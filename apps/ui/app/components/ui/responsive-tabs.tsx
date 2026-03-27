@@ -1,13 +1,15 @@
 import type { LucideIcon } from 'lucide-react';
 import { Link } from 'react-router';
-import { useEffect, useMemo, useRef } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import { cn } from '#utils/ui.utils.js';
 import { Tabs, TabsList, TabsTrigger, TabsContents } from '#components/ui/tabs.js';
+import { Separator } from '#components/ui/separator.js';
 
 export type ResponsiveTabItem = {
   label: string;
   href: string;
   icon: LucideIcon;
+  group?: string;
 };
 
 type ResponsiveTabsProps = {
@@ -62,26 +64,33 @@ export function ResponsiveTabs({
             'md:mt-14 md:w-fit',
           )}
         >
-          {tabs.map((tab) => (
-            <TabsTrigger
-              key={tab.label}
-              asChild
-              value={tab.label}
-              className={cn(
-                // Mobile: compact horizontal layout
-                'flex-row justify-center gap-2',
-                // Desktop: left-aligned with icon
-                'md:justify-start',
-                // Icon color
-                '[&_svg]:text-muted-foreground',
-              )}
-            >
-              <Link to={tab.href}>
-                <tab.icon />
-                {tab.label}
-              </Link>
-            </TabsTrigger>
-          ))}
+          {tabs.map((tab, index) => {
+            const previousGroup = index > 0 ? tabs[index - 1]!.group : tab.group;
+            const showDivider = index > 0 && tab.group !== previousGroup;
+
+            return (
+              <React.Fragment key={tab.label}>
+                {showDivider && <Separator className='my-1 max-md:hidden' />}
+                <TabsTrigger
+                  asChild
+                  value={tab.label}
+                  className={cn(
+                    // Mobile: compact horizontal layout
+                    'flex-row justify-center gap-2',
+                    // Desktop: left-aligned with icon
+                    'md:justify-start',
+                    // Icon color
+                    '[&_svg]:text-muted-foreground',
+                  )}
+                >
+                  <Link to={tab.href}>
+                    <tab.icon />
+                    {tab.label}
+                  </Link>
+                </TabsTrigger>
+              </React.Fragment>
+            );
+          })}
         </TabsList>
 
         <div className='flex flex-1 flex-col gap-6'>

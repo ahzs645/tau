@@ -1,6 +1,5 @@
 import {
   BookOpen,
-  Bot,
   ChartColumn,
   FileAxis3D,
   Files,
@@ -74,11 +73,6 @@ export const navRoutes: {
     //   url: '/workflows',
     //   icon: Workflow,
     // },
-    {
-      title: 'Models',
-      url: '/models',
-      icon: Bot,
-    },
     {
       title: 'Usage',
       url: '/usage',
