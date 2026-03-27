@@ -5,8 +5,9 @@ import type { Plugin } from 'vite';
 /**
  * Shared regex for `new URL('./path.js', import.meta.url)` patterns.
  * Captures the relative path (group 1) and optional `.href` suffix (group 2).
+ * Handles optional trailing comma after `import.meta.url` (valid JS syntax).
  */
-const urlPattern = /new\s+URL\(\s*["']([^"']+\.js)["']\s*,\s*import\.meta\.url\s*\)(\.href)?/g;
+const urlPattern = /new\s+URL\(\s*["']([^"']+\.js)["']\s*,\s*import\.meta\.url\s*,?\s*\)(\.href)?/g;
 
 type UrlMatch = {
   full: string;

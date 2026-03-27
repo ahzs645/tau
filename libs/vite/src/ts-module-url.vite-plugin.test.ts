@@ -113,6 +113,43 @@ describe('tsModuleUrlBuildPlugin', () => {
     expect(result!.code).toContain('import.meta.ROLLUP_FILE_URL_ref2');
   });
 
+  it('should handle trailing comma after import.meta.url', () => {
+    mockExistsSync.mockReturnValue(true);
+    const emitFile = vi.fn().mockReturnValue('trailing1');
+
+    const code = `const url = new URL('middleware.js', import.meta.url,).href;`;
+    const result = callTransform({ plugin, code, id: fakeId, context: { emitFile } });
+
+    expect(emitFile).toHaveBeenCalledWith({
+      type: 'chunk',
+      id: path.resolve(fakeDirectory, 'middleware.ts'),
+    });
+    expect(result).toMatchObject({
+      code: `const url = import.meta.ROLLUP_FILE_URL_trailing1;`,
+    });
+  });
+
+  it('should handle multi-line new URL() with trailing comma', () => {
+    mockExistsSync.mockReturnValue(true);
+    const emitFile = vi.fn().mockReturnValue('multiline1');
+
+    const code = [
+      `const url = new URL(`,
+      `  'parameter-file-resolver.middleware.js',`,
+      `  import.meta.url,`,
+      `).href;`,
+    ].join('\n');
+    const result = callTransform({ plugin, code, id: fakeId, context: { emitFile } });
+
+    expect(emitFile).toHaveBeenCalledWith({
+      type: 'chunk',
+      id: path.resolve(fakeDirectory, 'parameter-file-resolver.middleware.ts'),
+    });
+    expect(result).toMatchObject({
+      code: `const url = import.meta.ROLLUP_FILE_URL_multiline1;`,
+    });
+  });
+
   it('should skip .js references where only .js exists (no .ts source)', () => {
     mockExistsSync.mockImplementation((filePath: unknown) => {
       return String(filePath).endsWith('.ts') && String(filePath).includes('existing');
@@ -213,6 +250,17 @@ describe('tsModuleUrlServePlugin', () => {
 
     expect(result!.code).toContain(`'../existing/module.ts'`);
     expect(result!.code).toContain(`'../prebuilt/library.js'`);
+  });
+
+  it('should rewrite .js to .ts with trailing comma after import.meta.url', () => {
+    mockExistsSync.mockReturnValue(true);
+
+    const code = `const url = new URL('middleware.js', import.meta.url,).href;`;
+    const result = callTransform({ plugin, code, id: fakeId });
+
+    expect(result).toMatchObject({
+      code: `const url = new URL('middleware.ts', import.meta.url,).href;`,
+    });
   });
 
   it('should not touch non-.js URL references', () => {
