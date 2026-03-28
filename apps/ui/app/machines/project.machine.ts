@@ -1,7 +1,7 @@
 import { assign, assertEvent, setup, emit, enqueueActions } from 'xstate';
 import type { ActorRefFrom, AnyStateMachine } from 'xstate';
 import { produce } from 'immer';
-import type { Project } from '@taucad/types';
+import type { FileParameterConfig, Project } from '@taucad/types';
 import type { RuntimeClientOptions } from '@taucad/runtime';
 import { isBrowser } from '#constants/browser.constants.js';
 import type { GraphicsViewSettings } from '#constants/editor.constants.js';
@@ -12,6 +12,7 @@ import { gitMachine } from '#machines/git.machine.js';
 import { graphicsMachine } from '#machines/graphics.machine.js';
 import { logMachine } from '#machines/logs.machine.js';
 import type { fileManagerMachine } from '#machines/file-manager.machine.js';
+import { updateSetValues, createSet, deleteSet, switchActiveSet } from '#utils/parameter-config.utils.js';
 
 /**
  * Project Machine Context
@@ -32,6 +33,8 @@ export type ProjectContext = {
   /** The main entry file path from project.assets.mechanical.main. Set after project loads. */
   mainEntryFile: string;
   logRef: ActorRefFrom<typeof logMachine>;
+  /** Filesystem-based parameter configuration from .tau/parameters.json */
+  parameterConfig: FileParameterConfig | undefined;
 };
 
 /**
@@ -45,13 +48,14 @@ type ProjectInput = {
 };
 
 // Define the actors that the machine can invoke
-const loadProjectActor = fromSafeAsync<{ type: 'projectRetrieved'; project: Project }, { projectId: string }>(
-  async () => {
-    throw new Error(
-      'Not implemented. Please supply the `provide.actors.loadProjectActor` option to the project machine.',
-    );
-  },
-);
+const loadProjectActor = fromSafeAsync<
+  { type: 'projectRetrieved'; project: Project; parameterConfig?: FileParameterConfig },
+  { projectId: string }
+>(async () => {
+  throw new Error(
+    'Not implemented. Please supply the `provide.actors.loadProjectActor` option to the project machine.',
+  );
+});
 
 const writeProjectActor = fromSafeAsync<void, { project: Project }>(async () => {
   throw new Error(
@@ -59,9 +63,16 @@ const writeProjectActor = fromSafeAsync<void, { project: Project }>(async () => 
   );
 });
 
+const writeParameterFileActor = fromSafeAsync<void, { projectId: string; config: FileParameterConfig }>(async () => {
+  throw new Error(
+    'Not implemented. Please supply the `provide.actors.writeParameterFileActor` option to the project machine.',
+  );
+});
+
 const projectActors = {
   loadProjectActor,
   writeProjectActor,
+  writeParameterFileActor,
   git: gitMachine,
   graphics: graphicsMachine,
   // Having the cadMachine typed results in:
@@ -89,6 +100,11 @@ type ProjectEventInternal =
       parameters: Record<string, unknown>;
     }
   | { type: 'setParameters'; parameters: Record<string, unknown> }
+  | { type: 'setCompilationUnitParameters'; filePath: string; parameters: Record<string, unknown> }
+  | { type: 'parameterFileChanged'; config: FileParameterConfig }
+  | { type: 'switchParameterSet'; filePath: string; setName: string }
+  | { type: 'createParameterSet'; filePath: string; setName: string; values?: Record<string, unknown> }
+  | { type: 'deleteParameterSet'; filePath: string; setName: string }
   | { type: 'loadModel' }
   | { type: 'setMainFile'; path: string }
   | { type: 'createCompilationUnit'; entryFile: string }
@@ -100,10 +116,11 @@ type ProjectEventInternal =
       settings?: GraphicsViewSettings;
     }
   | { type: 'destroyViewGraphics'; viewId: string }
-  // Flush pending state immediately (bypasses debounce, used on tab close)
   | { type: 'flushNow' };
 
-type ProjectEvent = ProjectEventInternal | { type: 'projectRetrieved'; project: Project };
+type ProjectEvent =
+  | ProjectEventInternal
+  | { type: 'projectRetrieved'; project: Project; parameterConfig?: FileParameterConfig };
 
 /**
  * Project Machine Emitted Events
@@ -170,6 +187,10 @@ export const projectMachine = setup({
       project({ event }) {
         assertEvent(event, 'projectRetrieved');
         return event.project;
+      },
+      parameterConfig({ event }) {
+        assertEvent(event, 'projectRetrieved');
+        return event.parameterConfig;
       },
       isLoading: false,
     }),
@@ -240,31 +261,51 @@ export const projectMachine = setup({
         }),
       );
     }),
-    setParametersInContext: enqueueActions(({ enqueue, context, event }) => {
+    setParametersInContext: assign(({ context, event }) => {
       assertEvent(event, 'setParameters');
-
-      if (!context.project?.assets.mechanical) {
-        return;
+      if (!context.parameterConfig) {
+        return {};
       }
 
-      // Update project in context using Immer
-      enqueue.assign(({ context }) =>
-        produce(context, (draft) => {
-          if (draft.project?.assets.mechanical) {
-            draft.project.assets.mechanical.parameters = event.parameters;
-            draft.project.updatedAt = Date.now();
-          }
-        }),
-      );
-
-      // Forward to the main file compilation unit
-      const mainUnit = context.compilationUnits.get(context.mainEntryFile);
-      if (mainUnit) {
-        enqueue.sendTo(mainUnit, {
-          type: 'setParameters',
-          parameters: event.parameters,
-        });
+      const filePath = context.mainEntryFile;
+      const activeSet = context.parameterConfig.files[filePath]?.activeSet ?? 'default';
+      const newConfig = updateSetValues(context.parameterConfig, filePath, activeSet, event.parameters);
+      return { parameterConfig: newConfig };
+    }),
+    setCompilationUnitParametersInContext: assign(({ context, event }) => {
+      assertEvent(event, 'setCompilationUnitParameters');
+      if (!context.parameterConfig) {
+        return {};
       }
+
+      const activeSet = context.parameterConfig.files[event.filePath]?.activeSet ?? 'default';
+      const newConfig = updateSetValues(context.parameterConfig, event.filePath, activeSet, event.parameters);
+      return { parameterConfig: newConfig };
+    }),
+    handleParameterFileChanged: assign(({ event }) => {
+      assertEvent(event, 'parameterFileChanged');
+      return { parameterConfig: event.config };
+    }),
+    handleSwitchParameterSet: assign(({ context, event }) => {
+      assertEvent(event, 'switchParameterSet');
+      if (!context.parameterConfig) {
+        return {};
+      }
+      return { parameterConfig: switchActiveSet(context.parameterConfig, event.filePath, event.setName) };
+    }),
+    handleCreateParameterSet: assign(({ context, event }) => {
+      assertEvent(event, 'createParameterSet');
+      if (!context.parameterConfig) {
+        return {};
+      }
+      return { parameterConfig: createSet(context.parameterConfig, event.filePath, event.setName, event.values ?? {}) };
+    }),
+    handleDeleteParameterSet: assign(({ context, event }) => {
+      assertEvent(event, 'deleteParameterSet');
+      if (!context.parameterConfig) {
+        return {};
+      }
+      return { parameterConfig: deleteSet(context.parameterConfig, event.filePath, event.setName) };
     }),
     setMainFileInContext: assign(({ context, event }) => {
       assertEvent(event, 'setMainFile');
@@ -310,7 +351,6 @@ export const projectMachine = setup({
       viewGraphics: () => new Map(),
     }),
     initializeKernelIfNeeded: enqueueActions(({ enqueue, context }) => {
-      // Only initialize if shouldLoadModelOnStart is true
       if (!context.shouldLoadModelOnStart) {
         return;
       }
@@ -322,9 +362,7 @@ export const projectMachine = setup({
 
       const mainFile = mechanicalAsset.main;
 
-      // Create the primary compilation unit for the main file if it doesn't exist
       if (context.compilationUnits.has(mainFile)) {
-        // Compilation unit already exists, just set the main entry file and re-initialize
         enqueue.assign({ mainEntryFile: mainFile });
         const existingUnit = context.compilationUnits.get(mainFile)!;
         enqueue.sendTo(existingUnit, {
@@ -333,11 +371,8 @@ export const projectMachine = setup({
             path: `/projects/${context.projectId}`,
             filename: mainFile,
           },
-          parameters: mechanicalAsset.parameters,
         });
       } else {
-        // Spawn is only available inside assign callbacks in XState v5.
-        // We spawn and immediately send events to the new actor within the assign.
         enqueue.assign(({ spawn, context }) => {
           const cadUnit = spawn('cad', {
             id: `cad-${context.projectId}-${mainFile.replaceAll('/', '-')}`,
@@ -355,7 +390,6 @@ export const projectMachine = setup({
               path: `/projects/${context.projectId}`,
               filename: mainFile,
             },
-            parameters: mechanicalAsset.parameters,
           });
 
           const newUnits = new Map(context.compilationUnits);
@@ -372,7 +406,6 @@ export const projectMachine = setup({
 
       const mainFile = mechanicalAsset.main;
 
-      // Find or create the compilation unit for the main file
       const mainUnit = context.compilationUnits.get(mainFile);
       if (mainUnit) {
         enqueue.sendTo(mainUnit, {
@@ -381,10 +414,8 @@ export const projectMachine = setup({
             path: `/projects/${context.projectId}`,
             filename: mainFile,
           },
-          parameters: mechanicalAsset.parameters,
         });
       } else {
-        // Spawn is only available inside assign callbacks in XState v5.
         enqueue.assign(({ spawn, context }) => {
           const cadUnit = spawn('cad', {
             id: `cad-${context.projectId}-${mainFile.replaceAll('/', '-')}`,
@@ -402,7 +433,6 @@ export const projectMachine = setup({
               path: `/projects/${context.projectId}`,
               filename: mainFile,
             },
-            parameters: mechanicalAsset.parameters,
           });
 
           const newUnits = new Map(context.compilationUnits);
@@ -431,14 +461,12 @@ export const projectMachine = setup({
           },
         });
 
-        // Initialize model with the entry file directly on the spawned actor
         cadUnit.send({
           type: 'initializeModel',
           file: {
             path: `/projects/${context.projectId}`,
             filename: event.entryFile,
           },
-          parameters: context.project?.assets.mechanical?.parameters ?? {},
         });
 
         const newUnits = new Map(context.compilationUnits);
@@ -547,9 +575,13 @@ export const projectMachine = setup({
       assertEvent(event, 'loadProject');
       return context.projectId !== event.projectId;
     },
+    hasParameterConfig({ context }) {
+      return context.parameterConfig !== undefined;
+    },
   },
   delays: {
-    storeDebounce: 500,
+    /** Zero-delay batching step so `pending` can handle `flushNow` before transitioning to `writing`. */
+    pendingToWriting: 0,
   },
 }).createMachine({
   id: 'project',
@@ -585,6 +617,7 @@ export const projectMachine = setup({
       compilationUnits,
       mainEntryFile: '',
       logRef,
+      parameterConfig: undefined,
     };
   },
   on: {},
@@ -693,6 +726,21 @@ export const projectMachine = setup({
             setParameters: {
               actions: ['setParametersInContext'],
             },
+            setCompilationUnitParameters: {
+              actions: ['setCompilationUnitParametersInContext'],
+            },
+            parameterFileChanged: {
+              actions: ['handleParameterFileChanged'],
+            },
+            switchParameterSet: {
+              actions: ['handleSwitchParameterSet'],
+            },
+            createParameterSet: {
+              actions: ['handleCreateParameterSet'],
+            },
+            deleteParameterSet: {
+              actions: ['handleDeleteParameterSet'],
+            },
             loadModel: {
               actions: 'loadModel',
             },
@@ -722,31 +770,28 @@ export const projectMachine = setup({
             idle: {
               on: {
                 updateName: {
-                  target: 'pending',
+                  target: 'writing',
                 },
                 updateDescription: {
-                  target: 'pending',
+                  target: 'writing',
                 },
                 updateTags: {
-                  target: 'pending',
+                  target: 'writing',
                 },
                 updateThumbnail: {
-                  target: 'pending',
+                  target: 'writing',
                 },
                 updateCodeParameters: {
-                  target: 'pending',
-                },
-                setParameters: {
-                  target: 'pending',
+                  target: 'writing',
                 },
                 setMainFile: {
-                  target: 'pending',
+                  target: 'writing',
                 },
               },
             },
             pending: {
               after: {
-                storeDebounce: 'writing',
+                pendingToWriting: 'writing',
               },
               on: {
                 updateName: {
@@ -769,15 +814,10 @@ export const projectMachine = setup({
                   target: 'pending',
                   reenter: true,
                 },
-                setParameters: {
-                  target: 'pending',
-                  reenter: true,
-                },
                 setMainFile: {
                   target: 'pending',
                   reenter: true,
                 },
-                // Immediately bypass debounce and write
                 flushNow: { target: 'writing' },
               },
             },
@@ -792,9 +832,78 @@ export const projectMachine = setup({
                   actions: ['emitProjectUpdated'],
                 },
                 onError: {
-                  target: 'pending',
+                  target: 'idle',
                   actions: ['setError'],
                 },
+              },
+              on: {
+                updateName: {
+                  target: 'pending',
+                },
+                updateDescription: {
+                  target: 'pending',
+                },
+                updateTags: {
+                  target: 'pending',
+                },
+                updateThumbnail: {
+                  target: 'pending',
+                },
+                updateCodeParameters: {
+                  target: 'pending',
+                },
+                setMainFile: {
+                  target: 'pending',
+                },
+              },
+            },
+          },
+        },
+        parameterStoring: {
+          initial: 'idle',
+          states: {
+            idle: {
+              on: {
+                setParameters: { guard: 'hasParameterConfig', target: 'writing' },
+                setCompilationUnitParameters: { guard: 'hasParameterConfig', target: 'writing' },
+                switchParameterSet: { guard: 'hasParameterConfig', target: 'writing' },
+                createParameterSet: { guard: 'hasParameterConfig', target: 'writing' },
+                deleteParameterSet: { guard: 'hasParameterConfig', target: 'writing' },
+              },
+            },
+            pending: {
+              after: {
+                pendingToWriting: 'writing',
+              },
+              on: {
+                setParameters: { guard: 'hasParameterConfig', target: 'pending', reenter: true },
+                setCompilationUnitParameters: { guard: 'hasParameterConfig', target: 'pending', reenter: true },
+                switchParameterSet: { guard: 'hasParameterConfig', target: 'pending', reenter: true },
+                createParameterSet: { guard: 'hasParameterConfig', target: 'pending', reenter: true },
+                deleteParameterSet: { guard: 'hasParameterConfig', target: 'pending', reenter: true },
+              },
+            },
+            writing: {
+              invoke: {
+                src: 'writeParameterFileActor',
+                input({ context }) {
+                  return {
+                    projectId: context.projectId,
+                    config: context.parameterConfig!,
+                  };
+                },
+                onDone: { target: 'idle' },
+                onError: {
+                  target: 'idle',
+                  actions: ['setError'],
+                },
+              },
+              on: {
+                setParameters: { guard: 'hasParameterConfig', target: 'pending' },
+                setCompilationUnitParameters: { guard: 'hasParameterConfig', target: 'pending' },
+                switchParameterSet: { guard: 'hasParameterConfig', target: 'pending' },
+                createParameterSet: { guard: 'hasParameterConfig', target: 'pending' },
+                deleteParameterSet: { guard: 'hasParameterConfig', target: 'pending' },
               },
             },
           },

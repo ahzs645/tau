@@ -101,19 +101,31 @@ vi.mock('#routes/projects_.$id/chat-kernel-logs.js', () => ({
   CompilationUnitLogs: ({ entryFile }: { entryFile: string }) => <div data-testid='cu-logs'>{entryFile}</div>,
 }));
 
+vi.mock('#routes/projects_.$id/use-chat-interface-state.js', () => ({
+  usePaneviewPersistence: () => ({
+    savedState: {},
+    connectApi: vi.fn(),
+  }),
+  getInitialPanelOptions: (
+    _saved: Record<string, unknown>,
+    _panelId: string,
+    defaults: { isExpanded: boolean; size?: number },
+  ) => defaults,
+}));
+
 describe('ChatKernel', () => {
   beforeEach(() => {
     mockCompilationUnits = new Map<string, ActorRefFrom<typeof cadMachine>>();
   });
 
-  it('renders single CU without PaneviewReact', async () => {
+  it('should render single CU inside PaneviewReact', async () => {
     mockCompilationUnits.set('main.ts', mockCadRef);
 
     const { ChatKernel } = await import('./chat-kernel.js');
     render(<ChatKernel isExpanded setIsExpanded={vi.fn()} />);
 
-    expect(screen.queryByTestId('paneview')).not.toBeInTheDocument();
-    expect(screen.getByTestId('panel-body')).toBeInTheDocument();
+    expect(screen.getByTestId('paneview')).toBeInTheDocument();
+    expect(screen.getByTestId('pane-main.ts')).toBeInTheDocument();
   });
 
   it('renders PaneviewReact for multiple CUs', async () => {

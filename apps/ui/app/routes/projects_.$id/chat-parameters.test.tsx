@@ -78,25 +78,43 @@ vi.mock('#hooks/use-project.js', () => ({
 vi.mock('dockview-react', () => ({
   PaneviewReact: ({
     onReady,
+    components,
   }: {
     onReady: (event: { api: { addPanel: (options: Record<string, unknown>) => void } }) => void;
+    components: Record<string, React.ComponentType<{ params: Record<string, unknown> }>>;
   }) => {
-    const panels: Array<{ id: string; title: string; isExpanded: boolean; params: { entryFile: string } }> = [];
+    const panels: Array<{
+      id: string;
+      title: string;
+      component: string;
+      isExpanded: boolean;
+      params: Record<string, unknown> & { entryFile: string };
+    }> = [];
     const api = {
       addPanel: (options: Record<string, unknown>) => {
         panels.push(
-          options as unknown as { id: string; title: string; isExpanded: boolean; params: { entryFile: string } },
+          options as unknown as {
+            id: string;
+            title: string;
+            component: string;
+            isExpanded: boolean;
+            params: Record<string, unknown> & { entryFile: string };
+          },
         );
       },
     };
     onReady({ api });
     return (
       <div data-testid='paneview'>
-        {panels.map((p) => (
-          <div key={p.id} data-testid={`param-pane-${p.id}`} data-expanded={p.isExpanded}>
-            {p.params.entryFile}
-          </div>
-        ))}
+        {panels.map((p) => {
+          const Component = components[p.component];
+          return (
+            <div key={p.id} data-testid={`param-pane-${p.id}`} data-expanded={p.isExpanded}>
+              {p.params.entryFile}
+              {Component ? <Component params={p.params} /> : null}
+            </div>
+          );
+        })}
       </div>
     );
   },
@@ -168,6 +186,18 @@ vi.mock('@taucad/utils/schema', () => ({
     Boolean(schema && typeof schema === 'object' && 'properties' in schema),
 }));
 
+vi.mock('#routes/projects_.$id/use-chat-interface-state.js', () => ({
+  usePaneviewPersistence: () => ({
+    savedState: {},
+    connectApi: vi.fn(),
+  }),
+  getInitialPanelOptions: (
+    _saved: Record<string, unknown>,
+    _panelId: string,
+    defaults: { isExpanded: boolean; size?: number },
+  ) => defaults,
+}));
+
 describe('ChatParameters', () => {
   beforeEach(() => {
     mockCompilationUnits = new Map<string, ActorRefFrom<typeof cadMachine>>();
@@ -185,14 +215,14 @@ describe('ChatParameters', () => {
     };
   });
 
-  it('renders single CU without PaneviewReact', async () => {
+  it('should render single CU inside PaneviewReact', async () => {
     mockCompilationUnits.set('main.ts', mockCadRef);
 
     const { ChatParameters } = await import('./chat-parameters.js');
     render(<ChatParameters isExpanded setIsExpanded={vi.fn()} />);
 
-    expect(screen.queryByTestId('paneview')).not.toBeInTheDocument();
-    expect(screen.getByTestId('parameters-component')).toBeInTheDocument();
+    expect(screen.getByTestId('paneview')).toBeInTheDocument();
+    expect(screen.getByTestId('param-pane-main.ts')).toBeInTheDocument();
   });
 
   it('renders PaneviewReact for multiple CUs', async () => {

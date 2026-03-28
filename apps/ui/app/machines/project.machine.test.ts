@@ -1,11 +1,12 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mock } from 'vitest-mock-extended';
 import { createActor, waitFor } from 'xstate';
-import type { Project } from '@taucad/types';
+import type { FileParameterConfig, Project } from '@taucad/types';
 import type { RuntimeClientOptions } from '@taucad/runtime';
 import { projectMachine } from '#machines/project.machine.js';
 import type { ProjectContext } from '#machines/project.machine.js';
 import { fromSafeAsync } from '#lib/xstate.lib.js';
+import { createDefaultConfig, getActiveSetValues } from '#utils/parameter-config.utils.js';
 
 vi.mock('#constants/browser.constants.js', () => ({
   isBrowser: true,
@@ -44,23 +45,33 @@ const stubProjectWithMechanical: Project = {
 function createTestActor(options?: {
   loadResult?: Project | (() => Promise<Project>);
   writeResult?: () => Promise<void>;
+  writeParameterResult?: () => Promise<void>;
+  parameterConfig?: FileParameterConfig;
   shouldAutoLoad?: boolean;
   shouldLoadModelOnStart?: boolean;
   projectId?: string;
 }) {
   const loadResult = options?.loadResult ?? stubProject;
   const loadFunction = typeof loadResult === 'function' ? loadResult : async () => loadResult;
+  const parameterConfig = options?.parameterConfig;
 
   const machine = projectMachine.provide({
     actors: {
       loadProjectActor: fromSafeAsync(async () => {
         const project = await loadFunction();
-        return { type: 'projectRetrieved', project };
+        return { type: 'projectRetrieved', project, parameterConfig };
       }),
       ...(options?.writeResult
         ? {
             writeProjectActor: fromSafeAsync(async () => {
               await options.writeResult!();
+            }),
+          }
+        : {}),
+      ...(options?.writeParameterResult
+        ? {
+            writeParameterFileActor: fromSafeAsync(async () => {
+              await options.writeParameterResult!();
             }),
           }
         : {}),
@@ -531,12 +542,15 @@ describe('projectMachine', () => {
       const actor = await startAndLoad({
         loadResult: stubProjectWithMechanical,
         shouldLoadModelOnStart: true,
+        parameterConfig: createDefaultConfig('main.ts'),
       });
       const mainUnit = actor.getSnapshot().context.compilationUnits.get('main.ts');
       expect(mainUnit).toBeDefined();
 
       actor.send({ type: 'setParameters', parameters: { depth: 5 } });
-      expect(actor.getSnapshot().context.project?.assets.mechanical?.parameters).toEqual({ depth: 5 });
+      const { parameterConfig } = actor.getSnapshot().context;
+      expect(parameterConfig).toBeDefined();
+      expect(getActiveSetValues(parameterConfig!, 'main.ts')).toEqual({ depth: 5 });
       actor.stop();
     });
 
@@ -570,89 +584,114 @@ describe('projectMachine', () => {
   });
 
   // =========================================================================
-  // State: ready – storing (debounce + write)
+  // State: ready – storing (immediate write, no debounce)
   // =========================================================================
   describe('ready – storing', () => {
-    it('should enter storing.pending after a metadata update', async () => {
-      const actor = await startAndLoad();
-      actor.send({ type: 'updateName', name: 'Trigger Store' });
+    it('should enter storing.writing after a metadata update', async () => {
+      let resolveWrite!: () => void;
+      const writeGate = new Promise<void>((resolve) => {
+        resolveWrite = resolve;
+      });
 
-      const snapshot = actor.getSnapshot();
-      expect(snapshot.matches({ ready: { storing: 'pending' } })).toBe(true);
+      const actor = await startAndLoad({
+        writeResult: async () => {
+          await writeGate;
+        },
+      });
+
+      actor.send({ type: 'updateName', name: 'Trigger Store' });
+      await waitFor(actor, (s) => s.matches({ ready: { storing: 'writing' } }));
+      resolveWrite();
+      await waitFor(actor, (s) => s.matches({ ready: { storing: 'idle' } }));
       actor.stop();
     });
 
-    it('should write project after debounce elapses', async () => {
-      vi.useFakeTimers();
-      try {
-        let writeCallCount = 0;
-        const actor = await startAndLoad({
-          writeResult: async () => {
-            writeCallCount++;
-          },
-        });
+    it('should write project without debounce delay', async () => {
+      let writeCallCount = 0;
+      const actor = await startAndLoad({
+        writeResult: async () => {
+          writeCallCount++;
+        },
+      });
 
-        actor.send({ type: 'updateName', name: 'Debounced' });
-        expect(actor.getSnapshot().matches({ ready: { storing: 'pending' } })).toBe(true);
-
-        await vi.advanceTimersByTimeAsync(500);
-
-        const snapshot = await waitFor(actor, (s) => s.matches({ ready: { storing: 'idle' } }));
-        expect(snapshot.matches({ ready: { storing: 'idle' } })).toBe(true);
-        expect(writeCallCount).toBe(1);
-        actor.stop();
-      } finally {
-        vi.useRealTimers();
-      }
+      actor.send({ type: 'updateName', name: 'Immediate' });
+      await waitFor(actor, (s) => s.matches({ ready: { storing: 'idle' } }));
+      expect(writeCallCount).toBe(1);
+      actor.stop();
     });
 
-    it('should reset debounce when another update arrives during pending', async () => {
+    it('should run a follow-up write when another update arrives during writing', async () => {
+      let writeCallCount = 0;
+      const writeResolvers: Array<() => void> = [];
+      const actor = await startAndLoad({
+        writeResult: () => {
+          writeCallCount++;
+          return new Promise<void>((resolve) => {
+            writeResolvers.push(resolve);
+          });
+        },
+      });
+
+      actor.send({ type: 'updateName', name: 'First' });
+      await waitFor(actor, (s) => s.matches({ ready: { storing: 'writing' } }));
+      expect(writeCallCount).toBe(1);
+
+      actor.send({ type: 'updateDescription', description: 'Second' });
+      await waitFor(actor, (s) => s.matches({ ready: { storing: 'writing' } }));
+      expect(writeResolvers).toHaveLength(2);
+
+      writeResolvers[1]!();
+      await waitFor(actor, (s) => s.matches({ ready: { storing: 'idle' } }));
+      expect(writeCallCount).toBe(2);
+      actor.stop();
+    });
+
+    it('should land in idle with error on write failure', async () => {
+      let writeCallCount = 0;
+      const actor = await startAndLoad({
+        writeResult: async () => {
+          writeCallCount++;
+          if (writeCallCount === 1) {
+            throw new Error('write failed');
+          }
+        },
+      });
+
+      actor.send({ type: 'updateName', name: 'Will Fail' });
+      await waitFor(actor, (s) => s.matches({ ready: { storing: 'idle' } }));
+      expect(writeCallCount).toBe(1);
+      expect(actor.getSnapshot().context.error?.message).toBe('write failed');
+
+      actor.send({ type: 'updateName', name: 'Retry' });
+      await waitFor(actor, (s) => s.matches({ ready: { storing: 'idle' } }));
+      expect(writeCallCount).toBe(2);
+      actor.stop();
+    });
+
+    it('should flush immediately on flushNow event while pending', async () => {
       vi.useFakeTimers();
       try {
         let writeCallCount = 0;
+        const writeResolvers: Array<() => void> = [];
         const actor = await startAndLoad({
-          writeResult: async () => {
+          writeResult: () => {
             writeCallCount++;
+            return new Promise<void>((resolve) => {
+              writeResolvers.push(resolve);
+            });
           },
         });
 
         actor.send({ type: 'updateName', name: 'First' });
-        await vi.advanceTimersByTimeAsync(300);
-
-        actor.send({ type: 'updateDescription', description: 'Second' });
-        await vi.advanceTimersByTimeAsync(300);
-        expect(writeCallCount).toBe(0);
-
-        await vi.advanceTimersByTimeAsync(200);
-        await waitFor(actor, (s) => s.matches({ ready: { storing: 'idle' } }));
-        expect(writeCallCount).toBe(1);
-        actor.stop();
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-
-    it('should go to pending on write error, allowing retry', async () => {
-      vi.useFakeTimers();
-      try {
-        let writeCallCount = 0;
-        const actor = await startAndLoad({
-          writeResult: async () => {
-            writeCallCount++;
-            if (writeCallCount === 1) {
-              throw new Error('write failed');
-            }
-          },
-        });
-
-        actor.send({ type: 'updateName', name: 'Will Fail' });
-        await vi.advanceTimersByTimeAsync(500);
-
+        await waitFor(actor, (s) => s.matches({ ready: { storing: 'writing' } }));
+        actor.send({ type: 'updateDescription', description: 'Queue' });
         await waitFor(actor, (s) => s.matches({ ready: { storing: 'pending' } }));
-        expect(writeCallCount).toBe(1);
-        expect(actor.getSnapshot().context.error?.message).toBe('write failed');
 
-        await vi.advanceTimersByTimeAsync(500);
+        actor.send({ type: 'flushNow' });
+        expect(actor.getSnapshot().matches({ ready: { storing: 'writing' } })).toBe(true);
+
+        await vi.advanceTimersByTimeAsync(0);
+        writeResolvers[1]!();
         await waitFor(actor, (s) => s.matches({ ready: { storing: 'idle' } }));
         expect(writeCallCount).toBe(2);
         actor.stop();
@@ -661,52 +700,21 @@ describe('projectMachine', () => {
       }
     });
 
-    it('should flush immediately on flushNow event', async () => {
-      vi.useFakeTimers();
-      try {
-        let writeCallCount = 0;
-        const actor = await startAndLoad({
-          writeResult: async () => {
-            writeCallCount++;
-          },
-        });
-
-        actor.send({ type: 'updateName', name: 'Flush Me' });
-        expect(actor.getSnapshot().matches({ ready: { storing: 'pending' } })).toBe(true);
-
-        actor.send({ type: 'flushNow' });
-        expect(actor.getSnapshot().matches({ ready: { storing: 'writing' } })).toBe(true);
-
-        await vi.advanceTimersByTimeAsync(0);
-        await waitFor(actor, (s) => s.matches({ ready: { storing: 'idle' } }));
-        expect(writeCallCount).toBe(1);
-        actor.stop();
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-
     it('should emit projectUpdated after successful write', async () => {
-      vi.useFakeTimers();
-      try {
-        const actor = await startAndLoad({
-          writeResult: async () => {
-            /* No-op */
-          },
-        });
+      const actor = await startAndLoad({
+        writeResult: async () => {
+          /* No-op */
+        },
+      });
 
-        const emitted: unknown[] = [];
-        actor.on('projectUpdated', (event) => emitted.push(event));
+      const emitted: unknown[] = [];
+      actor.on('projectUpdated', (event) => emitted.push(event));
 
-        actor.send({ type: 'updateName', name: 'Updated' });
-        await vi.advanceTimersByTimeAsync(500);
-        await waitFor(actor, (s) => s.matches({ ready: { storing: 'idle' } }));
+      actor.send({ type: 'updateName', name: 'Updated' });
+      await waitFor(actor, (s) => s.matches({ ready: { storing: 'idle' } }));
 
-        expect(emitted).toHaveLength(1);
-        actor.stop();
-      } finally {
-        vi.useRealTimers();
-      }
+      expect(emitted).toHaveLength(1);
+      actor.stop();
     });
   });
 
@@ -803,6 +811,126 @@ describe('projectMachine', () => {
       expect(context.mainEntryFile).toBe('');
       expect(context.compilationUnits.size).toBe(0);
       expect(context.viewGraphics.size).toBe(0);
+      actor.stop();
+    });
+  });
+
+  // =========================================================================
+  // State: ready – parameterStoring (immediate write, no debounce)
+  // =========================================================================
+  describe('ready – parameterStoring', () => {
+    it('should not transition to writing when parameterConfig is undefined', async () => {
+      const actor = await startAndLoad();
+      expect(actor.getSnapshot().context.parameterConfig).toBeUndefined();
+
+      actor.send({ type: 'setParameters', parameters: { width: 10 } });
+      expect(actor.getSnapshot().matches({ ready: { parameterStoring: 'idle' } })).toBe(true);
+      actor.stop();
+    });
+
+    it('should enter writing after a parameter event when config is defined', async () => {
+      let resolveWrite!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        resolveWrite = resolve;
+      });
+
+      const actor = await startAndLoad({
+        parameterConfig: createDefaultConfig('main.ts'),
+        loadResult: stubProjectWithMechanical,
+        shouldLoadModelOnStart: true,
+        writeParameterResult: async () => {
+          await gate;
+        },
+      });
+      expect(actor.getSnapshot().context.parameterConfig).toBeDefined();
+
+      actor.send({ type: 'setParameters', parameters: { width: 10 } });
+      await waitFor(actor, (s) => s.matches({ ready: { parameterStoring: 'writing' } }));
+      resolveWrite();
+      await waitFor(actor, (s) => s.matches({ ready: { parameterStoring: 'idle' } }));
+      actor.stop();
+    });
+
+    it('should coalesce rapid parameter events into fewer writes than events', async () => {
+      let writeCallCount = 0;
+      const actor = await startAndLoad({
+        parameterConfig: createDefaultConfig('main.ts'),
+        loadResult: stubProjectWithMechanical,
+        shouldLoadModelOnStart: true,
+        writeParameterResult: async () => {
+          writeCallCount++;
+        },
+      });
+
+      actor.send({ type: 'setParameters', parameters: { width: 1 } });
+      actor.send({ type: 'setParameters', parameters: { width: 2 } });
+      actor.send({ type: 'setParameters', parameters: { width: 3 } });
+
+      await waitFor(actor, (s) => s.matches({ ready: { parameterStoring: 'idle' } }));
+      expect(writeCallCount).toBe(2);
+      actor.stop();
+    });
+
+    it('should coalesce events during writing into a follow-up write', async () => {
+      vi.useFakeTimers();
+      try {
+        let writeCallCount = 0;
+        const writeResolvers: (() => void)[] = [];
+        const actor = await startAndLoad({
+          parameterConfig: createDefaultConfig('main.ts'),
+          loadResult: stubProjectWithMechanical,
+          shouldLoadModelOnStart: true,
+          writeParameterResult: () => {
+            writeCallCount++;
+            return new Promise<void>((resolve) => {
+              writeResolvers.push(resolve);
+            });
+          },
+        });
+
+        actor.send({ type: 'setParameters', parameters: { width: 1 } });
+        await waitFor(actor, (s) => s.matches({ ready: { parameterStoring: 'writing' } }));
+        expect(writeCallCount).toBe(1);
+
+        actor.send({ type: 'setParameters', parameters: { width: 2 } });
+        await waitFor(actor, (s) => s.matches({ ready: { parameterStoring: 'pending' } }));
+
+        await vi.advanceTimersByTimeAsync(0);
+        expect(writeCallCount).toBe(2);
+
+        writeResolvers[1]!();
+        await vi.advanceTimersByTimeAsync(0);
+        await waitFor(actor, (s) => s.matches({ ready: { parameterStoring: 'idle' } }));
+
+        actor.stop();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('should land in idle with error on parameter write failure and allow retry', async () => {
+      let writeCallCount = 0;
+      const actor = await startAndLoad({
+        parameterConfig: createDefaultConfig('main.ts'),
+        loadResult: stubProjectWithMechanical,
+        shouldLoadModelOnStart: true,
+        writeParameterResult: async () => {
+          writeCallCount++;
+          if (writeCallCount === 1) {
+            throw new Error('write failed');
+          }
+        },
+      });
+
+      actor.send({ type: 'setParameters', parameters: { width: 1 } });
+      await waitFor(actor, (s) => s.matches({ ready: { parameterStoring: 'idle' } }));
+      expect(writeCallCount).toBe(1);
+      expect(actor.getSnapshot().context.error?.message).toBe('write failed');
+
+      actor.send({ type: 'setParameters', parameters: { width: 2 } });
+      await waitFor(actor, (s) => s.matches({ ready: { parameterStoring: 'idle' } }));
+      expect(writeCallCount).toBe(2);
+
       actor.stop();
     });
   });

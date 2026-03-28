@@ -221,6 +221,8 @@ function ParametersPaneview({
 
   const sortedEntries = useMemo(() => sortCompilationEntries(entries, mainEntryFile), [entries, mainEntryFile]);
 
+  const paneviewKey = useMemo(() => sortedEntries.map(([file]) => file).join('\0'), [sortedEntries]);
+
   const handleReady = useCallback(
     (event: { api: PaneviewApi }) => {
       connectApi(event.api);
@@ -249,6 +251,7 @@ function ParametersPaneview({
 
   return (
     <PaneviewReact
+      key={paneviewKey}
       className={paneviewStyleOverrides}
       components={paneviewComponents}
       headerComponents={paneviewHeaderComponents}
@@ -271,19 +274,8 @@ function ParametersContent({
   const { compilationUnits, mainEntryFile } = useProject();
   const entries = useMemo(() => [...compilationUnits.entries()], [compilationUnits]);
 
-  if (entries.length <= 1) {
-    const [entryFile, cadRef] = entries[0] ?? [mainEntryFile, undefined];
-    if (!cadRef) {
-      return <p className='p-4 text-center text-xs text-muted-foreground'>No compilation units.</p>;
-    }
-    return (
-      <CompilationUnitParameters
-        entryFile={entryFile}
-        cadRef={cadRef}
-        enableSearch={enableSearch}
-        isAllExpanded={isAllExpanded}
-      />
-    );
+  if (entries.length === 0) {
+    return <p className='p-4 text-center text-xs text-muted-foreground'>No compilation units.</p>;
   }
 
   return (

@@ -4,6 +4,7 @@ import { Info } from 'lucide-react';
 import React, { useCallback, useMemo, useState } from 'react';
 import Form from '@rjsf/core';
 import type { RJSFSchema } from '@rjsf/utils';
+import deepmerge from 'deepmerge';
 import { SearchInput } from '#components/search-input.js';
 import { cn } from '#utils/ui.utils.js';
 import { templates, uiSchema, widgets } from '#components/geometry/parameters/rjsf-theme.js';
@@ -131,7 +132,13 @@ export function Parameters({
     [allExpanded, searchTerm, resetSingleParameter, defaultParameters, units],
   );
 
-  const mergedData = useMemo(() => ({ ...defaultParameters, ...parameters }), [defaultParameters, parameters]);
+  const mergedData = useMemo(
+    () =>
+      deepmerge(defaultParameters, parameters, {
+        arrayMerge: (_target: unknown[], source: unknown[]) => source,
+      }),
+    [defaultParameters, parameters],
+  );
   const hasParameters = jsonSchema && Object.keys(jsonSchema.properties ?? {}).length > 0;
 
   // Initialize the ref with the current edited parameters when component mounts or data changes

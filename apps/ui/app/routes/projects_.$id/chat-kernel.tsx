@@ -77,6 +77,8 @@ function KernelPaneview({
 
   const sortedEntries = useMemo(() => sortCompilationEntries(entries, mainEntryFile), [entries, mainEntryFile]);
 
+  const paneviewKey = useMemo(() => sortedEntries.map(([file]) => file).join('\0'), [sortedEntries]);
+
   const handleReady = useCallback(
     (event: { api: PaneviewApi }) => {
       connectApi(event.api);
@@ -105,6 +107,7 @@ function KernelPaneview({
 
   return (
     <PaneviewReact
+      key={paneviewKey}
       className={paneviewStyleOverrides}
       components={paneviewComponents}
       headerComponents={paneviewHeaderComponents}
@@ -114,39 +117,15 @@ function KernelPaneview({
 }
 
 // ---------------------------------------------------------------------------
-// Single-CU flat view (no paneview overhead)
-// ---------------------------------------------------------------------------
-
-function KernelSingleUnit({
-  entryFile,
-  cadRef,
-}: {
-  readonly entryFile: string;
-  readonly cadRef: ActorRefFrom<typeof cadMachine>;
-}): React.JSX.Element {
-  return (
-    <div className='h-full overflow-y-auto'>
-      <CompilationUnitTiming cadRef={cadRef} />
-      <div className='mx-2 border-t border-border/20' />
-      <CompilationUnitLogs entryFile={entryFile} />
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Kernel content: single vs multi CU
+// Kernel content
 // ---------------------------------------------------------------------------
 
 function KernelContent(): React.JSX.Element {
   const { compilationUnits, mainEntryFile } = useProject();
   const entries = useMemo(() => [...compilationUnits.entries()], [compilationUnits]);
 
-  if (entries.length <= 1) {
-    const [entryFile, cadRef] = entries[0] ?? [mainEntryFile, undefined];
-    if (!cadRef) {
-      return <p className='p-4 text-center text-xs text-muted-foreground'>No compilation units.</p>;
-    }
-    return <KernelSingleUnit entryFile={entryFile} cadRef={cadRef} />;
+  if (entries.length === 0) {
+    return <p className='p-4 text-center text-xs text-muted-foreground'>No compilation units.</p>;
   }
 
   return <KernelPaneview entries={entries} mainEntryFile={mainEntryFile} />;

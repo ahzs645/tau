@@ -3,6 +3,7 @@ import { parameterCache, geometryCache, gltfCoordinateTransform, gltfEdgeDetecti
 import { esbuild } from '@taucad/runtime/bundler';
 import { createRuntimeClientOptions } from '@taucad/runtime';
 import { observability } from '@taucad/telemetry/middleware';
+import { parameterFileResolver } from '#middleware/parameter-file-resolver.factory.js';
 import { ENV } from '#environment.config.js';
 
 /**
@@ -25,8 +26,8 @@ export const defaultKernelOptions = createRuntimeClientOptions({
     tau(),
   ],
   middleware: [
-    // Middleware
     observability({ reportUrl: `${ENV.TAU_API_URL}/v1/telemetry/ingest` }),
+    parameterFileResolver(),
     parameterCache(),
     geometryCache(),
     gltfCoordinateTransform(),

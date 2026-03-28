@@ -5,6 +5,7 @@ import { waitFor } from 'xstate';
 import type { ActorRefFrom } from 'xstate';
 import type { Remote } from 'comlink';
 import { useQueryClient } from '@tanstack/react-query';
+import type { FileParameterConfig } from '@taucad/types';
 import type { RuntimeClientOptions } from '@taucad/runtime';
 import { fromSafeAsync } from '#lib/xstate.lib.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
@@ -18,6 +19,7 @@ import type { logMachine } from '#machines/logs.machine.js';
 import { inspect } from '#machines/inspector.js';
 import { useProjectManager } from '#hooks/use-project-manager.js';
 import { defaultKernelOptions } from '#constants/kernel-worker.constants.js';
+import { parseParameterConfig, createDefaultConfig, serializeParameterConfig } from '#utils/parameter-config.utils.js';
 
 type ProjectContextType = {
   projectId: string;
@@ -36,6 +38,11 @@ type ProjectContextType = {
     parameters: Record<string, unknown>,
   ) => void;
   setParameters: (parameters: Record<string, unknown>) => void;
+  setCompilationUnitParameters: (filePath: string, parameters: Record<string, unknown>) => void;
+  switchParameterSet: (filePath: string, setName: string) => void;
+  createParameterSet: (filePath: string, setName: string, values?: Record<string, unknown>) => void;
+  deleteParameterSet: (filePath: string, setName: string) => void;
+  parameterConfig: FileParameterConfig | undefined;
   updateName: (name: string) => void;
   updateDescription: (description: string) => void;
   updateTags: (tags: string[]) => void;
@@ -76,13 +83,48 @@ export function ProjectProvider({
             throw new Error(`Project not found: ${input.projectId}`);
           }
 
-          // Ensure the file manager is ready before loading the project
-          await waitFor(fileManager.fileManagerRef, (state) => state.matches('ready'));
+          const readySnapshot = await waitFor(fileManager.fileManagerRef, (state) => state.matches('ready'));
 
-          return { type: 'projectRetrieved', project };
+          const parameterConfigPath = `.tau/parameters.json`;
+          let parameterConfig: FileParameterConfig | undefined;
+
+          const { contentService } = readySnapshot.context;
+          if (contentService) {
+            try {
+              const data = await contentService.resolve(parameterConfigPath);
+              const text = new TextDecoder().decode(data);
+              parameterConfig = parseParameterConfig(text);
+            } catch {
+              const mainFile = project.assets.mechanical?.main ?? 'main.ts';
+              parameterConfig = createDefaultConfig(mainFile);
+              const serialized = serializeParameterConfig(parameterConfig);
+              await contentService.write(parameterConfigPath, new TextEncoder().encode(serialized), 'machine');
+            }
+          }
+
+          return {
+            type: 'projectRetrieved',
+            project,
+            ...(parameterConfig ? { parameterConfig } : {}),
+          };
         }),
         writeProjectActor: fromSafeAsync(async ({ input }) => {
           await projectManager.updateProject(input.project.id, input.project);
+        }),
+        writeParameterFileActor: fromSafeAsync(async ({ input, signal }) => {
+          if (signal.aborted) {
+            return;
+          }
+          const parameterConfigPath = `.tau/parameters.json`;
+          const serialized = serializeParameterConfig(input.config);
+          const encoded = new TextEncoder().encode(serialized);
+          if (encoded.byteLength === 0) {
+            return;
+          }
+          const { contentService } = fileManager.fileManagerRef.getSnapshot().context;
+          if (contentService) {
+            await contentService.write(parameterConfigPath, encoded, 'machine');
+          }
         }),
       },
       ...provide,
@@ -146,6 +188,7 @@ export function ProjectProvider({
     (state) => state.context.mainEntryFile,
   );
   const logRef = useSelector(actorRef, (state) => state.context.logRef);
+  const parameterConfig = useSelector(actorRef, (state) => state.context.parameterConfig);
 
   useEffect(() => {
     // Load the new project when the projectId changes
@@ -169,7 +212,6 @@ export function ProjectProvider({
 
   useEffect(() => {
     const subscription = actorRef.on('projectUpdated', () => {
-      // The project updated, invalidate the projects query
       void queryClient.invalidateQueries({ queryKey: ['projects'] });
     });
 
@@ -177,6 +219,30 @@ export function ProjectProvider({
       subscription.unsubscribe();
     };
   }, [actorRef, queryClient]);
+
+  // Subscribe to external parameter file changes
+  useEffect(() => {
+    const { contentService } = fileManager;
+    if (!contentService) {
+      return;
+    }
+
+    const parameterPath = `.tau/parameters.json`;
+    const unsubscribe = contentService.onDidContentChange((event) => {
+      if (event.type !== 'written' || event.path !== parameterPath || event.source === 'machine') {
+        return;
+      }
+      try {
+        const text = new TextDecoder().decode(event.data);
+        const config = parseParameterConfig(text);
+        actorRef.send({ type: 'parameterFileChanged', config });
+      } catch {
+        // Invalid JSON — ignore
+      }
+    });
+
+    return unsubscribe;
+  }, [fileManager, projectId, actorRef]);
 
   // Memoize callbacks
   const setCodeParameters = useCallback(
@@ -189,6 +255,34 @@ export function ProjectProvider({
   const setParameters = useCallback(
     (parameters: Record<string, unknown>) => {
       actorRef.send({ type: 'setParameters', parameters });
+    },
+    [actorRef],
+  );
+
+  const setCompilationUnitParameters = useCallback(
+    (filePath: string, parameters: Record<string, unknown>) => {
+      actorRef.send({ type: 'setCompilationUnitParameters', filePath, parameters });
+    },
+    [actorRef],
+  );
+
+  const switchParameterSet = useCallback(
+    (filePath: string, setName: string) => {
+      actorRef.send({ type: 'switchParameterSet', filePath, setName });
+    },
+    [actorRef],
+  );
+
+  const createParameterSet = useCallback(
+    (filePath: string, setName: string, values?: Record<string, unknown>) => {
+      actorRef.send({ type: 'createParameterSet', filePath, setName, values });
+    },
+    [actorRef],
+  );
+
+  const deleteParameterSet = useCallback(
+    (filePath: string, setName: string) => {
+      actorRef.send({ type: 'deleteParameterSet', filePath, setName });
     },
     [actorRef],
   );
@@ -248,8 +342,13 @@ export function ProjectProvider({
       compilationUnits,
       mainEntryFile,
       logRef,
+      parameterConfig,
       setCodeParameters,
       setParameters,
+      setCompilationUnitParameters,
+      switchParameterSet,
+      createParameterSet,
+      deleteParameterSet,
       updateName,
       updateDescription,
       updateTags,
@@ -266,8 +365,13 @@ export function ProjectProvider({
     compilationUnits,
     mainEntryFile,
     logRef,
+    parameterConfig,
     setCodeParameters,
     setParameters,
+    setCompilationUnitParameters,
+    switchParameterSet,
+    createParameterSet,
+    deleteParameterSet,
     updateName,
     updateDescription,
     updateTags,
