@@ -514,6 +514,52 @@ describe('ZooWorker', () => {
     });
 
     // ===========================================================================
+    // Tests: Subdirectory File Resolution
+    // ===========================================================================
+
+    describe('Subdirectory file resolution', () => {
+      it('should extract parameters from a file in a subdirectory', async () => {
+        const { defaultParameters } = await getParameters(
+          {
+            'samples/ball-bearing/main.kcl': `
+              outsideDiameter = 1.625
+              shaftDia = 0.75
+              thickness = 0.313
+            `,
+          },
+          'samples/ball-bearing/main.kcl',
+        );
+
+        expect(defaultParameters).toMatchObject({
+          outsideDiameter: 1.625,
+          shaftDia: 0.75,
+          thickness: 0.313,
+        });
+      });
+
+      it('should resolve imports relative to the subdirectory file', async () => {
+        const { defaultParameters } = await getParameters(
+          {
+            'samples/bearing/main.kcl': `
+              import diameter from "params.kcl"
+
+              thickness = 5
+            `,
+            'samples/bearing/params.kcl': `
+              export diameter = 42
+            `,
+          },
+          'samples/bearing/main.kcl',
+        );
+
+        expect(defaultParameters).toMatchObject({
+          diameter: 42,
+          thickness: 5,
+        });
+      });
+    });
+
+    // ===========================================================================
     // Tests: Error Handling
     // ===========================================================================
 

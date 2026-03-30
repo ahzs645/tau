@@ -202,7 +202,7 @@ export default defineKernel({
         return createKernelError(mapCompilationErrorsToKernelIssues(criticalErrors, code, relativeFilePath));
       }
 
-      const executionResult = await utilities.executeMockKcl(parseResult.program, 'main.kcl');
+      const executionResult = await utilities.executeMockKcl(parseResult.program, relativeFilePath);
       const criticalExecutionErrors = filterNonWarningErrors(executionResult.errors);
       if (criticalExecutionErrors.length > 0) {
         logger.warn('KCL execution errors during parameter extraction', {
@@ -240,7 +240,7 @@ export default defineKernel({
       }
 
       const modifiedProgram = KclUtilities.injectParametersIntoProgram(parseResult.program, parameters);
-      const executionResult = await utilities.executeProgram(modifiedProgram, 'main.kcl');
+      const executionResult = await utilities.executeProgram(modifiedProgram, relativeFilePath);
       const criticalExecutionErrors = filterNonWarningErrors(executionResult.errors);
       if (criticalExecutionErrors.length > 0) {
         logger.warn('KCL execution errors', { data: criticalExecutionErrors });
