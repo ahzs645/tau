@@ -231,4 +231,4 @@ export type ChatTool<
   SuccessOutputT,
   NameT extends string,
   SchemaInputT = SchemaOutputT,
-> = DynamicStructuredTool<SchemaT, SchemaOutputT, SchemaInputT, SuccessOutputT | ToolExecutionError, NameT>;
+> = DynamicStructuredTool<SchemaT, SchemaOutputT, SchemaInputT, SuccessOutputT | ToolExecutionError, unknown, NameT>;
