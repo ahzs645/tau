@@ -143,7 +143,7 @@ export type ParsedCadModule = {
 };
 
 /**
- * Filesystem-based parameter configuration stored at `.tau/parameters.json`.
+ * Filesystem-based parameter configuration.
  * Contains per-file parameter entries with named parameter sets.
  */
 export type FileParameterConfig = {

@@ -33,7 +33,7 @@ export type ProjectContext = {
   /** The main entry file path from project.assets.mechanical.main. Set after project loads. */
   mainEntryFile: string;
   logRef: ActorRefFrom<typeof logMachine>;
-  /** Filesystem-based parameter configuration from .tau/parameters.json */
+  /** Filesystem-based parameter configuration parameters file. */
   parameterConfig: FileParameterConfig | undefined;
 };
 
