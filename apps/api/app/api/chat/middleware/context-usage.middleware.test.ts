@@ -47,12 +47,12 @@ describe('createContextUsageMiddleware', () => {
 
     expect(writer).toHaveBeenCalledOnce();
     const emitted = writer.mock.calls[0]![0] as Record<string, unknown>;
-    expect(emitted.type).toBe('context-usage');
-    expect(emitted.totalInputTokens).toBe(50_000);
-    expect(emitted.contextWindow).toBe(200_000);
-    expect(emitted.percentUsed).toBe(25);
-    expect(emitted.modelId).toBe('anthropic-claude-haiku-4.5');
-    expect(emitted.id).toMatch(/^data_/);
+    expect(emitted['type']).toBe('context-usage');
+    expect(emitted['totalInputTokens']).toBe(50_000);
+    expect(emitted['contextWindow']).toBe(200_000);
+    expect(emitted['percentUsed']).toBe(25);
+    expect(emitted['modelId']).toBe('anthropic-claude-haiku-4.5');
+    expect(emitted['id']).toMatch(/^data_/);
   });
 
   it('should cap percentage at 100', () => {

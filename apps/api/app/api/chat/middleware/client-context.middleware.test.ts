@@ -19,7 +19,9 @@ function extractSystemText(handler: ReturnType<typeof vi.fn>): string {
   /* oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- vi.fn mock.calls is typed as any[][] */
   const passedRequest = handler.mock.calls[0]![0] as { systemMessage: SystemMessage };
   const { content } = passedRequest.systemMessage;
-  return Array.isArray(content) ? content.map((block: { text: string }) => block.text).join('\n') : String(content);
+  return Array.isArray(content)
+    ? content.map((block) => (block.type === 'text' ? block.text : '')).join('\n')
+    : String(content);
 }
 
 // ===================================================================
