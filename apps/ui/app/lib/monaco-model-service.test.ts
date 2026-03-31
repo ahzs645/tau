@@ -202,8 +202,7 @@ describe('MonacoModelService', () => {
 
     it('should dispose models from editorHolds', async () => {
       contentService.resolve.mockResolvedValueOnce(new TextEncoder().encode('export {};'));
-      await service.getOrEnsureModel('src/editor-held.ts');
-      service.registerEditorModel('src/editor-held.ts');
+      await service.acquireModel('src/editor-held.ts');
 
       const model = models.get('file:///src/editor-held.ts');
 
@@ -262,6 +261,54 @@ describe('MonacoModelService', () => {
       expect(() => {
         service.setProjectSession();
       }).not.toThrow();
+    });
+  });
+
+  describe('acquireModel / releaseModel', () => {
+    it('should create and return a model on first acquire', async () => {
+      contentService.resolve.mockResolvedValueOnce(new TextEncoder().encode('const x = 1;'));
+      const model = await service.acquireModel('src/app.ts');
+
+      expect(model).toBeDefined();
+      expect(monaco.editor.createModel).toHaveBeenCalled();
+    });
+
+    it('should ref-count multiple acquires', async () => {
+      contentService.resolve.mockResolvedValue(new TextEncoder().encode('const x = 1;'));
+      await service.acquireModel('src/app.ts');
+      await service.acquireModel('src/app.ts');
+
+      const diag = service.getDiagnostics();
+      expect(diag.editorHeldCount).toBe(1);
+
+      service.releaseModel('src/app.ts');
+      const diag2 = service.getDiagnostics();
+      expect(diag2.editorHeldCount).toBe(1);
+
+      service.releaseModel('src/app.ts');
+      const diag3 = service.getDiagnostics();
+      expect(diag3.editorHeldCount).toBe(0);
+      expect(diag3.backgroundCount).toBe(1);
+    });
+
+    it('should transition model to background on final release', async () => {
+      contentService.resolve.mockResolvedValueOnce(new TextEncoder().encode('export {};'));
+      await service.acquireModel('src/bg.ts');
+
+      service.releaseModel('src/bg.ts');
+
+      const diag = service.getDiagnostics();
+      expect(diag.editorHeldCount).toBe(0);
+      expect(diag.backgroundCount).toBe(1);
+    });
+
+    it('should return the same model for repeated acquires', async () => {
+      contentService.resolve.mockResolvedValue(new TextEncoder().encode('const x = 1;'));
+      const model1 = await service.acquireModel('src/app.ts');
+      const model2 = await service.acquireModel('src/app.ts');
+
+      expect(model1).toBe(model2);
+      expect(monaco.editor.createModel).toHaveBeenCalledTimes(1);
     });
   });
 

@@ -181,15 +181,15 @@ const FileEditor = memo(function ({
     setForceOpenBinary(true);
   }, []);
 
-  // Register/unregister editor model with the model service
+  // Acquire/release ref-counted editor model hold
   useEffect(() => {
     if (!modelService || !filePath) {
       return;
     }
 
-    modelService.registerEditorModel(filePath);
+    void modelService.acquireModel(filePath);
     return () => {
-      modelService.unregisterEditorModel(filePath);
+      modelService.releaseModel(filePath);
     };
   }, [modelService, filePath]);
 
