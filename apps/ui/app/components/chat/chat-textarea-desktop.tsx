@@ -138,6 +138,7 @@ export const ChatTextareaDesktop = memo(function ({
     onSubmit: handleSubmit,
     onEscape: onEscapePressed,
     onUpdate: handleEditorUpdate,
+    onImagePaste: handleAddImage,
     fileTree,
     chats,
     actionItems,

@@ -537,10 +537,10 @@ export function useChatTextareaLogic({
   }, [enableAutoFocus, focusInput]);
 
   useEffect(() => {
-    // Add paste event listener to the document
+    if (!textareaReference.current) {
+      return;
+    }
     document.addEventListener('paste', handlePaste);
-
-    // Cleanup function
     return () => {
       document.removeEventListener('paste', handlePaste);
     };

@@ -7,13 +7,12 @@ import { HardBreak } from '@tiptap/extension-hard-break';
 import { History } from '@tiptap/extension-history';
 import { Placeholder } from '@tiptap/extension-placeholder';
 import type { Editor, JSONContent } from '@tiptap/core';
-import type { Node as PmNode } from '@tiptap/pm/model';
-import { Fragment, Slice } from '@tiptap/pm/model';
+import { Slice } from '@tiptap/pm/model';
 import type { EditorView } from '@tiptap/pm/view';
 import type { FileEntry } from '@taucad/types';
 import type { Chat } from '@taucad/chat';
 import type { ChipType } from '#components/chat/context-chip.js';
-import { buildPastedContent } from '#utils/at-reference.utils.js';
+import { buildPastedContent, slashCommandRegex } from '#utils/at-reference.utils.js';
 import type { PastedContentSegment } from '#utils/at-reference.utils.js';
 import { ContextChipNode } from '#components/chat/tiptap/context-chip-node.js';
 import { SubmitOnEnter } from '#components/chat/tiptap/submit-on-enter.js';
@@ -97,10 +96,19 @@ export function buildEditorContentJson(segments: PastedContentSegment[]): JSONCo
   return { type: 'doc', content: paragraphs };
 }
 
+function walkChildren(node: JSONContent, visitor: (child: JSONContent) => void): void {
+  if (node.content) {
+    for (const child of node.content) {
+      visitor(child);
+    }
+  }
+}
+
 export function extractContent(editor: Editor): ChatInputContent {
   const editorDocument = editor.getJSON();
   const contextChips: ContextChip[] = [];
   const textParts: string[] = [];
+  let paragraphCount = 0;
 
   function walk(node: JSONContent): void {
     if (node.type === 'contextChip') {
@@ -123,11 +131,13 @@ export function extractContent(editor: Editor): ChatInputContent {
       textParts.push('\n');
       return;
     }
-    if (node.content) {
-      for (const child of node.content) {
-        walk(child);
+    if (node.type === 'paragraph') {
+      if (paragraphCount > 0) {
+        textParts.push('\n');
       }
+      paragraphCount++;
     }
+    walkChildren(node, walk);
   }
 
   walk(editorDocument);
@@ -139,6 +149,7 @@ export type UseChatEditorOptions = {
   onSubmit: () => void;
   onEscape?: () => void;
   onUpdate?: (content: ChatInputContent) => void;
+  onImagePaste?: (dataUrl: string) => void;
   fileTree: Map<string, FileEntry>;
   chats: Chat[];
   actionItems?: ContextSuggestionItem[];
@@ -163,6 +174,7 @@ export function useChatEditor({
   onSubmit,
   onEscape,
   onUpdate,
+  onImagePaste,
   fileTree,
   chats,
   actionItems,
@@ -230,6 +242,8 @@ export function useChatEditor({
   onEscapeRef.current = onEscape;
   const onUpdateRef = useRef(onUpdate);
   onUpdateRef.current = onUpdate;
+  const onImagePasteRef = useRef(onImagePaste);
+  onImagePasteRef.current = onImagePaste;
 
   const editor = useEditor({
     extensions: [
@@ -263,9 +277,36 @@ export function useChatEditor({
       attributes: {
         class: 'outline-none',
       },
-      handlePaste: (view: EditorView, event: ClipboardEvent, _slice: Slice) => {
+      handlePaste: (_view: EditorView, event: ClipboardEvent) => {
+        const items = event.clipboardData?.items;
+        if (items) {
+          for (const item of items) {
+            if (item.type.startsWith('image/')) {
+              const file = item.getAsFile();
+              if (file) {
+                const reader = new FileReader();
+                reader.addEventListener('load', (readerEvent) => {
+                  const result = readerEvent.target?.result;
+                  if (typeof result === 'string' && result !== '') {
+                    onImagePasteRef.current?.(result);
+                  }
+                });
+                reader.readAsDataURL(file);
+              }
+              return true;
+            }
+          }
+        }
+
         const text = event.clipboardData?.getData('text/plain');
-        if (!text || (!text.includes('@') && !text.includes('/'))) {
+        if (!text) {
+          return false;
+        }
+
+        const hasAtRef = text.includes('@');
+        const slashTest = new RegExp(slashCommandRegex.source, slashCommandRegex.flags);
+        const hasSlashCmd = slashTest.test(text);
+        if (!hasAtRef && !hasSlashCmd) {
           return false;
         }
 
@@ -274,36 +315,18 @@ export function useChatEditor({
           chats: chatsRef.current,
           knownSkills: knownSkillIds,
         });
-        const hasChips = segments.some((s) => s.type === 'chip');
-        if (!hasChips) {
+        const json = buildEditorContentJson(segments);
+        if (!json) {
           return false;
         }
 
-        const { schema } = view.state;
-        const contextChipType = schema.nodes['contextChip'];
-        if (!contextChipType) {
+        const { schema } = _view.state;
+        if (!schema.nodes['contextChip']) {
           return false;
         }
 
-        const nodes: PmNode[] = [];
-        for (const segment of segments) {
-          if (segment.type === 'text') {
-            if (segment.value.length > 0) {
-              nodes.push(schema.text(segment.value));
-            }
-          } else {
-            nodes.push(
-              contextChipType.create({
-                id: segment.id,
-                label: segment.label,
-                chipType: segment.chipType,
-                path: segment.path,
-              }),
-            );
-          }
-        }
-
-        view.dispatch(view.state.tr.replaceSelection(new Slice(Fragment.from(nodes), 0, 0)));
+        const pastedDocument = schema.nodeFromJSON(json);
+        _view.dispatch(_view.state.tr.replaceSelection(new Slice(pastedDocument.content, 1, 1)));
 
         return true;
       },

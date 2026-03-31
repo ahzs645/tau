@@ -184,6 +184,86 @@ describe('useChatEditor', () => {
       expect(onUpdate).toHaveBeenCalled();
       expect(onUpdate).toHaveBeenLastCalledWith(expect.objectContaining({ text: 'Updated text' }));
     });
+
+    it('should extract multi-paragraph content with newline separators', async () => {
+      const { result } = renderHook(() => useChatEditor(createDefaultOptions()));
+
+      await waitFor(() => {
+        expect(result.current.editor).not.toBeNull();
+      });
+
+      const editor = result.current.editor!;
+
+      act(() => {
+        editor.commands.setContent({
+          type: 'doc',
+          content: [
+            { type: 'paragraph', content: [{ type: 'text', text: 'Hello' }] },
+            { type: 'paragraph', content: [{ type: 'text', text: 'World' }] },
+          ],
+        });
+      });
+
+      const content = extractContent(editor);
+      expect(content.text).toBe('Hello\nWorld');
+    });
+
+    it('should extract three paragraphs with two newline separators', async () => {
+      const { result } = renderHook(() => useChatEditor(createDefaultOptions()));
+
+      await waitFor(() => {
+        expect(result.current.editor).not.toBeNull();
+      });
+
+      const editor = result.current.editor!;
+
+      act(() => {
+        editor.commands.setContent({
+          type: 'doc',
+          content: [
+            { type: 'paragraph', content: [{ type: 'text', text: 'A' }] },
+            { type: 'paragraph', content: [{ type: 'text', text: 'B' }] },
+            { type: 'paragraph', content: [{ type: 'text', text: 'C' }] },
+          ],
+        });
+      });
+
+      const content = extractContent(editor);
+      expect(content.text).toBe('A\nB\nC');
+    });
+
+    it('should extract paragraphs with chips and newline separators', async () => {
+      const { result } = renderHook(() => useChatEditor(createDefaultOptions()));
+
+      await waitFor(() => {
+        expect(result.current.editor).not.toBeNull();
+      });
+
+      const editor = result.current.editor!;
+
+      act(() => {
+        editor.commands.setContent({
+          type: 'doc',
+          content: [
+            {
+              type: 'paragraph',
+              content: [
+                { type: 'text', text: 'Check ' },
+                {
+                  type: 'contextChip',
+                  attrs: { id: 'main.ts', label: 'main.ts', chipType: 'file', path: 'main.ts' },
+                },
+              ],
+            },
+            { type: 'paragraph', content: [{ type: 'text', text: 'for details' }] },
+          ],
+        });
+      });
+
+      const content = extractContent(editor);
+      expect(content.text).toBe('Check @main.ts\nfor details');
+      expect(content.contextChips).toHaveLength(1);
+    });
   });
 });
 
