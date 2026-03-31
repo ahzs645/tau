@@ -148,9 +148,9 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       configuration: {
         streaming: true,
         temperature: 1,
-        // @ts-expect-error: OpenAI reasoning params not in typed schema
-        reasoningText: {
-          effort: 'medium',
+        reasoning: {
+          effort: 'high',
+          summary: 'auto',
         },
       },
     },
@@ -179,9 +179,9 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       configuration: {
         streaming: true,
         temperature: 1,
-        // @ts-expect-error: OpenAI reasoning params not in typed schema
-        reasoningText: {
+        reasoning: {
           effort: 'high',
+          summary: 'auto',
         },
       },
     },

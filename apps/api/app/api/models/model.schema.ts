@@ -32,6 +32,13 @@ export const modelConfigurationSchema = z.object({
     .enum(['LOW', 'MEDIUM', 'HIGH', 'THINKING_LEVEL_UNSPECIFIED'])
     .describe('Gemini thinking level (Google-specific)')
     .optional(),
+  reasoning: z
+    .object({
+      effort: z.enum(['low', 'medium', 'high']).describe('Reasoning effort level').optional(),
+      summary: z.enum(['auto', 'concise', 'detailed']).describe('Reasoning summary output').optional(),
+    })
+    .describe('OpenAI reasoning model configuration')
+    .optional(),
 });
 
 export const modelDetailsSchema = z.object({
