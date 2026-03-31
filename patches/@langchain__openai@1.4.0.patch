@@ -1,0 +1,26 @@
+diff --git a/dist/converters/responses.cjs b/dist/converters/responses.cjs
+index e277bd2cfce8bc3189ac848295a0b31ec5e0f2f6..de102150e55d288722b3d8cc3b91781d94d27110 100644
+--- a/dist/converters/responses.cjs
++++ b/dist/converters/responses.cjs
+@@ -992,7 +992,7 @@ const convertMessagesToResponsesInput = ({ messages, zdrEnabled, model }) => {
+ 						});
+ 					}),
+ 					phase: require_misc.iife(() => {
+-						const index = content.findIndex((item) => "phase" in item && typeof item.phase === "string");
++						if (typeof content === "string") return undefined; const index = content.findIndex((item) => "phase" in item && typeof item.phase === "string");
+ 						if (index >= 0) return content[index].phase;
+ 					})
+ 				};
+diff --git a/dist/converters/responses.js b/dist/converters/responses.js
+index c9f2830f058a27c8da3da3c8039c4654a7ffa506..de0c9afd1c4699c824420160eca94eae7e946804 100644
+--- a/dist/converters/responses.js
++++ b/dist/converters/responses.js
+@@ -992,7 +992,7 @@ const convertMessagesToResponsesInput = ({ messages, zdrEnabled, model }) => {
+ 						});
+ 					}),
+ 					phase: iife$1(() => {
+-						const index = content.findIndex((item) => "phase" in item && typeof item.phase === "string");
++						if (typeof content === "string") return undefined; const index = content.findIndex((item) => "phase" in item && typeof item.phase === "string");
+ 						if (index >= 0) return content[index].phase;
+ 					})
+ 				};
