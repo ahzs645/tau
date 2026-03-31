@@ -52,5 +52,8 @@ export const invokeWrapToolCall = async <M extends WrapToolCallMiddleware>(
     throw new Error('wrapToolCall not defined');
   }
 
-  return wrapToolCall(payload as unknown as Parameters<typeof wrapToolCall>[0], handler);
+  return wrapToolCall(
+    payload as unknown as Parameters<typeof wrapToolCall>[0],
+    handler as Parameters<typeof wrapToolCall>[1],
+  );
 };
