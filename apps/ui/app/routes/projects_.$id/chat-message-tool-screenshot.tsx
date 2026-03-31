@@ -37,8 +37,9 @@ export function ChatMessageToolScreenshot({
 
     case 'output-available': {
       const { output } = part;
-      const { images } = output;
-      const isComposite = images.length === 1 && images[0]?.view === 'composite';
+      const allImages = output.images;
+      const renderableImages = allImages.filter((img) => img.dataUrl.startsWith('data:'));
+      const isComposite = allImages.length === 1 && allImages[0]?.view === 'composite';
 
       return (
         <ChatToolCard variant='minimal' status='ready' isDefaultOpen={false}>
@@ -47,13 +48,15 @@ export function ChatMessageToolScreenshot({
             <ChatToolCardTitle>
               {isComposite
                 ? 'Captured 6 screenshots'
-                : `Captured ${images.length} ${images.length === 1 ? 'screenshot' : 'screenshots'}`}
+                : `Captured ${allImages.length} ${allImages.length === 1 ? 'screenshot' : 'screenshots'}`}
             </ChatToolCardTitle>
           </ChatToolCardHeader>
-          {images.length > 0 ? (
+          {renderableImages.length > 0 ? (
             <ChatToolCardContent>
-              <div className={`grid gap-2 ${images.length === 1 ? 'grid-cols-1' : 'grid-cols-2 @md:grid-cols-3'}`}>
-                {images.map((image) => (
+              <div
+                className={`grid gap-2 ${renderableImages.length === 1 ? 'grid-cols-1' : 'grid-cols-2 @md:grid-cols-3'}`}
+              >
+                {renderableImages.map((image) => (
                   <div key={image.view} className='flex flex-col items-center gap-1'>
                     <img
                       src={image.dataUrl}
