@@ -1037,7 +1037,9 @@ describe('removeCloneUnsafeObjects', () => {
    * `this.camera` as `undefined` and causing a runtime crash during scene traversal.
    */
   class MockTransformControls extends THREE.Object3D {
-    public readonly isTransformControls = true;
+    public get isTransformControls(): boolean {
+      return true;
+    }
     private readonly camera: THREE.Camera | undefined;
 
     public constructor(camera?: THREE.Camera) {

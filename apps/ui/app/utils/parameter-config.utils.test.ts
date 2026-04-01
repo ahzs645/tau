@@ -10,11 +10,12 @@ import {
   switchActiveSet,
   serializeParameterConfig,
   validateParameterConfig,
-} from './parameter-config.utils';
+} from '#utils/parameter-config.utils.js';
 
 const createTestConfig = (): FileParameterConfig => ({
   version: 1,
   files: {
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- file path key
     'main.ts': {
       activeSet: 'default',
       sets: {
@@ -75,6 +76,7 @@ describe('parameter-config.utils', () => {
       const config: FileParameterConfig = {
         version: 1,
         files: {
+          // eslint-disable-next-line @typescript-eslint/naming-convention -- file path key
           'main.ts': {
             activeSet: 'nonexistent',
             sets: {},
@@ -88,8 +90,12 @@ describe('parameter-config.utils', () => {
   describe('updateSetValues', () => {
     it('should update existing set values immutably', () => {
       const original = createTestConfig();
-      const updated = updateSetValues(original, 'main.ts', 'default', {
-        width: 99,
+      const updated = updateSetValues(original, {
+        filePath: 'main.ts',
+        setName: 'default',
+        values: {
+          width: 99,
+        },
       });
 
       expect(updated.files['main.ts']?.sets['default']?.values).toEqual({
@@ -104,8 +110,12 @@ describe('parameter-config.utils', () => {
 
     it('should create file entry if it does not exist', () => {
       const original = createTestConfig();
-      const updated = updateSetValues(original, 'box.ts', 'default', {
-        size: 5,
+      const updated = updateSetValues(original, {
+        filePath: 'box.ts',
+        setName: 'default',
+        values: {
+          size: 5,
+        },
       });
 
       expect(updated.files['box.ts']?.activeSet).toBe('default');
@@ -117,8 +127,12 @@ describe('parameter-config.utils', () => {
 
     it('should not mutate the original config', () => {
       const original = createTestConfig();
-      const updated = updateSetValues(original, 'main.ts', 'default', {
-        width: 99,
+      const updated = updateSetValues(original, {
+        filePath: 'main.ts',
+        setName: 'default',
+        values: {
+          width: 99,
+        },
       });
 
       expect(updated).not.toBe(original);
@@ -130,9 +144,13 @@ describe('parameter-config.utils', () => {
   describe('createSet', () => {
     it('should create a new set with provided values', () => {
       const config = createTestConfig();
-      const updated = createSet(config, 'main.ts', 'large', {
-        width: 100,
-        height: 200,
+      const updated = createSet(config, {
+        filePath: 'main.ts',
+        setName: 'large',
+        values: {
+          width: 100,
+          height: 200,
+        },
       });
 
       expect(updated.files['main.ts']?.sets['large']?.values).toEqual({
@@ -143,14 +161,14 @@ describe('parameter-config.utils', () => {
 
     it('should create a new set with empty values by default', () => {
       const config = createTestConfig();
-      const updated = createSet(config, 'main.ts', 'empty');
+      const updated = createSet(config, { filePath: 'main.ts', setName: 'empty' });
 
       expect(updated.files['main.ts']?.sets['empty']?.values).toEqual({});
     });
 
     it('should throw if set already exists', () => {
       const config = createTestConfig();
-      expect(() => createSet(config, 'main.ts', 'default')).toThrow('already exists');
+      expect(() => createSet(config, { filePath: 'main.ts', setName: 'default' })).toThrow('already exists');
     });
   });
 
@@ -202,35 +220,51 @@ describe('parameter-config.utils', () => {
 
   describe('validateParameterConfig', () => {
     it('should pass for a valid config', () => {
-      expect(() => validateParameterConfig(createTestConfig())).not.toThrow();
+      expect(() => {
+        validateParameterConfig(createTestConfig());
+      }).not.toThrow();
     });
 
     it('should throw on undefined', () => {
-      expect(() => validateParameterConfig(undefined)).toThrow('expected a non-null object');
+      expect(() => {
+        validateParameterConfig(undefined);
+      }).toThrow('expected a non-null object');
     });
 
     it('should throw on null', () => {
-      expect(() => validateParameterConfig(null)).toThrow('expected a non-null object');
+      expect(() => {
+        validateParameterConfig(null);
+      }).toThrow('expected a non-null object');
     });
 
     it('should throw on non-object', () => {
-      expect(() => validateParameterConfig('string')).toThrow('expected a non-null object');
+      expect(() => {
+        validateParameterConfig('string');
+      }).toThrow('expected a non-null object');
     });
 
     it('should throw on missing version', () => {
-      expect(() => validateParameterConfig({ files: {} })).toThrow('missing or unsupported version');
+      expect(() => {
+        validateParameterConfig({ files: {} });
+      }).toThrow('missing or unsupported version');
     });
 
     it('should throw on wrong version', () => {
-      expect(() => validateParameterConfig({ version: 2, files: {} })).toThrow('missing or unsupported version');
+      expect(() => {
+        validateParameterConfig({ version: 2, files: {} });
+      }).toThrow('missing or unsupported version');
     });
 
     it('should throw on missing files', () => {
-      expect(() => validateParameterConfig({ version: 1 })).toThrow('missing or invalid files object');
+      expect(() => {
+        validateParameterConfig({ version: 1 });
+      }).toThrow('missing or invalid files object');
     });
 
     it('should throw on null files', () => {
-      expect(() => validateParameterConfig({ version: 1, files: null })).toThrow('missing or invalid files object');
+      expect(() => {
+        validateParameterConfig({ version: 1, files: null });
+      }).toThrow('missing or invalid files object');
     });
   });
 
@@ -252,24 +286,36 @@ describe('parameter-config.utils', () => {
     });
 
     it('should throw on undefined input', () => {
-      expect(() => serializeParameterConfig(undefined as never)).toThrow('expected a non-null object');
+      expect(() => serializeParameterConfig(undefined as unknown as FileParameterConfig)).toThrow(
+        'expected a non-null object',
+      );
     });
 
     it('should throw on null input', () => {
-      expect(() => serializeParameterConfig(null as never)).toThrow('expected a non-null object');
+      expect(() => serializeParameterConfig(null as unknown as FileParameterConfig)).toThrow(
+        'expected a non-null object',
+      );
     });
 
     it('should throw on config missing version', () => {
-      expect(() => serializeParameterConfig({ files: {} } as never)).toThrow('missing or unsupported version');
+      expect(() => serializeParameterConfig({ files: {} } as unknown as FileParameterConfig)).toThrow(
+        'missing or unsupported version',
+      );
     });
 
     it('should throw on config missing files', () => {
-      expect(() => serializeParameterConfig({ version: 1 } as never)).toThrow('missing or invalid files object');
+      expect(() => serializeParameterConfig({ version: 1 } as unknown as FileParameterConfig)).toThrow(
+        'missing or invalid files object',
+      );
     });
 
     it('should preserve all file entries when one CU is reset to empty values', () => {
-      const config = updateSetValues(createTestConfig(), 'second.ts', 'default', { size: 5 });
-      const reset = updateSetValues(config, 'second.ts', 'default', {});
+      const config = updateSetValues(createTestConfig(), {
+        filePath: 'second.ts',
+        setName: 'default',
+        values: { size: 5 },
+      });
+      const reset = updateSetValues(config, { filePath: 'second.ts', setName: 'default', values: {} });
       const json = serializeParameterConfig(reset);
       const parsed = parseParameterConfig(json);
 

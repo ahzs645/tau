@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useRef } from 'react';
 import { ChevronDown, Paperclip, CircuitBoard, Wrench, AtSign } from 'lucide-react';
 import type { Chat, ToolSelection } from '@taucad/chat';
 import type { FileEntry } from '@taucad/types';
+import type { FileTreeService } from '#lib/file-tree-service.js';
 import { ChatModelSelector } from '#components/chat/chat-model-selector.js';
 import { ChatKernelSelector } from '#components/chat/chat-kernel-selector.js';
 import { ChatToolSelector } from '#components/chat/chat-tool-selector.js';
@@ -45,7 +46,7 @@ type ChatTextareaDesktopProperties = {
   readonly formattedCancelKeyCombination: string;
 
   // Context data for Tiptap editor
-  readonly fileTree: Map<string, FileEntry>;
+  readonly treeService: FileTreeService | undefined;
   readonly chats: Chat[];
   readonly actionItems?: ContextSuggestionItem[];
   readonly setDraftText: (text: string) => void;
@@ -102,7 +103,7 @@ export const ChatTextareaDesktop = memo(function ({
   formattedCancelKeyCombination,
 
   // Context data
-  fileTree,
+  treeService,
   chats,
   actionItems,
   setDraftText,
@@ -139,7 +140,7 @@ export const ChatTextareaDesktop = memo(function ({
     onEscape: onEscapePressed,
     onUpdate: handleEditorUpdate,
     onImagePaste: handleAddImage,
-    fileTree,
+    treeService,
     chats,
     actionItems,
     onContextAction: createScreenshotContextHandler({
@@ -163,11 +164,12 @@ export const ChatTextareaDesktop = memo(function ({
     if (inputText === '' && !editor.isEmpty) {
       editor.commands.clearContent(false);
     } else if (inputText !== '' && editor.isEmpty) {
-      const segments = buildPastedContent(inputText, { fileTree, chats, knownSkills: knownSkillIds });
+      const lazyTree: Map<string, FileEntry> = treeService?.getTreeSnapshot() ?? new Map<string, FileEntry>();
+      const segments = buildPastedContent(inputText, { fileTree: lazyTree, chats, knownSkills: knownSkillIds });
       const json = buildEditorContentJson(segments);
       editor.commands.setContent(json ?? inputText, { emitUpdate: false });
     }
-  }, [inputText, editor, fileTree, chats]);
+  }, [inputText, editor, treeService, chats]);
 
   // Expose focus function to parent via mutable ref
   useEffect(() => {

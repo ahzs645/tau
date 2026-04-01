@@ -526,6 +526,100 @@ describe('runtime-filesystem-bridge', () => {
     });
   });
 
+  describe('SharedContentPool bridge integration', () => {
+    async function createTestPool(totalBytes = 64 * 1024, maxEntries = 64) {
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- class name is PascalCase
+      const { SharedContentPool } = await import('@taucad/filesystem');
+      const buffer = new SharedArrayBuffer(totalBytes);
+      return new SharedContentPool(buffer, { maxEntries });
+    }
+
+    it('should resolve readFile from pool without postMessage', async () => {
+      const pool = await createTestPool();
+
+      pool.store('/cached.txt', new TextEncoder().encode('from pool'));
+
+      const channel = new MessageChannel();
+      const postMessageSpy = vi.spyOn(channel.port2, 'postMessage');
+
+      const bridge = await import('#framework/runtime-filesystem-bridge.js');
+      const { call, dispose } = bridge.createBridgeCall(channel.port2, { contentPool: pool });
+
+      const result = await call('readFile', ['/cached.txt']);
+      expect(result).toBeInstanceOf(Uint8Array);
+      expect(new TextDecoder().decode(result as Uint8Array<ArrayBuffer>)).toBe('from pool');
+      expect(postMessageSpy).not.toHaveBeenCalled();
+
+      dispose();
+    });
+
+    it('should resolve readFile utf8 from pool without postMessage', async () => {
+      const pool = await createTestPool();
+
+      pool.store('/cached.txt', new TextEncoder().encode('utf8 from pool'));
+
+      const channel = new MessageChannel();
+      const postMessageSpy = vi.spyOn(channel.port2, 'postMessage');
+
+      const bridge = await import('#framework/runtime-filesystem-bridge.js');
+      const { call, dispose } = bridge.createBridgeCall(channel.port2, { contentPool: pool });
+
+      const result = await call('readFile', ['/cached.txt', 'utf8']);
+      expect(result).toBe('utf8 from pool');
+      expect(postMessageSpy).not.toHaveBeenCalled();
+
+      dispose();
+    });
+
+    it('should fall through to bridge RPC on pool miss', async () => {
+      const pool = await createTestPool();
+
+      const fs = fromMemoryFS({ '/on-disk.txt': 'from bridge' });
+      const channel = new MessageChannel();
+      createBridgeServer(fs, channel.port1);
+
+      const bridge = await import('#framework/runtime-filesystem-bridge.js');
+      const { call, dispose } = bridge.createBridgeCall(channel.port2, { contentPool: pool });
+
+      const result = await call('readFile', ['/on-disk.txt', 'utf8']);
+      expect(result).toBe('from bridge');
+
+      dispose();
+    });
+
+    it('should populate pool after successful readFile on server side', async () => {
+      const pool = await createTestPool();
+
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- filesystem paths use non-camelCase names
+      const fs = fromMemoryFS({ '/server.txt': 'server data' });
+      const channel = new MessageChannel();
+      createBridgeServer(fs, channel.port1, { contentPool: pool });
+
+      const proxy = createBridgeProxy<RuntimeFileSystemBase>(channel.port2);
+      await proxy.readFile('/server.txt');
+
+      const cached = pool.resolve('/server.txt');
+      expect(cached).toBeDefined();
+      expect(new TextDecoder().decode(cached)).toBe('server data');
+
+      proxy.dispose();
+    });
+
+    it('should work identically without pool (progressive enhancement)', async () => {
+      const fs = fromMemoryFS({ '/no-pool.txt': 'no pool data' });
+      const channel = new MessageChannel();
+      createBridgeServer(fs, channel.port1);
+
+      const bridge = await import('#framework/runtime-filesystem-bridge.js');
+      const { call, dispose } = bridge.createBridgeCall(channel.port2);
+
+      const result = await call('readFile', ['/no-pool.txt', 'utf8']);
+      expect(result).toBe('no pool data');
+
+      dispose();
+    });
+  });
+
   describe('extractTransferables', () => {
     it('should extract ArrayBuffer', () => {
       const buffer = new ArrayBuffer(8);

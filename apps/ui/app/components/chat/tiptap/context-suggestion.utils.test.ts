@@ -97,9 +97,9 @@ describe('buildContextItems', () => {
     const fileTree = new Map<string, FileEntry>([['src', createFileEntry({ path: 'src', name: 'src', type: 'dir' })]]);
 
     const items = buildContextItems({ fileTree, chats: [] });
-    const dirItem = items.find((i) => i.id === 'src');
-    expect(dirItem?.chipType).toBe('folder');
-    expect(dirItem?.group).toBe(filesFoldersGroup);
+    const directoryItem = items.find((i) => i.id === 'src');
+    expect(directoryItem?.chipType).toBe('folder');
+    expect(directoryItem?.group).toBe(filesFoldersGroup);
   });
 
   it('should build chat items with updatedAt as sortKey', () => {

@@ -19,7 +19,12 @@ export { createRuntimeFileSystem } from '#filesystem/create-runtime-filesystem.j
 
 // High-level wrappers
 export { exposeFileSystem, createFileSystemBridge } from '#filesystem/filesystem-bridge.js';
-export type { FileSystemBridgeOptions, ExposeFileSystemHandle } from '#filesystem/filesystem-bridge.js';
+export type {
+  FileSystemBridgeOptions,
+  ExposeFileSystemHandle,
+  ChangeEventCoalescer,
+  CoalescerFactory,
+} from '#filesystem/filesystem-bridge.js';
 
 // Low-level bridge primitives
 export {
@@ -30,4 +35,9 @@ export {
   catchMessages,
   extractTransferables,
 } from '#framework/runtime-filesystem-bridge.js';
-export type { BridgeError, BridgeHandle, BridgeServerHandle } from '#framework/runtime-filesystem-bridge.js';
+export type {
+  BridgeError,
+  BridgeHandle,
+  BridgeServerHandle,
+  ContentPool,
+} from '#framework/runtime-filesystem-bridge.js';

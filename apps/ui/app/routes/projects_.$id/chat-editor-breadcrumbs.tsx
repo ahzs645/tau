@@ -2,7 +2,6 @@ import type { ReactNode } from 'react';
 import { Fragment, useMemo, useCallback, useRef } from 'react';
 import { ChevronRight } from 'lucide-react';
 import { useProject } from '#hooks/use-project.js';
-import { useFileTreeMap } from '#hooks/use-file-tree.js';
 import { useHorizontalScroll } from '#hooks/use-horizontal-scroll.js';
 import { FileExtensionIcon } from '#components/icons/file-extension-icon.js';
 import { FileSelector } from '#components/files/file-selector.js';
@@ -27,18 +26,6 @@ export function ChatEditorBreadcrumbs({ filePath, children }: ChatEditorBreadcru
       name: filePath.split('/').pop() ?? '',
     }),
     [filePath],
-  );
-
-  // Get file list from file tree service for the FileSelector
-  const fileTree = useFileTreeMap();
-  const files = useMemo(
-    () =>
-      fileTree.size === 0
-        ? []
-        : [...fileTree.values()].map((entry) => ({
-            path: entry.path,
-          })),
-    [fileTree],
   );
 
   // Handle file selection - opens file in editor
@@ -75,7 +62,7 @@ export function ChatEditorBreadcrumbs({ filePath, children }: ChatEditorBreadcru
           breadcrumbs.map((crumb) => (
             <Fragment key={crumb.path}>
               <FileSelector
-                files={files}
+                shouldIncludeDirectories
                 selectedFile={activeFile.path}
                 initialPath={crumb.parentPath}
                 popoverProperties={{ align: 'start' }}

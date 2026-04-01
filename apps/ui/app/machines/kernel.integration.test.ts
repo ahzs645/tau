@@ -12,13 +12,8 @@
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
-import {
-  ProviderRegistry,
-  WriteCoordinator,
-  DirectoryTreeCache,
-  ChangeEventBus,
-  FileService,
-} from '@taucad/filesystem';
+// eslint-disable-next-line @nx/enforce-module-boundaries -- test file; not part of lazy-loaded bundle
+import { ProviderRegistry, ResourceQueue, DirectoryTreeCache, ChangeEventBus, FileService } from '@taucad/filesystem';
 import { createBridgeServer, createBridgeProxy } from '@taucad/runtime/filesystem';
 import { createRuntimeClient } from '@taucad/runtime';
 import type { RuntimeClient } from '@taucad/runtime';
@@ -55,13 +50,13 @@ async function createFileService(): Promise<FileService> {
   // backend is 'indexeddb' which requires IDBFactory (browser-only).
   await providerRegistry.switchActiveProvider('memory');
 
-  const writeCoordinator = new WriteCoordinator();
+  const resourceQueue = new ResourceQueue();
   const treeCache = new DirectoryTreeCache();
   const eventBus = new ChangeEventBus();
 
   return new FileService({
     providerRegistry,
-    writeCoordinator,
+    resourceQueue,
     treeCache,
     eventBus,
   });

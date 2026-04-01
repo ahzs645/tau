@@ -1,37 +1,55 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import type { ContextPayload, SkillMetadata } from '@taucad/chat';
-import { useFileTree, useFileManager } from '#hooks/use-file-manager.js';
+import { useFileManager } from '#hooks/use-file-manager.js';
 import { parseSkillFrontmatter } from '#hooks/use-context-payload.utils.js';
 
-const skillPathPattern = /^\.tau\/skills\/[^/]+\/SKILL\.md$/;
 const agentsMdPath = '.tau/AGENTS.md';
 const decoder = new TextDecoder();
 
 /**
  * Hook that assembles a context payload from the project's `.tau/` directory.
- * Reads `.tau/skills/` SKILL.md frontmatter and `.tau/AGENTS.md` from ZenFS,
- * caching results and re-reading when the file tree changes.
+ * Uses targeted reads: `readDirectoryEntries('.tau/skills')` to discover skill
+ * directories and `getEntry('.tau/AGENTS.md')` for memory — never scans the
+ * full project tree.
  *
  * @returns ContextPayload to attach to message metadata, or undefined if nothing to send
  */
 export function useContextPayload(): ContextPayload | undefined {
-  const fileTree = useFileTree();
-  const { readFile } = useFileManager();
+  const { readFile, treeService } = useFileManager();
+  const [skillPaths, setSkillPaths] = useState<string[]>([]);
+  const [hasAgentsMd, setHasAgentsMd] = useState(false);
   const [skills, setSkills] = useState<SkillMetadata[]>([]);
   const [memory, setMemory] = useState<Record<string, string> | undefined>();
 
-  const skillPaths = useMemo(
-    () =>
-      fileTree
-        ?.filter((entry) => entry.type === 'file' && skillPathPattern.test(entry.path))
-        .map((entry) => entry.path) ?? [],
-    [fileTree],
-  );
+  useEffect(() => {
+    if (!treeService) {
+      return;
+    }
+    let cancelled = false;
 
-  const hasAgentsMd = useMemo(
-    () => fileTree?.some((entry) => entry.type === 'file' && entry.path === agentsMdPath) ?? false,
-    [fileTree],
-  );
+    async function discover(): Promise<void> {
+      const [skillDirectories, agentsEntry] = await Promise.all([
+        treeService!.readDirectoryEntries('.tau/skills').catch(() => []),
+        treeService!.getEntry(agentsMdPath),
+      ]);
+
+      if (cancelled) {
+        return;
+      }
+
+      const paths = skillDirectories
+        .filter((node) => node.children !== undefined)
+        .map((node) => `.tau/skills/${node.name}/SKILL.md`);
+
+      setSkillPaths(paths);
+      setHasAgentsMd(agentsEntry?.type === 'file');
+    }
+
+    void discover();
+    return () => {
+      cancelled = true;
+    };
+  }, [treeService]);
 
   const readFileRef = useRef(readFile);
   readFileRef.current = readFile;

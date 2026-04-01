@@ -229,7 +229,7 @@ describe('ContextSuggestionDropdown', () => {
 
       const dropdown = screen.getByTestId('context-suggestion-dropdown');
       const buttons = within(dropdown).getAllByRole('button');
-      const categoryButton = buttons.find((b) => b.textContent?.includes(filesFoldersGroup));
+      const categoryButton = buttons.find((b) => b.textContent.includes(filesFoldersGroup));
       expect(categoryButton).toBeInTheDocument();
     });
 
@@ -250,7 +250,7 @@ describe('ContextSuggestionDropdown', () => {
       const dropdown = screen.getByTestId('context-suggestion-dropdown');
       const buttons = within(dropdown).getAllByRole('button');
       const labels = buttons.map((b) => b.textContent);
-      expect(labels.some((l) => l?.includes('main.ts'))).toBe(true);
+      expect(labels.some((l) => l.includes('main.ts'))).toBe(true);
     });
 
     it('should not show separator when query is non-empty', () => {

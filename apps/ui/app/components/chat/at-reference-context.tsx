@@ -1,26 +1,26 @@
 import { createContext, use, useMemo } from 'react';
-import type { FileEntry } from '@taucad/types';
 import type { Chat } from '@taucad/chat';
+import type { FileTreeService } from '#lib/file-tree-service.js';
 
 type AtReferenceContextValue = {
-  fileTree: Map<string, FileEntry>;
+  treeService: FileTreeService | undefined;
   chatsById: Map<string, Chat>;
 };
 
 const AtReferenceContext = createContext<AtReferenceContextValue>({
-  fileTree: new Map(),
+  treeService: undefined,
   chatsById: new Map(),
 });
 
 type AtReferenceProviderProps = {
-  readonly fileTree: Map<string, FileEntry>;
+  readonly treeService: FileTreeService | undefined;
   readonly chats: Chat[];
   readonly children: React.ReactNode;
 };
 
-export function AtReferenceProvider({ fileTree, chats, children }: AtReferenceProviderProps): React.JSX.Element {
+export function AtReferenceProvider({ treeService, chats, children }: AtReferenceProviderProps): React.JSX.Element {
   const chatsById = useMemo(() => new Map(chats.map((c) => [c.id, c])), [chats]);
-  const contextValue = useMemo(() => ({ fileTree, chatsById }), [fileTree, chatsById]);
+  const contextValue = useMemo(() => ({ treeService, chatsById }), [treeService, chatsById]);
 
   return <AtReferenceContext value={contextValue}>{children}</AtReferenceContext>;
 }

@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import type { Root } from 'hast';
 import { rehypeAtReferences } from '#components/markdown/rehype-at-references.js';
 
 type TextNode = { type: 'text'; value: string };
@@ -19,8 +20,7 @@ function tree(...children: ElementNode[]): RootNode {
 }
 
 function runPlugin(root: RootNode): RootNode {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-argument -- test helper casting hast-compatible tree
-  rehypeAtReferences()(root as any);
+  rehypeAtReferences()(root as unknown as Root);
   return root;
 }
 

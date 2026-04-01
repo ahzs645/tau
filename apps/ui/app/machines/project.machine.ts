@@ -269,7 +269,11 @@ export const projectMachine = setup({
 
       const filePath = context.mainEntryFile;
       const activeSet = context.parameterConfig.files[filePath]?.activeSet ?? 'default';
-      const newConfig = updateSetValues(context.parameterConfig, filePath, activeSet, event.parameters);
+      const newConfig = updateSetValues(context.parameterConfig, {
+        filePath,
+        setName: activeSet,
+        values: event.parameters,
+      });
       return { parameterConfig: newConfig };
     }),
     setCompilationUnitParametersInContext: assign(({ context, event }) => {
@@ -279,7 +283,11 @@ export const projectMachine = setup({
       }
 
       const activeSet = context.parameterConfig.files[event.filePath]?.activeSet ?? 'default';
-      const newConfig = updateSetValues(context.parameterConfig, event.filePath, activeSet, event.parameters);
+      const newConfig = updateSetValues(context.parameterConfig, {
+        filePath: event.filePath,
+        setName: activeSet,
+        values: event.parameters,
+      });
       return { parameterConfig: newConfig };
     }),
     handleParameterFileChanged: assign(({ event }) => {
@@ -298,7 +306,13 @@ export const projectMachine = setup({
       if (!context.parameterConfig) {
         return {};
       }
-      return { parameterConfig: createSet(context.parameterConfig, event.filePath, event.setName, event.values ?? {}) };
+      return {
+        parameterConfig: createSet(context.parameterConfig, {
+          filePath: event.filePath,
+          setName: event.setName,
+          values: event.values ?? {},
+        }),
+      };
     }),
     handleDeleteParameterSet: assign(({ context, event }) => {
       assertEvent(event, 'deleteParameterSet');

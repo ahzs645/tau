@@ -52,10 +52,9 @@ export const getActiveSetValues = (config: FileParameterConfig, filePath: string
  */
 export const updateSetValues = (
   config: FileParameterConfig,
-  filePath: string,
-  setName: string,
-  values: Record<string, unknown>,
+  options: { filePath: string; setName: string; values: Record<string, unknown> },
 ): FileParameterConfig => {
+  const { filePath, setName, values } = options;
   const existingEntry: FileParameterEntry = config.files[filePath] ?? {
     activeSet: setName,
     sets: {},
@@ -82,15 +81,14 @@ export const updateSetValues = (
  */
 export const createSet = (
   config: FileParameterConfig,
-  filePath: string,
-  setName: string,
-  values: Record<string, unknown> = {},
+  options: { filePath: string; setName: string; values?: Record<string, unknown> },
 ): FileParameterConfig => {
+  const { filePath, setName, values = {} } = options;
   const entry = config.files[filePath];
   if (entry?.sets[setName]) {
     throw new Error(`Parameter set "${setName}" already exists for "${filePath}"`);
   }
-  return updateSetValues(config, filePath, setName, values);
+  return updateSetValues(config, { filePath, setName, values });
 };
 
 /**

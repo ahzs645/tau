@@ -2,8 +2,9 @@ import { useCallback, useSyncExternalStore } from 'react';
 import type { FileEntry } from '@taucad/types';
 import { useFileManager } from '#hooks/use-file-manager.js';
 
-// eslint-disable-next-line no-empty-function -- intentional no-op for unsubscribe fallback
-const noop = (): void => {};
+const noop = (): void => {
+  /* Intentional no-op when subscribe is unavailable (useSyncExternalStore fallback). */
+};
 const emptyTree = new Map<string, FileEntry>();
 
 /**

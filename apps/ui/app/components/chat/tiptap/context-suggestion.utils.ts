@@ -1,4 +1,4 @@
-import type { FileEntry } from '@taucad/types';
+import type { FileEntry, FileStatEntry } from '@taucad/types';
 import type { Chat } from '@taucad/chat';
 import type { ContextSuggestionItem } from '#components/chat/tiptap/suggestion-types.js';
 import { fuzzyMatch } from '#components/chat/tiptap/fuzzy-match.js';
@@ -9,6 +9,12 @@ const isTauInternal = (path: string): boolean => path === '.tau' || path.startsW
 
 export type BuildContextItemsOptions = {
   fileTree: Map<string, FileEntry>;
+  chats: Chat[];
+  actionItems?: ContextSuggestionItem[];
+};
+
+export type BuildContextItemsFromSearchOptions = {
+  fileEntries: FileStatEntry[];
   chats: Chat[];
   actionItems?: ContextSuggestionItem[];
 };
@@ -66,6 +72,60 @@ export function buildContextItems({ fileTree, chats, actionItems }: BuildContext
         group: filesFoldersGroup,
       });
     }
+  }
+
+  for (const chat of chats) {
+    items.push({
+      id: chat.id,
+      label: chat.name,
+      chipType: 'chat',
+      path: `.tau/transcripts/${chat.id}.jsonl`,
+      group: pastChatsGroup,
+      sortKey: chat.updatedAt,
+    });
+  }
+
+  if (actionItems) {
+    items.push(...actionItems);
+  }
+
+  return items;
+}
+
+/**
+ * Build context suggestion items from worker-side search results (`FileStatEntry[]`).
+ * Used when `treeService.searchFiles()` provides file entries instead of the full tree.
+ */
+export function buildContextItemsFromSearch({
+  fileEntries,
+  chats,
+  actionItems,
+}: BuildContextItemsFromSearchOptions): ContextSuggestionItem[] {
+  const items: ContextSuggestionItem[] = [];
+
+  const filtered = fileEntries.filter((entry) => !isTauInternal(entry.path));
+  const sorted = [...filtered].sort((a, b) => b.mtimeMs - a.mtimeMs);
+  const recentPaths = new Set(sorted.slice(0, recentFilesLimit).map((entry) => entry.path));
+
+  for (const entry of sorted) {
+    if (recentPaths.has(entry.path)) {
+      items.push({
+        id: entry.path,
+        label: entry.name,
+        chipType: entry.type === 'dir' ? 'folder' : 'file',
+        path: entry.path,
+        group: recentFilesGroup,
+        sortKey: entry.mtimeMs,
+      });
+    }
+    items.push({
+      id: entry.path,
+      label: entry.name,
+      chipType: entry.type === 'dir' ? 'folder' : 'file',
+      path: entry.path,
+      group: filesFoldersGroup,
+      sortKey: entry.mtimeMs,
+    });
   }
 
   for (const chat of chats) {

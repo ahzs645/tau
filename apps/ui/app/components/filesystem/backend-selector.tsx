@@ -75,10 +75,8 @@ export function BackendSelector({
     () =>
       backendOptions.filter(
         (option) =>
-          // OPFS is disabled due to file corruption issues -- hide from all selectors
-          option.value !== 'opfs' &&
           // Memory is internal-only
-          (!isInternalHidden || option.value !== 'memory'),
+          !isInternalHidden || option.value !== 'memory',
       ),
     [isInternalHidden],
   );

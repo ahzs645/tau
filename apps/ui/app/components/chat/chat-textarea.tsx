@@ -8,7 +8,7 @@ import { ChatTextareaMobile } from '#components/chat/chat-textarea-mobile.js';
 import { useIsMobile } from '#hooks/use-mobile.js';
 import { ClientOnly } from '#components/ui/utils/client-only.js';
 import { useProject } from '#hooks/use-project.js';
-import { useFileTreeMap } from '#hooks/use-file-tree.js';
+import { useFileManager } from '#hooks/use-file-manager.js';
 import { useChats } from '#hooks/use-chats.js';
 import { useChatActions } from '#hooks/use-chat.js';
 import { useImageQuality } from '#hooks/use-image-quality.js';
@@ -23,7 +23,7 @@ import { takeScreenshotGroup } from '#components/chat/tiptap/context-suggestion.
  * desktop or mobile version based on the `useIsMobile()` hook.
  *
  * All logic is shared via the `useChatTextareaLogic` hook.
- * Project context data (fileTree, chats) is fetched here and passed
+ * Project context data (treeService, chats) is fetched here and passed
  * as props to keep the memo'd desktop component free of internal subscription hooks,
  * preventing re-render cascades through Radix UI's composeRefs.
  */
@@ -49,7 +49,7 @@ export const ChatTextarea = memo(function ({
   });
 
   const projectContext = useProject({ enableNoContext: true });
-  const fileTree = useFileTreeMap();
+  const { treeService } = useFileManager();
   const { chats } = useChats(projectContext?.projectId ?? '');
   const { setDraftText: setMainDraftText, setEditDraftText } = useChatActions();
 
@@ -336,7 +336,7 @@ export const ChatTextarea = memo(function ({
         selectedModel={logic.selectedModel}
         formattedCancelKeyCombination={logic.formattedCancelKeyCombination}
         // Context data for Tiptap
-        fileTree={fileTree}
+        treeService={treeService}
         chats={chats}
         actionItems={screenshotActionItems}
         setDraftText={setDraftText}

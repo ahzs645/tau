@@ -177,6 +177,7 @@
     "eslint-plugin-import-x": "catalog:",
     "eslint-plugin-max-params-no-constructor": "catalog:",
     "eslint-plugin-react": "catalog:",
+    "fake-indexeddb": "catalog:",
     "fastify": "^5.7.4",
     "fumadocs-core": "^16.6.5",
     "fumadocs-mdx": "^14.2.8",

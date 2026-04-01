@@ -23,7 +23,7 @@ export type CommunityBuildGridProperties = {
 };
 
 export function CommunityProjectGrid({
-  projects: projects,
+  projects,
   hasMore,
   onLoadMore,
   limit,

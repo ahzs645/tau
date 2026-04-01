@@ -4,7 +4,7 @@ import type { Project } from '@taucad/types';
 import { Button } from '#components/ui/button.js';
 import { Loader } from '#components/ui/loader.js';
 import type { Handle } from '#types/matches.types.js';
-import { FileManagerProvider } from '#hooks/use-file-manager.js';
+import { FileManagerProvider, SharedWorkerGate } from '#hooks/use-file-manager.js';
 import { CadPreviewProvider } from '#hooks/use-cad-preview.js';
 import { useProjectManager } from '#hooks/use-project-manager.js';
 import type { ProjectsWithFiles } from '#constants/project-examples.js';
@@ -25,7 +25,7 @@ function findStaticProject(projectId: string): ProjectsWithFiles | undefined {
 function StaticPreviewProvider({
   children,
   projectId,
-  staticProject: staticProject,
+  staticProject,
 }: {
   readonly children?: React.ReactNode;
   readonly projectId: string;
@@ -138,15 +138,17 @@ function RouteProvider({ children }: { readonly children?: React.ReactNode }): R
   const staticProject = findStaticProject(id!);
 
   return (
-    <FileManagerProvider projectId={id} rootDirectory={`/projects/${id}`}>
-      {staticProject ? (
-        <StaticPreviewProvider projectId={id!} staticProject={staticProject}>
-          {children}
-        </StaticPreviewProvider>
-      ) : (
-        <DynamicPreviewProvider projectId={id!}>{children}</DynamicPreviewProvider>
-      )}
-    </FileManagerProvider>
+    <SharedWorkerGate>
+      <FileManagerProvider projectId={id} rootDirectory={`/projects/${id}`}>
+        {staticProject ? (
+          <StaticPreviewProvider projectId={id!} staticProject={staticProject}>
+            {children}
+          </StaticPreviewProvider>
+        ) : (
+          <DynamicPreviewProvider projectId={id!}>{children}</DynamicPreviewProvider>
+        )}
+      </FileManagerProvider>
+    </SharedWorkerGate>
   );
 }
 

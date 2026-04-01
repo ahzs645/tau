@@ -14,8 +14,8 @@ import { FileContentService } from '#lib/file-content-service.js';
 import { FileTreeService } from '#lib/file-tree-service.js';
 import type { FileManagerProxy, FileManagerProtocol } from '#machines/file-manager.machine.types.js';
 
-const fileCacheMaxEntries = 200;
-const fileCacheMaxTotalBytes = 50 * 1024 * 1024;
+const fileCacheMaxEntries = 500;
+const fileCacheMaxTotalBytes = 128 * 1024 * 1024;
 const fileCacheMaxSingleFileBytes = 1024 * 1024;
 
 type FileManagerContext = {
@@ -84,10 +84,6 @@ const initializeWorkerActor = fromSafeAsync<WorkerInitializedEvent, { context: F
       backend = projectBackend ?? 'indexeddb';
     }
 
-    if (backend === 'opfs') {
-      backend = 'indexeddb';
-    }
-
     let webAccessNeedsPermission = false;
 
     if (backend === 'webaccess') {
@@ -114,19 +110,19 @@ const initializeWorkerActor = fromSafeAsync<WorkerInitializedEvent, { context: F
       const rootPath = context.rootDirectory;
       const absolutePath = normalizePath(rootPath);
       console.debug(
-        `[FileManager] calling getDirectoryStat('${absolutePath}') +${(performance.now() - initT0).toFixed(1)}ms`,
+        `[FileManager] calling readDirectory('${absolutePath}') +${(performance.now() - initT0).toFixed(1)}ms`,
       );
-      const fileStats = await proxy.getDirectoryStat(absolutePath);
+      const rootNodes = await proxy.readDirectory(absolutePath);
       console.debug(
-        `[FileManager] getDirectoryStat returned ${fileStats.length} entries +${(performance.now() - initT0).toFixed(1)}ms`,
+        `[FileManager] readDirectory returned ${rootNodes.length} entries +${(performance.now() - initT0).toFixed(1)}ms`,
       );
-      for (const fileStat of fileStats) {
+      for (const node of rootNodes) {
         initialEntries.push({
-          path: fileStat.path,
-          name: fileStat.name,
-          type: fileStat.type,
-          size: fileStat.size,
-          mtimeMs: fileStat.mtimeMs,
+          path: node.name,
+          name: node.name,
+          type: node.children === undefined ? 'file' : 'dir',
+          size: 0,
+          mtimeMs: Date.now(),
           isLoaded: false,
         });
       }
@@ -207,7 +203,7 @@ export const fileManagerMachine = setup({
     setError: assign({
       error({ event }) {
         if ('error' in event && event.error instanceof Error) {
-          console.error('[ZenFS] File manager error:', event.error);
+          console.error('[FileManager] error:', event.error);
           return event.error;
         }
         return undefined;
@@ -292,7 +288,7 @@ export const fileManagerMachine = setup({
     },
 
     stopPolling({ context }) {
-      context.treeService?.stopPolling();
+      context.treeService?.stopChangeDetection();
     },
   },
   guards: {

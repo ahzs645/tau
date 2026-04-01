@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react';
 import { createContext, useContext, useEffect, useMemo, useCallback } from 'react';
 import { useActorRef, useSelector } from '@xstate/react';
-import { waitFor, type ActorRefFrom } from 'xstate';
+import { waitFor } from 'xstate';
+import type { ActorRefFrom } from 'xstate';
 import type { Geometry } from '@taucad/types';
 import type { RuntimeClientOptions } from '@taucad/runtime';
 import type { JSONSchema7 } from 'json-schema';
@@ -41,7 +42,7 @@ const CadPreviewContext = createContext<CadPreviewContextValue | undefined>(unde
 export type CadPreviewProviderProps = {
   readonly projectId: string;
   readonly mainFile: string;
-  /** When provided, files are written to ZenFS before kernel init. Omit for dynamic projects where files already exist. */
+  /** When provided, files are written to the filesystem before kernel init. Omit for dynamic projects where files already exist. */
   readonly files?: Record<string, { content: Uint8Array<ArrayBuffer> }>;
   readonly parameters?: Record<string, unknown>;
   /** Whether the rendering should be triggered (default: true) */
@@ -56,6 +57,7 @@ function deriveStatus(cadState: string): CadPreviewStatus {
       return 'ready';
     }
 
+    case 'buffering':
     case 'rendering':
     case 'connecting': {
       return 'loading';
@@ -73,7 +75,7 @@ function deriveStatus(cadState: string): CadPreviewStatus {
 
 /**
  * Provider that creates a lightweight CAD rendering pipeline (cadMachine + graphicsMachine),
- * optionally writes files to ZenFS, and exposes all rendering state via the useCadPreview() hook.
+ * optionally writes files to the filesystem, and exposes all rendering state via the useCadPreview() hook.
  *
  * Replaces the heavyweight ProjectProvider for preview-only contexts.
  * Uses cadPreviewMachine to orchestrate file preparation and kernel initialization,
@@ -86,7 +88,7 @@ function deriveStatus(cadState: string): CadPreviewStatus {
  * </CadPreviewProvider>
  * ```
  *
- * @example Dynamic project (files already in ZenFS)
+ * @example Dynamic project (files already in the filesystem)
  * ```tsx
  * <CadPreviewProvider projectId={existingBuildId} mainFile="main.ts">
  *   <CadPreviewViewer enablePan enableZoom />
@@ -146,26 +148,25 @@ export function CadPreviewProvider({
 
             signal.throwIfAborted();
 
-            const { treeService, contentService } = snapshot.context;
-            if (!treeService || !contentService) {
+            const { contentService } = snapshot.context;
+            if (!contentService) {
               throw new Error('File manager services not available after initialization');
             }
 
-            const firstFilePath = Object.keys(input.files)[0];
-            const alreadyExists =
-              firstFilePath && treeService.exists(joinPath('/projects', input.projectId, firstFilePath));
-
             signal.throwIfAborted();
-            if (!alreadyExists) {
-              const projectFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};
-              for (const [path, file] of Object.entries(input.files)) {
-                projectFiles[joinPath('/projects', input.projectId, path)] = {
-                  content: new Uint8Array(file.content),
-                };
-              }
 
-              await contentService.writeFiles(projectFiles, 'machine');
+            // Always write the full snapshot to the filesystem. A previous optimization skipped writes when
+            // `exists(firstKey)` was true; first key order follows Map insertion (arbitrary), so a
+            // stale match could skip the entire write while the kernel still read from disk — ENOENT,
+            // empty geometry, and broken tree refresh. Preview imports are not hot enough to require skipping.
+            const projectFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};
+            for (const [path, file] of Object.entries(input.files)) {
+              projectFiles[joinPath('/projects', input.projectId, path)] = {
+                content: new Uint8Array(file.content),
+              };
             }
+
+            await contentService.writeFiles(projectFiles, 'machine');
           }
         }),
       },

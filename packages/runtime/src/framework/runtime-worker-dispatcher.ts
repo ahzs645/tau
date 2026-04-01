@@ -108,6 +108,11 @@ export function createWorkerDispatcher(worker: KernelWorker, port: RuntimeMessag
             worker.setSignalBuffer(signalBuffer);
           }
 
+          const contentPoolBuffer = 'contentPoolBuffer' in message ? message.contentPoolBuffer : undefined;
+          if (contentPoolBuffer) {
+            worker.setContentPoolBuffer(contentPoolBuffer);
+          }
+
           worker.onStateChanged = (state, detail) => {
             respond({ type: 'stateChanged', state, detail });
           };

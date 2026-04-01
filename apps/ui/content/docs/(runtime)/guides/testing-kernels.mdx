@@ -106,7 +106,7 @@ await initializeWorkerForTesting(worker, {
 
 ### 4. Seed and Clear the Test Filesystem
 
-`seedTestFileSystem` resets the ZenFS in-memory backend and writes files. `clearTestFileSystem` resets without seeding:
+`seedTestFileSystem` resets the in-memory filesystem and writes files. `clearTestFileSystem` resets without seeding:
 
 ```typescript @ts-nocheck
 import { seedTestFileSystem, clearTestFileSystem } from '@taucad/runtime/testing';

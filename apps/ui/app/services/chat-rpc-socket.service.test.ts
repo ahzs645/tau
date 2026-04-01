@@ -36,12 +36,18 @@ vi.mock('socket.io-client', () => ({
   },
 }));
 
-vi.mock('#environment.config.js', () => ({
-  ENV: {
-    TAU_WEBSOCKET_URL: 'http://localhost:3001',
-  },
-}));
+vi.mock('#environment.config.js', () => {
+  /* eslint-disable @typescript-eslint/naming-convention -- mock env object shape */
+  const mock = {
+    ENV: {
+      TAU_WEBSOCKET_URL: 'http://localhost:3001',
+    },
+  };
+  /* eslint-enable @typescript-eslint/naming-convention -- mock env object shape */
+  return mock;
+});
 
+// eslint-disable-next-line @typescript-eslint/naming-convention -- destructures exported class
 const { ChatRpcSocketService } = await import('#services/chat-rpc-socket.service.js');
 
 function emitSocketEvent(event: string, ...args: unknown[]): void {

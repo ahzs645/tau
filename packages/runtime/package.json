@@ -333,8 +333,6 @@
   "devDependencies": {
     "@taucad/tau-examples": "workspace:*",
     "@types/json-schema": "catalog:",
-    "@zenfs/core": "catalog:",
-    "@zenfs/dom": "catalog:",
     "geist": "catalog:"
   }
 }

@@ -30,7 +30,7 @@ import { useKernel } from '#hooks/use-kernel.js';
 import { useCookie } from '#hooks/use-cookie.js';
 import { cookieName } from '#constants/cookie.constants.js';
 import { AtReferenceProvider } from '#components/chat/at-reference-context.js';
-import { useFileTreeMap } from '#hooks/use-file-tree.js';
+import { useFileManager } from '#hooks/use-file-manager.js';
 import { useChats } from '#hooks/use-chats.js';
 import { useProject } from '#hooks/use-project.js';
 
@@ -81,7 +81,7 @@ export const ChatHistory = memo(function (props: {
   const messageIds = useChatSelector((state) => state.messageOrder);
   const { sendMessage } = useChatActions();
   const { kernel } = useKernel();
-  const fileTree = useFileTreeMap();
+  const { treeService } = useFileManager();
   const { projectId } = useProject();
   const { chats } = useChats(projectId);
   // Const snapshot = useChatSnapshot();
@@ -197,7 +197,7 @@ export const ChatHistory = memo(function (props: {
         <ChatHistoryStatus />
 
         {/* Main chat content area */}
-        <AtReferenceProvider fileTree={fileTree} chats={chats}>
+        <AtReferenceProvider treeService={treeService} chats={chats}>
           <Virtuoso
             ref={virtuosoRef}
             totalCount={messageIds.length}

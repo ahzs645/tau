@@ -1,6 +1,16 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { Link } from 'react-router';
-import { Database, Download, FolderArchive, FolderOpen, MoreHorizontal, RefreshCw, Star, Trash2 } from 'lucide-react';
+import {
+  Database,
+  Download,
+  FolderArchive,
+  FolderOpen,
+  HardDrive,
+  MoreHorizontal,
+  RefreshCw,
+  Star,
+  Trash2,
+} from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { FileSystemBackend, Project } from '@taucad/types';
 import { ExternalLink } from '#components/external-link.js';
@@ -55,7 +65,13 @@ const backendColumns: BackendColumnMeta[] = [
     description: 'Browser database storage',
     isSupported: true,
   },
-  // OPFS column removed -- disabled due to file corruption issues
+  {
+    key: 'opfs',
+    label: 'OPFS',
+    icon: HardDrive,
+    description: 'Origin Private File System',
+    isSupported: typeof navigator !== 'undefined' && 'storage' in navigator,
+  },
   {
     key: 'webaccess',
     label: 'File System',
@@ -847,7 +863,7 @@ export default function FilesRoute(): React.JSX.Element {
       </div>
 
       {/* 3-column grid */}
-      <div className='grid min-h-0 flex-1 grid-cols-1 grid-rows-[1fr] gap-4 overflow-hidden md:grid-cols-2'>
+      <div className='grid min-h-0 flex-1 grid-cols-1 grid-rows-[1fr] gap-4 overflow-hidden md:grid-cols-3'>
         {backendColumns.map((column) => (
           <BackendColumn
             key={column.key}

@@ -597,7 +597,7 @@ describe('KernelWorker lifecycle', () => {
         worker.handleSetParameters({ width: 3 });
 
         const bufferingCalls = (worker.onStateChanged as ReturnType<typeof vi.fn>).mock.calls.filter(
-          ([state]: [string]) => state === 'buffering',
+          ([state]) => state === 'buffering',
         );
         expect(bufferingCalls).toHaveLength(1);
       } finally {

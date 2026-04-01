@@ -1,4 +1,6 @@
+// eslint-disable-next-line @nx/enforce-module-boundaries -- filesystem is lazy-loaded via worker; this service runs on main thread
 import { BoundedFileCache } from '@taucad/filesystem';
+import type { SharedContentPool } from '@taucad/filesystem';
 import type { FileWriteSource, FileManagerProxy } from '#machines/file-manager.machine.types.js';
 import { joinPath } from '@taucad/utils/path';
 
@@ -17,10 +19,12 @@ type FileContentServiceInit = {
     maxTotalBytes?: number;
     maxSingleFileBytes?: number;
   };
+  /** Reader-side shared content pool for zero-IPC cached reads across threads. */
+  contentPool?: SharedContentPool;
 };
 
-const defaultMaxEntries = 200;
-const defaultMaxTotalBytes = 50 * 1024 * 1024;
+const defaultMaxEntries = 500;
+const defaultMaxTotalBytes = 128 * 1024 * 1024;
 const defaultMaxSingleFileBytes = 1024 * 1024;
 
 /**
@@ -29,17 +33,23 @@ const defaultMaxSingleFileBytes = 1024 * 1024;
  * go through this service. No consumer ever calls the proxy for
  * content operations directly.
  */
+export type OrphanChangeEvent = { path: string; orphaned: boolean };
+
 export class FileContentService {
   private readonly cache: BoundedFileCache;
   private readonly proxy: FileManagerProxy;
+  private readonly contentPool: SharedContentPool | undefined;
   private rootDirectory: string;
   private readonly pendingResolves = new Map<string, Promise<Uint8Array<ArrayBuffer>>>();
   private readonly pathSubscribers = new Map<string, Set<() => void>>();
   private readonly globalSubscribers = new Set<(event: ContentChangeEvent) => void>();
+  private readonly orphanedPaths = new Set<string>();
+  private readonly orphanSubscribers = new Set<(event: OrphanChangeEvent) => void>();
 
   public constructor(init: FileContentServiceInit) {
     this.proxy = init.proxy;
     this.rootDirectory = init.rootDirectory;
+    this.contentPool = init.contentPool;
     this.cache = new BoundedFileCache({
       maxEntries: init.cacheOptions?.maxEntries ?? defaultMaxEntries,
       maxTotalBytes: init.cacheOptions?.maxTotalBytes ?? defaultMaxTotalBytes,
@@ -56,6 +66,16 @@ export class FileContentService {
     const cached = this.cache.get(path);
     if (cached !== undefined) {
       return cached;
+    }
+
+    if (this.contentPool) {
+      const absolutePath = joinPath(this.rootDirectory, path);
+      const poolData = this.contentPool.resolve(absolutePath);
+      if (poolData) {
+        const copy = new Uint8Array(poolData);
+        this.cache.set(path, copy);
+        return copy;
+      }
     }
 
     const pending = this.pendingResolves.get(path);
@@ -81,6 +101,7 @@ export class FileContentService {
     const absolutePath = joinPath(this.rootDirectory, path);
     await this.proxy.writeFile(absolutePath, data);
     this.cache.set(path, localCopy);
+    this.setOrphaned(path, false);
     this.notifyPathSubscribers(path);
     this.notifyGlobalSubscribers({ type: 'written', path, data: localCopy, source });
   }
@@ -133,6 +154,7 @@ export class FileContentService {
     const absolutePath = joinPath(this.rootDirectory, path);
     await this.proxy.unlink(absolutePath);
     this.cache.delete(path);
+    this.setOrphaned(path, true);
     this.notifyPathSubscribers(path);
     this.notifyGlobalSubscribers({ type: 'deleted', path, source });
   }
@@ -173,6 +195,25 @@ export class FileContentService {
    */
   public has(path: string): boolean {
     return this.cache.has(path);
+  }
+
+  /**
+   * Sync check of cached orphan flag. A file is orphaned when a resolve
+   * attempt fails with ENOENT or after an explicit delete.
+   */
+  public isOrphaned(path: string): boolean {
+    return this.orphanedPaths.has(path);
+  }
+
+  /**
+   * Subscribe to orphan state transitions. Fires when a path transitions
+   * between orphaned and non-orphaned.
+   */
+  public onDidChangeOrphaned(handler: (event: OrphanChangeEvent) => void): () => void {
+    this.orphanSubscribers.add(handler);
+    return () => {
+      this.orphanSubscribers.delete(handler);
+    };
   }
 
   /**
@@ -219,6 +260,7 @@ export class FileContentService {
     this.rootDirectory = rootDirectory;
     this.cache.clear();
     this.pendingResolves.clear();
+    this.orphanedPaths.clear();
   }
 
   /**
@@ -229,6 +271,23 @@ export class FileContentService {
     this.pendingResolves.clear();
     this.pathSubscribers.clear();
     this.globalSubscribers.clear();
+    this.orphanedPaths.clear();
+    this.orphanSubscribers.clear();
+  }
+
+  private setOrphaned(path: string, orphaned: boolean): void {
+    const changed = orphaned ? !this.orphanedPaths.has(path) : this.orphanedPaths.has(path);
+    if (!changed) {
+      return;
+    }
+    if (orphaned) {
+      this.orphanedPaths.add(path);
+    } else {
+      this.orphanedPaths.delete(path);
+    }
+    for (const handler of this.orphanSubscribers) {
+      handler({ path, orphaned });
+    }
   }
 
   private notifyPathSubscribers(path: string): void {
@@ -248,10 +307,18 @@ export class FileContentService {
 
   private async resolveFromWorker(path: string): Promise<Uint8Array<ArrayBuffer>> {
     const absolutePath = joinPath(this.rootDirectory, path);
-    const data = await this.proxy.readFile(absolutePath);
-    this.cache.set(path, data);
-    this.notifyPathSubscribers(path);
-    this.notifyGlobalSubscribers({ type: 'read', path, data });
-    return data;
+    try {
+      const data = await this.proxy.readFile(absolutePath);
+      this.cache.set(path, data);
+      this.setOrphaned(path, false);
+      this.notifyPathSubscribers(path);
+      this.notifyGlobalSubscribers({ type: 'read', path, data });
+      return data;
+    } catch (error) {
+      if (error instanceof Error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
+        this.setOrphaned(path, true);
+      }
+      throw error;
+    }
   }
 }

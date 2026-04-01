@@ -145,10 +145,10 @@ describe('fuzzyMatch', () => {
   describe('real-world scenarios', () => {
     it('should rank "Past Chats" higher than "parameters-sorter.ts" for query "pas"', () => {
       const pastChats = fuzzyMatch('pas', 'Past Chats');
-      const paramSorter = fuzzyMatch('pas', 'parameters-sorter.ts');
+      const parameterSorter = fuzzyMatch('pas', 'parameters-sorter.ts');
       expect(pastChats).toBeDefined();
-      expect(paramSorter).toBeDefined();
-      expect(pastChats!.score).toBeGreaterThan(paramSorter!.score);
+      expect(parameterSorter).toBeDefined();
+      expect(pastChats!.score).toBeGreaterThan(parameterSorter!.score);
     });
 
     it('should match "ts" against "Take Screenshot" at word boundaries', () => {

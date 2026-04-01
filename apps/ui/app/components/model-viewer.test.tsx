@@ -2,6 +2,7 @@ import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { Geometry } from '@taucad/types';
 import { ModelViewer, RenderStatusOverlay } from '#components/model-viewer.js';
+import type { ModelViewerProps } from '#components/model-viewer.js';
 
 // ── Mocks ──────────────────────────────────────────────────────────────
 
@@ -131,7 +132,12 @@ describe('ModelViewer', () => {
       const externalSend = vi.fn();
       const externalRef = { send: externalSend, getSnapshot: () => ({ context: {} }) };
 
-      render(<ModelViewer geometries={testGeometries} graphicsRef={externalRef as never} />);
+      render(
+        <ModelViewer
+          geometries={testGeometries}
+          graphicsRef={externalRef as unknown as ModelViewerProps['graphicsRef']}
+        />,
+      );
 
       expect(externalSend).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -145,7 +151,7 @@ describe('ModelViewer', () => {
     it('should not create internal graphicsMachine when external graphicsRef is provided', () => {
       const externalRef = { send: vi.fn(), getSnapshot: () => ({ context: {} }) };
 
-      render(<ModelViewer geometries={[]} graphicsRef={externalRef as never} />);
+      render(<ModelViewer geometries={[]} graphicsRef={externalRef as unknown as ModelViewerProps['graphicsRef']} />);
 
       expect(mockUseActorRef).not.toHaveBeenCalled();
     });
@@ -159,7 +165,13 @@ describe('ModelViewer', () => {
     it('should render CadViewer with external graphicsRef when geometries are provided', () => {
       const externalRef = { send: vi.fn(), getSnapshot: () => ({ context: {} }) };
 
-      render(<ModelViewer geometries={testGeometries} graphicsRef={externalRef as never} enablePan />);
+      render(
+        <ModelViewer
+          geometries={testGeometries}
+          graphicsRef={externalRef as unknown as ModelViewerProps['graphicsRef']}
+          enablePan
+        />,
+      );
 
       expect(screen.getByTestId('cad-viewer')).toBeInTheDocument();
       expect(screen.getByTestId('cad-viewer')).toHaveAttribute('data-enable-pan', 'true');
@@ -168,7 +180,7 @@ describe('ModelViewer', () => {
     it('should render loading state with external graphicsRef when geometries are empty', () => {
       const externalRef = { send: vi.fn(), getSnapshot: () => ({ context: {} }) };
 
-      render(<ModelViewer geometries={[]} graphicsRef={externalRef as never} />);
+      render(<ModelViewer geometries={[]} graphicsRef={externalRef as unknown as ModelViewerProps['graphicsRef']} />);
 
       expect(screen.getByTestId('loader')).toBeInTheDocument();
     });
@@ -177,7 +189,13 @@ describe('ModelViewer', () => {
       const externalRef = { send: vi.fn(), getSnapshot: () => ({ context: {} }) };
       const error = new Error('External error');
 
-      render(<ModelViewer geometries={testGeometries} graphicsRef={externalRef as never} error={error} />);
+      render(
+        <ModelViewer
+          geometries={testGeometries}
+          graphicsRef={externalRef as unknown as ModelViewerProps['graphicsRef']}
+          error={error}
+        />,
+      );
 
       expect(screen.getByRole('alert')).toBeInTheDocument();
       expect(screen.getByText('External error')).toBeInTheDocument();

@@ -22,7 +22,7 @@ Use the filesystem API when configuring how kernels read and write project files
 | ------------------------------- | ---------------------------- | --------------------------------------------------------- |
 | `fromNodeFS(basePath)`          | `@taucad/runtime/filesystem` | Node.js filesystem rooted at `basePath`                   |
 | `fromMemoryFS(files?)`          | `@taucad/runtime`            | In-memory Map-backed filesystem, optionally seeded        |
-| `fromFsLike(fs, rootPath?)`     | `@taucad/runtime`            | Any fs-compatible object (ZenFS, BrowserFS, memfs)        |
+| `fromFsLike(fs, rootPath?)`     | `@taucad/runtime`            | Any fs-compatible object (BrowserFS, memfs, polyfills)    |
 | `createRuntimeFileSystem(base)` | `@taucad/runtime/filesystem` | Wrap `RuntimeFileSystemBase` with enhanced helper methods |
 
 ## Bridge Types

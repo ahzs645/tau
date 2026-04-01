@@ -23,7 +23,7 @@ export function parseAtReferences(text: string): AtReferenceSegment[] {
   let match: RegExpExecArray | undefined;
 
   while ((match = regex.exec(text) ?? undefined) !== undefined) {
-    const fullMatch = match[0] ?? '';
+    const fullMatch = match[0];
     const path = match[1] ?? '';
     const matchStart = match.index + (fullMatch.length - path.length - 1);
 

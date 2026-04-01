@@ -32,7 +32,7 @@ flowchart TB
         Caches["Caches (file, bundle, selection)"]
     end
 
-    subgraph FSWorker["File Manager Worker (ZenFS + IndexedDB)"]
+    subgraph FSWorker["File Manager Worker (IndexedDB)"]
         FS["Filesystem Backend"]
         EventBus["EventBus + WatchRegistry"]
     end
@@ -78,7 +78,7 @@ After receiving `setFile`, the worker manages its own render lifecycle:
 
 The File Manager Worker is the single owner of the virtual filesystem. It accepts multiple MessagePort bridge connections via `exposeFileSystem(handlers, { watchHandler })`. Two bridges are established at startup:
 
-**Bridge A (main thread):** The editor and file manager UI use `createFileSystemBridge(fsWorker)` + `createBridgeProxy<FileManagerProtocol>(port)` to write files, read directory trees, and perform file management operations. When a file is written, `FileService` persists it via ZenFS and emits a `fileWritten` event on the EventBus.
+**Bridge A (main thread):** The editor and file manager UI use `createFileSystemBridge(fsWorker)` + `createBridgeProxy<FileManagerProtocol>(port)` to write files, read directory trees, and perform file management operations. When a file is written, `FileService` persists it via the active provider and emits a `fileWritten` event on the EventBus.
 
 **Bridge B (kernel worker):** The kernel worker receives its own port as `fileSystemPort` during initialization and creates a `createBridgeProxy<RuntimeFileSystemBase>(port)` for file reads, dependency resolution, and watch subscriptions. The `WatchRegistry` matches EventBus change events against the kernel worker's watch subscriptions and pushes watch events directly over this bridge.
 

@@ -1,9 +1,10 @@
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
 import type { FileEntry } from '@taucad/types';
 import type { Chat } from '@taucad/chat';
 import { AtReferenceChip } from '#components/chat/at-reference-chip.js';
 import { AtReferenceProvider } from '#components/chat/at-reference-context.js';
+import type { FileTreeService } from '#lib/file-tree-service.js';
 
 vi.mock('#components/files/file-link.js', () => ({
   FileLink: ({ children, path }: { children: React.ReactNode; path: string }) => (
@@ -20,21 +21,24 @@ vi.mock('#hooks/use-project.js', () => ({
   }),
 }));
 
-function createFileTree(entries: Array<[string, Partial<FileEntry>]>): Map<string, FileEntry> {
-  return new Map(
-    entries.map(([path, partial]) => [
-      path,
-      {
-        path,
-        name: partial.name ?? path.split('/').pop()!,
-        type: partial.type ?? 'file',
-        size: 0,
-        isLoaded: true,
-        mtimeMs: 0,
-        ...partial,
-      },
-    ]),
-  );
+function createEntry(path: string, partial: Partial<FileEntry> = {}): FileEntry {
+  return {
+    path,
+    name: partial.name ?? path.split('/').pop()!,
+    type: partial.type ?? 'file',
+    size: 0,
+    isLoaded: true,
+    mtimeMs: 0,
+    ...partial,
+  };
+}
+
+function createMockTreeService(entries: FileEntry[] = []): FileTreeService {
+  const tree = new Map<string, FileEntry>(entries.map((entry) => [entry.path, entry]));
+  return {
+    getTreeSnapshot: () => tree,
+    getEntry: vi.fn(async (path: string) => tree.get(path)),
+  } as unknown as FileTreeService;
 }
 
 function createChats(items: Array<{ id: string; name: string }>): Chat[] {
@@ -48,28 +52,32 @@ function createChats(items: Array<{ id: string; name: string }>): Chat[] {
   }));
 }
 
-function renderChip(path: string, fileTree: Map<string, FileEntry> = new Map(), chats: Chat[] = []) {
+function renderChip(path: string, treeService?: FileTreeService, chats: Chat[] = []) {
   return render(
-    <AtReferenceProvider fileTree={fileTree} chats={chats}>
+    <AtReferenceProvider treeService={treeService} chats={chats}>
       <AtReferenceChip data-at-reference={path} />
     </AtReferenceProvider>,
   );
 }
 
 describe('AtReferenceChip', () => {
-  it('should render file chip with FileLink for existing file', () => {
-    const fileTree = createFileTree([['src/app.ts', { name: 'app.ts', type: 'file' }]]);
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
 
-    renderChip('src/app.ts', fileTree);
+  it('should render file chip with FileLink for existing file', () => {
+    const treeService = createMockTreeService([createEntry('src/app.ts', { name: 'app.ts', type: 'file' })]);
+
+    renderChip('src/app.ts', treeService);
 
     expect(screen.getByText('app.ts')).toBeInTheDocument();
     expect(screen.getByTestId('file-link')).toHaveAttribute('data-path', 'src/app.ts');
   });
 
   it('should render folder chip with FileLink for existing folder', () => {
-    const fileTree = createFileTree([['src/components', { name: 'components', type: 'dir' }]]);
+    const treeService = createMockTreeService([createEntry('src/components', { name: 'components', type: 'dir' })]);
 
-    renderChip('src/components', fileTree);
+    renderChip('src/components', treeService);
 
     expect(screen.getByText('components')).toBeInTheDocument();
     expect(screen.getByTestId('file-link')).toBeInTheDocument();
@@ -78,36 +86,36 @@ describe('AtReferenceChip', () => {
   it('should render chat chip for valid transcript path', () => {
     const chats = createChats([{ id: 'chat-123', name: 'Design Discussion' }]);
 
-    renderChip('.tau/transcripts/chat-123.jsonl', new Map(), chats);
+    renderChip('.tau/transcripts/chat-123.jsonl', createMockTreeService(), chats);
 
     expect(screen.getByText('Design Discussion')).toBeInTheDocument();
   });
 
   it('should render plain text for unknown transcript path', () => {
-    renderChip('.tau/transcripts/missing-chat.jsonl');
+    renderChip('.tau/transcripts/missing-chat.jsonl', createMockTreeService());
 
     expect(screen.getByText('@.tau/transcripts/missing-chat.jsonl')).toBeInTheDocument();
     expect(screen.queryByTestId('file-link')).not.toBeInTheDocument();
   });
 
   it('should render plain text for unknown file path', () => {
-    renderChip('does/not/exist.ts');
+    renderChip('does/not/exist.ts', createMockTreeService());
 
     expect(screen.getByText('@does/not/exist.ts')).toBeInTheDocument();
     expect(screen.queryByTestId('file-link')).not.toBeInTheDocument();
   });
 
   it('should not pass onRemove to ContextChip (read-only)', () => {
-    const fileTree = createFileTree([['src/app.ts', { name: 'app.ts', type: 'file' }]]);
+    const treeService = createMockTreeService([createEntry('src/app.ts', { name: 'app.ts', type: 'file' })]);
 
-    renderChip('src/app.ts', fileTree);
+    renderChip('src/app.ts', treeService);
 
     expect(screen.queryByRole('button', { name: 'Remove' })).not.toBeInTheDocument();
   });
 
   it('should render fallback mark when no data-at-reference attribute', () => {
     const { container } = render(
-      <AtReferenceProvider fileTree={new Map()} chats={[]}>
+      <AtReferenceProvider treeService={createMockTreeService()} chats={[]}>
         <AtReferenceChip>highlighted text</AtReferenceChip>
       </AtReferenceProvider>,
     );
@@ -118,7 +126,7 @@ describe('AtReferenceChip', () => {
 
   it('should render skill chip when data-slash-command is set', () => {
     render(
-      <AtReferenceProvider fileTree={new Map()} chats={[]}>
+      <AtReferenceProvider treeService={createMockTreeService()} chats={[]}>
         <AtReferenceChip data-slash-command='create-policy' />
       </AtReferenceProvider>,
     );
@@ -129,12 +137,27 @@ describe('AtReferenceChip', () => {
 
   it('should render fallback mark when neither data attribute is present', () => {
     const { container } = render(
-      <AtReferenceProvider fileTree={new Map()} chats={[]}>
+      <AtReferenceProvider treeService={createMockTreeService()} chats={[]}>
         <AtReferenceChip>some text</AtReferenceChip>
       </AtReferenceProvider>,
     );
 
     expect(container.querySelector('mark')).toBeInTheDocument();
     expect(screen.getByText('some text')).toBeInTheDocument();
+  });
+
+  it('should resolve file asynchronously via getEntry when not in lazy tree snapshot', async () => {
+    const entry = createEntry('deep/file.ts', { name: 'file.ts' });
+    const treeService = createMockTreeService();
+    vi.mocked(treeService.getEntry).mockResolvedValue(entry);
+
+    renderChip('deep/file.ts', treeService);
+
+    expect(screen.getByText('@deep/file.ts')).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(screen.getByText('file.ts')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('file-link')).toHaveAttribute('data-path', 'deep/file.ts');
   });
 });

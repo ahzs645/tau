@@ -27,7 +27,7 @@ import type {
 import type { FileEntry } from '@taucad/types';
 import { idPrefix } from '@taucad/types/constants';
 import { generatePrefixedId } from '@taucad/utils/id';
-import { parentDirectory } from '@taucad/utils/path';
+
 import { screenshotRequestMachine, orthographicViews } from '#machines/screenshot-request.machine.js';
 import type { graphicsMachine } from '#machines/graphics.machine.js';
 import type { projectMachine } from '#machines/project.machine.js';
@@ -48,7 +48,13 @@ export type RpcHandlerDependencies = {
   };
   graphicsRef: ActorRefFrom<typeof graphicsMachine> | undefined;
   projectRef: ActorRefFrom<typeof projectMachine>;
-  treeService: { getTreeSnapshot(): Map<string, FileEntry> } | undefined;
+  treeService:
+    | {
+        getTreeSnapshot(): Map<string, FileEntry>;
+        exists(path: string): Promise<boolean>;
+        readDirectoryEntries(path: string): Promise<Array<{ id?: string; name: string; children?: unknown[] }>>;
+      }
+    | undefined;
   screenshotQuality: number;
 };
 
@@ -82,39 +88,21 @@ function createBrowserRpcFileSystem(
     async readdir(
       path: string,
     ): Promise<Array<{ name: string; type: 'file' | 'directory'; size: number; modifiedAt?: string }>> {
-      const entries: Array<{
-        name: string;
-        type: 'file' | 'directory';
-        size: number;
-        modifiedAt?: string;
-      }> = [];
-
-      const fileTree = treeService?.getTreeSnapshot() ?? new Map<string, FileEntry>();
-      for (const [entryPath, entry] of fileTree.entries()) {
-        const parentPath = entryPath.includes('/') ? parentDirectory(entryPath) : '';
-        if (parentPath === path) {
-          let modifiedAt: string | undefined;
-          try {
-            // oxlint-disable-next-line no-await-in-loop -- sequential stat calls
-            const s = await fileManager.stat(entryPath);
-            modifiedAt = new Date(s.mtimeMs).toISOString();
-          } catch {
-            // `stat` not available for this entry
-          }
-          entries.push({
-            name: entry.name,
-            type: entry.type === 'dir' ? 'directory' : 'file',
-            size: entry.size,
-            modifiedAt,
-          });
-        }
+      if (!treeService) {
+        return [];
       }
-
-      return entries;
+      const nodes = await treeService.readDirectoryEntries(path);
+      return nodes.map((node) => ({
+        name: node.name,
+        type: node.children === undefined ? 'file' : 'directory',
+        size: 0,
+      }));
     },
     async exists(path: string): Promise<boolean> {
-      const fileTree = treeService?.getTreeSnapshot() ?? new Map<string, FileEntry>();
-      return fileTree.has(path);
+      if (!treeService) {
+        return false;
+      }
+      return treeService.exists(path);
     },
     async appendFile(path: string, content: string): Promise<void> {
       let existing = '';

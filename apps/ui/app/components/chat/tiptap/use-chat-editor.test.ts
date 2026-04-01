@@ -5,12 +5,20 @@ import type { UseChatEditorOptions } from '#components/chat/tiptap/use-chat-edit
 import type { PastedContentSegment } from '#utils/at-reference.utils.js';
 import { buildPastedContent } from '#utils/at-reference.utils.js';
 import type { FileEntry } from '@taucad/types';
+import type { FileTreeService } from '#lib/file-tree-service.js';
+
+function createMockTreeService(fileTree: Map<string, FileEntry>): FileTreeService {
+  return {
+    getTreeSnapshot: () => fileTree,
+    searchFiles: vi.fn().mockResolvedValue([]),
+  } as unknown as FileTreeService;
+}
 
 function createDefaultOptions(overrides?: Partial<UseChatEditorOptions>): UseChatEditorOptions {
   return {
     onSubmit: vi.fn(),
     onUpdate: vi.fn(),
-    fileTree: new Map(),
+    treeService: undefined,
     chats: [],
     ...overrides,
   };
@@ -277,6 +285,7 @@ const createFileTree = (entries: Array<[string, Partial<FileEntry>]>): Map<strin
         type: partial.type ?? 'file',
         size: 0,
         isLoaded: true,
+        mtimeMs: 0,
       },
     ]),
   );
@@ -359,7 +368,9 @@ describe('draft content restoration with chip rehydration', () => {
       ['main.scad', { name: 'main.scad' }],
     ]);
 
-    const { result } = renderHook(() => useChatEditor(createDefaultOptions({ fileTree })));
+    const { result } = renderHook(() =>
+      useChatEditor(createDefaultOptions({ treeService: createMockTreeService(fileTree) })),
+    );
 
     await waitFor(() => {
       expect(result.current.editor).not.toBeNull();
@@ -386,7 +397,9 @@ describe('draft content restoration with chip rehydration', () => {
   it('should preserve plain text around rehydrated chips', async () => {
     const fileTree = createFileTree([['main.ts', { name: 'main.ts' }]]);
 
-    const { result } = renderHook(() => useChatEditor(createDefaultOptions({ fileTree })));
+    const { result } = renderHook(() =>
+      useChatEditor(createDefaultOptions({ treeService: createMockTreeService(fileTree) })),
+    );
 
     await waitFor(() => {
       expect(result.current.editor).not.toBeNull();
@@ -412,7 +425,9 @@ describe('draft content restoration with chip rehydration', () => {
   it('should fall back to plain text for unresolvable @references', async () => {
     const fileTree = createFileTree([]);
 
-    const { result } = renderHook(() => useChatEditor(createDefaultOptions({ fileTree })));
+    const { result } = renderHook(() =>
+      useChatEditor(createDefaultOptions({ treeService: createMockTreeService(fileTree) })),
+    );
 
     await waitFor(() => {
       expect(result.current.editor).not.toBeNull();
@@ -492,7 +507,9 @@ describe('draft content restoration with chip rehydration', () => {
 
     expect(json).toBeDefined();
 
-    const { result } = renderHook(() => useChatEditor(createDefaultOptions({ fileTree })));
+    const { result } = renderHook(() =>
+      useChatEditor(createDefaultOptions({ treeService: createMockTreeService(fileTree) })),
+    );
 
     await waitFor(() => {
       expect(result.current.editor).not.toBeNull();

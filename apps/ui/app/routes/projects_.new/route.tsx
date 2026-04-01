@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { useAuthenticate } from '@daveyplate/better-auth-ui';
 import type { KernelProvider } from '@taucad/runtime';
+import type { FileSystemBackend } from '@taucad/types';
 import { kernelConfigurations } from '@taucad/types/constants';
 import { Button } from '#components/ui/button.js';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '#components/ui/card.js';
@@ -20,6 +21,9 @@ import { cn } from '#utils/ui.utils.js';
 import { useKeybinding } from '#hooks/use-keyboard.js';
 import { useProjectManager } from '#hooks/use-project-manager.js';
 import { useKernel } from '#hooks/use-kernel.js';
+import { BackendSelector } from '#components/filesystem/backend-selector.js';
+import { useCookie } from '#hooks/use-cookie.js';
+import { cookieName } from '#constants/cookie.constants.js';
 
 export const handle: Handle = {
   breadcrumb() {
@@ -79,7 +83,7 @@ function useProjectCreation() {
   const projectManager = useProjectManager();
 
   const createProject = useCallback(
-    async (projectData: { name: string; description: string; kernel: KernelProvider }) => {
+    async (projectData: { name: string; description: string; kernel: KernelProvider; backend: FileSystemBackend }) => {
       setIsCreating(true);
       try {
         const selectedOption = getKernelOption(projectData.kernel);
@@ -107,6 +111,7 @@ function useProjectCreation() {
             },
           },
           chatName: 'Initial design',
+          backend: projectData.backend,
           // Set initial panel state: editor open
           editorState: {
             panelState: { openPanels: { editor: true, files: true } },
@@ -133,6 +138,8 @@ export default function ProjectsNew(): React.JSX.Element {
   const { kernel, setKernel: setSelectedKernel } = useKernel();
   const [projectName, setProjectName] = useState('');
   const [projectDescription, setProjectDescription] = useState('');
+  const [backendCookie] = useCookie(cookieName.filesystemBackend, 'indexeddb');
+  const [selectedBackend, setSelectedBackend] = useState<FileSystemBackend>(backendCookie as FileSystemBackend);
 
   const handleCreateProject = useCallback(async () => {
     try {
@@ -140,11 +147,12 @@ export default function ProjectsNew(): React.JSX.Element {
         name: projectName,
         description: projectDescription,
         kernel,
+        backend: selectedBackend,
       });
     } catch {
       toast.error('Failed to create project. Please try again.');
     }
-  }, [projectName, projectDescription, kernel, createProject]);
+  }, [projectName, projectDescription, kernel, selectedBackend, createProject]);
 
   const handleCancel = useCallback(() => {
     void navigate('/');
@@ -200,6 +208,19 @@ export default function ProjectsNew(): React.JSX.Element {
                 }}
               />
             </div>
+          </div>
+          <div className='space-y-2'>
+            <Label>Storage Backend</Label>
+            <BackendSelector
+              value={selectedBackend}
+              onSelect={(value) => {
+                setSelectedBackend(value as FileSystemBackend);
+              }}
+              isInternalHidden
+            />
+            <p className='text-xs text-muted-foreground'>
+              Where project files are stored. Can be changed later in project settings.
+            </p>
           </div>
         </CardContent>
 

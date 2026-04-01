@@ -1,16 +1,22 @@
-import { renderHook, act, waitFor } from '@testing-library/react';
+import { renderHook, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { FileTreeEntry } from '@taucad/types';
+import type { FileEntry } from '@taucad/types';
+import type { FileTreeNode } from '@taucad/filesystem';
 
 const mockReadFile = vi.fn<(path: string) => Promise<Uint8Array<ArrayBuffer>>>();
-const mockFileTree = vi.fn<() => FileTreeEntry[] | undefined>();
+const mockReadDirectoryEntries = vi.fn<(path: string) => Promise<FileTreeNode[]>>();
+const mockGetEntry = vi.fn<(path: string) => Promise<FileEntry | undefined>>();
 
 vi.mock('#hooks/use-file-manager.js', () => ({
-  useFileTree: () => mockFileTree(),
-  useFileManager: () => ({ readFile: mockReadFile }),
+  useFileManager: () => ({
+    readFile: mockReadFile,
+    treeService: {
+      readDirectoryEntries: mockReadDirectoryEntries,
+      getEntry: mockGetEntry,
+    },
+  }),
 }));
 
-// Import after mocks are set up
 const { useContextPayload } = await import('#hooks/use-context-payload.js');
 
 const encoder = new TextEncoder();
@@ -19,38 +25,48 @@ function makeSkillMd(name: string, description: string): Uint8Array<ArrayBuffer>
   return encoder.encode(`---\nname: ${name}\ndescription: '${description}'\n---\n\n# ${name}\n\nSkill content.`);
 }
 
-function makeFileEntry(path: string, type: 'file' | 'dir' = 'file', size = 100): FileTreeEntry {
-  return { path, name: path.split('/').pop()!, type, size };
+function makeSkillDirectoryNode(name: string): FileTreeNode {
+  return { id: `.tau/skills/${name}`, name, children: [] };
+}
+
+function makeFileEntry(path: string, type: 'file' | 'dir' = 'file'): FileEntry {
+  return { path, name: path.split('/').pop()!, type, size: 100, isLoaded: true, mtimeMs: 0 };
 }
 
 describe('useContextPayload', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockFileTree.mockReturnValue(undefined);
+    mockReadDirectoryEntries.mockResolvedValue([]);
+    mockGetEntry.mockResolvedValue(undefined);
     mockReadFile.mockRejectedValue(new Error('not found'));
   });
 
-  it('should return undefined when file tree is undefined', () => {
-    mockFileTree.mockReturnValue(undefined);
-
+  it('should return undefined when .tau/skills is empty and no AGENTS.md', async () => {
     const { result } = renderHook(() => useContextPayload());
+
+    await waitFor(() => {
+      expect(mockReadDirectoryEntries).toHaveBeenCalledWith('.tau/skills');
+    });
 
     expect(result.current).toBeUndefined();
   });
 
-  it('should return undefined when file tree has no .tau directory', () => {
-    mockFileTree.mockReturnValue([makeFileEntry('main.scad'), makeFileEntry('lib/utils.scad')]);
+  it('should return undefined when no skill directories exist', async () => {
+    mockReadDirectoryEntries.mockResolvedValue([{ id: '.tau/skills/readme.md', name: 'readme.md' }]);
 
     const { result } = renderHook(() => useContextPayload());
+
+    await waitFor(() => {
+      expect(mockReadDirectoryEntries).toHaveBeenCalled();
+    });
 
     expect(result.current).toBeUndefined();
   });
 
   it('should discover skills from .tau/skills/ subdirectories', async () => {
-    mockFileTree.mockReturnValue([
-      makeFileEntry('main.scad'),
-      makeFileEntry('.tau/skills/cad-expert/SKILL.md'),
-      makeFileEntry('.tau/skills/testing/SKILL.md'),
+    mockReadDirectoryEntries.mockResolvedValue([
+      makeSkillDirectoryNode('cad-expert'),
+      makeSkillDirectoryNode('testing'),
     ]);
     mockReadFile.mockImplementation(async (path: string) => {
       if (path.includes('cad-expert')) {
@@ -78,7 +94,7 @@ describe('useContextPayload', () => {
 
   it('should read AGENTS.md content into memory payload', async () => {
     const agentsContent = '# AGENTS\n\nPrefer early returns.';
-    mockFileTree.mockReturnValue([makeFileEntry('main.scad'), makeFileEntry('.tau/AGENTS.md')]);
+    mockGetEntry.mockResolvedValue(makeFileEntry('.tau/AGENTS.md'));
     mockReadFile.mockImplementation(async (path: string) => {
       if (path === '.tau/AGENTS.md') {
         return encoder.encode(agentsContent);
@@ -92,25 +108,24 @@ describe('useContextPayload', () => {
       expect(result.current?.memory).toBeDefined();
     });
 
-    const agentsKey = '.tau/AGENTS.md';
-    expect(result.current!.memory).toEqual({
-      [agentsKey]: agentsContent,
-    });
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- fixture path key
+    expect(result.current!.memory).toEqual({ '.tau/AGENTS.md': agentsContent });
   });
 
-  it('should handle empty .tau/skills/ directory', () => {
-    mockFileTree.mockReturnValue([makeFileEntry('.tau/skills', 'dir')]);
+  it('should handle empty .tau/skills/ directory', async () => {
+    mockReadDirectoryEntries.mockResolvedValue([]);
 
     const { result } = renderHook(() => useContextPayload());
+
+    await waitFor(() => {
+      expect(mockReadDirectoryEntries).toHaveBeenCalled();
+    });
 
     expect(result.current).toBeUndefined();
   });
 
   it('should skip SKILL.md files with malformed frontmatter', async () => {
-    mockFileTree.mockReturnValue([
-      makeFileEntry('.tau/skills/good/SKILL.md'),
-      makeFileEntry('.tau/skills/bad/SKILL.md'),
-    ]);
+    mockReadDirectoryEntries.mockResolvedValue([makeSkillDirectoryNode('good'), makeSkillDirectoryNode('bad')]);
     mockReadFile.mockImplementation(async (path: string) => {
       if (path.includes('good')) {
         return makeSkillMd('good-skill', 'Works correctly');
@@ -134,29 +149,9 @@ describe('useContextPayload', () => {
     });
   });
 
-  it('should update payload when file tree changes', async () => {
-    mockFileTree.mockReturnValue([]);
-
-    const { result, rerender } = renderHook(() => useContextPayload());
-
-    expect(result.current).toBeUndefined();
-
-    mockFileTree.mockReturnValue([makeFileEntry('.tau/skills/new-skill/SKILL.md')]);
-    mockReadFile.mockImplementation(async () => makeSkillMd('new-skill', 'Just appeared'));
-
-    await act(async () => {
-      rerender();
-    });
-
-    await waitFor(() => {
-      expect(result.current?.skills).toHaveLength(1);
-    });
-
-    expect(result.current!.skills![0]!.name).toBe('new-skill');
-  });
-
   it('should return both skills and memory when both present', async () => {
-    mockFileTree.mockReturnValue([makeFileEntry('.tau/skills/my-skill/SKILL.md'), makeFileEntry('.tau/AGENTS.md')]);
+    mockReadDirectoryEntries.mockResolvedValue([makeSkillDirectoryNode('my-skill')]);
+    mockGetEntry.mockResolvedValue(makeFileEntry('.tau/AGENTS.md'));
     mockReadFile.mockImplementation(async (path: string) => {
       if (path.includes('SKILL.md')) {
         return makeSkillMd('my-skill', 'A skill');
@@ -179,10 +174,7 @@ describe('useContextPayload', () => {
   });
 
   it('should handle readFile errors gracefully for individual skills', async () => {
-    mockFileTree.mockReturnValue([
-      makeFileEntry('.tau/skills/good/SKILL.md'),
-      makeFileEntry('.tau/skills/broken/SKILL.md'),
-    ]);
+    mockReadDirectoryEntries.mockResolvedValue([makeSkillDirectoryNode('good'), makeSkillDirectoryNode('broken')]);
     mockReadFile.mockImplementation(async (path: string) => {
       if (path.includes('good')) {
         return makeSkillMd('good-skill', 'Works');

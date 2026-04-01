@@ -12,7 +12,6 @@ import type {
   IDockviewPanelProps,
   IWatermarkPanelProps,
 } from 'dockview-react';
-import type { FileEntry } from '@taucad/types';
 import {
   languageFromExtension,
   tauFileDragMime,
@@ -38,7 +37,6 @@ import { getFileExtension, isBinaryFile, decodeTextFile, encodeTextFile } from '
 import { ChatEditorBinaryWarning } from '#routes/projects_.$id/chat-editor-binary-warning.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import { useFileContent } from '#hooks/use-file-content.js';
-import { useFileTreeMap } from '#hooks/use-file-tree.js';
 import { useViewContext } from '#routes/projects_.$id/chat-interface-view-context.js';
 import { useMonacoServices } from '#hooks/use-monaco-model-service.js';
 import { useKernelDiagnostics } from '#hooks/use-kernel-diagnostics.js';
@@ -98,8 +96,8 @@ const FileEditor = memo(function ({
     markerService,
   });
 
-  // Read file content from content service
-  const fileContent = useFileContent(filePath);
+  // Read file content from content service (auto-loads on cache miss)
+  const { content: fileContent, isOrphaned: isMissing } = useFileContent(filePath);
 
   const activeFile = useMemo(() => {
     if (!fileContent) {
@@ -115,25 +113,6 @@ const FileEditor = memo(function ({
       language: languageFromExtension[getFileExtension(name) as keyof typeof languageFromExtension],
     };
   }, [filePath, fileContent]);
-
-  // Check if the file exists in the file tree
-  const fileTree = useFileTreeMap();
-
-  const isMissing = useMemo(() => {
-    if (fileTree.size === 0) {
-      return false;
-    }
-
-    return !fileTree.has(filePath);
-  }, [filePath, fileTree]);
-
-  const fileSelectorFiles = useMemo(
-    () =>
-      [...fileTree.values()]
-        .filter((entry: FileEntry) => entry.type === 'file')
-        .map((entry: FileEntry) => ({ path: entry.path, size: entry.size })),
-    [fileTree],
-  );
 
   const handleFileSelectorSelect = useCallback(
     (path: string) => {
@@ -152,14 +131,6 @@ const FileEditor = memo(function ({
   useEffect(() => {
     setForceOpenBinary(false);
   }, [filePath]);
-
-  // Ensure file content is loaded (handles restore from fromJSON where no
-  // fileOpened event is emitted, as well as any other creation path)
-  useEffect(() => {
-    if (!isMissing) {
-      void fileManager.readFile(filePath);
-    }
-  }, [fileManager, filePath, isMissing]);
 
   const handleCodeChange = useCallback(
     (value: ComponentProps<typeof CodeEditor>['value']) => {
@@ -202,7 +173,6 @@ const FileEditor = memo(function ({
           <p className='max-w-60 truncate text-xs'>{filePath}</p>
         </div>
         <FileSelector
-          files={fileSelectorFiles}
           selectedFile={undefined}
           placeholder='Select file to edit...'
           className='h-8 w-50'
@@ -248,15 +218,6 @@ const FileEditor = memo(function ({
  */
 function EditorWatermark({ containerApi, group }: IWatermarkPanelProps): React.JSX.Element {
   const { editorRef } = useProject();
-  const fileTree = useFileTreeMap();
-
-  const files = useMemo(
-    () =>
-      [...fileTree.values()]
-        .filter((entry: FileEntry) => entry.type === 'file')
-        .map((entry: FileEntry) => ({ path: entry.path, size: entry.size })),
-    [fileTree],
-  );
 
   const handleSelect = useCallback(
     (path: string) => {
@@ -279,7 +240,6 @@ function EditorWatermark({ containerApi, group }: IWatermarkPanelProps): React.J
       onClose={handleClose}
     >
       <FileSelector
-        files={files}
         selectedFile={undefined}
         title='Open File'
         description='Choose a file to open in the editor'

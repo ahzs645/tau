@@ -1,6 +1,6 @@
 // @vitest-environment node
 /* eslint-disable @typescript-eslint/naming-convention -- file-path keys in FileParameterConfig test data */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createMockRuntime, createMockInput, createMockCreateGeometryHandler } from '@taucad/runtime/testing';
 import { parameterFileResolverMiddleware } from '#middleware/parameter-file-resolver.middleware.js';
 
@@ -175,7 +175,7 @@ describe('parameterFileResolverMiddleware', () => {
 
       await parameterFileResolverMiddleware.wrapCreateGeometry!(input, handler, runtime);
 
-      const calledParams = (handler.mock.calls[0]![0] as { parameters: Record<string, unknown> }).parameters;
+      const calledParams = (vi.mocked(handler).mock.calls[0]![0] as { parameters: Record<string, unknown> }).parameters;
       expect(calledParams).toEqual({
         base: { width: 30, depth: 20, cornerRadius: 10 },
         profile: { line1X: 5, line1Y: 5 },
@@ -208,7 +208,7 @@ describe('parameterFileResolverMiddleware', () => {
 
       await parameterFileResolverMiddleware.wrapCreateGeometry!(input, handler, runtime);
 
-      const calledParams = (handler.mock.calls[0]![0] as { parameters: Record<string, unknown> }).parameters;
+      const calledParams = (vi.mocked(handler).mock.calls[0]![0] as { parameters: Record<string, unknown> }).parameters;
       expect(calledParams).toEqual({
         base: { width: 30, depth: 20, cornerRadius: 10 },
         profile: { line1X: 5 },
@@ -221,7 +221,7 @@ describe('parameterFileResolverMiddleware', () => {
     it('should return the parameters file path', () => {
       const result = parameterFileResolverMiddleware.getDependencies!(
         { filePath: '/projects/test/main.ts', basePath: '/projects/test' },
-        { parametersFile: '.tau/parameters.json' },
+        { parametersFile: '.tau/parameters.json', watchDebounceMs: 200 },
       );
 
       expect(result).toEqual(['/projects/test/.tau/parameters.json']);
@@ -230,7 +230,7 @@ describe('parameterFileResolverMiddleware', () => {
     it('should use custom parametersFile option', () => {
       const result = parameterFileResolverMiddleware.getDependencies!(
         { filePath: '/projects/test/main.ts', basePath: '/projects/test' },
-        { parametersFile: '.config/params.json' },
+        { parametersFile: '.config/params.json', watchDebounceMs: 200 },
       );
 
       expect(result).toEqual(['/projects/test/.config/params.json']);
@@ -239,7 +239,7 @@ describe('parameterFileResolverMiddleware', () => {
     it('should return synchronously (not a promise)', () => {
       const result = parameterFileResolverMiddleware.getDependencies!(
         { filePath: '/projects/test/main.ts', basePath: '/projects/test' },
-        { parametersFile: '.tau/parameters.json' },
+        { parametersFile: '.tau/parameters.json', watchDebounceMs: 200 },
       );
 
       expect(Array.isArray(result)).toBe(true);

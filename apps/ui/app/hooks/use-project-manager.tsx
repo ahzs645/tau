@@ -36,6 +36,8 @@ type CreateProjectChatOptions = {
   chatName?: string;
   /** Initial editor state overrides (e.g., panelState for initial panel layout) */
   editorState?: InitialEditorState;
+  /** Explicit backend override — takes precedence over the cookie default */
+  backend?: FileSystemBackend;
 };
 
 /**
@@ -192,9 +194,9 @@ export function ProjectManagerProvider({ children }: { readonly children: ReactN
       });
 
       // Persist the per-build filesystem config
-      let resolvedBackend: FileSystemBackend = defaultBackend;
+      let resolvedBackend: FileSystemBackend = options.backend ?? defaultBackend;
 
-      if (defaultBackend === 'webaccess') {
+      if (resolvedBackend === 'webaccess') {
         // Verify workspace handle exists and has permission before using webaccess
         try {
           const workspaceHandle = await getStoredDirectoryHandle();
@@ -216,13 +218,28 @@ export function ProjectManagerProvider({ children }: { readonly children: ReactN
 
       await setBuildFileSystemConfig(project.id, resolvedBackend);
 
-      // Write files to filesystem (separate worker, can't consolidate)
+      // Ensure the root file manager writes to the correct backend for this project.
+      // The root FM may be on a different backend (e.g. indexeddb) than what the
+      // project config says (e.g. opfs), so reconfigure before writing, then restore.
+      const previousBackend = fileManager.backendType;
+      const needsReconfigure = resolvedBackend !== previousBackend;
+
+      if (needsReconfigure) {
+        await fileManager.reconfigureBackend(resolvedBackend);
+      }
+
       const projectFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};
       for (const [path, file] of Object.entries(files)) {
         projectFiles[`/projects/${project.id}/${path}`] = file;
       }
 
-      await fileManager.writeFiles(projectFiles);
+      try {
+        await fileManager.writeFiles(projectFiles);
+      } finally {
+        if (needsReconfigure) {
+          await fileManager.reconfigureBackend(previousBackend);
+        }
+      }
 
       return project;
     },

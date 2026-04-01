@@ -17,6 +17,16 @@ import { safeDispose } from '@taucad/utils/dispose';
 import type { RuntimeFileSystemBase, RuntimeWatchRequest, RuntimeWatchEvent } from '#types/runtime-kernel.types.js';
 import type { StringKeyedObject } from '#types/bridge.types.js';
 import { messagePortCallTimeoutMs } from '#framework/runtime-framework.constants.js';
+/**
+ * Minimal interface for a shared content pool used by the bridge for
+ * zero-IPC cached reads. Structurally compatible with `SharedContentPool`
+ * from `@taucad/filesystem`.
+ * @public
+ */
+export type ContentPool = {
+  store(path: string, data: Uint8Array<ArrayBuffer>): boolean;
+  resolve(path: string): Uint8Array<ArrayBuffer> | undefined;
+};
 
 /**
  * Walk an arbitrarily nested value and collect every unique `ArrayBuffer`
@@ -121,6 +131,8 @@ export function createBridgeServer<T extends StringKeyedObject>(
     onDisconnect?: () => void;
     onWatch?: (watchId: string, request: RuntimeWatchRequest) => void;
     onUnwatch?: (watchId: string) => void;
+    /** Writer-side shared content pool. Binary readFile results are stored here after successful reads. */
+    contentPool?: ContentPool;
   },
 ): BridgeServerHandle {
   // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MessagePort requires onmessage (implicitly calls start(); addEventListener does not)
@@ -160,6 +172,12 @@ export function createBridgeServer<T extends StringKeyedObject>(
 
     try {
       const result: unknown = await function_.call(handlers, ...args);
+
+      if (options?.contentPool && method === 'readFile' && result instanceof Uint8Array) {
+        const filePath = args[0] as string;
+        options.contentPool.store(filePath, result as Uint8Array<ArrayBuffer>);
+      }
+
       const response = { id, result } satisfies BridgeResponse;
       const transferables = extractTransferables(result);
       try {
@@ -280,7 +298,13 @@ function reconstructError(bridgeError: BridgeError): Error & {
  * @returns Object with call, listen, watch, and dispose methods.
  * @public
  */
-export function createBridgeCall(port: MessagePort): {
+export function createBridgeCall(
+  port: MessagePort,
+  options?: {
+    /** Reader-side shared content pool. readFile calls check here before sending RPC. */
+    contentPool?: ContentPool;
+  },
+): {
   call: (method: string, args: unknown[]) => Promise<unknown>;
   listen: (event: string, handler: (data: unknown) => void) => () => void;
   watch: (request: RuntimeWatchRequest, handler: (event: RuntimeWatchEvent) => void) => () => void;
@@ -371,6 +395,18 @@ export function createBridgeCall(port: MessagePort): {
 
   return {
     async call(method: string, args: unknown[]): Promise<unknown> {
+      if (options?.contentPool && method === 'readFile') {
+        const filePath = args[0] as string;
+        const encoding = args[1] as string | undefined;
+        const cached = options.contentPool.resolve(filePath);
+        if (cached) {
+          if (encoding === 'utf8') {
+            return new TextDecoder().decode(cached);
+          }
+          return new Uint8Array(cached);
+        }
+      }
+
       return new Promise((resolve, reject) => {
         const id = nextId++;
         const timer = setTimeout(() => {
@@ -449,12 +485,23 @@ export function createBridgeCall(port: MessagePort): {
 // oxlint-disable-next-line @typescript-eslint/no-explicit-any -- generic proxy type must accept any callable shape
 export function createBridgeProxy<T extends Record<string, (...args: any[]) => any>>(
   port: MessagePort,
+  options?: {
+    /** Reader-side shared content pool for zero-IPC cached reads. */
+    contentPool?: ContentPool;
+  },
 ): T & {
   dispose(): void;
   listen(event: string, handler: (data: unknown) => void): () => void;
   watch(request: RuntimeWatchRequest, handler: (event: RuntimeWatchEvent) => void): () => void;
 } {
-  const { call, listen, watch, dispose: rawDispose } = createBridgeCall(port);
+  const {
+    call,
+    listen,
+    watch,
+    dispose: rawDispose,
+  } = createBridgeCall(port, {
+    contentPool: options?.contentPool,
+  });
   let isDisposed = false;
 
   const dispose = (): void => {

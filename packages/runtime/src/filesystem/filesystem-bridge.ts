@@ -8,12 +8,35 @@
  */
 
 import { safeDispose } from '@taucad/utils/dispose';
+import type { ChangeEvent } from '@taucad/types';
 import type { StringKeyedObject } from '#types/bridge.types.js';
 import type { BridgeHandle, BridgeServerHandle } from '#framework/runtime-filesystem-bridge.js';
 import type { RuntimeWatchRequest, RuntimeWatchEvent } from '#types/runtime-kernel.types.js';
 import { createBridgeServer, catchMessages } from '#framework/runtime-filesystem-bridge.js';
 
 const defaultBridgeMessageType = 'connect';
+const defaultUiCoalescingWindowMs = 500;
+
+/**
+ * Minimal interface for an event coalescer that batches ChangeEvents
+ * before delivering them. Matches the push/flush/dispose API surface
+ * of `EventCoalescer` from `@taucad/filesystem`.
+ * @public
+ */
+export type ChangeEventCoalescer = {
+  push(event: ChangeEvent): void;
+  flush(): void;
+  dispose(): void;
+};
+
+/**
+ * Factory that creates a {@link ChangeEventCoalescer}.
+ *
+ * Called by {@link exposeFileSystem} with the delivery callback (broadcasts
+ * to all connected bridge ports) and the configured coalescing window.
+ * @public
+ */
+export type CoalescerFactory = (deliver: (events: ChangeEvent[]) => void, windowMs: number) => ChangeEventCoalescer;
 
 /**
  * Options for configuring the filesystem bridge message type.
@@ -21,6 +44,14 @@ const defaultBridgeMessageType = 'connect';
  */
 export type FileSystemBridgeOptions = {
   messageType?: string;
+  /** Coalescing window for UI-bound fileChanged events (default: 500ms). */
+  uiCoalescingWindowMs?: number;
+  /**
+   * Factory for creating a change event coalescer. When provided, events
+   * from `changeEventBus` are batched before broadcasting to bridge clients.
+   * When omitted, events pass through without batching.
+   */
+  createCoalescer?: CoalescerFactory;
 };
 
 /**
@@ -79,9 +110,24 @@ export function exposeFileSystem<T extends StringKeyedObject>(
   const serverHandles = new Map<MessagePort, BridgeServerHandle>();
   const portWatches = new Map<MessagePort, Map<string, () => void>>();
 
+  const deliverToHandles = (events: ChangeEvent[]): void => {
+    for (const event of events) {
+      for (const handle of serverHandles.values()) {
+        handle.emit('fileChanged', event);
+      }
+    }
+  };
+
+  let coalescer: ChangeEventCoalescer | undefined;
+  if (options?.createCoalescer) {
+    coalescer = options.createCoalescer(deliverToHandles, options.uiCoalescingWindowMs ?? defaultUiCoalescingWindowMs);
+  }
+
   const unsubscribeEventBus = options?.changeEventBus?.subscribe((event) => {
-    for (const handle of serverHandles.values()) {
-      handle.emit('fileChanged', event);
+    if (coalescer) {
+      coalescer.push(event as ChangeEvent);
+    } else {
+      deliverToHandles([event as ChangeEvent]);
     }
   });
 
@@ -147,6 +193,7 @@ export function exposeFileSystem<T extends StringKeyedObject>(
 
   return {
     cleanup() {
+      coalescer?.dispose();
       unsubscribeEventBus?.();
       self.removeEventListener('message', handler);
       for (const port of activePorts) {

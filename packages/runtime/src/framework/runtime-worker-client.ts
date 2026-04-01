@@ -188,6 +188,8 @@ export class RuntimeWorkerClient {
     fileSystemPort: MessagePort;
     middlewareEntries: MiddlewareRegistrations;
     bundlerEntries?: BundlerRegistrations;
+    /** Shared memory buffer for zero-IPC file content reads. */
+    contentPoolBuffer?: SharedArrayBuffer;
   }): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       this.pendingInit = {
@@ -205,6 +207,7 @@ export class RuntimeWorkerClient {
         bundlerEntries: input.bundlerEntries,
         fileSystemPort: input.fileSystemPort,
         signalBuffer: this.signalBuffer,
+        contentPoolBuffer: input.contentPoolBuffer,
       };
       this.transport.send(command, [input.fileSystemPort]);
     });

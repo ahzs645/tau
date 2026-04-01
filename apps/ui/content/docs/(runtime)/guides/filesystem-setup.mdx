@@ -6,7 +6,7 @@ icon: lucide:folder-cog
 
 # Set Up the Filesystem
 
-Configure the filesystem backend that kernels use to read project files. The framework provides three built-in constructors: `fromNodeFS` for disk access, `fromMemoryFS` for in-memory content, and `fromFsLike` for any fs-compatible object (ZenFS, BrowserFS, memfs, polyfills).
+Configure the filesystem backend that kernels use to read project files. The framework provides three built-in constructors: `fromNodeFS` for disk access, `fromMemoryFS` for in-memory content, and `fromFsLike` for any fs-compatible object (BrowserFS, memfs, polyfills).
 
 ## Prerequisites
 
@@ -75,14 +75,15 @@ const client = createRuntimeClient({
 
 ### 4. Use fromFsLike for Any fs-Compatible Object
 
-Use `fromFsLike` when you have an fs-compatible object with a `promises` namespace (e.g., ZenFS, BrowserFS, memfs, or any polyfill). The `FsLike` interface requires `promises.readFile`, `promises.writeFile`, `promises.mkdir`, and the other standard `fs.promises` methods:
+Use `fromFsLike` when you have an fs-compatible object with a `promises` namespace (e.g., BrowserFS, memfs, or any polyfill). The `FsLike` interface requires `promises.readFile`, `promises.writeFile`, `promises.mkdir`, and the other standard `fs.promises` methods:
 
-```typescript
+```typescript @ts-nocheck
 import { createRuntimeClient, fromFsLike } from '@taucad/runtime';
 import { replicad } from '@taucad/runtime/kernels';
 import { esbuild } from '@taucad/runtime/bundler';
-import { fs } from '@zenfs/core';
+import { BFSRequire } from 'browserfs';
 
+const fs = BFSRequire('fs');
 const filesystem = fromFsLike(fs, '/');
 
 const client = createRuntimeClient({
@@ -135,11 +136,11 @@ Call `dispose()` when the bridge is no longer needed to release the underlying M
 
 ## When to Use Each
 
-| Constructor                 | Use when                                                      |
-| --------------------------- | ------------------------------------------------------------- |
-| `fromNodeFS(basePath)`      | Node.js environment, disk-based projects, persistent cache    |
-| `fromMemoryFS(files?)`      | Editor-driven content, tests, no disk I/O, ephemeral cache    |
-| `fromFsLike(fs, rootPath?)` | Any fs-compatible object (ZenFS, BrowserFS, memfs, polyfills) |
+| Constructor                 | Use when                                                   |
+| --------------------------- | ---------------------------------------------------------- |
+| `fromNodeFS(basePath)`      | Node.js environment, disk-based projects, persistent cache |
+| `fromMemoryFS(files?)`      | Editor-driven content, tests, no disk I/O, ephemeral cache |
+| `fromFsLike(fs, rootPath?)` | Any fs-compatible object (BrowserFS, memfs, polyfills)     |
 
 ## Variations
 

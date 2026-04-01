@@ -13,6 +13,8 @@ import { allotmentPanelOrder } from '#constants/editor.constants.js';
 export type OpenFile = {
   path: string;
   name: string;
+  /** Timestamp of last focus/access for LRU eviction. */
+  lastAccessedAt: number;
 };
 
 /**

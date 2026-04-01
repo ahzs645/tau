@@ -3,7 +3,7 @@
  *
  * Minimal CDN module cache manager for kernel workers.
  * Fetches ESM bundles from CDN and caches them at the root-level `/node_modules/`
- * directory in ZenFS. Cached modules persist in IndexedDB across builds and are
+ * directory in the filesystem. Cached modules persist in IndexedDB across builds and are
  * shared across all projects.
  *
  * Key responsibilities:

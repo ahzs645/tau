@@ -22,13 +22,15 @@ import { WebglContextTrackerProvider } from '#hooks/use-webgl-context-tracker.js
 function RouteProvider({ children }: { readonly children?: React.ReactNode }): React.JSX.Element {
   const { id } = useParams();
   return (
-    <FileManagerProvider projectId={id} rootDirectory={`/projects/${id}`}>
-      <WebglContextTrackerProvider>
-        <ProjectProvider projectId={id!} kernelOptions={debugKernelOptions}>
-          <MonacoModelServiceProvider>{children}</MonacoModelServiceProvider>
-        </ProjectProvider>
-      </WebglContextTrackerProvider>
-    </FileManagerProvider>
+    <SharedWorkerGate>
+      <FileManagerProvider projectId={id} rootDirectory={`/projects/${id}`}>
+        <WebglContextTrackerProvider>
+          <ProjectProvider projectId={id!} kernelOptions={debugKernelOptions}>
+            <MonacoModelServiceProvider>{children}</MonacoModelServiceProvider>
+          </ProjectProvider>
+        </WebglContextTrackerProvider>
+      </FileManagerProvider>
+    </SharedWorkerGate>
   );
 }
 

@@ -5,11 +5,12 @@
  * - FileSystemProvider: abstraction over filesystem backends
  * - ProviderCapabilities: what a provider supports
  * - ProviderFileStat: stat result from provider operations
- * - ChangeEvent: push-based change notifications
+ * - ChangeEvent: push-based change notifications (canonical definition in @taucad/types)
  * - FileTreeNode: tree representation for /files route
  */
 
-import type { FileSystemBackend } from '@taucad/types';
+// oxlint-disable-next-line no-barrel-files/no-barrel-files -- re-export for internal consumers that import from #types.js
+export type { ChangeEvent } from '@taucad/types';
 
 /**
  * Capability flags describing what a storage provider supports.
@@ -71,17 +72,6 @@ export type FileReadStreamOptions = {
   /** Abort signal for cancellation. */
   signal?: AbortSignal;
 };
-
-/**
- * Discriminated union of filesystem change events emitted by the event bus.
- * @public
- */
-export type ChangeEvent =
-  | { type: 'fileWritten'; path: string; backend: FileSystemBackend }
-  | { type: 'fileDeleted'; path: string; backend: FileSystemBackend }
-  | { type: 'fileRenamed'; oldPath: string; newPath: string; backend: FileSystemBackend }
-  | { type: 'directoryChanged'; path: string; backend: FileSystemBackend }
-  | { type: 'backendChanged'; backend: FileSystemBackend };
 
 /**
  * Node in a standalone backend file tree.

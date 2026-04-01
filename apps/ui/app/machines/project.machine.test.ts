@@ -59,7 +59,7 @@ function createTestActor(options?: {
     actors: {
       loadProjectActor: fromSafeAsync(async () => {
         const project = await loadFunction();
-        return { type: 'projectRetrieved', project, parameterConfig };
+        return { type: 'projectRetrieved', project, ...(parameterConfig !== undefined && { parameterConfig }) };
       }),
       ...(options?.writeResult
         ? {
@@ -624,7 +624,7 @@ describe('projectMachine', () => {
       let writeCallCount = 0;
       const writeResolvers: Array<() => void> = [];
       const actor = await startAndLoad({
-        writeResult: () => {
+        writeResult: async () => {
           writeCallCount++;
           return new Promise<void>((resolve) => {
             writeResolvers.push(resolve);
@@ -674,7 +674,7 @@ describe('projectMachine', () => {
         let writeCallCount = 0;
         const writeResolvers: Array<() => void> = [];
         const actor = await startAndLoad({
-          writeResult: () => {
+          writeResult: async () => {
             writeCallCount++;
             return new Promise<void>((resolve) => {
               writeResolvers.push(resolve);
@@ -875,12 +875,12 @@ describe('projectMachine', () => {
       vi.useFakeTimers();
       try {
         let writeCallCount = 0;
-        const writeResolvers: (() => void)[] = [];
+        const writeResolvers: Array<() => void> = [];
         const actor = await startAndLoad({
           parameterConfig: createDefaultConfig('main.ts'),
           loadResult: stubProjectWithMechanical,
           shouldLoadModelOnStart: true,
-          writeParameterResult: () => {
+          writeParameterResult: async () => {
             writeCallCount++;
             return new Promise<void>((resolve) => {
               writeResolvers.push(resolve);

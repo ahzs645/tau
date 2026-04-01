@@ -50,7 +50,7 @@ import type {
 import type { PerformanceEntryData, RenderPhase, WorkerState } from '#types/runtime-protocol.types.js';
 import { signalSlot, workerStateEnum } from '#types/runtime-protocol.types.js';
 import { isRenderAbortedError } from '#framework/runtime-worker-client.js';
-import type { FileSystemProxy } from '#framework/runtime-filesystem-bridge.js';
+import type { FileSystemProxy, ContentPool } from '#framework/runtime-filesystem-bridge.js';
 import { createBridgeProxy } from '#framework/runtime-filesystem-bridge.js';
 import { createRuntimeFileSystem } from '#filesystem/create-runtime-filesystem.js';
 import { createKernelError } from '#kernels/kernel-helpers.js';
@@ -307,6 +307,9 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   /** SharedArrayBuffer signal channel for bidirectional abort/state signaling. */
   private signalView: Int32Array | undefined;
 
+  /** SharedArrayBuffer for the shared content pool, set before initialize. */
+  private contentPoolBuffer: SharedArrayBuffer | undefined;
+
   /** Current render generation for abort detection. */
   private renderGeneration = 0;
 
@@ -412,7 +415,19 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
 
     // Register file manager and create filesystem if port is provided
     if (input.transferables.fileSystemPort) {
-      this.fileSystem = createBridgeProxy<RuntimeFileSystemBase>(input.transferables.fileSystemPort);
+      let readerPool: ContentPool | undefined;
+      if (this.contentPoolBuffer) {
+        try {
+          // eslint-disable-next-line import-x/no-extraneous-dependencies -- resolved by consumer's bundler; runtime is consumed as source
+          const filesystemModule = await import('@taucad/filesystem');
+          readerPool = new filesystemModule.SharedContentPool(this.contentPoolBuffer);
+        } catch {
+          // Graceful degradation: pool unavailable
+        }
+      }
+      this.fileSystem = createBridgeProxy<RuntimeFileSystemBase>(input.transferables.fileSystemPort, {
+        contentPool: readerPool,
+      });
       this._filesystem = this.createFileSystem();
     }
 
@@ -466,6 +481,16 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    */
   public setSignalBuffer(buffer: SharedArrayBuffer): void {
     this.signalView = new Int32Array(buffer);
+  }
+
+  /**
+   * Set the SharedArrayBuffer for the shared content pool.
+   * Called by the dispatcher during initialization if the main thread provides a content pool buffer.
+   *
+   * @param buffer - SharedArrayBuffer backing the shared content pool.
+   */
+  public setContentPoolBuffer(buffer: SharedArrayBuffer): void {
+    this.contentPoolBuffer = buffer;
   }
 
   /**

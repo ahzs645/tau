@@ -36,7 +36,7 @@ const groupIcons: Record<string, React.ComponentType<{ className?: string }>> = 
 };
 
 export type ContextMentionOptions = {
-  getItems: (query: string) => ContextSuggestionItem[];
+  getItems: (query: string) => ContextSuggestionItem[] | Promise<ContextSuggestionItem[]>;
   renderCallbacks: SuggestionRenderCallbacks<ContextSuggestionItem>;
   onAction?: (item: ContextSuggestionItem) => void;
 };
@@ -64,7 +64,7 @@ export const ContextMention = Extension.create<ContextMentionOptions>({
         pluginKey: contextMentionPluginKey,
         editor: this.editor,
         char: '@',
-        items: ({ query }) => getItems(query),
+        items: async ({ query }) => getItems(query),
         command: ({ editor, range, props }) => {
           const item = props as ContextSuggestionItem;
           if (item.isAction) {
@@ -167,7 +167,7 @@ export const ContextSuggestionDropdown = memo(function ContextSuggestionDropdown
 
   useEffect(() => {
     if (virtuosoRef.current) {
-      virtuosoRef.current.scrollToIndex({ index: selectedIndex, align: 'nearest' });
+      virtuosoRef.current.scrollToIndex({ index: selectedIndex });
     } else {
       const element = itemReferences.current.get(selectedIndex);
       element?.scrollIntoView({ block: 'nearest' });

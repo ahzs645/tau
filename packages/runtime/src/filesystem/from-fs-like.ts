@@ -1,5 +1,5 @@
 /**
- * Create a RuntimeFileSystem from any fs-compatible object (ZenFS, BrowserFS, memfs, polyfills).
+ * Create a RuntimeFileSystem from any fs-compatible object (BrowserFS, memfs, polyfills).
  * Wraps an `fs.promises`-style API for same-thread usage (testing, Node.js, worker-side serving).
  */
 
@@ -7,13 +7,13 @@ import type { NativeStats } from '@taucad/types';
 import { toFileStat } from '@taucad/types/constants';
 import type { RuntimeFileSystemBase } from '#types/runtime-kernel.types.js';
 
-/* oxlint-disable @protontech/enforce-uint8array-arraybuffer/enforce-uint8array-arraybuffer -- ZenFS/BrowserFS returns Buffer<ArrayBufferLike>, we must accept the wider type */
+/* oxlint-disable @protontech/enforce-uint8array-arraybuffer/enforce-uint8array-arraybuffer -- BrowserFS/memfs returns Buffer<ArrayBufferLike>, we must accept the wider type */
 /**
  * Minimal interface for any fs-compatible object with a `promises` namespace.
- * Matches the shape of `fs` from `@zenfs/core`, BrowserFS, memfs, and similar
+ * Matches the shape of `fs` from BrowserFS, memfs, and similar
  * libraries without importing them directly.
  * Uses `ArrayBufferLike` to accept both `ArrayBuffer` and `SharedArrayBuffer`
- * (ZenFS/BrowserFS returns `Buffer<ArrayBufferLike>`).
+ * (BrowserFS returns `Buffer<ArrayBufferLike>`).
  * @public
  */
 export type FsLike = {
@@ -36,18 +36,18 @@ export type FsLike = {
  * Create a RuntimeFileSystem from any fs-compatible object.
  * Wraps an `fs.promises`-style API for same-thread usage (testing, Node.js, worker-side serving).
  *
- * @param fsLike - An fs-compatible object with a `promises` namespace (e.g., `fs` from `@zenfs/core`, BrowserFS, memfs)
+ * @param fsLike - An fs-compatible object with a `promises` namespace (e.g., BrowserFS, memfs)
  * @param rootPath - Optional root path prefix for all operations (default: '/')
  * @returns RuntimeFileSystemBase backed by the provided fs-compatible object
  *
  * @public
  *
- * @example <caption>ZenFS-backed filesystem adapter</caption>
+ * @example <caption>fs-like object adapter</caption>
  * ```typescript
  * import { fromFsLike } from '@taucad/runtime/filesystem';
- * import { fs } from '@zenfs/core';
  *
- * const fileSystem = fromFsLike(fs);
+ * declare const fsLikeObject: { promises: typeof import('fs').promises };
+ * const fileSystem = fromFsLike(fsLikeObject);
  * ```
  */
 export function fromFsLike(fsLike: FsLike, rootPath = '/'): RuntimeFileSystemBase {

@@ -9,8 +9,9 @@ import { Placeholder } from '@tiptap/extension-placeholder';
 import type { Editor, JSONContent } from '@tiptap/core';
 import { Slice } from '@tiptap/pm/model';
 import type { EditorView } from '@tiptap/pm/view';
-import type { FileEntry } from '@taucad/types';
 import type { Chat } from '@taucad/chat';
+import type { FileEntry } from '@taucad/types';
+import type { FileTreeService } from '#lib/file-tree-service.js';
 import type { ChipType } from '#components/chat/context-chip.js';
 import { buildPastedContent, slashCommandRegex } from '#utils/at-reference.utils.js';
 import type { PastedContentSegment } from '#utils/at-reference.utils.js';
@@ -19,7 +20,7 @@ import { SubmitOnEnter } from '#components/chat/tiptap/submit-on-enter.js';
 import { ChatInputDropHandler } from '#components/chat/tiptap/chat-input-drop-handler.js';
 import { ContextMention } from '#components/chat/tiptap/context-suggestion.js';
 import { SlashCommand, defaultSkills } from '#components/chat/tiptap/slash-command-suggestion.js';
-import { buildContextItems } from '#components/chat/tiptap/context-suggestion.utils.js';
+import { buildContextItemsFromSearch } from '#components/chat/tiptap/context-suggestion.utils.js';
 import type {
   ContextSuggestionItem,
   SlashCommandItem,
@@ -150,7 +151,7 @@ export type UseChatEditorOptions = {
   onEscape?: () => void;
   onUpdate?: (content: ChatInputContent) => void;
   onImagePaste?: (dataUrl: string) => void;
-  fileTree: Map<string, FileEntry>;
+  treeService: FileTreeService | undefined;
   chats: Chat[];
   actionItems?: ContextSuggestionItem[];
   onSlashCommand?: (item: SlashCommandItem) => void;
@@ -175,7 +176,7 @@ export function useChatEditor({
   onEscape,
   onUpdate,
   onImagePaste,
-  fileTree,
+  treeService,
   chats,
   actionItems,
   onSlashCommand,
@@ -191,8 +192,8 @@ export function useChatEditor({
   const contextKeydownRef = useRef<((event: KeyboardEvent) => boolean) | undefined>(undefined);
   const slashKeydownRef = useRef<((event: KeyboardEvent) => boolean) | undefined>(undefined);
 
-  const fileTreeRef = useRef(fileTree);
-  fileTreeRef.current = fileTree;
+  const treeServiceRef = useRef(treeService);
+  treeServiceRef.current = treeService;
   const chatsRef = useRef(chats);
   chatsRef.current = chats;
   const actionItemsRef = useRef(actionItems);
@@ -218,15 +219,22 @@ export function useChatEditor({
     [],
   );
 
-  const getContextItems = useCallback(
-    (_query: string) =>
-      buildContextItems({
-        fileTree: fileTreeRef.current,
+  const getContextItems = useCallback(async (query: string): Promise<ContextSuggestionItem[]> => {
+    const service = treeServiceRef.current;
+    if (!service) {
+      return buildContextItemsFromSearch({
+        fileEntries: [],
         chats: chatsRef.current,
         actionItems: actionItemsRef.current,
-      }),
-    [],
-  );
+      });
+    }
+    const fileEntries = await service.searchFiles(query, { maxResults: 20 });
+    return buildContextItemsFromSearch({
+      fileEntries,
+      chats: chatsRef.current,
+      actionItems: actionItemsRef.current,
+    });
+  }, []);
 
   const handleContextAction = useCallback((item: ContextSuggestionItem) => {
     onContextActionRef.current?.(item);
@@ -310,8 +318,10 @@ export function useChatEditor({
           return false;
         }
 
+        const lazyTree: Map<string, FileEntry> =
+          treeServiceRef.current?.getTreeSnapshot() ?? new Map<string, FileEntry>();
         const segments = buildPastedContent(text, {
-          fileTree: fileTreeRef.current,
+          fileTree: lazyTree,
           chats: chatsRef.current,
           knownSkills: knownSkillIds,
         });

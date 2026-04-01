@@ -76,6 +76,12 @@ export type FileManagerProtocol = {
 
   readDirectory(path: string): Promise<FileTreeNode[]>;
 
+  searchFiles(
+    basePath: string,
+    query: string,
+    options?: { maxResults?: number; includeDirectories?: boolean },
+  ): FileStatEntry[];
+
   watch(request: WatchRequest, handler: (event: WatchEvent) => void): () => void;
 };
 

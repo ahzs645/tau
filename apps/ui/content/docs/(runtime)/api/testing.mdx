@@ -18,8 +18,8 @@ Use the testing API when writing unit tests for custom kernels, middleware, or k
 | ---------------------------- | ----------------------------------------------------------------------------------------------------------------- |
 | `createTestWorker`           | Create and initialize a [`KernelRuntimeWorker`](../concepts/worker-model) with kernel definition and seeded files |
 | `initializeWorkerForTesting` | Initialize an existing worker with MessageChannel-based filesystem bridge                                         |
-| `seedTestFileSystem`         | Seed ZenFS with files; resets to clean state first                                                                |
-| `clearTestFileSystem`        | Reset ZenFS to empty in-memory backend                                                                            |
+| `seedTestFileSystem`         | Seed the in-memory filesystem with files; resets to clean state first                                             |
+| `clearTestFileSystem`        | Reset the in-memory filesystem to empty                                                                           |
 
 ## Mock Utilities
 

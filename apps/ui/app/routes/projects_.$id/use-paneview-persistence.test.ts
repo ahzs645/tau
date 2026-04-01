@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
-import type { PaneviewApi, IPaneviewPanel, PaneviewPanelApi } from 'dockview-react';
+import type { PaneviewApi, IPaneviewPanel } from 'dockview-react';
 import type { PaneviewPanelState } from '#types/editor.types.js';
 import { getInitialPanelOptions, usePaneviewPersistence } from '#routes/projects_.$id/use-chat-interface-state.js';
 
@@ -50,11 +50,12 @@ function createMockPanel(id: string, isExpanded: boolean, height: number): IPane
   return {
     id,
     height,
-    api: { isExpanded } as PaneviewPanelApi,
+    api: { isExpanded },
   } as unknown as IPaneviewPanel;
 }
 
 function createMockPaneviewApi(): PaneviewApi & {
+  panels: IPaneviewPanel[];
   triggerLayoutChange: () => void;
 } {
   let layoutHandler: (() => void) | undefined;
@@ -75,7 +76,10 @@ function createMockPaneviewApi(): PaneviewApi & {
     triggerLayoutChange() {
       layoutHandler?.();
     },
-  } as unknown as PaneviewApi & { triggerLayoutChange: () => void };
+  } as unknown as PaneviewApi & {
+    panels: IPaneviewPanel[];
+    triggerLayoutChange: () => void;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -83,6 +87,7 @@ function createMockPaneviewApi(): PaneviewApi & {
 // ---------------------------------------------------------------------------
 
 describe('getInitialPanelOptions', () => {
+  /* eslint-disable @typescript-eslint/naming-convention -- file path keys in test fixtures */
   it('returns defaults when no saved state exists', () => {
     const result = getInitialPanelOptions({}, 'main.ts', {
       isExpanded: true,
@@ -119,6 +124,7 @@ describe('getInitialPanelOptions', () => {
     });
     expect(result).toEqual({ isExpanded: true });
   });
+  /* eslint-enable @typescript-eslint/naming-convention -- file path keys in test fixtures */
 });
 
 // ---------------------------------------------------------------------------
@@ -135,6 +141,7 @@ describe('usePaneviewPersistence', () => {
     vi.restoreAllMocks();
   });
 
+  /* eslint-disable @typescript-eslint/naming-convention -- file path keys in test fixtures */
   it('returns saved state from editor machine', () => {
     mockPaneviewState = { 'main.ts': { isExpanded: true, size: 200 } };
 
@@ -196,8 +203,8 @@ describe('usePaneviewPersistence', () => {
       mockApi.triggerLayoutChange();
     });
 
-    const call = mockSend.mock.calls[0]![0];
-    expect(call.panelState.kernelPaneview).toEqual({
+    const call = mockSend.mock.calls[0]![0] as { panelState: Record<string, Record<string, PaneviewPanelState>> };
+    expect(call.panelState['kernelPaneview']).toEqual({
       'a.ts': { isExpanded: true, size: 300 },
       'b.ts': { isExpanded: true, size: 150 },
       'c.ts': { isExpanded: false, size: 30 },
@@ -218,8 +225,9 @@ describe('usePaneviewPersistence', () => {
       mockApi.triggerLayoutChange();
     });
 
-    const call = mockSend.mock.calls[0]![0];
+    const call = mockSend.mock.calls[0]![0] as { panelState: Record<string, unknown> };
     expect(call.panelState).toHaveProperty('parametersPaneview');
     expect(call.panelState).not.toHaveProperty('kernelPaneview');
   });
+  /* eslint-enable @typescript-eslint/naming-convention -- file path keys in test fixtures */
 });

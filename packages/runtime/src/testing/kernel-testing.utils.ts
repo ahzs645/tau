@@ -12,8 +12,6 @@ import { parentDirectory, joinPath } from '@taucad/utils/path';
 import type { Mock } from 'vitest';
 import { expect, vi } from 'vitest';
 import { mock } from 'vitest-mock-extended';
-import { configure, fs } from '@zenfs/core';
-import { InMemory } from '@zenfs/core/backends/memory.js';
 import type {
   CreateGeometryResult,
   HashedGeometryResult,
@@ -52,16 +50,23 @@ import { KernelRuntimeWorker } from '#framework/kernel-runtime-worker.js';
 import type { ResolvedMiddleware } from '#framework/kernel-worker.js';
 import { KernelWorker } from '#framework/kernel-worker.js';
 import { createBridgePort } from '#framework/runtime-filesystem-bridge.js';
-import { fromFsLike } from '#filesystem/from-fs-like.js';
+import { fromMemoryFS } from '#filesystem/from-memory-fs.js';
 
-async function resetFileSystem(): Promise<void> {
-  // eslint-disable-next-line @typescript-eslint/naming-convention -- filesystem mount point requires '/' as key
-  await configure({ mounts: { '/': InMemory } });
-}
+let _testFileSystem: ReturnType<typeof fromMemoryFS> | undefined;
 
 // =============================================================================
 // Test Filesystem Utilities
 // =============================================================================
+
+/**
+ * Get the shared test filesystem instance. Creates a new one if none exists.
+ * @returns The shared in-memory test filesystem
+ * @public
+ */
+export function getTestFileSystem(): ReturnType<typeof fromMemoryFS> {
+  _testFileSystem ??= fromMemoryFS();
+  return _testFileSystem;
+}
 
 /**
  * Seed the test filesystem with files.
@@ -72,21 +77,17 @@ async function resetFileSystem(): Promise<void> {
  * @public
  */
 export async function seedTestFileSystem(files: Record<string, string | Uint8Array<ArrayBuffer>>): Promise<void> {
-  // Reset to a clean in-memory filesystem to prevent stale files from prior tests
-  // (e.g., a leftover shapes.ts blocking resolution of shapes/index.ts barrel imports)
-  await resetFileSystem();
+  _testFileSystem = fromMemoryFS();
 
-  // Write files to the filesystem
   for (const [path, content] of Object.entries(files)) {
     const normalizedPath = path.startsWith('/') ? path : `/${path}`;
     const parentDirectoryPath = parentDirectory(normalizedPath);
 
     if (parentDirectoryPath && parentDirectoryPath !== '/') {
-      await fs.promises.mkdir(parentDirectoryPath, { recursive: true });
+      await _testFileSystem.mkdir(parentDirectoryPath, { recursive: true });
     }
 
-    // Write file content
-    await fs.promises.writeFile(normalizedPath, content);
+    await _testFileSystem.writeFile(normalizedPath, content);
   }
 }
 
@@ -95,7 +96,7 @@ export async function seedTestFileSystem(files: Record<string, string | Uint8Arr
  * @public
  */
 export async function clearTestFileSystem(): Promise<void> {
-  await resetFileSystem();
+  _testFileSystem = fromMemoryFS();
 }
 
 // =============================================================================
@@ -139,7 +140,7 @@ export async function initializeWorkerForTesting<T extends KernelWorker>(
     worker.setTelemetrySend(options.onTelemetry);
   }
 
-  const { port } = createBridgePort(fromFsLike(fs));
+  const { port } = createBridgePort(getTestFileSystem());
 
   await worker.initialize({
     callbacks: {

@@ -33,6 +33,8 @@ export type RuntimeCommand =
       bundlerEntries?: BundlerRegistrations;
       fileSystemPort?: MessagePort;
       signalBuffer?: SharedArrayBuffer;
+      /** Shared memory buffer for zero-IPC file content reads across threads. */
+      contentPoolBuffer?: SharedArrayBuffer;
     }
   | {
       type: 'render';

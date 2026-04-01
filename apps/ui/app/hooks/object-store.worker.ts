@@ -68,7 +68,7 @@ const objectStoreWorker = {
         options.editorState?.openFiles && options.editorState.openFiles.length > 0
           ? options.editorState.openFiles
           : mainFile
-            ? [{ path: mainFile, name: mainFile.split('/').pop() ?? mainFile }]
+            ? [{ path: mainFile, name: mainFile.split('/').pop() ?? mainFile, lastAccessedAt: Date.now() }]
             : [];
 
       // Merge provided panelState with defaults

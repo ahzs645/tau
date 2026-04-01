@@ -51,6 +51,7 @@ export type WebAccessStatus = 'disconnected' | 'connected' | 'needs-permission';
 
 type FileManagerContextType = {
   fileManagerRef: FileManagerRef;
+  backendType: FileSystemBackend;
   contentService: FileContentService | undefined;
   treeService: FileTreeService | undefined;
   writeFile: (path: string, data: Uint8Array<ArrayBuffer>, options: WriteFileOptions) => Promise<void>;
@@ -76,6 +77,22 @@ type FileManagerContextType = {
 const FileManagerContext = createContext<FileManagerContextType | undefined>(undefined);
 
 const SharedWorkerContext = createContext<Worker | undefined>(undefined);
+
+/**
+ * Gate component that defers rendering until the parent FileManagerProvider's
+ * worker is available via SharedWorkerContext. Prevents nested
+ * FileManagerProviders from creating duplicate workers during the window
+ * between root mount and root worker initialization.
+ */
+export function SharedWorkerGate({ children }: { readonly children: ReactNode }): React.ReactNode | undefined {
+  const worker = useContext(SharedWorkerContext);
+
+  if (!worker) {
+    return undefined;
+  }
+
+  return children;
+}
 
 export function FileManagerProvider({
   children,
@@ -110,6 +127,7 @@ export function FileManagerProvider({
 
   const contentService = useSelector(fileManagerRef, (state) => state.context.contentService);
   const treeService = useSelector(fileManagerRef, (state) => state.context.treeService);
+  const backendType = useSelector(fileManagerRef, (state) => state.context.backendType);
 
   /**
    * Wait for machine ready and return proxy. Used only for admin operations
@@ -259,7 +277,7 @@ export function FileManagerProvider({
       const proxy = await getReadiedProxy();
 
       if (backend !== 'webaccess') {
-        treeService?.stopPolling();
+        treeService?.stopChangeDetection();
       }
 
       await proxy.reconfigure(backend);
@@ -267,7 +285,7 @@ export function FileManagerProvider({
       fileManagerRef.send({ type: 'setBackendType', backendType: backend });
 
       if (backend === 'webaccess') {
-        treeService?.startPolling();
+        void treeService?.startChangeDetection();
       }
 
       treeService?.scheduleRefresh('');
@@ -309,7 +327,7 @@ export function FileManagerProvider({
     setConnectedDirectoryName(handle.name);
     fileManagerRef.send({ type: 'setBackendType', backendType: 'webaccess' });
 
-    treeService?.startPolling();
+    void treeService?.startChangeDetection(handle);
     treeService?.scheduleRefresh('');
   }, [fileManagerRef, getReadiedProxy, treeService]);
 
@@ -331,7 +349,7 @@ export function FileManagerProvider({
     setConnectedDirectoryName(handle.name);
     fileManagerRef.send({ type: 'setBackendType', backendType: 'webaccess' });
 
-    treeService?.startPolling();
+    void treeService?.startChangeDetection(handle);
     treeService?.scheduleRefresh('');
 
     return true;
@@ -370,6 +388,7 @@ export function FileManagerProvider({
   const value = useMemo<FileManagerContextType>(
     () => ({
       fileManagerRef,
+      backendType,
       contentService,
       treeService,
       writeFile,
@@ -393,6 +412,7 @@ export function FileManagerProvider({
     }),
     [
       fileManagerRef,
+      backendType,
       contentService,
       treeService,
       writeFile,
@@ -435,6 +455,15 @@ export function useFileManager(): FileManagerContextType {
   }
 
   return context;
+}
+
+/**
+ * Non-throwing variant of `useFileManager`. Returns `undefined` when called
+ * outside a `FileManagerProvider` instead of throwing. Used by components
+ * that optionally read from the file manager context (e.g. `FileSelector`).
+ */
+export function useOptionalFileManager(): FileManagerContextType | undefined {
+  return useContext(FileManagerContext);
 }
 
 /**

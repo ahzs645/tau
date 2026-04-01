@@ -1,9 +1,8 @@
-import { assign, assertEvent, setup, enqueueActions } from 'xstate';
-import type { AnyActorRef, ActorRefFrom } from 'xstate';
-import { unzipMachine } from '#machines/unzip.machine.js';
-import type { UnzipMachineActor } from '#machines/unzip.machine.js';
+import { assign, assertEvent, setup, enqueueActions, fromCallback } from 'xstate';
+import type { AnyActorRef } from 'xstate';
 import { fromSafeAsync } from '#lib/xstate.lib.js';
 import { getGitHubClient } from '#lib/github-api.js';
+import type { ImportWorkerRequest, ImportWorkerResponse } from '#workers/import.worker.js';
 
 /**
  * Import GitHub Machine Context
@@ -39,9 +38,10 @@ export type ImportGitHubContext = {
   isLoadingFiles: boolean;
   downloadProgress: { loaded: number; total: number };
   extractProgress: { processed: number; total: number };
-  unzipRef: ActorRefFrom<UnzipMachineActor> | undefined;
-  unzipSubscription: { unsubscribe: () => void } | undefined;
   files: Map<string, { filename: string; content: Uint8Array<ArrayBuffer> }>;
+  /** File paths from import worker (lighter than full file contents) */
+  importedFilePaths: string[];
+  importWorker: Worker | undefined;
   projectId: string | undefined;
   error: Error | undefined;
   fetchErrors: {
@@ -115,15 +115,17 @@ type ImportGitHubEventInternal =
       processed: number;
       total: number;
     }
+  | { type: 'confirmImport' }
   | {
-      type: 'extractionComplete';
-      files: Map<string, { filename: string; content: Uint8Array<ArrayBuffer> }>;
+      type: 'workerExtractComplete';
+      filePaths: string[];
+      files: Array<{ path: string; content: Uint8Array<ArrayBuffer> }>;
     }
   | {
-      type: 'extractionError';
-      error: Error;
-    }
-  | { type: 'confirmImport' };
+      type: 'workerError';
+      message: string;
+      phase: 'download' | 'extract' | 'write';
+    };
 
 /**
  * Events emitted by the machine for external listeners (e.g., URL sync)
@@ -146,11 +148,7 @@ type ImportGitHubEvent =
   | RepoMetadataResult
   | BranchesResult
   | FilesResult
-  | DownloadResult
   | ProjectCreatedResult;
-
-// Actor output types
-type DownloadResult = { type: 'downloaded'; blob: Blob };
 type RepoMetadataResult = {
   type: 'metadataRetrieved';
   metadata: {
@@ -255,74 +253,6 @@ const getFilesActor = fromSafeAsync<FilesResult, { owner: string; repo: string; 
   };
 });
 
-const downloadZipActor = fromSafeAsync<
-  DownloadResult,
-  { owner: string; repo: string; ref: string; onProgress: (loaded: number, total: number) => void }
->(async ({ input, signal }) => {
-  const client = getGitHubClient();
-
-  const { stream, size: contentLength } = await client.downloadArchiveWithSize({
-    owner: input.owner,
-    repo: input.repo,
-    ref: input.ref,
-    signal,
-  });
-
-  const totalBytes = contentLength ?? 0;
-
-  input.onProgress(0, totalBytes);
-
-  const reader = stream.getReader();
-
-  const chunks: Array<Uint8Array<ArrayBuffer>> = [];
-  let receivedLength = 0;
-  let lastProgressUpdate = 0;
-  const progressUpdateInterval = 100;
-
-  try {
-    // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- standard stream reading pattern
-    while (true) {
-      if (signal.aborted) {
-        // oxlint-disable-next-line no-await-in-loop -- need to cancel stream before throwing
-        await reader.cancel();
-        throw new Error('Download canceled');
-      }
-
-      // oxlint-disable-next-line no-await-in-loop -- reading stream sequentially
-      const { done, value } = await reader.read();
-
-      if (done) {
-        break;
-      }
-
-      chunks.push(value);
-      receivedLength += value.length;
-
-      const now = Date.now();
-      if (now - lastProgressUpdate >= progressUpdateInterval || lastProgressUpdate === 0) {
-        input.onProgress(receivedLength, totalBytes);
-        lastProgressUpdate = now;
-      }
-    }
-
-    input.onProgress(receivedLength, totalBytes);
-
-    const zipData = new Uint8Array(receivedLength);
-    let position = 0;
-    for (const chunk of chunks) {
-      zipData.set(chunk, position);
-      position += chunk.length;
-    }
-
-    return {
-      type: 'downloaded',
-      blob: new Blob([zipData], { type: 'application/zip' }),
-    };
-  } finally {
-    reader.releaseLock();
-  }
-});
-
 type ProjectCreatedResult = { type: 'projectCreated'; projectId: string };
 
 const createProjectActor = fromSafeAsync<
@@ -338,12 +268,76 @@ const createProjectActor = fromSafeAsync<
   throw new Error('Not implemented');
 });
 
+type ImportWorkerCallbackInput = {
+  downloadUrl: string;
+  headers?: Record<string, string>;
+};
+
+type ImportWorkerCallbackEvents =
+  | { type: 'updateDownloadProgress'; loaded: number; total: number }
+  | { type: 'updateExtractProgress'; processed: number; total: number }
+  | {
+      type: 'workerExtractComplete';
+      filePaths: string[];
+      files: Array<{ path: string; content: Uint8Array<ArrayBuffer> }>;
+    }
+  | { type: 'workerError'; message: string; phase: 'download' | 'extract' | 'write' };
+
+const importWorkerActor = fromCallback<ImportWorkerCallbackEvents, ImportWorkerCallbackInput>(({ sendBack, input }) => {
+  const worker = new Worker(new URL('#workers/import.worker.js', import.meta.url), {
+    type: 'module',
+  });
+
+  worker.addEventListener('message', (event: MessageEvent<ImportWorkerResponse>) => {
+    const message = event.data;
+    switch (message.type) {
+      case 'downloadProgress': {
+        sendBack({ type: 'updateDownloadProgress', loaded: message.loaded, total: message.total });
+        break;
+      }
+      case 'extractProgress': {
+        sendBack({ type: 'updateExtractProgress', processed: message.processed, total: message.total });
+        break;
+      }
+      case 'extractComplete': {
+        sendBack({
+          type: 'workerExtractComplete',
+          filePaths: message.filePaths,
+          files: message.files,
+        });
+        break;
+      }
+      case 'error': {
+        sendBack({ type: 'workerError', message: message.message, phase: message.phase });
+        break;
+      }
+    }
+  });
+
+  worker.addEventListener('error', (event) => {
+    sendBack({ type: 'workerError', message: event.message, phase: 'download' });
+  });
+
+  const startMessage: ImportWorkerRequest = {
+    type: 'startDownload',
+    url: input.downloadUrl,
+    headers: input.headers,
+  };
+  worker.postMessage(startMessage);
+
+  return () => {
+    const cancelMessage: ImportWorkerRequest = { type: 'cancel' };
+    worker.postMessage(cancelMessage);
+    worker.terminate();
+  };
+});
+
 const importGitHubActors = {
   getRepoMetadataActor,
   getBranchesActor,
   getFilesActor,
-  downloadZipActor,
   createProjectActor,
+  importWorkerActor,
 } as const;
 
 /**
@@ -352,8 +346,7 @@ const importGitHubActors = {
  * Manages importing a GitHub repository as a project.
  *
  * States:
- * - downloading: Downloading ZIP from GitHub with progress tracking
- * - extracting: Extracting files from ZIP with progress tracking
+ * - downloading: Download and extract via import worker (ZIP stream) with progress tracking
  * - selectingMainFile: User reviews files and selects main file
  * - creating: Creating the project with selected main file
  * - success: Import completed successfully
@@ -377,7 +370,6 @@ export const importGitHubMachine = setup({
   },
   actors: {
     ...importGitHubActors,
-    unzipMachine,
   },
   delays: {
     debounceDelay: 500,
@@ -571,34 +563,18 @@ export const importGitHubMachine = setup({
     }),
     initializeSelectedMainFile: assign({
       selectedMainFile({ context }) {
-        // If main file was requested and exists, use it; otherwise undefined for user selection
-        const fileNames = [...context.files.keys()];
+        const fileNames = context.importedFilePaths.length > 0 ? context.importedFilePaths : [...context.files.keys()];
 
         if (context.requestedMainFile.length > 0 && fileNames.includes(context.requestedMainFile)) {
           return context.requestedMainFile;
         }
 
-        // Try to find a CAD file as suggestion
-        const cadExtensions = ['.scad', '.jscad', '.ts', '.js'];
+        const cadExtensions = ['.scad', '.jscad', '.ts', '.js', '.kcl'];
         // oxlint-disable-next-line unicorn-js/prevent-abbreviations -- ext is conventional abbreviation for extension
         const foundFile = fileNames.find((filename) => cadExtensions.some((ext) => filename.endsWith(ext)));
 
         return foundFile;
       },
-    }),
-    spawnUnzipMachine: assign({
-      unzipRef({ spawn }) {
-        return spawn('unzipMachine', { id: 'unzip', input: {} });
-      },
-    }),
-    sendExtractToUnzip: enqueueActions(({ enqueue, context, event }) => {
-      assertEvent(event, 'downloaded');
-      if (context.unzipRef) {
-        enqueue.sendTo(context.unzipRef, {
-          type: 'extract',
-          zipBlob: event.blob,
-        });
-      }
     }),
     setMetadataError: assign({
       fetchErrors: ({ context, event }) => ({
@@ -788,9 +764,9 @@ export const importGitHubMachine = setup({
     isLoadingFiles: false,
     downloadProgress: { loaded: 0, total: 0 },
     extractProgress: { processed: 0, total: 0 },
-    unzipRef: undefined,
-    unzipSubscription: undefined,
     files: new Map(),
+    importedFilePaths: [],
+    importWorker: undefined,
     projectId: undefined,
     error: undefined,
     fetchErrors: {
@@ -1106,116 +1082,62 @@ export const importGitHubMachine = setup({
       },
     },
     downloading: {
-      entry: ['clearError', 'spawnUnzipMachine'],
+      entry: 'clearError',
       invoke: {
-        src: 'downloadZipActor',
-        input: ({ context, self }) => ({
-          owner: context.owner,
-          repo: context.repo,
-          ref: context.ref,
-          onProgress(loaded: number, total: number) {
-            self.send({ type: 'updateDownloadProgress', loaded, total });
-          },
-        }),
-        onDone: {
-          target: 'extracting',
-        },
-        onError: {
-          target: 'error',
-          actions: 'setError',
+        src: 'importWorkerActor',
+        input: ({ context }) => {
+          const client = getGitHubClient();
+          return {
+            downloadUrl: client.getArchiveUrl({
+              owner: context.owner,
+              repo: context.repo,
+              ref: context.ref,
+            }),
+            headers: client.getAuthHeaders(),
+          };
         },
       },
       on: {
-        downloaded: {
-          actions: 'sendExtractToUnzip',
-        },
         updateDownloadProgress: {
           actions: 'applyDownloadProgressImmediately',
         },
-        cancelDownload: {
-          target: 'enteringDetails',
-          actions: 'clearError',
-        },
-      },
-    },
-    extracting: {
-      entry: assign({
-        unzipSubscription({ context, self }) {
-          // Subscribe to the spawned unzip machine's state changes and events
-          if (!context.unzipRef) {
-            return undefined;
-          }
-
-          // Subscribe to state changes
-          const stateSubscription = context.unzipRef.subscribe((state) => {
-            if (state.matches('ready')) {
-              // Unzip completed successfully
-              self.send({
-                type: 'extractionComplete',
-                files: state.context.files,
-              });
-            } else if (state.matches('error')) {
-              // Unzip failed
-              self.send({
-                type: 'extractionError',
-                error: state.context.error ?? new Error('Failed to extract ZIP'),
-              });
-            }
-            // If state is 'extracting' or 'idle', we just wait for the next state change
-          });
-
-          // Subscribe to progress events
-          const progressSubscription = context.unzipRef.on('progress', ({ processedBytes, totalBytes }) => {
-            self.send({
-              type: 'updateExtractProgress',
-              processed: processedBytes,
-              total: totalBytes,
-            });
-          });
-
-          // Return combined cleanup
-          return {
-            unsubscribe() {
-              stateSubscription.unsubscribe();
-              progressSubscription.unsubscribe();
-            },
-          };
-        },
-      }),
-      exit({ context }) {
-        // Clean up subscription
-        if (context.unzipSubscription) {
-          context.unzipSubscription.unsubscribe();
-        }
-      },
-      on: {
         updateExtractProgress: {
           actions: 'applyExtractProgressImmediately',
         },
-        cancelDownload: {
-          target: 'enteringDetails',
-          actions: 'clearError',
-        },
-        extractionComplete: {
+        workerExtractComplete: {
           target: 'selectingMainFile',
           actions: [
             assign({
+              importedFilePaths({ event }) {
+                assertEvent(event, 'workerExtractComplete');
+                return event.filePaths;
+              },
               files({ event }) {
-                assertEvent(event, 'extractionComplete');
-                return event.files;
+                assertEvent(event, 'workerExtractComplete');
+                const map = new Map<string, { filename: string; content: Uint8Array<ArrayBuffer> }>();
+                for (const entry of event.files) {
+                  const filename = entry.path.split('/').pop() ?? entry.path;
+                  map.set(entry.path, { filename, content: entry.content });
+                }
+
+                return map;
               },
             }),
             'initializeSelectedMainFile',
           ],
         },
-        extractionError: {
+        workerError: {
           target: 'error',
           actions: assign({
             error({ event }) {
-              assertEvent(event, 'extractionError');
-              return event.error;
+              assertEvent(event, 'workerError');
+              return new Error(`Import failed (${event.phase}): ${event.message}`);
             },
           }),
+        },
+        cancelDownload: {
+          target: 'enteringDetails',
+          actions: 'clearError',
         },
       },
     },
