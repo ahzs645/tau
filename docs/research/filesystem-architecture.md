@@ -543,11 +543,12 @@ When Tau adds cloud storage, the filesystem architecture must support:
 
 ### 6.6 Cross-tab filesystem access
 
-Multiple browser tabs may access the same IndexedDB store. Currently each tab has its own worker and ZenFS instance. Future options:
+Multiple browser tabs may access the same IndexedDB store. Each tab has its own dedicated worker and FileService instance. Cross-tab coordination is implemented via `CrossTabCoordinator`:
 
-- `SharedWorker` for a single FS worker across tabs
-- `BroadcastChannel` for change notifications (VS Code's `IndexedDBFileSystemProvider` does this)
-- `navigator.locks` for cross-tab write coordination
+- **`navigator.locks`** for per-file exclusive write serialization across tabs (crash-safe, built-in FIFO queuing)
+- **`BroadcastChannel`** for change notifications to other tabs (VS Code's `IndexedDBFileSystemProvider` uses this same pattern)
+
+**SharedWorker was evaluated and rejected** — see `docs/research/shared-worker-fs-architecture.md`. Key blockers: `SharedArrayBuffer` inaccessible from SharedWorkers (breaks R20 `SharedContentPool`), `FileSystemSyncAccessHandle` restricted to dedicated Workers (blocks R21 OPFS fast-path), no Android Chrome support, and lifecycle fragility. The per-tab dedicated worker + `navigator.locks` approach is architecturally superior and matches VS Code's choice.
 
 ---
 
