@@ -11,7 +11,7 @@ import { ViewContextProvider } from '#routes/projects_.$id/chat-interface-view-c
 import { useKeybinding } from '#hooks/use-keyboard.js';
 import { ProjectCommandPaletteItems } from '#routes/projects_.$id/project-command-items.js';
 import { FileManagerProvider, SharedWorkerGate } from '#hooks/use-file-manager.js';
-import { useChatRpcConnection } from '#hooks/use-chat-rpc-socket.js';
+import { ChatRpcSocketProvider, useChatRpcConnection } from '#hooks/use-chat-rpc-socket.js';
 import { MonacoModelServiceProvider } from '#hooks/use-monaco-model-service.js';
 import { useFlushOnClose } from '#hooks/use-flush-on-close.js';
 import { useBlockBrowserNavigation } from '#hooks/use-block-browser-navigation.js';
@@ -24,11 +24,13 @@ function RouteProvider({ children }: { readonly children?: React.ReactNode }): R
   return (
     <SharedWorkerGate>
       <FileManagerProvider projectId={id} rootDirectory={`/projects/${id}`}>
-        <WebglContextTrackerProvider>
-          <ProjectProvider projectId={id!} kernelOptions={debugKernelOptions}>
-            <MonacoModelServiceProvider>{children}</MonacoModelServiceProvider>
-          </ProjectProvider>
-        </WebglContextTrackerProvider>
+        <ChatRpcSocketProvider>
+          <WebglContextTrackerProvider>
+            <ProjectProvider projectId={id!} kernelOptions={debugKernelOptions}>
+              <MonacoModelServiceProvider>{children}</MonacoModelServiceProvider>
+            </ProjectProvider>
+          </WebglContextTrackerProvider>
+        </ChatRpcSocketProvider>
       </FileManagerProvider>
     </SharedWorkerGate>
   );
