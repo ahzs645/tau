@@ -33,7 +33,7 @@ export function ChatEditorMarkdownViewer({
         enableAnimation={false}
         className='flex-1 overflow-auto data-[state=inactive]:hidden'
       >
-        <div className='mx-auto w-full max-w-3xl px-6 py-8'>
+        <div className='mx-auto w-full max-w-3xl px-6 pt-3 pb-8'>
           <MarkdownViewerChat>{content}</MarkdownViewerChat>
         </div>
       </TabsContent>
