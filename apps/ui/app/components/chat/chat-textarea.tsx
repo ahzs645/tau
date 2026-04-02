@@ -7,6 +7,7 @@ import { ChatTextareaDesktop } from '#components/chat/chat-textarea-desktop.js';
 import { ChatTextareaMobile } from '#components/chat/chat-textarea-mobile.js';
 import { useIsMobile } from '#hooks/use-mobile.js';
 import { ClientOnly } from '#components/ui/utils/client-only.js';
+import { ChatTextareaSkeleton } from '#components/chat/chat-textarea-skeleton.js';
 import { useProject } from '#hooks/use-project.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import { useChats } from '#hooks/use-chats.js';
@@ -268,9 +269,11 @@ export const ChatTextarea = memo(function ({
     }
   }, []);
 
+  const skeleton = <ChatTextareaSkeleton className={className} />;
+
   if (isMobile) {
     return (
-      <ClientOnly>
+      <ClientOnly fallback={skeleton}>
         <ChatTextareaMobile
           className={className}
           enableAutoFocus={enableAutoFocus}
@@ -321,7 +324,7 @@ export const ChatTextarea = memo(function ({
   }
 
   return (
-    <ClientOnly>
+    <ClientOnly fallback={skeleton}>
       <ChatTextareaDesktop
         className={className}
         enableAutoFocus={enableAutoFocus}
