@@ -14,6 +14,7 @@ import {
   createTestWorker,
   createTestGeometry,
   getTestParameters,
+  getTestFileSystem,
   seedTestFileSystem,
 } from '#testing/kernel-testing.utils.js';
 import type { CreateTestWorkerOptions } from '#testing/kernel-testing.utils.js';
@@ -3572,6 +3573,65 @@ export default function main() {
       const watchedPaths = worker.getWatchedPaths();
       expect(watchedPaths).toContain('/projects/test/main.ts');
       expect(watchedPaths).toContain('/projects/test/lib/box.ts');
+    });
+
+    it('should watch unresolved imports and re-render when missing files are created', async () => {
+      const worker = await createWorker({
+        'main.ts': `
+          import { makeBox } from './lib/box';
+          import { makeCylinder } from './lib/cylinder';
+          export default function main() {
+            return [makeBox(), makeCylinder()];
+          }
+        `,
+      });
+
+      const geometryFile = createGeometryFile('main.ts');
+
+      const result1 = await worker.render({
+        file: geometryFile,
+        parameters: {},
+      });
+      assertFailure(result1);
+
+      // The watch set should include extension variants for the unresolved
+      // imports so that creating the files later triggers a re-render
+      const watchedPaths = worker.getWatchedPaths();
+      expect(watchedPaths).toContain('/projects/test/main.ts');
+      expect(watchedPaths).toContain('/projects/test/lib/box.ts');
+      expect(watchedPaths).toContain('/projects/test/lib/cylinder.ts');
+
+      // Write missing files directly to the live filesystem (seedTestFileSystem
+      // replaces the instance, but the bridge port is bound to the original)
+      const fs = getTestFileSystem();
+      await fs.mkdir('/projects/test/lib', { recursive: true });
+      await fs.writeFile(
+        '/projects/test/lib/box.ts',
+        `
+          import { makeBaseBox } from 'replicad';
+          export function makeBox() {
+            return makeBaseBox(10, 10, 10);
+          }
+        `,
+      );
+      await fs.writeFile(
+        '/projects/test/lib/cylinder.ts',
+        `
+          import { makeBaseBox } from 'replicad';
+          export function makeCylinder() {
+            return makeBaseBox(5, 5, 20);
+          }
+        `,
+      );
+
+      await worker.notifyFileChanged(['/projects/test/lib/box.ts']);
+
+      const result2 = await worker.createGeometry({
+        file: geometryFile,
+        parameters: {},
+      });
+      assertSuccess(result2);
+      await geometryHelpers.expectValidGltf(result2);
     });
   });
 });

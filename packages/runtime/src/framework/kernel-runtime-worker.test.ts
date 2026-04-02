@@ -16,7 +16,7 @@ function createMockKernelDefinition(id: string, overrides?: Partial<KernelDefini
     name: id,
     version: '1.0.0',
     initialize: initSpy,
-    getDependencies: async (input) => [input.filePath],
+    getDependencies: async (input) => ({ resolved: [input.filePath], unresolved: [] }),
     getParameters: async () => ({
       success: true,
       data: { defaultParameters: {}, jsonSchema: {} },

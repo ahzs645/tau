@@ -240,6 +240,21 @@ export type GetDependenciesInput = {
 };
 
 /**
+ * Structured result from dependency resolution, separating successfully
+ * resolved files from unresolvable import paths.
+ *
+ * Unresolved paths are added to the watch set so that creating the missing
+ * files later triggers a re-render automatically.
+ * @public
+ */
+export type GetDependenciesResult = {
+  /** Absolute paths of files that were successfully resolved and read. */
+  resolved: string[];
+  /** Absolute paths of imports that could not be resolved — used for watch-set expansion. */
+  unresolved: string[];
+};
+
+/**
  * File path and extension used to determine whether a kernel supports a given file.
  * @public
  */
@@ -329,8 +344,12 @@ export type KernelDefinition<
   /** Optional guard that determines whether this kernel can process a given file. Called during kernel selection. */
   canHandle?(input: CanHandleInput, runtime: KernelRuntime, context: Context): Promise<boolean>;
 
-  /** Return absolute paths of all files the active file depends on, used for change-detection and cache invalidation. */
-  getDependencies(input: GetDependenciesInput, runtime: KernelRuntime, context: Context): Promise<string[]>;
+  /** Return resolved and unresolved dependency paths for change-detection, cache invalidation, and watch-set expansion. */
+  getDependencies(
+    input: GetDependenciesInput,
+    runtime: KernelRuntime,
+    context: Context,
+  ): Promise<GetDependenciesResult>;
   /** Extract user-facing parameters (and their JSON Schema) from the active file. */
   getParameters(input: GetParametersInput, runtime: KernelRuntime, context: Context): Promise<GetParametersResult>;
   /** Evaluate the active file and produce tessellated geometry plus a native handle for export. */
@@ -373,7 +392,7 @@ export type KernelDefinition<
  *     return { myContext: true };
  *   },
  *   async getDependencies(input, runtime, context) {
- *     return [input.filePath];
+ *     return { resolved: [input.filePath], unresolved: [] };
  *   },
  *   async getParameters(input, runtime, context) {
  *     return { success: true, data: { defaultParameters: {}, jsonSchema: {} }, issues: [] };

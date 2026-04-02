@@ -7,6 +7,7 @@ import {
   createTestWorker,
   createTestGeometry,
   getTestParameters,
+  getTestFileSystem,
 } from '#testing/kernel-testing.utils.js';
 
 /* eslint-disable @typescript-eslint/naming-convention -- OpenSCAD uses snake_case for parameter names */
@@ -2077,6 +2078,67 @@ cube([10, 10, 10]);`,
         }
       });
     });
+  });
+});
+
+// =============================================================================
+// Unresolved dependency tracking
+// =============================================================================
+
+describe('OpenSCAD Kernel – unresolved dependency tracking', () => {
+  it('should include missing include paths in watch set', async () => {
+    const worker = await createWorker({
+      'assembly.scad': `
+        include <parts/base.scad>
+        include <parts/top.scad>
+        cube([10, 10, 10]);
+      `,
+    });
+
+    const geometryFile = createGeometryFile('assembly.scad');
+
+    await worker.render({
+      file: geometryFile,
+      parameters: {},
+    });
+
+    // OpenSCAD still renders the cube despite missing includes, but we
+    // need the watch set to include the unresolved paths so creating
+    // those files later triggers a re-render.
+    const watchedPaths = worker.getWatchedPaths();
+    expect(watchedPaths).toContain('/projects/test/assembly.scad');
+    expect(watchedPaths).toContain('/projects/test/parts/base.scad');
+    expect(watchedPaths).toContain('/projects/test/parts/top.scad');
+  });
+
+  it('should re-render when previously missing include file is created', async () => {
+    const worker = await createWorker({
+      'main.scad': `
+        include <lib/utils.scad>
+        cube([my_size, my_size, my_size]);
+      `,
+    });
+
+    const geometryFile = createGeometryFile('main.scad');
+
+    await worker.render({
+      file: geometryFile,
+      parameters: {},
+    });
+
+    // Write the missing include file directly to the live filesystem
+    const fs = getTestFileSystem();
+    await fs.mkdir('/projects/test/lib', { recursive: true });
+    await fs.writeFile('/projects/test/lib/utils.scad', 'my_size = 20;');
+
+    await worker.notifyFileChanged(['/projects/test/lib/utils.scad']);
+
+    const result2 = await worker.createGeometry({
+      file: geometryFile,
+      parameters: {},
+    });
+
+    expect(result2.success).toBe(true);
   });
 });
 

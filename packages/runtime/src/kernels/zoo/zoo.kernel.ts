@@ -179,12 +179,15 @@ export default defineKernel({
     ensureFileSystemManager(context, basePath, filesystem);
     const utilities = await getKclUtils(context);
     const relativeFilePath = resolveToRelative(filePath, basePath);
-    const relativePaths = await discoverKclDependencies(
+    const { resolved, unresolved } = await discoverKclDependencies(
       relativeFilePath,
       async (path) => filesystem.readFile(resolveFromRoot(path, basePath), 'utf8'),
       async (code) => utilities.parseKcl(code),
     );
-    return relativePaths.map((relativePath) => resolveFromRoot(relativePath, basePath));
+    return {
+      resolved: resolved.map((relativePath) => resolveFromRoot(relativePath, basePath)),
+      unresolved: unresolved.map((relativePath) => resolveFromRoot(relativePath, basePath)),
+    };
   },
 
   async getParameters({ filePath, basePath }, { filesystem, logger }, context) {

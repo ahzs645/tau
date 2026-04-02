@@ -43,7 +43,7 @@ describe('TauKernel', () => {
         mock<KernelRuntime>(),
         {},
       );
-      expect(result).toEqual(['/models/part.step']);
+      expect(result).toEqual({ resolved: ['/models/part.step'], unresolved: [] });
     });
   });
 

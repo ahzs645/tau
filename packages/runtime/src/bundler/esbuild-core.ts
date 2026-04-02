@@ -46,6 +46,8 @@ export type BundleResult = {
   success: boolean;
   /** Absolute paths of all project files that were resolved during bundling (transitive dependencies). */
   dependencies: string[];
+  /** Absolute paths of imports that could not be resolved during bundling — used for watch-set expansion. */
+  unresolvedPaths: string[];
 };
 
 /**
@@ -302,6 +304,8 @@ export type VfsPluginOptions = {
   autoExportNames: string[];
   /** Collects absolute paths of project files accessed during the build, even on failure. */
   accessedProjectFiles?: Set<string>;
+  /** Collects absolute paths of imports that could not be resolved during the build. */
+  unresolvedPaths?: Set<string>;
 };
 
 /**
@@ -325,8 +329,16 @@ export type VfsPluginOptions = {
  * @returns esbuild plugin for vfs-namespace module resolution
  */
 export function createVfsPlugin(options: VfsPluginOptions): Plugin {
-  const { filesystem, moduleManager, builtinModules, projectPath, entryPath, autoExportNames, accessedProjectFiles } =
-    options;
+  const {
+    filesystem,
+    moduleManager,
+    builtinModules,
+    projectPath,
+    entryPath,
+    autoExportNames,
+    accessedProjectFiles,
+    unresolvedPaths,
+  } = options;
 
   // Path conversion helpers: esbuild sees project-relative paths in the vfs namespace,
   // but all filesystem I/O uses absolute paths.
@@ -442,7 +454,14 @@ export function createVfsPlugin(options: VfsPluginOptions): Plugin {
         try {
           const resolvedPath = resolveRelativePath(args.path, importerAbsolute);
           const withExtension = await resolveFileExtension(filesystem, resolvedPath);
-          // Return project-relative path for project files
+
+          if (unresolvedPaths && withExtension === resolvedPath && !/\.[jt]sx?$/.test(resolvedPath)) {
+            const extensionVariants = ['.ts', '.tsx', '.js', '.jsx'];
+            for (const extension of extensionVariants) {
+              unresolvedPaths.add(resolvedPath + extension);
+            }
+          }
+
           return { path: toRelative(withExtension), namespace: esbuildNamespace.vfs };
         } catch (error) {
           return {
@@ -588,6 +607,11 @@ export function createVfsPlugin(options: VfsPluginOptions): Plugin {
             resolveDir: absolutePath.slice(0, absolutePath.lastIndexOf('/')),
           };
         } catch (error) {
+          const failedAbsolutePath = toAbsolute(args.path);
+          if (unresolvedPaths && !failedAbsolutePath.includes('/node_modules/')) {
+            unresolvedPaths.add(failedAbsolutePath);
+          }
+
           return {
             errors: [
               {
@@ -669,6 +693,7 @@ export class EsbuildBundler {
   public async bundle(entryPath: string): Promise<BundleResult> {
     const issues: KernelIssue[] = [];
     const accessedProjectFiles = new Set<string>();
+    const unresolvedPaths = new Set<string>();
 
     try {
       // Create banner to inject CommonJS-style globals for built-in modules
@@ -705,6 +730,7 @@ const module = { exports };
             entryPath,
             autoExportNames: this.autoExportNames,
             accessedProjectFiles,
+            unresolvedPaths,
           }),
         ],
         // Ensure we don't try to resolve node built-ins
@@ -740,6 +766,7 @@ const module = { exports };
           sourceMap,
           issues,
           dependencies,
+          unresolvedPaths: [...unresolvedPaths],
           success: result.errors.length === 0,
         };
       }
@@ -747,6 +774,7 @@ const module = { exports };
       return {
         code: '',
         dependencies,
+        unresolvedPaths: [...unresolvedPaths],
         issues: [
           ...issues,
           {
@@ -780,6 +808,7 @@ const module = { exports };
       return {
         code: '',
         dependencies: [...accessedProjectFiles],
+        unresolvedPaths: [...unresolvedPaths],
         issues,
         success: false,
       };

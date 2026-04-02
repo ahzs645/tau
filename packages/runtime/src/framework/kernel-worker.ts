@@ -292,6 +292,9 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   /** Bundle result cache keyed by entry path. Selectively invalidated when dependencies change; fully cleared on reset/overflow events. */
   private readonly bundleResultCache = new Map<string, BundleResult>();
 
+  /** Unresolved import paths from the most recent getDependencies call, merged into the watch set. */
+  private unresolvedDependencyPaths = new Set<string>();
+
   /** Per-render dependency computation cache. Cleared at the start of each render cycle. */
   private renderDependencyCache?: { hash: string; dependencies: Dependency[] };
 
@@ -1509,7 +1512,11 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       this.fileContentCache.delete(`utf8:${path}`);
     }
     for (const [entryPath, result] of this.bundleResultCache) {
-      if (changedPaths.includes(entryPath) || result.dependencies.some((dep) => changedPaths.includes(dep))) {
+      if (
+        changedPaths.includes(entryPath) ||
+        result.dependencies.some((dep) => changedPaths.includes(dep)) ||
+        result.unresolvedPaths.some((dep) => changedPaths.includes(dep))
+      ) {
         clearExecuteCache(result.code);
         this.bundleResultCache.delete(entryPath);
       }
@@ -1529,8 +1536,14 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       for (const dep of result.dependencies) {
         allDeps.add(dep);
       }
+      for (const path of result.unresolvedPaths) {
+        allDeps.add(path);
+      }
     }
     for (const path of this.fileHashCache.keys()) {
+      allDeps.add(path);
+    }
+    for (const path of this.unresolvedDependencyPaths) {
       allDeps.add(path);
     }
     for (const path of this.middlewareWatchPaths.keys()) {
@@ -1759,7 +1772,9 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       filePath: this.activeFileAbsolutePath,
       basePath: this.getProjectRootPath(),
     };
-    const absolutePaths = await this.onGetDependencies(discoverInput, this.createRuntime());
+    const depsResult = await this.onGetDependencies(discoverInput, this.createRuntime());
+    this.unresolvedDependencyPaths = new Set(depsResult.unresolved);
+    const absolutePaths = depsResult.resolved;
     discoverSpan.end();
 
     // 2. Read uncached files
@@ -1960,14 +1975,14 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
         this.bundleResultCache.set(entryPath, bundleResult);
         return bundleResult;
       },
-      resolveDependencies: async (entryPath: string): Promise<string[]> => {
+      resolveDependencies: async (entryPath: string): Promise<GetDependenciesResult> => {
         const cached = this.bundleResultCache.get(entryPath);
         if (cached) {
-          return cached.dependencies;
+          return { resolved: cached.dependencies, unresolved: cached.unresolvedPaths };
         }
 
         const result = await this.createBundlerFacade().bundle(entryPath);
-        return result.dependencies;
+        return { resolved: result.dependencies, unresolved: result.unresolvedPaths };
       },
       registerModule: (name: string, entry: BuiltinModule): void => {
         if (this.loadedBundlers.size > 0) {

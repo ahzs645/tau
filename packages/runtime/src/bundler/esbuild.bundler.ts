@@ -110,7 +110,7 @@ export default defineBundler({
 
   async resolveDependencies({ entryPath }, context) {
     const result = await context.bundler.bundle(entryPath);
-    return result.dependencies;
+    return { resolved: result.dependencies, unresolved: result.unresolvedPaths };
   },
 
   async cleanup(context) {

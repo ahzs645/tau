@@ -117,10 +117,11 @@ async function getReferencedScadFiles(options: {
   basePath: string;
   filesystem: RuntimeFileSystem;
   logger: RuntimeLogger;
-}): Promise<string[]> {
+}): Promise<{ resolved: string[]; unresolved: string[] }> {
   const { mainFile, basePath, filesystem, logger } = options;
   const visited = new Set<string>();
-  const result: string[] = [];
+  const resolved: string[] = [];
+  const unresolved: string[] = [];
 
   const resolveFile = async (filePath: string, depth: number): Promise<void> => {
     const normalizedPath = filePath.replace(/^\/+/, '');
@@ -140,10 +141,11 @@ async function getReferencedScadFiles(options: {
       code = await filesystem.readFile(resolveFromRoot(normalizedPath, basePath), 'utf8');
     } catch {
       logger.debug(`Could not read file ${normalizedPath} for dependency resolution`);
+      unresolved.push(normalizedPath);
       return;
     }
 
-    result.push(normalizedPath);
+    resolved.push(normalizedPath);
 
     const dependencies = parseUseIncludeStatements(code);
     for (const depPath of dependencies) {
@@ -154,7 +156,7 @@ async function getReferencedScadFiles(options: {
   };
 
   await resolveFile(mainFile, 0);
-  return result;
+  return { resolved, unresolved };
 }
 
 // =============================================================================
@@ -240,7 +242,7 @@ async function mountFileSystem(
   (instance.FS as unknown as { chdir(path: string): void }).chdir('/');
   instance.FS.mkdir('/locale');
 
-  const referencedFiles = await getReferencedScadFiles({
+  const { resolved: referencedFiles } = await getReferencedScadFiles({
     mainFile,
     basePath,
     filesystem,
@@ -398,19 +400,22 @@ export default defineKernel({
 
   async getDependencies({ filePath, basePath }, { filesystem, logger }) {
     const relativeFilePath = resolveToRelative(filePath, basePath);
-    const relativePaths = await getReferencedScadFiles({
+    const { resolved, unresolved } = await getReferencedScadFiles({
       mainFile: relativeFilePath,
       basePath,
       filesystem,
       logger,
     });
-    return relativePaths.map((relativePath) => resolveFromRoot(relativePath, basePath));
+    return {
+      resolved: resolved.map((relativePath) => resolveFromRoot(relativePath, basePath)),
+      unresolved: unresolved.map((relativePath) => resolveFromRoot(relativePath, basePath)),
+    };
   },
 
   async getParameters({ filePath, basePath }, { filesystem, logger, fileContentCache }, context) {
     try {
       const mainFilePath = resolveToRelative(filePath, basePath);
-      const referencedFiles = await getReferencedScadFiles({
+      const { resolved: referencedFiles } = await getReferencedScadFiles({
         mainFile: mainFilePath,
         basePath,
         filesystem,

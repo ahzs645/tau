@@ -488,3 +488,179 @@ describe('extractExternalImports', () => {
 });
 
 /* eslint-enable @typescript-eslint/naming-convention -- re-enable after metafile fixture blocks */
+
+// =============================================================================
+// Unresolved Path Tracking
+// =============================================================================
+
+describe('ESBuild Bundler – unresolved path tracking', () => {
+  let filesystem: MockFileSystem;
+  let mainOnResolve: CapturedResolveHandler;
+  let vfsOnLoad: CapturedHandler;
+  let unresolvedPaths: Set<string>;
+
+  function capturePluginHandlersWithUnresolved(fs: MockFileSystem): {
+    mainOnResolve: CapturedResolveHandler;
+    vfsOnLoad: CapturedHandler;
+    unresolvedPaths: Set<string>;
+  } {
+    let resolveHandler: CapturedResolveHandler | undefined;
+    let loadHandler: CapturedHandler | undefined;
+    const tracked = new Set<string>();
+
+    const mockBuild = {
+      onResolve: vi
+        .fn()
+        .mockImplementation((options: { filter?: RegExp; namespace?: string }, callback: CapturedResolveHandler) => {
+          if (!options.namespace && options.filter?.source === '.*') {
+            resolveHandler = callback;
+          }
+        }),
+      onLoad: vi.fn().mockImplementation((options: { namespace?: string }, callback: CapturedHandler) => {
+        if (options.namespace === esbuildNamespace.vfs) {
+          loadHandler = callback;
+        }
+      }),
+      onStart: vi.fn(),
+      onEnd: vi.fn(),
+      onDispose: vi.fn(),
+      resolve: vi.fn(),
+      esbuild: {},
+      initialOptions: {},
+    };
+
+    const plugin = createVfsPlugin({
+      filesystem: fs,
+      moduleManager: new ModuleManager(fs),
+      builtinModules: new Map(),
+      projectPath: '/project',
+      entryPath: '/project/main.ts',
+      autoExportNames: ['main'],
+      unresolvedPaths: tracked,
+    });
+
+    void plugin.setup(mock<PluginBuild>(mockBuild));
+
+    if (!resolveHandler) {
+      throw new Error('main onResolve handler was not registered');
+    }
+    if (!loadHandler) {
+      throw new Error('vfs onLoad handler was not registered');
+    }
+
+    return { mainOnResolve: resolveHandler, vfsOnLoad: loadHandler, unresolvedPaths: tracked };
+  }
+
+  beforeEach(() => {
+    filesystem = createMockFileSystem();
+    const handlers = capturePluginHandlersWithUnresolved(filesystem);
+    mainOnResolve = handlers.mainOnResolve;
+    vfsOnLoad = handlers.vfsOnLoad;
+    unresolvedPaths = handlers.unresolvedPaths;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  describe('onResolve extension variant tracking', () => {
+    it('should add extension variants to unresolvedPaths when file cannot be resolved', async () => {
+      filesystem.mocks.exists.mockResolvedValue(false);
+
+      await mainOnResolve({
+        path: './lib/foundation',
+        importer: 'main.ts',
+        namespace: esbuildNamespace.vfs,
+        kind: 'import-statement',
+        resolveDir: '/project',
+        suffix: '',
+        pluginData: undefined,
+        with: {},
+      });
+
+      expect(unresolvedPaths).toContain('/project/lib/foundation.ts');
+      expect(unresolvedPaths).toContain('/project/lib/foundation.tsx');
+      expect(unresolvedPaths).toContain('/project/lib/foundation.js');
+      expect(unresolvedPaths).toContain('/project/lib/foundation.jsx');
+    });
+
+    it('should not add extension variants when file resolves successfully', async () => {
+      filesystem.mocks.exists.mockImplementation(async (path: string) => path === '/project/lib/foundation.ts');
+
+      await mainOnResolve({
+        path: './lib/foundation',
+        importer: 'main.ts',
+        namespace: esbuildNamespace.vfs,
+        kind: 'import-statement',
+        resolveDir: '/project',
+        suffix: '',
+        pluginData: undefined,
+        with: {},
+      });
+
+      expect(unresolvedPaths.size).toBe(0);
+    });
+
+    it('should not add extension variants for imports that already have an extension', async () => {
+      filesystem.mocks.exists.mockResolvedValue(false);
+
+      await mainOnResolve({
+        path: './lib/foundation.ts',
+        importer: 'main.ts',
+        namespace: esbuildNamespace.vfs,
+        kind: 'import-statement',
+        resolveDir: '/project',
+        suffix: '',
+        pluginData: undefined,
+        with: {},
+      });
+
+      expect(unresolvedPaths.has('/project/lib/foundation.ts.ts')).toBe(false);
+      expect(unresolvedPaths.has('/project/lib/foundation.ts.tsx')).toBe(false);
+    });
+  });
+
+  describe('onLoad failed path tracking', () => {
+    it('should add failed absolute path to unresolvedPaths when readFile throws', async () => {
+      filesystem.mocks.readFile.mockRejectedValue(new Error('ENOENT: no such file or directory'));
+
+      await vfsOnLoad({
+        path: 'lib/foundation.ts',
+        namespace: esbuildNamespace.vfs,
+        suffix: '',
+        pluginData: undefined,
+        with: {},
+      });
+
+      expect(unresolvedPaths).toContain('/project/lib/foundation.ts');
+    });
+
+    it('should not add node_modules paths to unresolvedPaths on failure', async () => {
+      filesystem.mocks.readFile.mockRejectedValue(new Error('ENOENT'));
+
+      await vfsOnLoad({
+        path: '/node_modules/missing-pkg/index.js',
+        namespace: esbuildNamespace.vfs,
+        suffix: '',
+        pluginData: undefined,
+        with: {},
+      });
+
+      expect(unresolvedPaths.size).toBe(0);
+    });
+
+    it('should not add path to unresolvedPaths when readFile succeeds', async () => {
+      filesystem.mocks.readFile.mockResolvedValue('export const x = 1;');
+
+      await vfsOnLoad({
+        path: 'lib/foundation.ts',
+        namespace: esbuildNamespace.vfs,
+        suffix: '',
+        pluginData: undefined,
+        with: {},
+      });
+
+      expect(unresolvedPaths.has('/project/lib/foundation.ts')).toBe(false);
+    });
+  });
+});

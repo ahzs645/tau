@@ -27,6 +27,7 @@ import type {
   CreateGeometryInput,
   ExportGeometryInput,
   GetDependenciesInput,
+  GetDependenciesResult,
   GetParametersInput,
   KernelDefinition,
   KernelRuntime,
@@ -83,7 +84,7 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
   private activeKernelId: string | undefined;
   private readonly selectionCache = new Map<string, { id: string; method: SelectionMethod }>();
   private kernelModules: KernelModuleEntry[] = [];
-  private cachedDetectionDeps?: string[];
+  private cachedDetectionDeps?: GetDependenciesResult;
 
   // =====================================================================
   // Protected overrides (must precede private methods per linter rules)
@@ -118,7 +119,10 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
     return true;
   }
 
-  protected override async onGetDependencies(input: GetDependenciesInput, runtime: KernelRuntime): Promise<string[]> {
+  protected override async onGetDependencies(
+    input: GetDependenciesInput,
+    runtime: KernelRuntime,
+  ): Promise<GetDependenciesResult> {
     if (this.cachedDetectionDeps) {
       const deps = this.cachedDetectionDeps;
       this.cachedDetectionDeps = undefined;
@@ -127,7 +131,7 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
 
     const kernel = await this.ensureActiveKernel(input.filePath, runtime);
     if (!kernel) {
-      return [input.filePath];
+      return { resolved: [input.filePath], unresolved: [] };
     }
 
     return kernel.definition.getDependencies(input, runtime, kernel.ctx);
@@ -400,7 +404,7 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
             bundler.ctx,
           );
           detectSpan.end();
-          this.cachedDetectionDeps = dependencies;
+          this.cachedDetectionDeps = { resolved: dependencies, unresolved: [] };
 
           const matchingConfigs = configsWithBuiltins.filter((config) =>
             config.builtinModuleNames!.some((name) =>

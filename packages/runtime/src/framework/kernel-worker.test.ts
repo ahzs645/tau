@@ -101,6 +101,7 @@ describe('KernelWorker lifecycle', () => {
       worker.bundleResultCache.set('/projects/test/main.ts', {
         code: '',
         dependencies: [],
+        unresolvedPaths: [],
         issues: [],
         success: false,
       });
@@ -206,6 +207,7 @@ describe('KernelWorker lifecycle', () => {
       worker.bundleResultCache.set('/projects/test/main.ts', {
         code: '',
         dependencies: [],
+        unresolvedPaths: [],
         issues: [{ message: 'Unterminated regular expression', type: 'compilation', severity: 'error' }],
         success: false,
       });
@@ -226,6 +228,7 @@ describe('KernelWorker lifecycle', () => {
       worker.bundleResultCache.set('/projects/test/main.ts', {
         code: '',
         dependencies: [],
+        unresolvedPaths: [],
         issues: [{ message: 'Syntax error', type: 'compilation', severity: 'error' }],
         success: false,
       });
@@ -356,6 +359,7 @@ describe('KernelWorker lifecycle', () => {
       worker.bundleResultCache.set('/projects/test/main.ts', {
         code: 'bundled-code',
         dependencies: expectedDependencies,
+        unresolvedPaths: [],
         issues: [],
         success: true,
       });
@@ -387,8 +391,7 @@ describe('KernelWorker lifecycle', () => {
       const facade = worker.createBundlerFacade();
       const result = await facade.resolveDependencies('/projects/test/main.ts');
 
-      // The facade should return the cached dependencies
-      expect(result).toEqual(expectedDependencies);
+      expect(result).toEqual({ resolved: expectedDependencies, unresolved: [] });
       // The raw bundler's resolveDependencies should NOT have been called
       expect(rawResolveDependenciesSpy).not.toHaveBeenCalled();
     });
@@ -955,6 +958,60 @@ describe('KernelWorker lifecycle', () => {
       await worker.runCreateGeometry('main.ts');
 
       expect(getDependenciesSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Unresolved dependency path tracking
+  // ---------------------------------------------------------------------------
+
+  describe('unresolved dependency path tracking', () => {
+    it('should include unresolvedDependencyPaths in watch set via _updateWatchSetFromCaches', () => {
+      const worker = createConfiguredWorker();
+
+      // @ts-expect-error - accessing private method for test verification
+      worker.setBasePath(createGeometryFile('main.ts'));
+
+      // @ts-expect-error - accessing private for test verification
+      worker.unresolvedDependencyPaths = new Set(['/projects/test/lib/foundation.ts', '/projects/test/lib/posts.ts']);
+
+      const spy = vi.spyOn(worker, 'updateWatchSet');
+
+      // @ts-expect-error - accessing private for test verification
+      worker._updateWatchSetFromCaches();
+
+      expect(spy).toHaveBeenCalled();
+      const watchedPaths = spy.mock.calls[0]![0];
+      expect(watchedPaths).toContain('/projects/test/lib/foundation.ts');
+      expect(watchedPaths).toContain('/projects/test/lib/posts.ts');
+      expect(watchedPaths).toContain('/projects/test/main.ts');
+    });
+
+    it('should include bundleResultCache unresolvedPaths in watch set via _updateWatchSetFromCaches', () => {
+      const worker = createConfiguredWorker();
+
+      // @ts-expect-error - accessing private method for test verification
+      worker.setBasePath(createGeometryFile('main.ts'));
+
+      // @ts-expect-error - accessing private for test verification
+      worker.bundleResultCache.set('/projects/test/main.ts', {
+        code: '',
+        dependencies: ['/projects/test/main.ts'],
+        unresolvedPaths: ['/projects/test/lib/box.ts', '/projects/test/lib/cylinder.ts'],
+        issues: [],
+        success: false,
+      });
+
+      const spy = vi.spyOn(worker, 'updateWatchSet');
+
+      // @ts-expect-error - accessing private for test verification
+      worker._updateWatchSetFromCaches();
+
+      expect(spy).toHaveBeenCalled();
+      const watchedPaths = spy.mock.calls[0]![0];
+      expect(watchedPaths).toContain('/projects/test/lib/box.ts');
+      expect(watchedPaths).toContain('/projects/test/lib/cylinder.ts');
+      expect(watchedPaths).toContain('/projects/test/main.ts');
     });
   });
 });

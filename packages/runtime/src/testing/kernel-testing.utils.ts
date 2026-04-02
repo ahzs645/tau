@@ -32,6 +32,7 @@ import type {
   RuntimeFileSystem,
   CanHandleInput,
   GetDependenciesInput,
+  GetDependenciesResult,
   GetParametersInput,
   CreateGeometryInput,
   ExportGeometryInput,
@@ -778,11 +779,12 @@ export function createMockKernelRuntime(options?: { filesystemOverrides?: MockFi
       issues: never[];
       success: false;
       dependencies: never[];
+      unresolvedPaths: never[];
     }> {
-      return { code: '', issues: [], success: false, dependencies: [] };
+      return { code: '', issues: [], success: false, dependencies: [], unresolvedPaths: [] };
     },
-    async resolveDependencies(): Promise<string[]> {
-      return [];
+    async resolveDependencies(): Promise<GetDependenciesResult> {
+      return { resolved: [], unresolved: [] };
     },
     registerModule(): void {
       // No-op for tests
@@ -997,8 +999,8 @@ export class MockKernelWorker extends KernelWorker {
   protected override async onGetDependencies(
     { filePath }: GetDependenciesInput,
     _runtime: KernelRuntime,
-  ): Promise<string[]> {
-    return [filePath];
+  ): Promise<GetDependenciesResult> {
+    return { resolved: [filePath], unresolved: [] };
   }
 }
 

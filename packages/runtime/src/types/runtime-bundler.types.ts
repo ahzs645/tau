@@ -7,7 +7,7 @@
 
 import type { z } from 'zod';
 import type { KernelIssue } from '#types/runtime.types.js';
-import type { RuntimeFileSystem } from '#types/runtime-kernel.types.js';
+import type { RuntimeFileSystem, GetDependenciesResult } from '#types/runtime-kernel.types.js';
 
 // =============================================================================
 // Bundler Result Types
@@ -29,6 +29,8 @@ export type BundleResult = {
   success: boolean;
   /** Absolute paths of all project files that were resolved during bundling (transitive dependencies). */
   dependencies: string[];
+  /** Absolute paths of imports that could not be resolved during bundling — used for watch-set expansion. */
+  unresolvedPaths: string[];
 };
 
 /**
@@ -63,9 +65,9 @@ export type KernelBundler = {
   bundle(entryPath: string): Promise<BundleResult>;
   /**
    * Resolve all transitive dependencies without generating output code.
-   * Equivalent to `(await bundle(entryPath)).dependencies`.
+   * Returns both resolved dependencies and unresolved import paths.
    */
-  resolveDependencies(entryPath: string): Promise<string[]>;
+  resolveDependencies(entryPath: string): Promise<GetDependenciesResult>;
   /**
    * Register a built-in module that will be served from memory during bundling.
    * Used by JS/TS kernels to register WASM-loaded libraries (replicad, @jscad/modeling).
@@ -170,7 +172,7 @@ export type BundlerDefinition<Context = unknown, Options extends Record<string, 
    * Optional fast-path dependency resolution without full bundling.
    * Falls back to bundle().dependencies when not implemented.
    */
-  resolveDependencies?(input: BundleInput, context: Context): Promise<string[]>;
+  resolveDependencies?(input: BundleInput, context: Context): Promise<GetDependenciesResult>;
 
   /** Clean up bundler resources (e.g., esbuild.stop()). */
   cleanup?(context: Context): Promise<void>;
@@ -200,7 +202,7 @@ export type BundlerDefinition<Context = unknown, Options extends Record<string, 
  *     return { detectedModules: [], dependencies: [entryPath] };
  *   },
  *   async bundle({ entryPath }, context) {
- *     return { code: '', sourceMap: undefined, issues: [], success: true, dependencies: [] };
+ *     return { code: '', sourceMap: undefined, issues: [], success: true, dependencies: [], unresolvedPaths: [] };
  *   },
  *   async execute(code, context) {
  *     return { success: true, value: undefined };

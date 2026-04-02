@@ -65,7 +65,7 @@ describe('defineKernel type inference', () => {
           contextValue: string;
           count: number;
         }>();
-        return [];
+        return { resolved: [], unresolved: [] };
       },
       async getParameters(_input, _runtime, context) {
         expectTypeOf(context).toEqualTypeOf<{
@@ -105,7 +105,7 @@ describe('defineKernel type inference', () => {
         return {};
       },
       async getDependencies() {
-        return [];
+        return { resolved: [], unresolved: [] };
       },
       async getParameters() {
         return createKernelError([]);
@@ -128,7 +128,7 @@ describe('defineKernel type inference', () => {
         return {};
       },
       async getDependencies() {
-        return [];
+        return { resolved: [], unresolved: [] };
       },
       async getParameters() {
         return createKernelError([]);
@@ -167,7 +167,7 @@ describe('defineKernel type inference', () => {
         return {};
       },
       async getDependencies() {
-        return [];
+        return { resolved: [], unresolved: [] };
       },
       async getParameters() {
         return createKernelError([]);
@@ -190,7 +190,7 @@ describe('defineKernel type inference', () => {
         return {};
       },
       async getDependencies() {
-        return [];
+        return { resolved: [], unresolved: [] };
       },
       async getParameters() {
         return createKernelError([]);
@@ -217,7 +217,7 @@ describe('defineKernel type inference', () => {
       },
       async getDependencies(_input, _runtime, context) {
         expectTypeOf(context).toEqualTypeOf<{ url: string; ready: boolean }>();
-        return [];
+        return { resolved: [], unresolved: [] };
       },
       async getParameters() {
         return createKernelError([]);
@@ -245,7 +245,7 @@ describe('defineKernel type inference', () => {
       async getDependencies(_input, _runtime, context) {
         expectTypeOf(context.engine).toEqualTypeOf<string | undefined>();
         expectTypeOf(context.cache).toEqualTypeOf<Map<string, Uint8Array<ArrayBuffer>>>();
-        return [];
+        return { resolved: [], unresolved: [] };
       },
       async getParameters() {
         return createKernelError([]);
@@ -285,7 +285,7 @@ describe('defineBundler type inference', () => {
           bundlerInstance: string;
           projectPath: string;
         }>();
-        return { code: '', issues: [], success: true, dependencies: [] };
+        return { code: '', issues: [], success: true, dependencies: [], unresolvedPaths: [] };
       },
       async execute(_code, context) {
         expectTypeOf(context).toEqualTypeOf<{
@@ -305,7 +305,7 @@ describe('defineBundler type inference', () => {
           bundlerInstance: string;
           projectPath: string;
         }>();
-        return [];
+        return { resolved: [], unresolved: [] };
       },
       async cleanup(context) {
         expectTypeOf(context).toEqualTypeOf<{
@@ -332,7 +332,7 @@ describe('defineBundler type inference', () => {
         return { detectedModules: [], dependencies: [] };
       },
       async bundle() {
-        return { code: '', issues: [], success: true, dependencies: [] };
+        return { code: '', issues: [], success: true, dependencies: [], unresolvedPaths: [] };
       },
       async execute() {
         return { success: true, value: undefined };
@@ -356,7 +356,7 @@ describe('defineBundler type inference', () => {
         return { detectedModules: [], dependencies: [] };
       },
       async bundle() {
-        return { code: '', issues: [], success: true, dependencies: [] };
+        return { code: '', issues: [], success: true, dependencies: [], unresolvedPaths: [] };
       },
       async execute() {
         return { success: true, value: undefined };

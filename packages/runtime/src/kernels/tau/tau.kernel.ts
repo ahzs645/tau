@@ -101,7 +101,7 @@ export default defineKernel({
   },
 
   async getDependencies({ filePath }) {
-    return [filePath];
+    return { resolved: [filePath], unresolved: [] };
   },
 
   async getParameters() {
