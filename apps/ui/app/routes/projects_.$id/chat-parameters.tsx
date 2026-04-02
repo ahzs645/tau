@@ -166,6 +166,9 @@ function ParametersPanelHeader({
 }): React.JSX.Element {
   const { parameterConfig, setCompilationUnitParameters } = useProject();
   const fileEntry = parameterConfig?.files[params.entryFile];
+  const jsonSchema = useSelector(params.cadRef, (state) => state.context.jsonSchema);
+
+  const showCollapseToggle = jsonSchema && hasJsonSchemaObjectProperties(jsonSchema);
 
   const hasModifiedParameters = useMemo(() => {
     if (!parameterConfig) {
@@ -178,16 +181,34 @@ function ParametersPanelHeader({
     setCompilationUnitParameters(params.entryFile, {});
   }, [setCompilationUnitParameters, params.entryFile]);
 
+  const handleToggleAllExpanded = useCallback(() => {
+    api.updateParameters({ isAllExpanded: !params.isAllExpanded });
+  }, [api, params.isAllExpanded]);
+
   return (
     <PaneviewHeader
       api={api}
       title={params.entryFile}
       actions={
-        hasModifiedParameters ? (
+        showCollapseToggle || hasModifiedParameters ? (
           <PaneviewHeaderActionGroup>
-            <PaneviewHeaderAction tooltip='Reset parameters' aria-label='Reset parameters' onClick={handleReset}>
-              <RefreshCcw />
-            </PaneviewHeaderAction>
+            {showCollapseToggle ? (
+              <PaneviewHeaderAction
+                aria-expanded={params.isAllExpanded}
+                aria-label={params.isAllExpanded ? 'Collapse all' : 'Expand all'}
+                tooltip={params.isAllExpanded ? 'Collapse all' : 'Expand all'}
+                onClick={handleToggleAllExpanded}
+              >
+                <ChevronRight
+                  className={cn('transition-transform duration-300 ease-in-out', params.isAllExpanded && 'rotate-90')}
+                />
+              </PaneviewHeaderAction>
+            ) : null}
+            {hasModifiedParameters ? (
+              <PaneviewHeaderAction tooltip='Reset parameters' aria-label='Reset parameters' onClick={handleReset}>
+                <RefreshCcw />
+              </PaneviewHeaderAction>
+            ) : null}
           </PaneviewHeaderActionGroup>
         ) : undefined
       }
@@ -210,12 +231,10 @@ function ParametersPaneview({
   entries,
   mainEntryFile,
   enableSearch,
-  isAllExpanded,
 }: {
   readonly entries: Array<[string, ActorRefFrom<typeof cadMachine>]>;
   readonly mainEntryFile: string;
   readonly enableSearch: boolean;
-  readonly isAllExpanded: boolean;
 }): React.JSX.Element {
   const { savedState, connectApi } = usePaneviewPersistence('parametersPaneview');
 
@@ -242,11 +261,11 @@ function ParametersPaneview({
           isExpanded: initial.isExpanded,
           minimumBodySize: 80,
           size: initial.size,
-          params: { entryFile, cadRef, enableSearch, isAllExpanded } satisfies ParametersPanelParams,
+          params: { entryFile, cadRef, enableSearch, isAllExpanded: true } satisfies ParametersPanelParams,
         });
       }
     },
-    [sortedEntries, mainEntryFile, enableSearch, isAllExpanded, savedState, connectApi],
+    [sortedEntries, mainEntryFile, enableSearch, savedState, connectApi],
   );
 
   return (
@@ -264,13 +283,7 @@ function ParametersPaneview({
 // Parameters content: single vs multi CU
 // ---------------------------------------------------------------------------
 
-function ParametersContent({
-  enableSearch,
-  isAllExpanded,
-}: {
-  readonly enableSearch: boolean;
-  readonly isAllExpanded: boolean;
-}): React.JSX.Element {
+function ParametersContent({ enableSearch }: { readonly enableSearch: boolean }): React.JSX.Element {
   const { compilationUnits, mainEntryFile } = useProject();
   const entries = useMemo(() => [...compilationUnits.entries()], [compilationUnits]);
 
@@ -278,14 +291,7 @@ function ParametersContent({
     return <p className='p-4 text-center text-xs text-muted-foreground'>No compilation units.</p>;
   }
 
-  return (
-    <ParametersPaneview
-      entries={entries}
-      mainEntryFile={mainEntryFile}
-      enableSearch={enableSearch}
-      isAllExpanded={isAllExpanded}
-    />
-  );
+  return <ParametersPaneview entries={entries} mainEntryFile={mainEntryFile} enableSearch={enableSearch} />;
 }
 
 // ---------------------------------------------------------------------------
@@ -320,21 +326,12 @@ export const ChatParameters = memo(function (props: {
   readonly isExpanded?: boolean;
   readonly setIsExpanded?: (value: boolean | ((current: boolean) => boolean)) => void;
 }) {
-  const { mainEntryFile } = useProject();
   const { className, isExpanded = true, setIsExpanded } = props;
 
-  const mainCadRef = useProject().compilationUnits.get(mainEntryFile);
-  const jsonSchema = useSelector(mainCadRef, (state) => state?.context.jsonSchema ?? undefined);
-
   const [isSearchVisible, setIsSearchVisible] = useState(false);
-  const [isAllExpanded, setIsAllExpanded] = useState(true);
 
   const toggleSearch = useCallback(() => {
     setIsSearchVisible((current) => !current);
-  }, []);
-
-  const toggleAllExpanded = useCallback(() => {
-    setIsAllExpanded((current) => !current);
   }, []);
 
   const toggleParametersOpen = useCallback(() => {
@@ -361,18 +358,6 @@ export const ChatParameters = memo(function (props: {
               >
                 <Search className='size-4' />
               </FloatingPanelMenuButton>
-              {jsonSchema && hasJsonSchemaObjectProperties(jsonSchema) ? (
-                <FloatingPanelMenuButton
-                  aria-expanded={isAllExpanded}
-                  aria-label={isAllExpanded ? 'Collapse all' : 'Expand all'}
-                  tooltip={isAllExpanded ? 'Collapse all' : 'Expand all'}
-                  onClick={toggleAllExpanded}
-                >
-                  <ChevronRight
-                    className={cn('size-4 transition-transform duration-300 ease-in-out', isAllExpanded && 'rotate-90')}
-                  />
-                </FloatingPanelMenuButton>
-              ) : null}
             </FloatingPanelButtonGroup>
             <FloatingPanelClose
               icon={XIcon}
@@ -387,7 +372,7 @@ export const ChatParameters = memo(function (props: {
         </FloatingPanelContentHeader>
 
         <FloatingPanelContentBody className='overflow-y-hidden'>
-          <ParametersContent enableSearch={isSearchVisible} isAllExpanded={isAllExpanded} />
+          <ParametersContent enableSearch={isSearchVisible} />
         </FloatingPanelContentBody>
       </FloatingPanelContent>
     </FloatingPanel>
