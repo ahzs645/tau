@@ -1,6 +1,6 @@
 import { File as FileIcon } from 'lucide-react';
 import type { FileExtension } from '@taucad/types';
-import { supportedImportFormats, supportedExportFormats } from '@taucad/converter';
+import { supportedImportFormats, supportedExportFormats } from '@taucad/converter/formats';
 import { kernelConfigurations } from '@taucad/types/constants';
 import { Format3D } from '#components/icons/format-3d.js';
 import { SvgIcon } from '#components/icons/svg-icon.js';
