@@ -12,7 +12,7 @@ import {
   generateJsonBracketHighlightColors,
   generateJsonThemeRules,
 } from '#lib/monaco-json.lib.js';
-import { highlighter } from '#lib/shiki.lib.js';
+import { getHighlighter } from '#lib/shiki.lib.js';
 import { registry } from '#lib/monaco-language-registry.js';
 import { monacoLanguages } from '#lib/monaco.constants.js';
 import { kclContribution } from '#lib/kcl-language/kcl-register-language.js';
@@ -56,7 +56,10 @@ export const configureMonaco = async (): Promise<void> => {
       }
 
       if (label === 'typescript' || label === 'javascript') {
-        return new TsWorker();
+        performance.mark('ts-worker:create');
+        const worker = new TsWorker();
+        performance.measure('ts-worker:cold-start', 'ts-worker:create');
+        return worker;
       }
 
       return new EditorWorker();
@@ -101,6 +104,8 @@ export const configureMonaco = async (): Promise<void> => {
 
   // Phase 1: Register language metadata for all contributions (idempotent)
   registry.registerAll(monaco);
+
+  const highlighter = await getHighlighter();
 
   // Register Shiki highlighter globally. The idempotency guard above ensures
   // this only runs once, preventing monkey-patch wrapper multiplication on
