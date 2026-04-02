@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useDeferredValue, useRef } from 'react';
 import type * as THREE from 'three';
 import { useThree, useFrame } from '@react-three/fiber';
 import { Environment, Lightformer } from '@react-three/drei';
@@ -112,7 +112,9 @@ export function Lights({
     });
   });
 
-  const showEnvironment = !enableMatcap && (environmentPreset === 'studio' || environmentPreset === 'neutral');
+  const showEnvironment = useDeferredValue(
+    !enableMatcap && (environmentPreset === 'studio' || environmentPreset === 'neutral'),
+  );
 
   return (
     <>
