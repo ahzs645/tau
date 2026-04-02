@@ -1,7 +1,8 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 import type { InspectReport } from '@gltf-transform/functions';
-import type { SupportedImportFormat } from '#import.js';
-import { importFiles, supportedImportFormats } from '#import.js';
+import { importFiles } from '#import.js';
+import type { SupportedImportFormat } from '#formats.js';
+import { supportedImportFormats } from '#formats.js';
 import { createInspectTestUtils, loadTestData, loadFixture, createGeometryVariant } from '#test.utils.js';
 import type { LoaderTestCase, GeometryExpectation } from '#test.utils.js';
 import { getInspectReport, validateGlbData } from '#gltf.utils.js';

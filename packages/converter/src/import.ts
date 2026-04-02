@@ -14,6 +14,7 @@ import { GltfLoader } from '#loaders/gltf.loader.js';
 import { ThreeDmLoader } from '#loaders/3dm.loader.js';
 import { OcctLoader } from '#loaders/occt.loader.js';
 import { AssimpLoader } from '#loaders/assimp.loader.js';
+import type { SupportedImportFormat } from '#formats.js';
 
 const loaderFromInputFormat = {
   '3dm': new ThreeDmLoader(),
@@ -77,15 +78,7 @@ const loaderFromInputFormat = {
   // skp: new UnimplementedLoader('SketchUp .skp files are not implemented. This proprietary format requires specialized SketchUp file parsing capabilities.'),
   // sldprt: new UnimplementedLoader('SolidWorks .sldprt files are not implemented. This proprietary format requires specialized CAD file parsing capabilities.'),
   // x_t: new UnimplementedLoader('Parasolid .x_t files are not implemented. This proprietary format requires specialized CAD kernel integration.'),
-} as const satisfies Partial<Record<FileExtension, BaseLoader>>;
-
-/**
- * File extension recognized by the converter's import pipeline. Use with `importFiles()` to load CAD models.
- */
-export type SupportedImportFormat = keyof typeof loaderFromInputFormat;
-
-/** All file extensions supported by the import pipeline, derived from the loader registry. */
-export const supportedImportFormats = Object.keys(loaderFromInputFormat) as SupportedImportFormat[];
+} as const satisfies Record<SupportedImportFormat, BaseLoader> & Partial<Record<FileExtension, BaseLoader>>;
 
 /**
  * Imports files in the given format and produces a single GLB buffer.

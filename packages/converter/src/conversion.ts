@@ -1,10 +1,10 @@
 import type { ExportFile, FileInput } from '@taucad/types';
 import { mimeTypes } from '@taucad/types/constants';
 import type { FileResolver } from '#file-resolver.js';
-import { importFiles, supportedImportFormats } from '#import.js';
-import type { SupportedImportFormat } from '#import.js';
-import { exportFiles, supportedExportFormats } from '#export.js';
-import type { SupportedExportFormat } from '#export.js';
+import { importFiles } from '#import.js';
+import { exportFiles } from '#export.js';
+import { supportedImportFormats, supportedExportFormats } from '#formats.js';
+import type { SupportedImportFormat, SupportedExportFormat } from '#formats.js';
 
 /**
  * Convert files from one format to another.

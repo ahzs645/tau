@@ -1,7 +1,6 @@
 import { describe, expect, it, beforeAll } from 'vitest';
 import type { ExportFile } from '@taucad/types';
-import type { SupportedImportFormat } from '#import.js';
-import type { SupportedExportFormat } from '#export.js';
+import type { SupportedImportFormat, SupportedExportFormat } from '#formats.js';
 import {
   convertFile,
   importToGlb,

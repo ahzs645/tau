@@ -2,6 +2,7 @@ import type { ExportFile, FileExtension } from '@taucad/types';
 import type { BaseExporter } from '#exporters/base.exporter.js';
 import { GltfExporter } from '#exporters/gltf.exporter.js';
 import { AssimpExporter } from '#exporters/assimp.exporter.js';
+import type { SupportedExportFormat } from '#formats.js';
 
 type ExportConfig = {
   exporter: BaseExporter<unknown>;
@@ -33,15 +34,7 @@ const exportConfigs = {
 
   // '3mf': { exporter: new AssimpExporter().initialize({ format: '3mf' }) }, // Fix assimp 3mf exporter
   // '3dm': { exporter: new AssimpExporter().initialize({ format: '3dm' }) }, // Integrate 3dm exporter into assimp
-} as const satisfies Partial<Record<FileExtension, ExportConfig>>;
-
-/**
- * File extension recognized by the converter's export pipeline. Use with `exportFiles()` to produce output files.
- */
-export type SupportedExportFormat = keyof typeof exportConfigs;
-
-/** All file extensions supported by the export pipeline, derived from the export configuration registry. */
-export const supportedExportFormats = Object.keys(exportConfigs) as SupportedExportFormat[];
+} as const satisfies Record<SupportedExportFormat, ExportConfig> & Partial<Record<FileExtension, ExportConfig>>;
 
 /**
  * Exports GLB data to the specified format.

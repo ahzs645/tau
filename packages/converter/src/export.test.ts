@@ -2,8 +2,9 @@ import { expect, describe, it, beforeEach } from 'vitest';
 import type { InspectReport } from '@gltf-transform/functions';
 import type { ExportFile } from '@taucad/types';
 import { importFiles } from '#import.js';
-import { exportFiles, supportedExportFormats } from '#export.js';
-import type { SupportedExportFormat } from '#export.js';
+import { exportFiles } from '#export.js';
+import type { SupportedExportFormat } from '#formats.js';
+import { supportedExportFormats } from '#formats.js';
 import { loadFixture } from '#test.utils.js';
 import { getInspectReport } from '#gltf.utils.js';
 

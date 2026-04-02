@@ -29,7 +29,8 @@
   "author": "Richard Fontein",
   "license": "MIT",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./formats": "./src/formats.ts"
   },
   "publishConfig": {
     "access": "public",
@@ -42,6 +43,16 @@
         "import": {
           "types": "./dist/esm/index.d.ts",
           "default": "./dist/esm/index.js"
+        }
+      },
+      "./formats": {
+        "require": {
+          "types": "./dist/cjs/formats.d.cts",
+          "default": "./dist/cjs/formats.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/formats.d.ts",
+          "default": "./dist/esm/formats.js"
         }
       }
     }
