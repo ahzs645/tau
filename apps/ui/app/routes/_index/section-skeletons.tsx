@@ -1,3 +1,4 @@
+import { communityGridClassName } from '#components/project-grid.js';
 import { Skeleton } from '#components/ui/skeleton.js';
 
 function CardSkeleton(): React.JSX.Element {
@@ -19,8 +20,8 @@ export function CommunityGridSkeleton(): React.JSX.Element {
         <Skeleton className='h-6 w-40' />
         <Skeleton className='h-5 w-16' />
       </div>
-      <div className='grid grid-cols-2 gap-3 sm:gap-6 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5'>
-        {Array.from({ length: 4 }, (_, i) => (
+      <div className={communityGridClassName}>
+        {Array.from({ length: 10 }, (_, i) => (
           <CardSkeleton key={i} />
         ))}
       </div>

@@ -13,6 +13,8 @@ import { CadPreviewProvider } from '#hooks/use-cad-preview.js';
 import { CadPreviewViewer } from '#components/cad-preview.js';
 import type { ProjectsWithFiles } from '#constants/project-examples.js';
 
+export const communityGridClassName = 'grid grid-cols-2 gap-3 sm:gap-6 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5';
+
 type CommunityBuildCardProperties = ProjectsWithFiles;
 
 export type CommunityBuildGridProperties = {
@@ -32,7 +34,7 @@ export function CommunityProjectGrid({
 
   return (
     <>
-      <div className='grid grid-cols-2 gap-3 sm:gap-6 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5'>
+      <div className={communityGridClassName}>
         {displayedProjects.map((project) => (
           <ProjectCard key={project.id} {...project} />
         ))}
