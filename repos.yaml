@@ -67,6 +67,7 @@ groups:
       - tsdown
       - rolldown
       - knip
+      - agentfs
   tscircuit:
     description: tscircuit EDA ecosystem
     repos:
@@ -362,3 +363,6 @@ repos:
   knip:
     upstream: webpro-nl/knip
     description: ✂️  Find unused files, dependencies and exports in your JavaScript and TypeScript projects. Knip it before you ship it!
+  agentfs:
+    upstream: tursodatabase/agentfs
+    description: The filesystem for agents.
