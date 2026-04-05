@@ -1,4 +1,3 @@
-import JSZip from 'jszip';
 import type { FileStat, FileStatEntry, FileSystemBackend } from '@taucad/types';
 import type {
   FileTreeNode,
@@ -507,6 +506,8 @@ export class FileService {
    * @returns ZIP archive as a `Blob`.
    */
   public async getZippedDirectory(path: string): Promise<Blob> {
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- JSZip is the library's class name
+    const { default: JSZip } = await import('jszip');
     const zip = new JSZip();
     const files = await this.getDirectoryContents(path);
     for (const [relativePath, content] of Object.entries(files)) {
