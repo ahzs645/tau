@@ -363,24 +363,6 @@ function countProjects(elements: TreeViewElement[]): number {
   return count;
 }
 
-/**
- * Collect IDs of all folders named "projects" so they can be expanded by default.
- */
-function findProjectsFolderIds(elements: TreeViewElement[]): string[] {
-  const ids: string[] = [];
-  for (const element of elements) {
-    if (element.name === 'projects' && element.children) {
-      ids.push(element.id);
-    }
-
-    if (element.children) {
-      ids.push(...findProjectsFolderIds(element.children));
-    }
-  }
-
-  return ids;
-}
-
 // ============ WebAccess Directory State ============
 
 type WebAccessDirectoryState = {
@@ -507,7 +489,7 @@ function BackendColumn({
           ) : fileTree.length === 0 ? (
             <div className='flex h-32 items-center justify-center text-sm text-muted-foreground'>No files found</div>
           ) : (
-            <Tree elements={fileTree} initialExpandedItems={findProjectsFolderIds(fileTree)} onExpand={onExpand}>
+            <Tree elements={fileTree} onExpand={onExpand}>
               {renderTree(fileTree, treeActionHandlers)}
             </Tree>
           )}
