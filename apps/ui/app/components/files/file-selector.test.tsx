@@ -261,4 +261,54 @@ describe('FileSelector (context auto-wiring)', () => {
       expect(screen.getByText('No files found.')).toBeInTheDocument();
     });
   });
+
+  it('should preserve full breadcrumb path when drilling down after navigating up', async () => {
+    const { useOptionalFileManager } = await import('#hooks/use-file-manager.js');
+    const mockReadDirectoryEntries = vi.fn().mockImplementation(async (path: string) => {
+      if (path === '') {
+        return [{ id: 'public', name: 'public', children: [] }];
+      }
+      if (path === 'public') {
+        return [{ id: 'kcl-samples', name: 'kcl-samples', children: [] }];
+      }
+      if (path === 'public/kcl-samples') {
+        return [{ id: 'ball-bearing', name: 'ball-bearing', children: [] }];
+      }
+      if (path === 'public/kcl-samples/ball-bearing') {
+        return [{ id: 'main.kcl', name: 'main.kcl' }];
+      }
+      return [];
+    });
+
+    vi.mocked(useOptionalFileManager).mockReturnValue({
+      treeService: { readDirectoryEntries: mockReadDirectoryEntries },
+    } as unknown as ReturnType<typeof useOptionalFileManager>);
+
+    render(<FileSelector selectedFile='public/kcl-samples/ball-bearing/main.kcl' onSelect={vi.fn()} />);
+
+    await userEvent.click(screen.getByRole('button'));
+
+    await waitFor(() => {
+      // Trigger button + list item both show main.kcl
+      expect(screen.getAllByText('main.kcl')).toHaveLength(2);
+    });
+
+    await userEvent.click(screen.getByText('kcl-samples'));
+
+    await waitFor(() => {
+      expect(screen.getByText('ball-bearing')).toBeInTheDocument();
+    });
+
+    await userEvent.click(screen.getByText('ball-bearing'));
+
+    await waitFor(() => {
+      expect(mockReadDirectoryEntries).toHaveBeenCalledWith('public/kcl-samples/ball-bearing');
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByText('main.kcl')).toHaveLength(2);
+    });
+
+    vi.mocked(useOptionalFileManager).mockReturnValue(undefined);
+  });
 });

@@ -474,7 +474,7 @@ function useContextDataSource(shouldIncludeDirectories?: boolean): FileSelectorD
       const nodes = await treeService.readDirectoryEntries(path);
       return nodes.map((n) => ({
         name: n.name,
-        path: n.id,
+        path: path ? `${path}/${n.name}` : n.name,
         isFolder: n.children !== undefined,
         size: undefined,
       }));
