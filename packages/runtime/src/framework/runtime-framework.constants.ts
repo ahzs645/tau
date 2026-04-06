@@ -25,3 +25,9 @@ export const signalBufferByteLength = 16;
 
 /** Maximum byte length the growable SharedArrayBuffer can expand to. */
 export const signalBufferMaxByteLength = 64;
+
+/** Default wall-clock render timeout in milliseconds. 0 = disabled. */
+export const defaultRenderTimeoutMs = 30_000;
+
+/** Message type posted by workers to signal that initialization is complete and they are ready to receive bridge connections. */
+export const workerReadyMessageType = '__worker_ready__';

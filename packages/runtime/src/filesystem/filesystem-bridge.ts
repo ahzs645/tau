@@ -13,6 +13,7 @@ import type { StringKeyedObject } from '#types/bridge.types.js';
 import type { BridgeHandle, BridgeServerHandle } from '#framework/runtime-filesystem-bridge.js';
 import type { RuntimeWatchRequest, RuntimeWatchEvent } from '#types/runtime-kernel.types.js';
 import { createBridgeServer, catchMessages } from '#framework/runtime-filesystem-bridge.js';
+import { workerReadyMessageType } from '#framework/runtime-framework.constants.js';
 
 const defaultBridgeMessageType = 'connect';
 const defaultUiCoalescingWindowMs = 500;
@@ -207,6 +208,50 @@ export function exposeFileSystem<T extends StringKeyedObject>(
     activePorts,
     serverHandles,
   };
+}
+
+/**
+ * Wait for a worker to signal that its initialization is complete.
+ *
+ * Workers post `{ type: workerReadyMessageType }` after `exposeFileSystem`
+ * has registered its listener. Callers should await this before sending
+ * bridge `connect` messages to avoid the race where the message is dropped.
+ *
+ * @param worker - Worker to wait for
+ * @param signal - Optional AbortSignal to cancel the wait
+ * @returns Resolves when the worker posts the ready message
+ * @public
+ */
+export async function waitForWorkerReady(worker: Worker | EventTarget, signal?: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const onMessage = (event: Event): void => {
+      if ((event as MessageEvent).data?.type === workerReadyMessageType) {
+        cleanup();
+        resolve();
+      }
+    };
+
+    const toError = (reason: unknown): Error =>
+      reason instanceof Error ? reason : new Error('The operation was aborted.');
+
+    const onAbort = (): void => {
+      cleanup();
+      reject(toError(signal?.reason));
+    };
+
+    const cleanup = (): void => {
+      worker.removeEventListener('message', onMessage);
+      signal?.removeEventListener('abort', onAbort);
+    };
+
+    if (signal?.aborted) {
+      reject(toError(signal.reason));
+      return;
+    }
+
+    worker.addEventListener('message', onMessage);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 /**

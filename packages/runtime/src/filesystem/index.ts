@@ -18,13 +18,16 @@ export type { FsLike } from '#filesystem/from-fs-like.js';
 export { createRuntimeFileSystem } from '#filesystem/create-runtime-filesystem.js';
 
 // High-level wrappers
-export { exposeFileSystem, createFileSystemBridge } from '#filesystem/filesystem-bridge.js';
+export { exposeFileSystem, createFileSystemBridge, waitForWorkerReady } from '#filesystem/filesystem-bridge.js';
 export type {
   FileSystemBridgeOptions,
   ExposeFileSystemHandle,
   ChangeEventCoalescer,
   CoalescerFactory,
 } from '#filesystem/filesystem-bridge.js';
+
+// Constants
+export { workerReadyMessageType } from '#framework/runtime-framework.constants.js';
 
 // Low-level bridge primitives
 export {
