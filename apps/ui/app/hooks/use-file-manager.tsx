@@ -6,8 +6,8 @@ import type { SnapshotFrom } from 'xstate';
 import type { FileTreeEntry, FileSystemBackend, FileStatEntry, FileStat } from '@taucad/types';
 import { fileManagerMachine } from '#machines/file-manager.machine.js';
 import type { FileWriteSource, FileManagerRef, FileManagerProxy } from '#machines/file-manager.machine.types.js';
-import type { FileTreeNode } from '@taucad/filesystem';
-import { storeDirectoryHandle, getStoredDirectoryHandle, requestHandlePermission } from '#filesystem/handle-store.js';
+import type { FileTreeNode, MountOptions } from '@taucad/filesystem';
+import { getStoredDirectoryHandle } from '#filesystem/handle-store.js';
 import { useCookie } from '#hooks/use-cookie.js';
 import { cookieName } from '#constants/cookie.constants.js';
 import type { FileContentService } from '#lib/file-content-service.js';
@@ -41,14 +41,6 @@ type DeleteFileOptions = {
   source: FileWriteSource;
 };
 
-/**
- * Status of the webaccess (File System Access API) connection.
- * - 'disconnected': No directory handle stored or available
- * - 'connected': Directory handle is available and has permission
- * - 'needs-permission': Directory handle exists but needs user gesture to re-grant permission
- */
-export type WebAccessStatus = 'disconnected' | 'connected' | 'needs-permission';
-
 type FileManagerContextType = {
   fileManagerRef: FileManagerRef;
   backendType: FileSystemBackend;
@@ -66,10 +58,8 @@ type FileManagerContextType = {
   getDirectoryStat: (path: string) => Promise<FileStatEntry[]>;
   getZippedDirectory: (path: string) => Promise<Blob>;
   copyDirectory: (sourcePath: string, destinationPath: string) => Promise<void>;
-  reconfigureBackend: (backend: FileSystemBackend) => Promise<void>;
-  selectDirectory: () => Promise<void>;
-  reconnectDirectory: () => Promise<boolean>;
-  webAccessStatus: WebAccessStatus;
+  mount: (prefix: string, backend: FileSystemBackend, options?: MountOptions) => Promise<void>;
+  unmount: (prefix: string) => void;
   connectedDirectoryName: string | undefined;
   readShallowDirectory: (path: string, backend: FileSystemBackend) => Promise<FileTreeNode[]>;
 };
@@ -130,8 +120,8 @@ export function FileManagerProvider({
   const backendType = useSelector(fileManagerRef, (state) => state.context.backendType);
 
   /**
-   * Wait for machine ready and return proxy. Used only for admin operations
-   * (reconfigure, setDirectoryHandle) that are not file I/O.
+   * Wait for machine ready and return proxy. Used for admin operations
+   * (mount, unmount, readShallowDirectory) that are not file I/O.
    */
   const getReadiedProxy = useCallback(async (): Promise<FileManagerProxy> => {
     const snapshot = await waitFor(
@@ -272,88 +262,25 @@ export function FileManagerProvider({
     [contentService],
   );
 
-  const reconfigureBackend = useCallback(
-    async (backend: FileSystemBackend): Promise<void> => {
+  const mount = useCallback(
+    async (prefix: string, backend: FileSystemBackend, options?: MountOptions): Promise<void> => {
       const proxy = await getReadiedProxy();
-
-      if (backend !== 'webaccess') {
-        treeService?.stopChangeDetection();
-      }
-
-      await proxy.reconfigure(backend);
-
-      fileManagerRef.send({ type: 'setBackendType', backendType: backend });
-
-      if (backend === 'webaccess') {
-        void treeService?.startChangeDetection();
-      }
-
-      treeService?.scheduleRefresh('');
+      await proxy.mount(prefix, backend, options);
     },
-    [fileManagerRef, getReadiedProxy, treeService],
+    [getReadiedProxy],
+  );
+
+  const unmount = useCallback(
+    (prefix: string): void => {
+      void (async () => {
+        const proxy = await getReadiedProxy();
+        proxy.unmount(prefix);
+      })();
+    },
+    [getReadiedProxy],
   );
 
   const [connectedDirectoryName, setConnectedDirectoryName] = useState<string | undefined>(undefined);
-
-  const machineWebAccessNeedsPermission = useSelector(
-    fileManagerRef,
-    (state) => state.context.webAccessNeedsPermission,
-  );
-  const machineBackendType = useSelector(fileManagerRef, (state) => state.context.backendType);
-
-  const webAccessStatus: WebAccessStatus = useMemo(() => {
-    if (machineWebAccessNeedsPermission) {
-      return 'needs-permission';
-    }
-
-    if (machineBackendType === 'webaccess') {
-      return 'connected';
-    }
-
-    return 'disconnected';
-  }, [machineWebAccessNeedsPermission, machineBackendType]);
-
-  const selectDirectory = useCallback(async (): Promise<void> => {
-    const handle = await globalThis.window.showDirectoryPicker({
-      mode: 'readwrite',
-    });
-
-    await storeDirectoryHandle(handle);
-
-    const proxy = await getReadiedProxy();
-    proxy.setDirectoryHandle(handle);
-    await proxy.reconfigure('webaccess');
-
-    setConnectedDirectoryName(handle.name);
-    fileManagerRef.send({ type: 'setBackendType', backendType: 'webaccess' });
-
-    void treeService?.startChangeDetection(handle);
-    treeService?.scheduleRefresh('');
-  }, [fileManagerRef, getReadiedProxy, treeService]);
-
-  const reconnectDirectory = useCallback(async (): Promise<boolean> => {
-    const handle = await getStoredDirectoryHandle();
-    if (!handle) {
-      return false;
-    }
-
-    const granted = await requestHandlePermission(handle);
-    if (!granted) {
-      return false;
-    }
-
-    const proxy = await getReadiedProxy();
-    proxy.setDirectoryHandle(handle);
-    await proxy.reconfigure('webaccess');
-
-    setConnectedDirectoryName(handle.name);
-    fileManagerRef.send({ type: 'setBackendType', backendType: 'webaccess' });
-
-    void treeService?.startChangeDetection(handle);
-    treeService?.scheduleRefresh('');
-
-    return true;
-  }, [fileManagerRef, getReadiedProxy, treeService]);
 
   const readShallowDirectory = useCallback(
     async (path: string, backend: FileSystemBackend): Promise<FileTreeNode[]> => {
@@ -403,10 +330,8 @@ export function FileManagerProvider({
       getDirectoryStat,
       getZippedDirectory,
       copyDirectory,
-      reconfigureBackend,
-      selectDirectory,
-      reconnectDirectory,
-      webAccessStatus,
+      mount,
+      unmount,
       connectedDirectoryName,
       readShallowDirectory,
     }),
@@ -427,10 +352,8 @@ export function FileManagerProvider({
       getDirectoryStat,
       getZippedDirectory,
       copyDirectory,
-      reconfigureBackend,
-      selectDirectory,
-      reconnectDirectory,
-      webAccessStatus,
+      mount,
+      unmount,
       connectedDirectoryName,
       readShallowDirectory,
     ],

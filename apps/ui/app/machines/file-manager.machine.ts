@@ -1,6 +1,6 @@
 import { assign, assertEvent, setup, enqueueActions } from 'xstate';
-import type { FileEntry, FileSystemBackend } from '@taucad/types';
-import { createBridgeProxy, createFileSystemBridge } from '@taucad/runtime/filesystem';
+import type { ChangeEvent, FileEntry, FileSystemBackend } from '@taucad/types';
+import { createBridgeProxy, createFileSystemBridge, waitForWorkerReady } from '@taucad/runtime/filesystem';
 import { safeDispose } from '@taucad/utils/dispose';
 import FileManagerWorker from '#machines/file-manager.worker.js?worker';
 import {
@@ -64,14 +64,15 @@ const initializeWorkerActor = fromSafeAsync<WorkerInitializedEvent, { context: F
 
     const worker = context.sharedWorker ?? new FileManagerWorker({ name: `fm-root` });
     console.debug(`[FileManager] worker created +${(performance.now() - initT0).toFixed(1)}ms`);
-    worker.addEventListener('message', (event) => {
-      if (event.data?.type === '__worker_ready__') {
-        console.debug(`[FileManager] worker heartbeat received +${(performance.now() - initT0).toFixed(1)}ms`);
-      }
-    });
     worker.addEventListener('error', (error) => {
       console.error(`[FileManager] WORKER ERROR:`, error.message, error.filename, error.lineno);
     });
+
+    if (!context.sharedWorker) {
+      await waitForWorkerReady(worker, signal);
+      console.debug(`[FileManager] worker ready +${(performance.now() - initT0).toFixed(1)}ms`);
+    }
+
     const { port, dispose: bridgeDispose } = createFileSystemBridge(worker);
     console.debug(`[FileManager] bridge created, port transferred +${(performance.now() - initT0).toFixed(1)}ms`);
     const proxy = createBridgeProxy<FileManagerProtocol>(port);
@@ -92,7 +93,10 @@ const initializeWorkerActor = fromSafeAsync<WorkerInitializedEvent, { context: F
         const permission = await checkHandlePermission(workspaceHandle);
         if (permission === 'granted') {
           proxy.setDirectoryHandle(workspaceHandle);
-          await proxy.reconfigure('webaccess');
+          if (context.projectId) {
+            const projectPrefix = `/projects/${context.projectId}`;
+            await proxy.mount(projectPrefix, 'webaccess', { preservePath: true });
+          }
         } else {
           webAccessNeedsPermission = true;
           backend = 'indexeddb';
@@ -101,8 +105,11 @@ const initializeWorkerActor = fromSafeAsync<WorkerInitializedEvent, { context: F
         webAccessNeedsPermission = true;
         backend = 'indexeddb';
       }
-    } else if (backend !== 'indexeddb') {
-      await proxy.reconfigure(backend);
+    }
+
+    if (backend !== 'webaccess' && context.projectId) {
+      const projectPrefix = `/projects/${context.projectId}`;
+      await proxy.mount(projectPrefix, backend, { preservePath: true });
     }
 
     let initialEntries: FileEntry[] = [];
@@ -150,7 +157,7 @@ const initializeWorkerActor = fromSafeAsync<WorkerInitializedEvent, { context: F
     treeService.connectToContentService(contentService);
 
     proxy.listen('fileChanged', (event) => {
-      treeService.handleWorkerFileChanged(event);
+      treeService.handleWorkerFileChanged(event as ChangeEvent);
     });
 
     console.debug('[FileManager] initializeWorkerActor: success');
@@ -213,6 +220,11 @@ export const fileManagerMachine = setup({
     clearError: assign({ error: undefined }),
 
     destroyWorkerAndServices: assign(({ context }) => {
+      if (context.projectId && context.proxy) {
+        const projectPrefix = `/projects/${context.projectId}`;
+        context.proxy.unmount(projectPrefix);
+      }
+
       context.contentService?.dispose();
       context.treeService?.dispose();
       safeDispose(() => context.proxy?.dispose());

@@ -218,27 +218,18 @@ export function ProjectManagerProvider({ children }: { readonly children: ReactN
 
       await setBuildFileSystemConfig(project.id, resolvedBackend);
 
-      // Ensure the root file manager writes to the correct backend for this project.
-      // The root FM may be on a different backend (e.g. indexeddb) than what the
-      // project config says (e.g. opfs), so reconfigure before writing, then restore.
-      const previousBackend = fileManager.backendType;
-      const needsReconfigure = resolvedBackend !== previousBackend;
-
-      if (needsReconfigure) {
-        await fileManager.reconfigureBackend(resolvedBackend);
-      }
+      const projectPrefix = `/projects/${project.id}`;
+      await fileManager.mount(projectPrefix, resolvedBackend, { preservePath: true });
 
       const projectFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};
       for (const [path, file] of Object.entries(files)) {
-        projectFiles[`/projects/${project.id}/${path}`] = file;
+        projectFiles[`${projectPrefix}/${path}`] = file;
       }
 
       try {
         await fileManager.writeFiles(projectFiles);
       } finally {
-        if (needsReconfigure) {
-          await fileManager.reconfigureBackend(previousBackend);
-        }
+        fileManager.unmount(projectPrefix);
       }
 
       return project;

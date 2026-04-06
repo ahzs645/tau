@@ -199,7 +199,7 @@ export class WatchRegistry {
   }
 
   /**
-   * Update case-sensitivity (e.g. after backend reconfigure).
+   * Update case-sensitivity (e.g. after root mount).
    *
    * @param caseSensitive - Whether path matching is case-sensitive.
    */
@@ -298,7 +298,7 @@ export class WatchRegistry {
     this._ownerWatches.delete(ownerId);
   }
 
-  /** Emit a reset event to all subscribers (e.g. on backend reconfigure). */
+  /** Emit a reset event to all subscribers. */
   public emitResetAll(): void {
     for (const subscription of this._subscriptions.values()) {
       const resetEvent: WatchEvent = { type: 'reset', correlationId: subscription.request.correlationId };

@@ -11,15 +11,20 @@ vi.mock('#machines/file-manager.worker.js?worker', () => ({
   },
 }));
 
-const mockReconfigure = vi.fn();
+const mockMount = vi.fn<(prefix: string, backend: string, options?: unknown) => Promise<void>>();
+const mockUnmount = vi.fn<(prefix: string) => void>();
+const mockWaitForWorkerReady = vi.fn<() => Promise<void>>();
+const mockCreateFileSystemBridge = vi.fn(() => ({
+  port: new MessageChannel().port1,
+  dispose: vi.fn(),
+}));
 
 vi.mock('@taucad/runtime/filesystem', () => ({
-  createFileSystemBridge: vi.fn(() => ({
-    port: new MessageChannel().port1,
-    dispose: vi.fn(),
-  })),
+  createFileSystemBridge: () => mockCreateFileSystemBridge(),
+  waitForWorkerReady: async () => mockWaitForWorkerReady(),
   createBridgeProxy: vi.fn(() => ({
-    reconfigure: mockReconfigure,
+    mount: mockMount,
+    unmount: mockUnmount,
     setDirectoryHandle: vi.fn(),
     getDirectoryStat: vi.fn(async () => []),
     readShallowDirectory: vi.fn(async () => []),
@@ -43,6 +48,7 @@ describe('fileManagerMachine', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetProjectFileSystemConfig.mockResolvedValue(undefined);
+    mockWaitForWorkerReady.mockResolvedValue(undefined);
   });
 
   it('should start in initializing state when shouldInitializeOnStart is false', () => {
@@ -193,10 +199,119 @@ describe('fileManagerMachine', () => {
     expect(actor.getSnapshot().status).toBe('stopped');
   });
 
+  // ── worker readiness gating ─────────────────────────────────────────────
+
+  describe('worker readiness gating', () => {
+    it('should not create bridge before worker signals ready', async () => {
+      let resolveReady!: () => void;
+      mockWaitForWorkerReady.mockReturnValue(
+        new Promise<void>((resolve) => {
+          resolveReady = resolve;
+        }),
+      );
+
+      const actor = createActor(fileManagerMachine, {
+        input: {
+          rootDirectory: '/test',
+          shouldInitializeOnStart: true,
+        },
+      });
+      actor.start();
+
+      await vi.waitFor(() => {
+        expect(mockWaitForWorkerReady).toHaveBeenCalledOnce();
+      });
+
+      expect(mockCreateFileSystemBridge).not.toHaveBeenCalled();
+
+      resolveReady();
+
+      await vi.waitFor(() => {
+        expect(actor.getSnapshot().value).toBe('ready');
+      });
+
+      expect(mockCreateFileSystemBridge).toHaveBeenCalledOnce();
+      actor.stop();
+    });
+
+    it('should create bridge and reach ready after worker signals ready', async () => {
+      mockWaitForWorkerReady.mockResolvedValue(undefined);
+
+      const actor = createActor(fileManagerMachine, {
+        input: {
+          rootDirectory: '/test',
+          shouldInitializeOnStart: true,
+        },
+      });
+      actor.start();
+
+      await vi.waitFor(() => {
+        expect(actor.getSnapshot().value).toBe('ready');
+      });
+
+      expect(mockWaitForWorkerReady).toHaveBeenCalledOnce();
+      expect(mockCreateFileSystemBridge).toHaveBeenCalledOnce();
+      actor.stop();
+    });
+  });
+
+  // ── shared worker (project-scoped FM) ────────────────────────────────────
+
+  describe('shared worker initialization', () => {
+    it('should skip waitForWorkerReady and reach ready when sharedWorker is provided', async () => {
+      mockWaitForWorkerReady.mockReturnValue(new Promise<void>(() => {}));
+
+      const sharedWorker = {
+        terminate: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        postMessage: vi.fn(),
+      } as unknown as Worker;
+
+      const actor = createActor(fileManagerMachine, {
+        input: {
+          rootDirectory: '/projects/shared-proj',
+          shouldInitializeOnStart: true,
+          projectId: 'shared-proj',
+          sharedWorker,
+        },
+      });
+      actor.start();
+
+      await vi.waitFor(() => {
+        expect(actor.getSnapshot().value).toBe('ready');
+      });
+
+      expect(mockWaitForWorkerReady).not.toHaveBeenCalled();
+      expect(mockCreateFileSystemBridge).toHaveBeenCalledOnce();
+      actor.stop();
+    });
+
+    it('should still call waitForWorkerReady when no sharedWorker (fresh worker)', async () => {
+      mockWaitForWorkerReady.mockResolvedValue(undefined);
+
+      const actor = createActor(fileManagerMachine, {
+        input: {
+          rootDirectory: '/projects/fresh-proj',
+          shouldInitializeOnStart: true,
+          projectId: 'fresh-proj',
+        },
+      });
+      actor.start();
+
+      await vi.waitFor(() => {
+        expect(actor.getSnapshot().value).toBe('ready');
+      });
+
+      expect(mockWaitForWorkerReady).toHaveBeenCalledOnce();
+      actor.stop();
+    });
+  });
+
   // ── projectId-based backend resolution ────────────────────────────────────
 
   describe('projectId backend resolution', () => {
-    it('should reconfigure to opfs when project config stores opfs', async () => {
+    it('should call mount with opfs when project config stores opfs', async () => {
       mockGetProjectFileSystemConfig.mockResolvedValue('opfs');
 
       const actor = createActor(fileManagerMachine, {
@@ -213,11 +328,11 @@ describe('fileManagerMachine', () => {
       });
 
       expect(mockGetProjectFileSystemConfig).toHaveBeenCalled();
-      expect(mockReconfigure).toHaveBeenCalledWith('opfs');
+      expect(mockMount).toHaveBeenCalledWith('/projects/test-id', 'opfs', { preservePath: true });
       actor.stop();
     });
 
-    it('should not reconfigure when project config returns undefined (defaults to indexeddb)', async () => {
+    it('should call mount with indexeddb when project config returns undefined', async () => {
       mockGetProjectFileSystemConfig.mockResolvedValue(undefined);
 
       const actor = createActor(fileManagerMachine, {
@@ -234,7 +349,7 @@ describe('fileManagerMachine', () => {
       });
 
       expect(mockGetProjectFileSystemConfig).toHaveBeenCalled();
-      expect(mockReconfigure).not.toHaveBeenCalled();
+      expect(mockMount).toHaveBeenCalledWith('/projects/test-id', 'indexeddb', { preservePath: true });
       actor.stop();
     });
 
@@ -255,7 +370,7 @@ describe('fileManagerMachine', () => {
       actor.stop();
     });
 
-    it('should reconfigure to memory when project config stores memory', async () => {
+    it('should call mount with memory when project config stores memory', async () => {
       mockGetProjectFileSystemConfig.mockResolvedValue('memory');
 
       const actor = createActor(fileManagerMachine, {
@@ -271,7 +386,70 @@ describe('fileManagerMachine', () => {
         expect(actor.getSnapshot().value).toBe('ready');
       });
 
-      expect(mockReconfigure).toHaveBeenCalledWith('memory');
+      expect(mockMount).toHaveBeenCalledWith('/projects/mem-id', 'memory', { preservePath: true });
+      actor.stop();
+    });
+
+    it('should not mount when no projectId (root FM uses stable root mount)', async () => {
+      const actor = createActor(fileManagerMachine, {
+        input: {
+          rootDirectory: '/test',
+          shouldInitializeOnStart: true,
+          initialBackend: 'opfs',
+        },
+      });
+      actor.start();
+
+      await vi.waitFor(() => {
+        expect(actor.getSnapshot().value).toBe('ready');
+      });
+
+      expect(mockMount).not.toHaveBeenCalled();
+      actor.stop();
+    });
+  });
+
+  // ── project mount lifecycle cleanup ────────────────────────────────────
+
+  describe('project mount lifecycle', () => {
+    it('should unmount project prefix on root change when projectId is set', async () => {
+      mockGetProjectFileSystemConfig.mockResolvedValue(undefined);
+
+      const actor = createActor(fileManagerMachine, {
+        input: {
+          rootDirectory: '/projects/proj-1',
+          shouldInitializeOnStart: true,
+          projectId: 'proj-1',
+        },
+      });
+      actor.start();
+
+      await vi.waitFor(() => {
+        expect(actor.getSnapshot().value).toBe('ready');
+      });
+
+      actor.send({ type: 'setRoot', path: '/projects/proj-2', projectId: 'proj-2' });
+
+      expect(mockUnmount).toHaveBeenCalledWith('/projects/proj-1');
+      actor.stop();
+    });
+
+    it('should not call unmount on root change when no projectId', async () => {
+      const actor = createActor(fileManagerMachine, {
+        input: {
+          rootDirectory: '/test',
+          shouldInitializeOnStart: true,
+        },
+      });
+      actor.start();
+
+      await vi.waitFor(() => {
+        expect(actor.getSnapshot().value).toBe('ready');
+      });
+
+      actor.send({ type: 'setRoot', path: '/other' });
+
+      expect(mockUnmount).not.toHaveBeenCalled();
       actor.stop();
     });
   });

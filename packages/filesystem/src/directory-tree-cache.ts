@@ -55,6 +55,22 @@ export class DirectoryTreeCache {
   }
 
   /**
+   * Invalidate a directory and all its ancestors up to root.
+   * Used for recursive mkdir where intermediate directories are created.
+   *
+   * @param path - Deepest directory path whose ancestors should be invalidated.
+   */
+  public invalidateAncestors(path: string): void {
+    let current = canonicalizePath(path);
+    while (current !== '/') {
+      this._cache.delete(current);
+      const lastSlash = current.lastIndexOf('/');
+      current = lastSlash <= 0 ? '/' : current.slice(0, lastSlash);
+    }
+    this._cache.delete('/');
+  }
+
+  /**
    * Return the full internal cache map (for inspection/debugging).
    *
    * @returns Full cache map from path to entry map.

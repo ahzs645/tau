@@ -14,15 +14,18 @@ export type ProviderRegistryOptions = {
 };
 
 /**
- * Manages the lifecycle and caching of filesystem providers across
- * backends (IndexedDB, OPFS, Web Access, memory).
+ * Factory for filesystem provider instances across backends
+ * (IndexedDB, OPFS, Web Access, memory).
+ *
+ * Providers created via {@link createMountProvider} are uncached — the caller
+ * owns their lifecycle. {@link getStandaloneProvider} caches providers
+ * separately for read-only browsing use-cases.
+ *
  * @public
  */
 export class ProviderRegistry {
-  private readonly _providers = new Map<string, FileSystemProvider>();
   private readonly _standaloneProviders = new Map<string, FileSystemProvider>();
   private readonly _databasePrefix: string;
-  private _activeBackend: FileSystemBackend = 'indexeddb';
   private _directoryHandle: FileSystemDirectoryHandle | undefined;
 
   /**
@@ -35,35 +38,8 @@ export class ProviderRegistry {
   }
 
   /**
-   * Get or lazily create a provider for the given backend.
-   *
-   * @param backend - Backend key; defaults to the active backend.
-   * @returns Cached or newly created provider.
-   */
-  public async getProvider(backend?: FileSystemBackend): Promise<FileSystemProvider> {
-    const key = backend ?? this._activeBackend;
-    const cached = this._providers.get(key);
-    if (cached) {
-      return cached;
-    }
-
-    const provider = await this._createProvider(key);
-    this._providers.set(key, provider);
-    return provider;
-  }
-
-  /**
-   * Shorthand for `getProvider()` using the currently active backend.
-   *
-   * @returns The active provider instance.
-   */
-  public async getActiveProvider(): Promise<FileSystemProvider> {
-    return this.getProvider(this._activeBackend);
-  }
-
-  /**
    * Get or create a standalone provider for cross-backend reads
-   * (e.g. the `/files` route). Cached separately from active providers.
+   * (e.g. the `/files` route). Cached separately from mount providers.
    *
    * @param backend - Backend to create the provider for.
    * @param handle - Optional directory handle for webaccess backends.
@@ -86,30 +62,6 @@ export class ProviderRegistry {
   }
 
   /**
-   * Switch the active backend, disposing the previous provider and
-   * invalidating any standalone provider for that backend.
-   *
-   * @param backend - New active backend.
-   * @param handle - Optional directory handle for webaccess backends.
-   */
-  public async switchActiveProvider(backend: FileSystemBackend, handle?: FileSystemDirectoryHandle): Promise<void> {
-    if (handle) {
-      this._directoryHandle = handle;
-    }
-
-    this.invalidateStandaloneProvider(backend);
-
-    const existingProvider = this._providers.get(backend);
-    if (existingProvider) {
-      existingProvider.dispose();
-      this._providers.delete(backend);
-    }
-
-    this._activeBackend = backend;
-    await this.getProvider(backend);
-  }
-
-  /**
    * Dispose and remove cached standalone providers for a backend.
    *
    * @param backend - Backend whose standalone providers to invalidate.
@@ -129,6 +81,22 @@ export class ProviderRegistry {
   }
 
   /**
+   * Create a fresh provider instance for use as a mount target.
+   * Does not cache the instance. The caller owns the provider's lifecycle
+   * and must dispose it.
+   *
+   * @param backend - Backend type to create.
+   * @param handle - Optional directory handle for webaccess backends.
+   * @returns A new, uncached provider instance.
+   */
+  public async createMountProvider(
+    backend: FileSystemBackend,
+    handle?: FileSystemDirectoryHandle,
+  ): Promise<FileSystemProvider> {
+    return this._createProvider(backend, handle);
+  }
+
+  /**
    * Set the directory handle for webaccess backends.
    *
    * @param handle - Browser File System Access API directory handle.
@@ -138,22 +106,8 @@ export class ProviderRegistry {
     this.invalidateStandaloneProvider('webaccess');
   }
 
-  /**
-   * The currently active storage backend.
-   *
-   * @returns Active backend key.
-   */
-  public get activeBackend(): FileSystemBackend {
-    return this._activeBackend;
-  }
-
-  /** Dispose all cached providers (active and standalone). */
+  /** Dispose all cached standalone providers. */
   public disposeAll(): void {
-    for (const provider of this._providers.values()) {
-      provider.dispose();
-    }
-    this._providers.clear();
-
     for (const provider of this._standaloneProviders.values()) {
       provider.dispose();
     }

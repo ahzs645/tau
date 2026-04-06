@@ -13,7 +13,14 @@
 
 import { describe, it, expect, afterEach } from 'vitest';
 // eslint-disable-next-line @nx/enforce-module-boundaries -- test file; not part of lazy-loaded bundle
-import { ProviderRegistry, ResourceQueue, DirectoryTreeCache, ChangeEventBus, FileService } from '@taucad/filesystem';
+import {
+  ProviderRegistry,
+  ResourceQueue,
+  DirectoryTreeCache,
+  ChangeEventBus,
+  FileService,
+  MountTable,
+} from '@taucad/filesystem';
 import { createBridgeServer, createBridgeProxy } from '@taucad/runtime/filesystem';
 import { createRuntimeClient } from '@taucad/runtime';
 import type { RuntimeClient } from '@taucad/runtime';
@@ -45,10 +52,9 @@ export default function main(p = defaultParams): Shape3D {
 
 async function createFileService(): Promise<FileService> {
   const providerRegistry = new ProviderRegistry();
-  // Switch to memory BEFORE constructing FileService, since the constructor
-  // eagerly calls _syncCaseSensitivity → getActiveProvider(). The default
-  // backend is 'indexeddb' which requires IDBFactory (browser-only).
-  await providerRegistry.switchActiveProvider('memory');
+  const provider = await providerRegistry.createMountProvider('memory');
+  const mountTable = new MountTable();
+  mountTable.mount('/', provider, { backend: 'memory' });
 
   const resourceQueue = new ResourceQueue();
   const treeCache = new DirectoryTreeCache();
@@ -59,6 +65,7 @@ async function createFileService(): Promise<FileService> {
     resourceQueue,
     treeCache,
     eventBus,
+    mountTable,
   });
 }
 

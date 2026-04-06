@@ -44,4 +44,4 @@ export { SharedContentPool } from '#shared-content-pool.js';
 export type { SharedContentPoolOptions } from '#shared-content-pool.js';
 
 export { MountTable } from '#mount-table.js';
-export type { MountEntry, MountResolution } from '#mount-table.js';
+export type { MountConfig, MountEntry, MountOptions, MountResolution } from '#mount-table.js';

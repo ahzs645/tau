@@ -1,4 +1,4 @@
-import type { FileEntry, FileStatEntry, FileSystemBackend, FileStat } from '@taucad/types';
+import type { ChangeEvent, FileEntry, FileStatEntry, FileSystemBackend, FileStat } from '@taucad/types';
 import type { FileManagerProxy } from '#machines/file-manager.machine.types.js';
 import type { FileTreeNode } from '@taucad/filesystem';
 import type { FileContentService, ContentChangeEvent } from '#lib/file-content-service.js';
@@ -42,6 +42,7 @@ export class FileTreeService {
   private _refreshAbortController: AbortController | undefined;
   private _cachedCompleteTree: FileItem[] | undefined;
   private _completeTreeVersion = 0;
+  private readonly _resolvedDirectories = new Set<string>();
 
   public constructor(init: FileTreeServiceInit) {
     this.proxy = init.proxy;
@@ -52,6 +53,7 @@ export class FileTreeService {
       for (const entry of init.initialEntries) {
         this._tree.set(entry.path, entry);
       }
+      this._resolvedDirectories.add('');
     }
   }
 
@@ -401,8 +403,22 @@ export class FileTreeService {
 
   // === Worker Push Events ===
 
-  public handleWorkerFileChanged(_event: unknown): void {
-    this.scheduleRefresh('');
+  public handleWorkerFileChanged(event: ChangeEvent): void {
+    const absolutePath = this.extractPathFromEvent(event);
+    if (!absolutePath) {
+      this.scheduleRefresh('');
+      return;
+    }
+
+    const rootPrefix = this.rootDirectory.endsWith('/') ? this.rootDirectory : `${this.rootDirectory}/`;
+
+    if (!absolutePath.startsWith(rootPrefix) && absolutePath !== this.rootDirectory) {
+      return;
+    }
+
+    const relativePath = absolutePath.startsWith(rootPrefix) ? absolutePath.slice(rootPrefix.length) : '';
+
+    this.scheduleRefreshForParent(relativePath);
   }
 
   // === Tree Subscriptions (useSyncExternalStore) ===
@@ -425,6 +441,7 @@ export class FileTreeService {
       this.refreshTimer = undefined;
     }
     this.pendingRefreshPath = '';
+    this._resolvedDirectories.clear();
 
     const newTree = new Map<string, FileEntry>();
     if (initialEntries) {
@@ -455,17 +472,7 @@ export class FileTreeService {
    * Check whether a directory's children have been loaded into the tree.
    */
   public hasChildrenLoaded(path: string): boolean {
-    const prefix = path === '' ? '' : path.endsWith('/') ? path : `${path}/`;
-    for (const key of this._tree.keys()) {
-      if (prefix === '') {
-        if (!key.includes('/')) {
-          return true;
-        }
-      } else if (key.startsWith(prefix) && !key.slice(prefix.length).includes('/')) {
-        return true;
-      }
-    }
-    return false;
+    return this._resolvedDirectories.has(path);
   }
 
   public dispose(): void {
@@ -479,6 +486,23 @@ export class FileTreeService {
       this.refreshTimer = undefined;
     }
     this.treeSubscribers.clear();
+    this._resolvedDirectories.clear();
+  }
+
+  private extractPathFromEvent(event: ChangeEvent): string | undefined {
+    switch (event.type) {
+      case 'fileWritten':
+      case 'fileDeleted':
+      case 'directoryChanged': {
+        return event.path;
+      }
+      case 'fileRenamed': {
+        return event.newPath;
+      }
+      case 'backendChanged': {
+        return undefined;
+      }
+    }
   }
 
   private notifyTreeSubscribers(): void {
@@ -520,7 +544,6 @@ export class FileTreeService {
         break;
       }
       case 'read': {
-        this.optimisticAdd(event.path, event.data.byteLength);
         break;
       }
     }
@@ -616,6 +639,7 @@ export class FileTreeService {
     }
 
     this._tree = newTree;
+    this._resolvedDirectories.add(path);
     this.notifyTreeSubscribers();
   }
 }

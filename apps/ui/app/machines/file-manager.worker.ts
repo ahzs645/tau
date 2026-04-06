@@ -7,7 +7,7 @@
  * ResourceQueue (VS Code pattern); writes to different files run in parallel.
  */
 
-import { exposeFileSystem } from '@taucad/runtime/filesystem';
+import { exposeFileSystem, workerReadyMessageType } from '@taucad/runtime/filesystem';
 // eslint-disable-next-line @nx/enforce-module-boundaries -- worker entry point; inherently lazy-loaded
 import {
   ProviderRegistry,
@@ -36,7 +36,7 @@ async function createNodeModulesMount(): Promise<void> {
     const opfsRoot = await navigator.storage.getDirectory();
     const nodeModulesHandle = await opfsRoot.getDirectoryHandle('tau-node-modules', { create: true });
     const nodeModulesProvider = new FileSystemAccessProvider(nodeModulesHandle);
-    mountTable.mount('/node_modules', nodeModulesProvider);
+    mountTable.mount('/node_modules', nodeModulesProvider, { backend: 'opfs' });
     console.debug('[FM-Worker] /node_modules mounted on OPFS');
   } catch (error) {
     console.warn('[FM-Worker] Failed to mount OPFS /node_modules, falling through to root', error);
@@ -54,6 +54,7 @@ const fileService = new FileService({
 const t0 = performance.now();
 console.debug(`[FM-Worker] module evaluated in ${t0.toFixed(1)}ms`);
 
+await fileService.mount('/', 'indexeddb');
 await createNodeModulesMount();
 
 exposeFileSystem(fileService, {
@@ -70,4 +71,4 @@ exposeFileSystem(fileService, {
 });
 
 console.debug(`[FM-Worker] exposeFileSystem registered at +${(performance.now() - t0).toFixed(1)}ms`);
-self.postMessage({ type: '__worker_ready__' });
+self.postMessage({ type: workerReadyMessageType });

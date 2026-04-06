@@ -7,6 +7,7 @@ import { ProviderRegistry } from '#provider-registry.js';
 import { ResourceQueue } from '#resource-queue.js';
 import { DirectoryTreeCache } from '#directory-tree-cache.js';
 import { ChangeEventBus } from '#change-event-bus.js';
+import { MountTable } from '#mount-table.js';
 import type { ChangeEvent, FileSystemProvider, WatchEvent } from '#types.js';
 
 const encoder = new TextEncoder();
@@ -14,7 +15,10 @@ const decoder = new TextDecoder();
 
 async function createFileService() {
   const providerRegistry = new ProviderRegistry();
-  await providerRegistry.switchActiveProvider('memory');
+  const provider = await providerRegistry.createMountProvider('memory');
+
+  const mountTable = new MountTable();
+  mountTable.mount('/', provider, { backend: 'memory' });
 
   const resourceQueue = new ResourceQueue();
   const treeCache = new DirectoryTreeCache();
@@ -25,21 +29,24 @@ async function createFileService() {
     resourceQueue,
     treeCache,
     eventBus,
+    mountTable,
   });
 
-  return { service, eventBus, treeCache, providerRegistry, resourceQueue };
+  return { service, eventBus, treeCache, providerRegistry, resourceQueue, mountTable, provider };
 }
 
 describe('FileService', () => {
   let service: FileService;
   let eventBus: ChangeEventBus;
   let providerRegistry: ProviderRegistry;
+  let rootProvider: FileSystemProvider;
 
   beforeEach(async () => {
     const context = await createFileService();
     service = context.service;
     eventBus = context.eventBus;
     providerRegistry = context.providerRegistry;
+    rootProvider = context.provider;
   });
 
   // ---------------------------------------------------------------------------
@@ -327,6 +334,36 @@ describe('FileService', () => {
     it('should throw when creating nested directory without recursive', async () => {
       await expect(service.mkdir('/x/y/z')).rejects.toThrow();
     });
+
+    it('should invalidate ancestor tree caches on recursive mkdir', async () => {
+      await service.writeFile('/root/existing.txt', 'x');
+      const beforeMkdir = await service.readDirectory('/root');
+      expect(beforeMkdir.map((n) => n.name)).toEqual(['existing.txt']);
+
+      await service.mkdir('/root/deep/nested', { recursive: true });
+
+      const afterMkdir = await service.readDirectory('/root');
+      const names = afterMkdir.map((n) => n.name);
+      expect(names).toContain('existing.txt');
+      expect(names).toContain('deep');
+    });
+
+    it('should only invalidate immediate parent for non-recursive mkdir', async () => {
+      await service.mkdir('/other', { recursive: true });
+      await service.writeFile('/other/file.txt', 'y');
+      await service.readDirectory('/other');
+
+      await service.writeFile('/root/file.txt', 'x');
+      await service.readDirectory('/root');
+
+      await service.mkdir('/root/child');
+
+      const rootEntries = await service.readDirectory('/root');
+      expect(rootEntries.map((n) => n.name)).toContain('child');
+
+      const otherEntries = await service.readDirectory('/other');
+      expect(otherEntries.map((n) => n.name)).toContain('file.txt');
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -518,8 +555,7 @@ describe('FileService', () => {
       await service.writeFile('/rws/file.txt', 'content');
       await service.mkdir('/rws/dir');
 
-      const provider = await providerRegistry.getActiveProvider();
-      expect(provider.readdirWithStats).toBeDefined();
+      expect(rootProvider.readdirWithStats).toBeDefined();
 
       const nodes = await service.readDirectory('/rws');
       expect(nodes).toHaveLength(2);
@@ -527,6 +563,26 @@ describe('FileService', () => {
       const file = nodes.find((n) => n.name === 'file.txt');
       expect(directory!.children).toEqual([]);
       expect(file!.children).toBeUndefined();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // recursive mkdir + readDirectory cache coherence
+  // ---------------------------------------------------------------------------
+
+  describe('recursive mkdir + readDirectory cache coherence', () => {
+    it('should show new subdirectories in readDirectory after recursive mkdir', async () => {
+      await service.writeFile('/project/.tau/parameters.json', '{}');
+      const before = await service.readDirectory('/project/.tau');
+      expect(before.map((n) => n.name)).toEqual(['parameters.json']);
+
+      await service.mkdir('/project/.tau/cache/params', { recursive: true });
+      await service.writeFile('/project/.tau/cache/params/hash.json', '{"key":"value"}');
+
+      const after = await service.readDirectory('/project/.tau');
+      const names = after.map((n) => n.name);
+      expect(names).toContain('parameters.json');
+      expect(names).toContain('cache');
     });
   });
 
@@ -901,22 +957,6 @@ describe('FileService', () => {
     });
   });
 
-  describe('reconfigure', () => {
-    it('should switch backend and clear tree cache', async () => {
-      await service.writeFile('/cached.txt', 'data');
-      await service.readDirectory('/');
-
-      const events: ChangeEvent[] = [];
-      eventBus.subscribe((event) => {
-        events.push(event);
-      });
-
-      await service.reconfigure('memory');
-
-      expect(events.some((event) => event.type === 'backendChanged')).toBe(true);
-    });
-  });
-
   describe('eventBus getter', () => {
     it('should return the event bus instance', () => {
       expect(service.eventBus).toBe(eventBus);
@@ -925,10 +965,9 @@ describe('FileService', () => {
 
   describe('_ensurePath error propagation', () => {
     it('should propagate non-EEXIST errors during nested writes', async () => {
-      const provider = await providerRegistry.getActiveProvider();
-      const origMkdir = provider.mkdir.bind(provider);
+      const origMkdir = rootProvider.mkdir.bind(rootProvider);
       let callCount = 0;
-      provider.mkdir = async (path: string) => {
+      rootProvider.mkdir = async (path: string) => {
         callCount++;
         if (callCount === 2) {
           const error = new Error('disk full') as NodeJS.ErrnoException;
@@ -1017,19 +1056,6 @@ describe('FileService', () => {
       expect(paths).toEqual(['dst.txt', 'src.txt']);
     });
 
-    it('should clear in-memory tree on reconfigure', async () => {
-      await service.writeFile('/root/a.txt', 'a');
-      await service.getDirectoryStat('/root');
-
-      await service.reconfigure('memory');
-
-      await service.writeFile('/other/b.txt', 'b');
-      const stats = await service.getDirectoryStat('/other');
-      const paths = stats.map((s) => s.path);
-      expect(paths).toEqual(['b.txt']);
-      expect(paths).not.toContain('a.txt');
-    });
-
     it('should reflect copyDirectory in subsequent getDirectoryStat', async () => {
       await service.writeFile('/root/src/a.txt', 'aaa');
       await service.writeFile('/root/src/sub/b.txt', 'bb');
@@ -1080,7 +1106,10 @@ describe('FileService integration [DirectIDB]', () => {
     const providerRegistry = new ProviderRegistry({
       databasePrefix: `test-integration-${Date.now()}`,
     });
-    await providerRegistry.switchActiveProvider('indexeddb');
+    const provider = await providerRegistry.createMountProvider('indexeddb');
+
+    const mountTable = new MountTable();
+    mountTable.mount('/', provider, { backend: 'indexeddb' });
 
     const resourceQueue = new ResourceQueue();
     const treeCache = new DirectoryTreeCache();
@@ -1091,6 +1120,7 @@ describe('FileService integration [DirectIDB]', () => {
       resourceQueue,
       treeCache,
       eventBus,
+      mountTable,
     });
   });
 
@@ -1125,13 +1155,16 @@ describe('FileService integration [DirectIDB]', () => {
     const providerRegistry = new ProviderRegistry({
       databasePrefix: `test-events-${Date.now()}`,
     });
-    await providerRegistry.switchActiveProvider('indexeddb');
+    const provider = await providerRegistry.createMountProvider('indexeddb');
+    const mountTable = new MountTable();
+    mountTable.mount('/', provider, { backend: 'indexeddb' });
 
     const eventService = new FileService({
       providerRegistry,
       resourceQueue: new ResourceQueue(),
       treeCache: new DirectoryTreeCache(),
       eventBus,
+      mountTable,
     });
 
     eventBus.subscribe((event) => events.push(event));
@@ -1196,7 +1229,9 @@ describe('FileService integration [DirectIDB]', () => {
       const pool = new SharedContentPool(buffer, { maxEntries: 128 });
 
       const providerRegistry = new ProviderRegistry();
-      await providerRegistry.switchActiveProvider('memory');
+      const provider = await providerRegistry.createMountProvider('memory');
+      const mountTable = new MountTable();
+      mountTable.mount('/', provider, { backend: 'memory' });
 
       const resourceQueue = new ResourceQueue();
       const treeCache = new DirectoryTreeCache();
@@ -1208,6 +1243,7 @@ describe('FileService integration [DirectIDB]', () => {
         treeCache,
         eventBus,
         contentPool: pool,
+        mountTable,
       });
 
       return { service: svc, pool, eventBus };
@@ -1261,6 +1297,130 @@ describe('FileService integration [DirectIDB]', () => {
 
       const content = await svc.readFile('/no-pool.txt', 'utf8');
       expect(content).toBe('data');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // getZippedDirectory
+  // ---------------------------------------------------------------------------
+
+  describe('getZippedDirectory', () => {
+    it('should return a Blob containing the directory files as a zip', async () => {
+      await service.writeFile('/ziptest/a.txt', 'hello');
+      await service.writeFile('/ziptest/b.txt', 'world');
+
+      const blob = await service.getZippedDirectory('/ziptest');
+
+      expect(blob).toBeInstanceOf(Blob);
+      expect(blob.size).toBeGreaterThan(0);
+    });
+
+    it('should include files with correct relative paths in the zip', async () => {
+      await service.writeFile('/ziptest/sub/nested.txt', 'nested content');
+      await service.writeFile('/ziptest/root.txt', 'root content');
+
+      const blob = await service.getZippedDirectory('/ziptest');
+      const JSZip = (await import('jszip')).default;
+      const zip = await JSZip.loadAsync(await blob.arrayBuffer());
+
+      const paths = Object.keys(zip.files).sort();
+      expect(paths).toContain('root.txt');
+      expect(paths).toContain('sub/nested.txt');
+
+      const rootContent = await zip.files['root.txt']!.async('string');
+      expect(rootContent).toBe('root content');
+
+      const nestedContent = await zip.files['sub/nested.txt']!.async('string');
+      expect(nestedContent).toBe('nested content');
+    });
+
+    it('should handle empty directories', async () => {
+      await service.mkdir('/emptydir', { recursive: true });
+
+      const blob = await service.getZippedDirectory('/emptydir');
+
+      expect(blob).toBeInstanceOf(Blob);
+      expect(blob.size).toBeGreaterThan(0);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // mount / unmount (dynamic mount routing)
+  // ---------------------------------------------------------------------------
+
+  describe('mount / unmount', () => {
+    let mountedService: FileService;
+    let mountedEventBus: ChangeEventBus;
+    let mountedRegistry: ProviderRegistry;
+
+    beforeEach(async () => {
+      mountedRegistry = new ProviderRegistry();
+      const rootProvider = await mountedRegistry.createMountProvider('memory');
+
+      const mountTable = new MountTable();
+      mountTable.mount('/', rootProvider, { backend: 'memory' });
+      mountedEventBus = new ChangeEventBus();
+
+      mountedService = new FileService({
+        providerRegistry: mountedRegistry,
+        resourceQueue: new ResourceQueue(),
+        treeCache: new DirectoryTreeCache(),
+        eventBus: mountedEventBus,
+        mountTable,
+      });
+    });
+
+    it('should mount a path prefix on the specified backend', async () => {
+      await mountedService.mount('/data', 'memory');
+      await mountedService.writeFile('/data/test.txt', 'hello');
+      const content = await mountedService.readFile('/data/test.txt', 'utf8');
+      expect(content).toBe('hello');
+    });
+
+    it('should unmount a path prefix and dispose the provider', async () => {
+      await mountedService.mount('/ephemeral', 'memory', { preservePath: true });
+      await mountedService.writeFile('/ephemeral/file.txt', 'temp');
+      expect(await mountedService.exists('/ephemeral/file.txt')).toBe(true);
+
+      mountedService.unmount('/ephemeral');
+      expect(await mountedService.exists('/ephemeral/file.txt')).toBe(false);
+    });
+
+    it('should route writes to the mounted provider and not the root', async () => {
+      await mountedService.mount('/isolated', 'memory');
+      await mountedService.writeFile('/isolated/secret.txt', 'data');
+
+      const rootEntries = await mountedService.readdir('/');
+      expect(rootEntries).not.toContain('secret.txt');
+    });
+
+    it('should handle unmount of non-existent prefix gracefully', () => {
+      expect(() => {
+        mountedService.unmount('/nonexistent');
+      }).not.toThrow();
+    });
+
+    it('should support multiple simultaneous mounts', async () => {
+      await mountedService.mount('/a', 'memory');
+      await mountedService.mount('/b', 'memory');
+
+      await mountedService.writeFile('/a/x.txt', 'A');
+      await mountedService.writeFile('/b/y.txt', 'B');
+
+      expect(await mountedService.readFile('/a/x.txt', 'utf8')).toBe('A');
+      expect(await mountedService.readFile('/b/y.txt', 'utf8')).toBe('B');
+      expect(await mountedService.exists('/b/x.txt')).toBe(false);
+    });
+
+    it('should pass preservePath option through to mount table', async () => {
+      await mountedService.mount('/projects/abc', 'memory', { preservePath: true });
+      await mountedService.writeFile('/projects/abc/main.ts', 'code');
+
+      const content = await mountedService.readFile('/projects/abc/main.ts', 'utf8');
+      expect(content).toBe('code');
+
+      const entries = await mountedService.readdir('/projects/abc');
+      expect(entries).toContain('main.ts');
     });
   });
 });

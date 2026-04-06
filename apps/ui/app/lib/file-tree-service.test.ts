@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { FileTreeService } from '#lib/file-tree-service.js';
 import { FileContentService } from '#lib/file-content-service.js';
 import type { FileManagerProxy } from '#machines/file-manager.machine.types.js';
-import type { FileEntry, FileStatEntry } from '@taucad/types';
+import type { ChangeEvent, FileEntry, FileStatEntry } from '@taucad/types';
 import type { FileTreeNode } from '@taucad/filesystem';
 
 function createMockProxy(overrides?: Partial<FileManagerProxy>): FileManagerProxy {
@@ -190,20 +190,166 @@ describe('FileTreeService', () => {
   // ── R7: hasChildrenLoaded (F5) ──
 
   describe('hasChildrenLoaded', () => {
-    it('should return false for root when only deep nested entries exist', () => {
-      const deepService = new FileTreeService({
+    it('should return false for root when no initialEntries are provided', () => {
+      const emptyService = new FileTreeService({
         proxy: createMockProxy(),
         rootDirectory: '/project',
-        initialEntries: [createEntry('src/utils/helpers/math.ts')],
       });
 
-      expect(deepService.hasChildrenLoaded('')).toBe(false);
+      expect(emptyService.hasChildrenLoaded('')).toBe(false);
 
-      deepService.dispose();
+      emptyService.dispose();
     });
 
     it('should return true for root when direct root children exist', () => {
       expect(service.hasChildrenLoaded('')).toBe(true);
+    });
+  });
+
+  // ── Directory resolution tracking (VS Code _isDirectoryResolved pattern) ──
+
+  describe('directory resolution tracking', () => {
+    it('should return false from hasChildrenLoaded for directory not yet loaded via loadDirectory', () => {
+      const localService = new FileTreeService({
+        proxy: createMockProxy(),
+        rootDirectory: '/project',
+        initialEntries: [createEntry('.tau', 'dir'), createEntry('main.ts')],
+      });
+
+      expect(localService.hasChildrenLoaded('.tau')).toBe(false);
+
+      localService.dispose();
+    });
+
+    it('should return true from hasChildrenLoaded after loadDirectory resolves', async () => {
+      vi.useRealTimers();
+      const localProxy = createMockProxy({
+        readDirectory: vi.fn().mockResolvedValue([{ name: 'parameters.json' }, { name: 'cache', children: [] }]),
+      });
+      const localService = new FileTreeService({
+        proxy: localProxy,
+        rootDirectory: '/project',
+        initialEntries: [createEntry('.tau', 'dir')],
+      });
+
+      await localService.loadDirectory('.tau');
+
+      expect(localService.hasChildrenLoaded('.tau')).toBe(true);
+      expect(localService.getTreeSnapshot().has('.tau/parameters.json')).toBe(true);
+      expect(localService.getTreeSnapshot().has('.tau/cache')).toBe(true);
+
+      localService.dispose();
+      vi.useFakeTimers();
+    });
+
+    it('should return false from hasChildrenLoaded after reset clears resolution state', async () => {
+      vi.useRealTimers();
+      const localProxy = createMockProxy({
+        readDirectory: vi.fn().mockResolvedValue([{ name: 'parameters.json' }]),
+      });
+      const localService = new FileTreeService({
+        proxy: localProxy,
+        rootDirectory: '/project',
+        initialEntries: [createEntry('.tau', 'dir')],
+      });
+
+      await localService.loadDirectory('.tau');
+      expect(localService.hasChildrenLoaded('.tau')).toBe(true);
+
+      localService.reset('/project', [createEntry('.tau', 'dir')]);
+
+      expect(localService.hasChildrenLoaded('.tau')).toBe(false);
+
+      localService.dispose();
+      vi.useFakeTimers();
+    });
+
+    it('should not mark directory as resolved from optimistic content read events', async () => {
+      vi.useRealTimers();
+      const localProxy = createMockProxy({
+        readFile: vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3])),
+        readDirectory: vi
+          .fn()
+          .mockResolvedValue([
+            { name: 'parameters.json' },
+            { name: 'cache', children: [] },
+            { name: 'artifacts', children: [] },
+          ]),
+      });
+      const localService = new FileTreeService({
+        proxy: localProxy,
+        rootDirectory: '/project',
+        initialEntries: [createEntry('.tau', 'dir')],
+      });
+      const contentService = new FileContentService({ proxy: localProxy, rootDirectory: '/project' });
+      localService.connectToContentService(contentService);
+
+      await contentService.resolve('.tau/parameters.json');
+
+      expect(localService.hasChildrenLoaded('.tau')).toBe(false);
+
+      await localService.loadDirectory('.tau');
+
+      expect(localService.hasChildrenLoaded('.tau')).toBe(true);
+      expect(localService.getTreeSnapshot().has('.tau/parameters.json')).toBe(true);
+      expect(localService.getTreeSnapshot().has('.tau/cache')).toBe(true);
+      expect(localService.getTreeSnapshot().has('.tau/artifacts')).toBe(true);
+
+      contentService.dispose();
+      localService.dispose();
+      vi.useFakeTimers();
+    });
+
+    it('should not mark directory as resolved from optimistic content write events', async () => {
+      vi.useRealTimers();
+      const localProxy = createMockProxy({
+        readDirectory: vi.fn().mockResolvedValue([{ name: 'parameters.json' }, { name: 'cache', children: [] }]),
+      });
+      const localService = new FileTreeService({
+        proxy: localProxy,
+        rootDirectory: '/project',
+        initialEntries: [createEntry('.tau', 'dir')],
+      });
+      const contentService = new FileContentService({ proxy: localProxy, rootDirectory: '/project' });
+      localService.connectToContentService(contentService);
+
+      vi.mocked(localProxy.writeFile).mockResolvedValue(undefined);
+      await contentService.write('.tau/parameters.json', new Uint8Array([1, 2, 3]), 'machine');
+
+      expect(localService.getTreeSnapshot().has('.tau/parameters.json')).toBe(true);
+      expect(localService.hasChildrenLoaded('.tau')).toBe(false);
+
+      await localService.loadDirectory('.tau');
+
+      expect(localService.hasChildrenLoaded('.tau')).toBe(true);
+      expect(localService.getTreeSnapshot().has('.tau/cache')).toBe(true);
+
+      contentService.dispose();
+      localService.dispose();
+      vi.useFakeTimers();
+    });
+
+    it('should mark directory as resolved after executeRefresh patches entries', async () => {
+      const localProxy = createMockProxy({
+        readDirectory: vi.fn().mockResolvedValue([{ name: 'parameters.json' }, { name: 'cache', children: [] }]),
+      });
+      const localService = new FileTreeService({
+        proxy: localProxy,
+        rootDirectory: '/project',
+        initialEntries: [createEntry('.tau', 'dir')],
+        debounceMs: 10,
+      });
+
+      expect(localService.hasChildrenLoaded('.tau')).toBe(false);
+
+      localService.scheduleRefresh('.tau');
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(localService.hasChildrenLoaded('.tau')).toBe(true);
+      expect(localService.getTreeSnapshot().has('.tau/parameters.json')).toBe(true);
+      expect(localService.getTreeSnapshot().has('.tau/cache')).toBe(true);
+
+      localService.dispose();
     });
   });
 
@@ -343,10 +489,10 @@ describe('FileTreeService', () => {
     });
   });
 
-  // ── R8: handleContentChange 'read' enrichment (F1, F6, F7) ──
+  // ── R8: handleContentChange 'read' events (F1, F6, F7) ──
 
-  describe('content read enrichment', () => {
-    it('should add file to tree when content service emits a read event', async () => {
+  describe('content read events', () => {
+    it('should not add file to tree when content service emits a read event', async () => {
       const contentProxy = createMockProxy();
       const contentService = new FileContentService({ proxy: contentProxy, rootDirectory: '/project' });
       service.connectToContentService(contentService);
@@ -356,10 +502,7 @@ describe('FileTreeService', () => {
       vi.mocked(contentProxy.readFile).mockResolvedValue(new Uint8Array([1, 2, 3, 4, 5]));
       await contentService.resolve('newfile.ts');
 
-      expect(service.getTreeSnapshot().has('newfile.ts')).toBe(true);
-      const entry = service.getTreeSnapshot().get('newfile.ts');
-      expect(entry?.type).toBe('file');
-      expect(entry?.size).toBe(5);
+      expect(service.getTreeSnapshot().has('newfile.ts')).toBe(false);
 
       contentService.dispose();
     });
@@ -548,6 +691,95 @@ describe('FileTreeService', () => {
       expect(results[0]!.path).toBe('a.ts');
 
       searchService.dispose();
+    });
+  });
+
+  // === handleWorkerFileChanged ===
+
+  describe('handleWorkerFileChanged', () => {
+    it('should refresh parent directory when receiving fileWritten event', async () => {
+      const event: ChangeEvent = {
+        type: 'fileWritten',
+        path: '/project/.tau/cache/params.json',
+        backend: 'indexeddb',
+      };
+
+      service.handleWorkerFileChanged(event);
+      await vi.advanceTimersByTimeAsync(200);
+
+      expect(proxy.readDirectory).toHaveBeenCalledWith('/project/.tau/cache');
+    });
+
+    it('should refresh parent of newPath when receiving fileRenamed event', async () => {
+      const event: ChangeEvent = {
+        type: 'fileRenamed',
+        oldPath: '/project/old.ts',
+        newPath: '/project/lib/new.ts',
+        backend: 'indexeddb',
+      };
+
+      service.handleWorkerFileChanged(event);
+      await vi.advanceTimersByTimeAsync(200);
+
+      expect(proxy.readDirectory).toHaveBeenCalledWith('/project/lib');
+    });
+
+    it('should fall back to root refresh for backendChanged events', async () => {
+      const event: ChangeEvent = {
+        type: 'backendChanged',
+        backend: 'opfs',
+      };
+
+      service.handleWorkerFileChanged(event);
+      await vi.advanceTimersByTimeAsync(200);
+
+      expect(proxy.readDirectory).toHaveBeenCalledWith('/project');
+    });
+
+    it('should ignore events outside rootDirectory scope', async () => {
+      const event: ChangeEvent = {
+        type: 'fileWritten',
+        path: '/other-project/file.ts',
+        backend: 'indexeddb',
+      };
+
+      service.handleWorkerFileChanged(event);
+      await vi.advanceTimersByTimeAsync(200);
+
+      expect(proxy.readDirectory).not.toHaveBeenCalled();
+    });
+
+    it('should refresh parent directory when receiving directoryChanged event', async () => {
+      const event: ChangeEvent = {
+        type: 'directoryChanged',
+        path: '/project/.tau/cache',
+        backend: 'indexeddb',
+      };
+
+      service.handleWorkerFileChanged(event);
+      await vi.advanceTimersByTimeAsync(200);
+
+      expect(proxy.readDirectory).toHaveBeenCalledWith('/project/.tau');
+    });
+
+    it('should coalesce rapid worker events to common ancestor', async () => {
+      const event1: ChangeEvent = {
+        type: 'fileWritten',
+        path: '/project/.tau/cache/a.json',
+        backend: 'indexeddb',
+      };
+      const event2: ChangeEvent = {
+        type: 'fileWritten',
+        path: '/project/.tau/artifacts/b.json',
+        backend: 'indexeddb',
+      };
+
+      service.handleWorkerFileChanged(event1);
+      service.handleWorkerFileChanged(event2);
+      await vi.advanceTimersByTimeAsync(200);
+
+      expect(proxy.readDirectory).toHaveBeenCalledOnce();
+      expect(proxy.readDirectory).toHaveBeenCalledWith('/project/.tau');
     });
   });
 });

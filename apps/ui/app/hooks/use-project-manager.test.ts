@@ -7,14 +7,16 @@ import type { Project } from '@taucad/types';
 // ── Mock fns ──────────────────────────────────────────────────────────────────
 
 const mockWriteFiles = vi.fn<(files: Record<string, { content: Uint8Array<ArrayBuffer> }>) => Promise<void>>();
-const mockReconfigureBackend = vi.fn<(backend: string) => Promise<void>>();
+const mockMount = vi.fn<(prefix: string, backend: string, options?: unknown) => Promise<void>>();
+const mockUnmount = vi.fn<(prefix: string) => void>();
 let mockBackendType = 'indexeddb';
 
 vi.mock('#hooks/use-file-manager.js', () => ({
   useFileManager: () => ({
     backendType: mockBackendType,
     writeFiles: mockWriteFiles,
-    reconfigureBackend: mockReconfigureBackend,
+    mount: mockMount,
+    unmount: mockUnmount,
     copyDirectory: vi.fn(),
     fileManagerRef: { getSnapshot: () => ({ matches: () => true }) },
   }),
@@ -147,37 +149,38 @@ describe('useProjectManager', () => {
     vi.clearAllMocks();
     mockBackendType = 'indexeddb';
     mockWriteFiles.mockResolvedValue(undefined);
-    mockReconfigureBackend.mockResolvedValue(undefined);
+    mockMount.mockResolvedValue(undefined);
+    mockUnmount.mockReturnValue(undefined);
     mockSetBuildFileSystemConfig.mockResolvedValue(undefined);
     mockGetStoredDirectoryHandle.mockResolvedValue(undefined);
   });
 
-  describe('createProject backend wiring', () => {
-    it('should not reconfigure when resolved backend matches current backend', async () => {
-      mockBackendType = 'indexeddb';
-
+  describe('createProject mount-based backend wiring', () => {
+    it('should call mount with resolvedBackend and project prefix', async () => {
       const { result } = renderHook(() => useProjectManager(), { wrapper: createWrapper() });
 
       await act(async () => {
         await result.current.createProject({
           project: stubProjectData,
           files: makeFiles({ [mainFile]: [1] }),
+          backend: 'opfs',
         });
       });
 
-      expect(mockReconfigureBackend).not.toHaveBeenCalled();
-      expect(mockWriteFiles).toHaveBeenCalledOnce();
+      expect(mockMount).toHaveBeenCalledWith(`/projects/${fakeProject.id}`, 'opfs', { preservePath: true });
     });
 
-    it('should reconfigure to opfs before writing and restore to indexeddb after', async () => {
-      mockBackendType = 'indexeddb';
+    it('should call unmount in finally block after writeFiles', async () => {
       const callOrder: string[] = [];
 
-      mockReconfigureBackend.mockImplementation(async (backend) => {
-        callOrder.push(`reconfigure:${backend}`);
+      mockMount.mockImplementation(async () => {
+        callOrder.push('mount');
       });
       mockWriteFiles.mockImplementation(async () => {
         callOrder.push('writeFiles');
+      });
+      mockUnmount.mockImplementation(() => {
+        callOrder.push('unmount');
       });
 
       const { result } = renderHook(() => useProjectManager(), { wrapper: createWrapper() });
@@ -190,11 +193,10 @@ describe('useProjectManager', () => {
         });
       });
 
-      expect(callOrder).toEqual(['reconfigure:opfs', 'writeFiles', 'reconfigure:indexeddb']);
+      expect(callOrder).toEqual(['mount', 'writeFiles', 'unmount']);
     });
 
-    it('should restore previous backend even when writeFiles throws', async () => {
-      mockBackendType = 'indexeddb';
+    it('should call unmount even when writeFiles throws', async () => {
       mockWriteFiles.mockRejectedValueOnce(new Error('write failed'));
 
       const { result } = renderHook(() => useProjectManager(), { wrapper: createWrapper() });
@@ -209,14 +211,25 @@ describe('useProjectManager', () => {
         }),
       ).rejects.toThrow('write failed');
 
-      expect(mockReconfigureBackend).toHaveBeenCalledWith('opfs');
-      expect(mockReconfigureBackend).toHaveBeenCalledWith('indexeddb');
-      expect(mockReconfigureBackend).toHaveBeenCalledTimes(2);
+      expect(mockMount).toHaveBeenCalledWith(`/projects/${fakeProject.id}`, 'opfs', { preservePath: true });
+      expect(mockUnmount).toHaveBeenCalledWith(`/projects/${fakeProject.id}`);
     });
 
-    it('should store the resolved backend in per-project config', async () => {
-      mockBackendType = 'indexeddb';
+    it('should use mount for backend wiring during project creation', async () => {
+      const { result } = renderHook(() => useProjectManager(), { wrapper: createWrapper() });
 
+      await act(async () => {
+        await result.current.createProject({
+          project: stubProjectData,
+          files: makeFiles({ [mainFile]: [1] }),
+          backend: 'opfs',
+        });
+      });
+
+      expect(mockMount).toHaveBeenCalledOnce();
+    });
+
+    it('should still call setBuildFileSystemConfig with resolvedBackend', async () => {
       const { result } = renderHook(() => useProjectManager(), { wrapper: createWrapper() });
 
       await act(async () => {
@@ -230,8 +243,23 @@ describe('useProjectManager', () => {
       expect(mockSetBuildFileSystemConfig).toHaveBeenCalledWith(fakeProject.id, 'opfs');
     });
 
-    it('should fall back to indexeddb when webaccess has no stored handle', async () => {
+    it('should mount with default indexeddb when no backend specified', async () => {
       mockBackendType = 'indexeddb';
+
+      const { result } = renderHook(() => useProjectManager(), { wrapper: createWrapper() });
+
+      await act(async () => {
+        await result.current.createProject({
+          project: stubProjectData,
+          files: makeFiles({ [mainFile]: [1] }),
+        });
+      });
+
+      expect(mockMount).toHaveBeenCalledWith(`/projects/${fakeProject.id}`, 'indexeddb', { preservePath: true });
+      expect(mockUnmount).toHaveBeenCalledWith(`/projects/${fakeProject.id}`);
+    });
+
+    it('should fall back to indexeddb when webaccess has no stored handle', async () => {
       mockGetStoredDirectoryHandle.mockResolvedValue(undefined);
 
       const { result } = renderHook(() => useProjectManager(), { wrapper: createWrapper() });
@@ -245,28 +273,10 @@ describe('useProjectManager', () => {
       });
 
       expect(mockSetBuildFileSystemConfig).toHaveBeenCalledWith(fakeProject.id, 'indexeddb');
-      expect(mockReconfigureBackend).not.toHaveBeenCalled();
-    });
-
-    it('should not reconfigure when already on the target backend', async () => {
-      mockBackendType = 'opfs';
-
-      const { result } = renderHook(() => useProjectManager(), { wrapper: createWrapper() });
-
-      await act(async () => {
-        await result.current.createProject({
-          project: stubProjectData,
-          files: makeFiles({ [mainFile]: [1] }),
-          backend: 'opfs',
-        });
-      });
-
-      expect(mockReconfigureBackend).not.toHaveBeenCalled();
-      expect(mockWriteFiles).toHaveBeenCalledOnce();
+      expect(mockMount).toHaveBeenCalledWith(`/projects/${fakeProject.id}`, 'indexeddb', { preservePath: true });
     });
 
     it('should write files with correct project paths', async () => {
-      mockBackendType = 'indexeddb';
       const sourceFile = 'src/main.ts';
       const packageFile = 'package.json';
 

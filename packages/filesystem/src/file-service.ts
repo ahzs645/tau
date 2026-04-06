@@ -16,7 +16,7 @@ import { WatchRegistry } from '#watch-registry.js';
 import { bufferToStream } from '#providers/stream-utils.js';
 import { CrossTabCoordinator } from '#cross-tab-coordinator.js';
 import type { SharedContentPool } from '#shared-content-pool.js';
-import type { MountTable, MountResolution } from '#mount-table.js';
+import type { MountTable, MountOptions, MountResolution } from '#mount-table.js';
 import { parentDirectory, joinPath, normalizePath } from '@taucad/utils/path';
 
 const kernelCoalescingWindowMs = 75;
@@ -51,7 +51,7 @@ export class FileService {
   private readonly _watchRegistry: WatchRegistry;
   private readonly _crossTabCoordinator: CrossTabCoordinator;
   private readonly _contentPool: SharedContentPool | undefined;
-  private readonly _mountTable: MountTable | undefined;
+  private readonly _mountTable: MountTable;
   private readonly _inMemoryTree = new InMemoryFileTree();
   /** Absolute path passed to the first {@link getDirectoryStat} that populated the tree; in-memory paths are relative to this root. */
   private _directoryStatRoot: string | undefined;
@@ -69,8 +69,8 @@ export class FileService {
     crossTabCoordinator?: CrossTabCoordinator;
     /** Writer-side shared content pool for zero-IPC cached reads across threads. */
     contentPool?: SharedContentPool;
-    /** Optional mount table for multi-backend routing. When omitted, all paths resolve via the active provider. */
-    mountTable?: MountTable;
+    /** Mount table for multi-backend path routing. */
+    mountTable: MountTable;
   }) {
     this._registry = options.providerRegistry;
     this._resourceQueue = options.resourceQueue;
@@ -80,7 +80,6 @@ export class FileService {
     this._crossTabCoordinator = options.crossTabCoordinator ?? new CrossTabCoordinator();
     this._contentPool = options.contentPool;
     this._mountTable = options.mountTable;
-    void this._syncCaseSensitivity();
   }
 
   // --- Read operations (direct to provider, no serialization) ---
@@ -101,7 +100,7 @@ export class FileService {
       throw new DOMException('The operation was aborted.', 'AbortError');
     }
 
-    const { provider, path: resolvedPath } = await this._resolveProvider(filepath);
+    const { provider, path: resolvedPath } = this._resolveProvider(filepath);
     const encoding =
       options === 'utf8' || (typeof options === 'object' && options.encoding === 'utf8') ? 'utf8' : undefined;
 
@@ -133,7 +132,7 @@ export class FileService {
         if (options?.signal?.aborted) {
           throw new DOMException('The operation was aborted.', 'AbortError');
         }
-        const { provider, path: resolvedPath } = await this._resolveProvider(filepath);
+        const { provider, path: resolvedPath } = this._resolveProvider(filepath);
         const data = await provider.readFile(resolvedPath);
         return [filepath, data] as const;
       }),
@@ -158,7 +157,7 @@ export class FileService {
       throw new DOMException('The operation was aborted.', 'AbortError');
     }
 
-    const { provider, path: resolvedPath } = await this._resolveProvider(filepath);
+    const { provider, path: resolvedPath } = this._resolveProvider(filepath);
 
     if (provider.readFileStream) {
       return provider.readFileStream(resolvedPath, options);
@@ -175,16 +174,14 @@ export class FileService {
    * @returns Array of entry names (not full paths).
    */
   public async readdir(path: string): Promise<string[]> {
-    const { provider, path: resolvedPath } = await this._resolveProvider(path);
+    const { provider, path: resolvedPath } = this._resolveProvider(path);
     const entries = await provider.readdir(resolvedPath);
 
-    if (this._mountTable) {
-      const childMounts = this._mountTable.getMountsUnder(path);
-      for (const mount of childMounts) {
-        const mountName = mount.prefix.split('/').pop();
-        if (mountName && !entries.includes(mountName)) {
-          entries.push(mountName);
-        }
+    const childMounts = this._mountTable.getMountsUnder(path);
+    for (const mount of childMounts) {
+      const mountName = mount.prefix.split('/').pop();
+      if (mountName && !entries.includes(mountName)) {
+        entries.push(mountName);
       }
     }
 
@@ -198,7 +195,7 @@ export class FileService {
    * @returns Stat information (type, size, mtime).
    */
   public async stat(path: string): Promise<FileStat> {
-    const { provider, path: resolvedPath } = await this._resolveProvider(path);
+    const { provider, path: resolvedPath } = this._resolveProvider(path);
     return toFileStat(await provider.stat(resolvedPath));
   }
 
@@ -209,7 +206,7 @@ export class FileService {
    * @returns Stat information (type, size, mtime).
    */
   public async lstat(path: string): Promise<FileStat> {
-    const { provider, path: resolvedPath } = await this._resolveProvider(path);
+    const { provider, path: resolvedPath } = this._resolveProvider(path);
     return toFileStat(await provider.lstat(resolvedPath));
   }
 
@@ -220,7 +217,7 @@ export class FileService {
    * @returns `true` if the entry exists.
    */
   public async exists(path: string): Promise<boolean> {
-    const { provider, path: resolvedPath } = await this._resolveProvider(path);
+    const { provider, path: resolvedPath } = this._resolveProvider(path);
     return provider.exists(resolvedPath);
   }
 
@@ -233,7 +230,7 @@ export class FileService {
   public async batchExists(paths: string[]): Promise<Record<string, boolean>> {
     const results = await Promise.all(
       paths.map(async (path) => {
-        const { provider, path: resolvedPath } = await this._resolveProvider(path);
+        const { provider, path: resolvedPath } = this._resolveProvider(path);
         return { path, exists: await provider.exists(resolvedPath) };
       }),
     );
@@ -257,7 +254,7 @@ export class FileService {
   public async writeFile(path: string, data: Uint8Array<ArrayBuffer> | string): Promise<void> {
     return this._crossTabCoordinator.withWriteLock(path, async () =>
       this._resourceQueue.queueFor(path, async () => {
-        const { provider, path: resolvedPath } = await this._resolveProvider(path);
+        const { provider, path: resolvedPath, backend: resolvedBackend } = this._resolveProvider(path);
         await this._ensureParentDir(provider, resolvedPath);
         await provider.writeFile(resolvedPath, data);
 
@@ -268,7 +265,7 @@ export class FileService {
         this._eventBus.emit({
           type: 'fileWritten',
           path,
-          backend: this._registry.activeBackend,
+          backend: resolvedBackend,
         });
       }),
     );
@@ -281,10 +278,16 @@ export class FileService {
    * @returns Resolves when all writes complete.
    */
   public async writeFiles(files: Record<string, { content: Uint8Array<ArrayBuffer> | string }>): Promise<void> {
+    const entries = Object.entries(files);
+    if (entries.length === 0) {
+      return;
+    }
+
+    const resolvedBackend = this._mountTable.resolve('/').backend;
     await Promise.all(
-      Object.entries(files).map(async ([path, file]) =>
+      entries.map(async ([path, file]) =>
         this._resourceQueue.queueFor(path, async () => {
-          const { provider, path: resolvedPath } = await this._resolveProvider(path);
+          const { provider, path: resolvedPath } = this._resolveProvider(path);
           await this._ensureParentDir(provider, resolvedPath);
           await provider.writeFile(resolvedPath, file.content);
           const size =
@@ -296,14 +299,14 @@ export class FileService {
       ),
     );
 
-    const parentDirectories = new Set(Object.keys(files).map((p) => parentDirectory(p)));
+    const parentDirectories = new Set(entries.map(([p]) => parentDirectory(p)));
     for (const directory of parentDirectories) {
       this._treeCache.invalidate(directory);
     }
     this._eventBus.emit({
       type: 'directoryChanged',
       path: '/',
-      backend: this._registry.activeBackend,
+      backend: resolvedBackend,
     });
   }
 
@@ -316,15 +319,21 @@ export class FileService {
    */
   public async mkdir(path: string, options?: MkdirOptions): Promise<void> {
     return this._resourceQueue.queueFor(path, async () => {
-      const { provider, path: resolvedPath } = await this._resolveProvider(path);
+      const { provider, path: resolvedPath, backend: resolvedBackend } = this._resolveProvider(path);
       await provider.mkdir(resolvedPath, options?.recursive ? { recursive: true } : undefined);
 
       this._inMemoryTreeAddDirectory(path);
-      this._treeCache.invalidate(parentDirectory(path));
+
+      if (options?.recursive) {
+        this._treeCache.invalidateAncestors(path);
+      } else {
+        this._treeCache.invalidate(parentDirectory(path));
+      }
+
       this._eventBus.emit({
         type: 'directoryChanged',
         path: parentDirectory(path),
-        backend: this._registry.activeBackend,
+        backend: resolvedBackend,
       });
     });
   }
@@ -338,8 +347,8 @@ export class FileService {
    */
   public async rename(from: string, to: string): Promise<void> {
     return this._resourceQueue.queueFor(from, async () => {
-      const source = await this._resolveProvider(from);
-      const target = await this._resolveProvider(to);
+      const source = this._resolveProvider(from);
+      const target = this._resolveProvider(to);
 
       if (source.provider === target.provider) {
         await source.provider.rename(source.path, target.path);
@@ -360,7 +369,7 @@ export class FileService {
         type: 'fileRenamed',
         oldPath: from,
         newPath: to,
-        backend: this._registry.activeBackend,
+        backend: source.backend,
       });
     });
   }
@@ -373,7 +382,7 @@ export class FileService {
    */
   public async unlink(path: string): Promise<void> {
     return this._resourceQueue.queueFor(path, async () => {
-      const { provider, path: resolvedPath } = await this._resolveProvider(path);
+      const { provider, path: resolvedPath, backend: resolvedBackend } = this._resolveProvider(path);
       await provider.unlink(resolvedPath);
 
       this._contentPool?.invalidate(path);
@@ -382,7 +391,7 @@ export class FileService {
       this._eventBus.emit({
         type: 'fileDeleted',
         path,
-        backend: this._registry.activeBackend,
+        backend: resolvedBackend,
       });
     });
   }
@@ -395,7 +404,7 @@ export class FileService {
    */
   public async rmdir(path: string): Promise<void> {
     return this._resourceQueue.queueFor(path, async () => {
-      const { provider, path: resolvedPath } = await this._resolveProvider(path);
+      const { provider, path: resolvedPath, backend: resolvedBackend } = this._resolveProvider(path);
       await provider.rmdir(resolvedPath);
 
       this._inMemoryTreeRemoveDirectory(path);
@@ -404,7 +413,7 @@ export class FileService {
       this._eventBus.emit({
         type: 'directoryChanged',
         path: parentDirectory(path),
-        backend: this._registry.activeBackend,
+        backend: resolvedBackend,
       });
     });
   }
@@ -419,7 +428,7 @@ export class FileService {
    */
   public async ensureDirectoryExists(path: string): Promise<void> {
     return this._resourceQueue.queueFor(path, async () => {
-      const { provider, path: resolvedPath } = await this._resolveProvider(path);
+      const { provider, path: resolvedPath } = this._resolveProvider(path);
       await this._ensureDirectoryExistsInternal(provider, resolvedPath);
       this._inMemoryTreeAddDirectory(path);
     });
@@ -434,8 +443,8 @@ export class FileService {
    */
   public async duplicateFile(sourcePath: string, destinationPath: string): Promise<void> {
     return this._resourceQueue.queueFor(destinationPath, async () => {
-      const source = await this._resolveProvider(sourcePath);
-      const destination = await this._resolveProvider(destinationPath);
+      const source = this._resolveProvider(sourcePath);
+      const destination = this._resolveProvider(destinationPath);
       const data = await source.provider.readFile(source.path);
       await this._ensureParentDir(destination.provider, destination.path);
       await destination.provider.writeFile(destination.path, data);
@@ -446,7 +455,7 @@ export class FileService {
       this._eventBus.emit({
         type: 'fileWritten',
         path: destinationPath,
-        backend: this._registry.activeBackend,
+        backend: destination.backend,
       });
     });
   }
@@ -460,13 +469,13 @@ export class FileService {
    */
   public async copyDirectory(sourcePath: string, destinationPath: string): Promise<void> {
     return this._resourceQueue.queueFor(destinationPath, async () => {
-      const source = await this._resolveProvider(sourcePath);
+      const source = this._resolveProvider(sourcePath);
       const files = await this._getDirectoryContentsInternal(source.provider, source.path);
 
       for (const [relativePath, content] of Object.entries(files)) {
         const destinationFile = joinPath(destinationPath, relativePath);
         // oxlint-disable-next-line no-await-in-loop -- Sequential writes required
-        const destination = await this._resolveProvider(destinationFile);
+        const destination = this._resolveProvider(destinationFile);
         // oxlint-disable-next-line no-await-in-loop -- Sequential writes required
         await this._ensureParentDir(destination.provider, destination.path);
         // oxlint-disable-next-line no-await-in-loop -- Sequential writes required
@@ -476,10 +485,11 @@ export class FileService {
 
       this._treeCache.invalidate(parentDirectory(destinationPath));
       this._treeCache.invalidateSubtree(destinationPath);
+      const destinationResolution = this._resolveProvider(destinationPath);
       this._eventBus.emit({
         type: 'directoryChanged',
         path: parentDirectory(destinationPath),
-        backend: this._registry.activeBackend,
+        backend: destinationResolution.backend,
       });
     });
   }
@@ -491,7 +501,7 @@ export class FileService {
    * @returns Map of relative paths to file contents (empty if directory missing).
    */
   public async getDirectoryContents(path: string): Promise<Record<string, Uint8Array<ArrayBuffer>>> {
-    const { provider, path: resolvedPath } = await this._resolveProvider(path);
+    const { provider, path: resolvedPath } = this._resolveProvider(path);
     const directoryExists = await provider.exists(resolvedPath);
     if (!directoryExists) {
       return {};
@@ -536,7 +546,7 @@ export class FileService {
       return this._treeEntriesToNodes(cached);
     }
 
-    const { provider, path: resolvedPath } = await this._resolveProvider(path);
+    const { provider, path: resolvedPath } = this._resolveProvider(path);
     const entryMap = new Map<string, TreeEntry>();
 
     try {
@@ -572,13 +582,11 @@ export class FileService {
       return [];
     }
 
-    if (this._mountTable) {
-      const childMounts = this._mountTable.getMountsUnder(path);
-      for (const mount of childMounts) {
-        const mountName = mount.prefix.split('/').pop();
-        if (mountName && !entryMap.has(mountName)) {
-          entryMap.set(mountName, { name: mountName, type: 'directory', size: 0, mtimeMs: Date.now() });
-        }
+    const childMounts = this._mountTable.getMountsUnder(path);
+    for (const mount of childMounts) {
+      const mountName = mount.prefix.split('/').pop();
+      if (mountName && !entryMap.has(mountName)) {
+        entryMap.set(mountName, { name: mountName, type: 'directory', size: 0, mtimeMs: Date.now() });
       }
     }
 
@@ -602,7 +610,7 @@ export class FileService {
         return this._inMemoryTree.getDirectoryStat(treeRelativePath);
       }
 
-      const { provider, path: resolvedPath } = await this._resolveProvider(normalizedPath);
+      const { provider, path: resolvedPath } = this._resolveProvider(normalizedPath);
       return this._collectDirectoryStatsFromProvider(
         provider,
         { walkPath: resolvedPath, basePath: resolvedPath },
@@ -610,7 +618,7 @@ export class FileService {
       );
     }
 
-    const { provider, path: resolvedPath } = await this._resolveProvider(normalizedPath);
+    const { provider, path: resolvedPath } = this._resolveProvider(normalizedPath);
     const fileStats = await this._collectDirectoryStatsFromProvider(
       provider,
       { walkPath: resolvedPath, basePath: resolvedPath },
@@ -761,25 +769,35 @@ export class FileService {
   // --- Backend management ---
 
   /**
-   * Switch the active storage backend, clearing caches and emitting a reset.
+   * Dynamically mount a path prefix on a new provider instance of the given backend.
+   * The caller owns the path convention; FileService is domain-agnostic.
    *
-   * @param backend - Backend to switch to.
+   * @param prefix - Absolute path prefix to mount (e.g. `/data`, `/projects/abc`).
+   * @param backend - Storage backend for the new mount.
+   * @param options - Optional mount options (preservePath, etc.).
    */
-  public async reconfigure(backend: FileSystemBackend): Promise<void> {
-    await this._registry.switchActiveProvider(backend);
+  public async mount(prefix: string, backend: FileSystemBackend, options?: MountOptions): Promise<void> {
+    const provider = await this._registry.createMountProvider(backend);
+    this._mountTable.mount(prefix, provider, { backend, ...options });
 
-    if (this._mountTable) {
-      const newProvider = await this._registry.getActiveProvider();
-      this._mountTable.unmount('/');
-      this._mountTable.mount('/', newProvider);
+    if (prefix === '/') {
+      this._watchRegistry.setCaseSensitive(provider.capabilities.caseSensitive ?? true);
     }
+  }
 
-    this._treeCache.clear();
-    this._directoryStatRoot = undefined;
-    this._inMemoryTree.clear();
-    await this._syncCaseSensitivity();
-    this._watchRegistry.emitResetAll();
-    this._eventBus.emit({ type: 'backendChanged', backend });
+  /**
+   * Remove a dynamic mount, disposing the provider that backs it.
+   *
+   * @param prefix - The mount prefix to remove.
+   */
+  public unmount(prefix: string): void {
+    try {
+      const { provider } = this._mountTable.resolve(prefix);
+      this._mountTable.unmount(prefix);
+      provider.dispose();
+    } catch {
+      this._mountTable.unmount(prefix);
+    }
   }
 
   /**
@@ -974,31 +992,14 @@ export class FileService {
   }
 
   /**
-   * Resolve the provider and provider-relative path for an absolute virtual path.
-   * When a MountTable is configured, routes through it; otherwise falls back to the active provider.
-   * Lazily mounts the root provider on first call if the mount table has no root.
+   * Resolve the provider and provider-relative path for an absolute virtual path
+   * via the mount table. Throws immediately if no mount matches.
+   *
+   * @param path - Absolute virtual path.
+   * @returns Resolved provider and provider-relative path.
    */
-  private async _resolveProvider(path: string): Promise<MountResolution> {
-    if (this._mountTable) {
-      try {
-        return this._mountTable.resolve(path);
-      } catch {
-        const provider = await this._registry.getActiveProvider();
-        this._mountTable.mount('/', provider);
-        return this._mountTable.resolve(path);
-      }
-    }
-    const provider = await this._registry.getActiveProvider();
-    return { provider, path };
-  }
-
-  private async _syncCaseSensitivity(): Promise<void> {
-    try {
-      const provider = await this._registry.getActiveProvider();
-      this._watchRegistry.setCaseSensitive(provider.capabilities.caseSensitive ?? true);
-    } catch {
-      // Fallback: assume case-sensitive
-    }
+  private _resolveProvider(path: string): MountResolution {
+    return this._mountTable.resolve(path);
   }
 
   private async _ensureParentDir(

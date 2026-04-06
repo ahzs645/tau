@@ -40,7 +40,7 @@ Main Thread                       File Manager Worker              Kernel Worker
      │    (MessagePort)                  │              (MessagePort)        │
      │   readFile, writeFile, stat       │   readFile, readFiles, stat   │
      │   readShallowDirectory            │   exists, readdir             │
-     │   reconfigure, readBackendFileTree│   writeFile (cache only)      │
+     │   mount, readBackendFileTree      │   writeFile (cache only)      │
      │                                   │                               │
      │                                   │         ZenFS                 │
      │                                   │   IndexedDB / WebAccess /    │
@@ -49,7 +49,7 @@ Main Thread                       File Manager Worker              Kernel Worker
 
 All filesystem I/O runs on the file manager worker. The main thread and kernel workers access it exclusively via MessagePort RPC using the **same bridge mechanism** (`createFileSystemBridge` → `MessageChannel` → `createBridgeProxy`). The only difference is the TypeScript type used for the proxy:
 
-- **Main thread**: `createBridgeProxy<FileManagerProtocol>` — full API including worker management (`reconfigure`, `setDirectoryHandle`), diagnostics (`readBackendFileTree`), and higher-level operations (`copyDirectory`, `getZippedDirectory`)
+- **Main thread**: `createBridgeProxy<FileManagerProtocol>` — full API including worker management (`mount`, `unmount`, `setDirectoryHandle`), diagnostics (`readBackendFileTree`), and higher-level operations (`copyDirectory`, `getZippedDirectory`)
 - **Kernel worker**: `createBridgeProxy<RuntimeFileSystemBase>` — 11 base primitives only (`readFile`, `writeFile`, `stat`, `readdir`, `exists`, etc.)
 
 This is the Interface Segregation Principle (ISP): kernels receive a narrow API surface matching their needs. Both proxies talk to the same worker, same `fileManager` object, same bridge server. No thread may import or use ZenFS directly outside the worker.
@@ -209,7 +209,7 @@ const fs = await resolveMountConfig({ backend: IndexedDB, storeName }); // New c
 
 ### Rule 13: WebAccess handle lifecycle
 
-`FileSystemDirectoryHandle` is structured-clonable (not transferable). It must be explicitly passed from the main thread to the worker via `setDirectoryHandle` before `reconfigure('webaccess')`. Permission must be re-requested from a user gesture after page reload.
+`FileSystemDirectoryHandle` is structured-clonable (not transferable). It must be explicitly passed from the main thread to the worker via `setDirectoryHandle` before mounting a webaccess backend. Permission must be re-requested from a user gesture after page reload.
 
 ## RPC Pattern Rules
 
@@ -381,7 +381,7 @@ On port disconnect/dispose:
 - decrement shared ref-counted subscriptions
 - clear pending delivery queues for that port
 
-On backend reconfigure:
+On backend mount change:
 
 - invalidate watch subscriptions tied to old backend
 - emit backend reset events so clients can resync
@@ -418,7 +418,7 @@ The next implementation plan is incomplete unless all of the following are expli
 6. **Incremental dependency watch set diffing**: avoid full resubscribe churn.
 7. **Incremental tree patching**: no mutation-triggered full recursive tree scans.
 8. **Self-churn exclusion**: explicit ignore patterns for generated cache paths.
-9. **Lifecycle cleanup guarantees**: disconnect/reconfigure cleanup of watches and queues.
+9. **Lifecycle cleanup guarantees**: disconnect/unmount cleanup of watches and queues.
 10. **Performance acceptance gates**: concrete watch latency/throughput/flood tests.
 
 If one of these items is absent, the plan is not ready for "best-in-class" watcher implementation.
