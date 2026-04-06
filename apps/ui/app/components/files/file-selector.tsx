@@ -431,6 +431,9 @@ function FileSelectorItemList({
         totalCount={items.length}
         itemContent={renderItem}
         components={{
+          Scroller: ({ children, ...properties }) => (
+            <div {...properties} className={cn(properties.className, 'scroll-shadows-y')} />
+          ),
           List: (properties) => <div {...properties} className='px-1' />,
           Header: () => <div className='h-1' />,
           Footer: () => <div className='h-1' />,
@@ -660,7 +663,7 @@ export function FileSelector({
     <Command shouldFilter={false} className='flex flex-col'>
       <BreadcrumbNav currentPath={currentPath} onNavigate={handleNavigate} />
       <CommandInput placeholder={searchPlaceholder} value={searchQuery} onValueChange={setSearchQuery} />
-      <CommandList className='max-h-[300px]'>
+      <CommandList className='max-h-[300px] scroll-shadows-y'>
         {isLoadingItems ? (
           <div className='flex items-center justify-center p-4'>
             <Loader className='size-4' />
