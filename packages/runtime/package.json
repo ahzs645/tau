@@ -312,7 +312,7 @@
     "manifold-3d": "catalog:",
     "opencascade.js": "file:../../tarballs/opencascade.js-3.0.0-beta.fdd1879.tgz",
     "openscad-wasm-prebuilt": "catalog:",
-    "replicad": "file:../../tarballs/replicad-0.21.0-v8.40.tgz",
+    "replicad": "file:../../tarballs/replicad-0.21.0-v8.41.tgz",
     "replicad-opencascadejs": "file:../../tarballs/replicad-opencascadejs-0.21.0-v8.40.tgz",
     "source-map-js": "catalog:",
     "type-fest": "catalog:",
