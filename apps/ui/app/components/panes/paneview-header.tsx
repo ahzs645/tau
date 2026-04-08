@@ -1,5 +1,5 @@
 import { ChevronRight } from 'lucide-react';
-import { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import type { PaneviewPanelApi } from 'dockview-react';
 import { cn } from '#utils/ui.utils.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
@@ -26,24 +26,36 @@ export const paneviewStyleOverrides = cn(
   '[&_.dv-split-view-container.dv-vertical_>_.dv-sash-container_>_.dv-sash.dv-minimum]:!cursor-row-resize',
 );
 
+type PaneviewHeaderContextValue = { expanded: boolean };
+
+const PaneviewHeaderContext = React.createContext<PaneviewHeaderContextValue | undefined>(undefined);
+
+function usePaneviewHeaderContext(): PaneviewHeaderContextValue {
+  const context = useContext(PaneviewHeaderContext);
+  if (context === undefined) {
+    throw new Error('PaneviewHeader compound components must be used within a <PaneviewHeader>');
+  }
+  return context;
+}
+
 /**
  * Shared header component for PaneviewReact panels.
  *
  * Renders a rotating chevron indicator and toggles panel expansion on click.
  * When expanding a collapsed panel, sets a default body height so content is
  * immediately visible.
+ *
+ * Provides expansion state via context for compound child components.
+ * When `title` is provided, renders a `PaneviewHeaderTitle` before children.
  */
 export function PaneviewHeader({
   api,
   title,
   children,
-  actions,
 }: {
   readonly api: PaneviewPanelApi;
-  readonly title: string;
+  readonly title?: string;
   readonly children?: React.ReactNode;
-  /** Trailing content shown only when the panel is expanded. */
-  readonly actions?: React.ReactNode;
 }): React.JSX.Element {
   const [expanded, setExpanded] = useState(api.isExpanded);
 
@@ -64,39 +76,107 @@ export function PaneviewHeader({
     }
   }, [api, expanded]);
 
+  const contextValue = useMemo<PaneviewHeaderContextValue>(() => ({ expanded }), [expanded]);
+
+  return (
+    <PaneviewHeaderContext value={contextValue}>
+      <div
+        role='button'
+        tabIndex={0}
+        onClick={handleClick}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            handleClick();
+          }
+        }}
+        className='group/paneview-header flex h-full w-full cursor-pointer items-center gap-1 pr-2 pl-1 select-none'
+      >
+        <ChevronRight
+          className={cn(
+            'size-3 shrink-0 text-muted-foreground transition-transform duration-200',
+            expanded && 'rotate-90',
+          )}
+        />
+        {title === undefined ? undefined : <PaneviewHeaderTitle>{title}</PaneviewHeaderTitle>}
+        {children}
+      </div>
+    </PaneviewHeaderContext>
+  );
+}
+
+/**
+ * Styled title text for a paneview header.
+ *
+ * Truncates with ellipsis on the left so the filename tail (the most
+ * distinguishing part of a path) stays visible when space is tight.
+ */
+export function PaneviewHeaderTitle({
+  children,
+  className,
+}: {
+  readonly children: React.ReactNode;
+  readonly className?: string;
+}): React.JSX.Element {
+  return (
+    <span className={cn('truncate text-xs font-medium text-foreground', className)} dir='rtl'>
+      {children}
+    </span>
+  );
+}
+
+/**
+ * Interactive area within a paneview header that stops event propagation,
+ * preventing clicks and key events from toggling the panel.
+ *
+ * Pushes content to the trailing edge via `ml-auto`.
+ */
+export function PaneviewHeaderControls({
+  children,
+  className,
+}: {
+  readonly children: React.ReactNode;
+  readonly className?: string;
+}): React.JSX.Element {
   return (
     <div
-      role='button'
-      tabIndex={0}
-      onClick={handleClick}
-      onKeyDown={(event) => {
-        if (event.key === 'Enter' || event.key === ' ') {
-          event.preventDefault();
-          handleClick();
-        }
+      className={cn('ml-auto flex items-center gap-1', className)}
+      onClick={(event) => {
+        event.stopPropagation();
       }}
-      className='flex h-full w-full cursor-pointer items-center gap-1 pr-2 pl-1 select-none'
+      onKeyDown={(event) => {
+        event.stopPropagation();
+      }}
     >
-      <ChevronRight
-        className={cn(
-          'size-3 shrink-0 text-muted-foreground transition-transform duration-200',
-          expanded && 'rotate-90',
-        )}
-      />
-      <span className='truncate text-xs font-medium text-foreground'>{title}</span>
-      {children !== undefined || (expanded && actions !== undefined) ? (
-        <div
-          className='ml-auto flex items-center gap-1'
-          onClick={(event) => {
-            event.stopPropagation();
-          }}
-        >
-          {children}
-          {expanded ? actions : undefined}
-        </div>
-      ) : undefined}
+      {children}
     </div>
   );
+}
+
+/**
+ * Renders children only when the parent panel is expanded.
+ *
+ * These are actions that operate on the panel's content — when there
+ * is no content (collapsed), there are no content actions.
+ */
+export function PaneviewHeaderContentActions({
+  children,
+  className,
+}: {
+  readonly children: React.ReactNode;
+  readonly className?: string;
+}): React.JSX.Element | undefined {
+  const { expanded } = usePaneviewHeaderContext();
+
+  if (!expanded) {
+    return undefined;
+  }
+
+  if (className === undefined) {
+    return <div>{children}</div>;
+  }
+
+  return <div className={className}>{children}</div>;
 }
 
 /**

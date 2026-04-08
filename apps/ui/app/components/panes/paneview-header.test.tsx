@@ -5,6 +5,9 @@ import {
   PaneviewHeader,
   PaneviewHeaderAction,
   PaneviewHeaderActionGroup,
+  PaneviewHeaderControls,
+  PaneviewHeaderContentActions,
+  PaneviewHeaderTitle,
   paneviewStyleOverrides,
 } from '#components/panes/paneview-header.js';
 import { TooltipProvider } from '#components/ui/tooltip.js';
@@ -102,7 +105,7 @@ describe('PaneviewHeader', () => {
     expect(disposable.dispose).toHaveBeenCalled();
   });
 
-  it('renders children in trailing slot when expanded', () => {
+  it('renders children inline', () => {
     render(
       <PaneviewHeader api={mockApi} title='main.ts'>
         <span data-testid='child-content'>Extra</span>
@@ -123,46 +126,6 @@ describe('PaneviewHeader', () => {
     expect(screen.getByTestId('child-content')).toBeInTheDocument();
   });
 
-  it('renders actions only when expanded', () => {
-    render(<PaneviewHeader api={mockApi} title='main.ts' actions={<span data-testid='action-content'>Action</span>} />);
-
-    expect(screen.getByTestId('action-content')).toBeInTheDocument();
-  });
-
-  it('hides actions when collapsed', () => {
-    mockApi = createMockApi(false);
-    render(<PaneviewHeader api={mockApi} title='main.ts' actions={<span data-testid='action-content'>Action</span>} />);
-
-    expect(screen.queryByTestId('action-content')).not.toBeInTheDocument();
-  });
-
-  it('shows actions when panel expands externally', () => {
-    mockApi = createMockApi(false);
-    render(<PaneviewHeader api={mockApi} title='main.ts' actions={<span data-testid='action-content'>Action</span>} />);
-
-    expect(screen.queryByTestId('action-content')).not.toBeInTheDocument();
-
-    act(() => {
-      mockApi.triggerExpansionChange(true);
-    });
-
-    expect(screen.getByTestId('action-content')).toBeInTheDocument();
-  });
-
-  it('stops propagation on children click', () => {
-    render(
-      <PaneviewHeader api={mockApi} title='main.ts'>
-        <button type='button' data-testid='inner-btn'>
-          Click me
-        </button>
-      </PaneviewHeader>,
-    );
-
-    fireEvent.click(screen.getByTestId('inner-btn'));
-
-    expect(mockApi.setExpanded).not.toHaveBeenCalled();
-  });
-
   it('toggles on Enter key', () => {
     mockApi = createMockApi(false);
     render(<PaneviewHeader api={mockApi} title='main.ts' />);
@@ -181,11 +144,164 @@ describe('PaneviewHeader', () => {
     expect(mockApi.setExpanded).toHaveBeenCalledWith(false);
   });
 
-  it('does not render children wrapper when no children provided', () => {
-    const { container } = render(<PaneviewHeader api={mockApi} title='main.ts' />);
+  it('applies group/paneview-header class', () => {
+    render(<PaneviewHeader api={mockApi} title='main.ts' />);
 
-    const wrapper = container.querySelector('[class*="ml-auto"]');
-    expect(wrapper).not.toBeInTheDocument();
+    const root = screen.getByRole('button');
+    expect(root.classList.contains('group/paneview-header')).toBe(true);
+  });
+});
+
+describe('PaneviewHeaderTitle', () => {
+  it('renders text with truncation', () => {
+    const mockApi = createMockApi(true);
+    render(
+      <PaneviewHeader api={mockApi}>
+        <PaneviewHeaderTitle>custom-title.ts</PaneviewHeaderTitle>
+      </PaneviewHeader>,
+    );
+
+    const title = screen.getByText('custom-title.ts');
+    expect(title.classList.contains('truncate')).toBe(true);
+    expect(title.classList.contains('text-xs')).toBe(true);
+  });
+
+  it('applies custom className', () => {
+    const mockApi = createMockApi(true);
+    render(
+      <PaneviewHeader api={mockApi}>
+        <PaneviewHeaderTitle className='extra'>title</PaneviewHeaderTitle>
+      </PaneviewHeader>,
+    );
+
+    expect(screen.getByText('title').classList.contains('extra')).toBe(true);
+  });
+});
+
+describe('PaneviewHeaderControls', () => {
+  let mockApi: ReturnType<typeof createMockApi>;
+
+  beforeEach(() => {
+    mockApi = createMockApi(true);
+  });
+
+  it('stops propagation of click events', () => {
+    render(
+      <PaneviewHeader api={mockApi} title='main.ts'>
+        <PaneviewHeaderControls>
+          <button type='button' data-testid='inner-btn'>
+            Click me
+          </button>
+        </PaneviewHeaderControls>
+      </PaneviewHeader>,
+    );
+
+    fireEvent.click(screen.getByTestId('inner-btn'));
+
+    expect(mockApi.setExpanded).not.toHaveBeenCalled();
+  });
+
+  it('stops propagation of keyboard events', () => {
+    render(
+      <PaneviewHeader api={mockApi} title='main.ts'>
+        <PaneviewHeaderControls>
+          <input data-testid='inner-input' />
+        </PaneviewHeaderControls>
+      </PaneviewHeader>,
+    );
+
+    fireEvent.keyDown(screen.getByTestId('inner-input'), { key: 'Enter' });
+
+    expect(mockApi.setExpanded).not.toHaveBeenCalled();
+  });
+
+  it('stops propagation of Space key', () => {
+    render(
+      <PaneviewHeader api={mockApi} title='main.ts'>
+        <PaneviewHeaderControls>
+          <input data-testid='inner-input' />
+        </PaneviewHeaderControls>
+      </PaneviewHeader>,
+    );
+
+    fireEvent.keyDown(screen.getByTestId('inner-input'), { key: ' ' });
+
+    expect(mockApi.setExpanded).not.toHaveBeenCalled();
+  });
+
+  it('applies ml-auto for trailing positioning', () => {
+    const { container } = render(
+      <PaneviewHeader api={mockApi} title='main.ts'>
+        <PaneviewHeaderControls>
+          <span>controls</span>
+        </PaneviewHeaderControls>
+      </PaneviewHeader>,
+    );
+
+    const controls = container.querySelector('[class*="ml-auto"]');
+    expect(controls).toBeInTheDocument();
+  });
+});
+
+describe('PaneviewHeaderContentActions', () => {
+  let mockApi: ReturnType<typeof createMockApi>;
+
+  beforeEach(() => {
+    mockApi = createMockApi(true);
+  });
+
+  it('renders children when expanded', () => {
+    render(
+      <PaneviewHeader api={mockApi} title='main.ts'>
+        <PaneviewHeaderContentActions>
+          <span data-testid='action-content'>Action</span>
+        </PaneviewHeaderContentActions>
+      </PaneviewHeader>,
+    );
+
+    expect(screen.getByTestId('action-content')).toBeInTheDocument();
+  });
+
+  it('hides children when collapsed', () => {
+    mockApi = createMockApi(false);
+    render(
+      <PaneviewHeader api={mockApi} title='main.ts'>
+        <PaneviewHeaderContentActions>
+          <span data-testid='action-content'>Action</span>
+        </PaneviewHeaderContentActions>
+      </PaneviewHeader>,
+    );
+
+    expect(screen.queryByTestId('action-content')).not.toBeInTheDocument();
+  });
+
+  it('shows children when panel expands externally', () => {
+    mockApi = createMockApi(false);
+    render(
+      <PaneviewHeader api={mockApi} title='main.ts'>
+        <PaneviewHeaderContentActions>
+          <span data-testid='action-content'>Action</span>
+        </PaneviewHeaderContentActions>
+      </PaneviewHeader>,
+    );
+
+    expect(screen.queryByTestId('action-content')).not.toBeInTheDocument();
+
+    act(() => {
+      mockApi.triggerExpansionChange(true);
+    });
+
+    expect(screen.getByTestId('action-content')).toBeInTheDocument();
+  });
+
+  it('throws when used outside PaneviewHeader', () => {
+    expect(() => {
+      render(
+        <PaneviewHeaderContentActions>
+          <span>orphan</span>
+        </PaneviewHeaderContentActions>,
+      );
+    }).toThrow('PaneviewHeader compound components must be used within a <PaneviewHeader>');
   });
 });
 
