@@ -19,6 +19,7 @@ import { createStaticToolTransform } from '#api/chat/utils/static-tool-transform
 import { createErrorTransform } from '#api/chat/utils/error-transform.js';
 import { createToolOutputTransform } from '#api/chat/utils/tool-output-transform.js';
 import { createNewlineTrimTransform } from '#api/chat/utils/newline-trim-transform.js';
+import { createLatexDelimiterTransform } from '#api/chat/utils/latex-delimiter-transform.js';
 import { ChatExceptionFilter } from '#api/chat/chat-exception.filter.js';
 import { ChatAbortError, isChatAbortError, registerChatAbort } from '#api/chat/utils/chat-abort.js';
 import { MetricsService } from '#telemetry/metrics.js';
@@ -161,6 +162,7 @@ export class ChatController {
         .pipeThrough(createStaticToolTransform())
         .pipeThrough(createToolOutputTransform())
         .pipeThrough(createNewlineTrimTransform())
+        .pipeThrough(createLatexDelimiterTransform())
         .pipeThrough(createErrorTransform())
         .pipeThrough(this.createSseEventCountTransform());
 
