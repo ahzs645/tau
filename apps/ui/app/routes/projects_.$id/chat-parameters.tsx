@@ -6,6 +6,7 @@ import type { PaneviewApi, PaneviewPanelApi } from 'dockview-react';
 import { PaneviewReact } from 'dockview-react';
 import { hasJsonSchemaObjectProperties } from '@taucad/utils/schema';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '#components/ui/select.js';
 import {
   FloatingPanel,
   FloatingPanelClose,
@@ -57,8 +58,8 @@ function ParameterSetSelector({
   const setNames = Object.keys(sets);
 
   const handleChange = useCallback(
-    (event: React.ChangeEvent<HTMLSelectElement>) => {
-      switchParameterSet(filePath, event.target.value);
+    (value: string) => {
+      switchParameterSet(filePath, value);
     },
     [switchParameterSet, filePath],
   );
@@ -68,17 +69,18 @@ function ParameterSetSelector({
   }
 
   return (
-    <select
-      className='h-5 rounded border border-border bg-background px-1 text-[10px] text-foreground'
-      value={activeSet}
-      onChange={handleChange}
-    >
-      {setNames.map((name) => (
-        <option key={name} value={name}>
-          {name}
-        </option>
-      ))}
-    </select>
+    <Select value={activeSet} onValueChange={handleChange}>
+      <SelectTrigger size='sm' className='h-5 min-w-0 gap-1 border-0 bg-transparent px-1 text-[10px] shadow-none'>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {setNames.map((name) => (
+          <SelectItem key={name} value={name} className='text-xs'>
+            {name}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }
 

@@ -1,5 +1,5 @@
 import { vi, describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { LengthSymbol } from '@taucad/units';
 import { ParametersNumber } from '#components/geometry/parameters/parameters-number.js';
@@ -222,39 +222,17 @@ describe('ParametersNumber', () => {
     });
   });
 
-  describe('Slider Interactions', () => {
-    it('should calculate appropriate min/max range based on default value', () => {
+  describe('Unified Number Field', () => {
+    it('should render a fill bar proportional to the value', () => {
       const mockOnChange = vi.fn();
 
-      render(
+      const { container } = render(
         <TestWrapper>
           <ParametersNumber
             value={50}
             defaultValue={50}
             descriptor='length'
-            units={defaultUnits}
-            onChange={mockOnChange}
-          />
-        </TestWrapper>,
-      );
-
-      const slider = screen.getByRole('slider');
-
-      // For default value of 50, range should be [0, 200]
-      expect(slider.getAttribute('aria-valuemin')).toBe('0');
-      expect(slider.getAttribute('aria-valuemax')).toBe('200');
-    });
-
-    it('should respect custom min/max values', () => {
-      const mockOnChange = vi.fn();
-
-      render(
-        <TestWrapper>
-          <ParametersNumber
-            value={50}
-            defaultValue={50}
-            descriptor='length'
-            min={10}
+            min={0}
             max={100}
             units={defaultUnits}
             onChange={mockOnChange}
@@ -262,42 +240,41 @@ describe('ParametersNumber', () => {
         </TestWrapper>,
       );
 
-      const slider = screen.getByRole('slider');
-
-      expect(slider.getAttribute('aria-valuemin')).toBe('10');
-      expect(slider.getAttribute('aria-valuemax')).toBe('100');
+      const fillBar = container.querySelector('[class*="bg-primary"]');
+      expect(fillBar).toBeTruthy();
+      expect((fillBar as HTMLElement).style.width).toBe('50%');
     });
 
-    it('should handle zero default value correctly', () => {
+    it('should clamp fill bar to 0-100%', () => {
       const mockOnChange = vi.fn();
 
-      render(
+      const { container } = render(
         <TestWrapper>
           <ParametersNumber
             value={0}
             defaultValue={0}
             descriptor='length'
+            min={0}
+            max={100}
             units={defaultUnits}
             onChange={mockOnChange}
           />
         </TestWrapper>,
       );
 
-      const slider = screen.getByRole('slider');
-
-      // For zero, should use symmetric range [-100, 100]
-      expect(slider.getAttribute('aria-valuemin')).toBe('-100');
-      expect(slider.getAttribute('aria-valuemax')).toBe('100');
+      const fillBar = container.querySelector('[class*="bg-primary"]');
+      expect(fillBar).toBeTruthy();
+      expect((fillBar as HTMLElement).style.width).toBe('0%');
     });
 
-    it('should handle negative default values', () => {
+    it('should enter edit mode on focus and show the input', () => {
       const mockOnChange = vi.fn();
 
       render(
         <TestWrapper>
           <ParametersNumber
-            value={-50}
-            defaultValue={-50}
+            value={10}
+            defaultValue={10}
             descriptor='length'
             units={defaultUnits}
             onChange={mockOnChange}
@@ -305,35 +282,67 @@ describe('ParametersNumber', () => {
         </TestWrapper>,
       );
 
-      const slider = screen.getByRole('slider');
+      const input = screen.getByRole('textbox');
+      expect(input.className).toContain('opacity-0');
 
-      // For negative default, max should be 0, min should be expanded
-      expect(slider.getAttribute('aria-valuemax')).toBe('0');
-      const minValue = Number.parseFloat(slider.getAttribute('aria-valuemin') ?? '0');
-      expect(minValue).toBeLessThan(-50);
+      act(() => {
+        input.focus();
+      });
+      expect(input.className).toContain('opacity-100');
     });
 
-    it('should convert slider ranges when unit changes', () => {
+    it('should exit edit mode on blur', () => {
       const mockOnChange = vi.fn();
-      const inchUnits = createUnits(25.4, 'in');
 
       render(
         <TestWrapper>
           <ParametersNumber
-            value={254}
-            defaultValue={254}
+            value={10}
+            defaultValue={10}
             descriptor='length'
-            units={inchUnits}
+            units={defaultUnits}
             onChange={mockOnChange}
           />
         </TestWrapper>,
       );
 
-      const slider = screen.getByRole('slider');
-      // 254mm / 25.4 = 10 inches
-      // For default of 10, range should be [0, 40]
-      const maxValue = Number.parseFloat(slider.getAttribute('aria-valuemax') ?? '0');
-      expect(maxValue).toBeGreaterThan(30);
+      const input = screen.getByRole('textbox');
+      act(() => {
+        input.focus();
+      });
+      expect(input.className).toContain('opacity-100');
+
+      act(() => {
+        input.blur();
+      });
+      expect(input.className).toContain('opacity-0');
+    });
+
+    it('should revert text on Escape', async () => {
+      const mockOnChange = vi.fn();
+      const user = userEvent.setup();
+
+      render(
+        <TestWrapper>
+          <ParametersNumber
+            value={10}
+            defaultValue={10}
+            descriptor='length'
+            units={defaultUnits}
+            onChange={mockOnChange}
+          />
+        </TestWrapper>,
+      );
+
+      const input = screen.getByDisplayValue('10');
+      act(() => {
+        input.focus();
+      });
+      await user.clear(input);
+      await user.type(input, '999');
+      await user.keyboard('{Escape}');
+
+      expect(input).toHaveValue('10');
     });
   });
 
@@ -676,7 +685,7 @@ describe('ParametersNumber', () => {
   });
 
   describe('Disabled State', () => {
-    it('should disable slider and input when disabled prop is true', () => {
+    it('should disable input when disabled prop is true', () => {
       const mockOnChange = vi.fn();
 
       render(
@@ -692,11 +701,7 @@ describe('ParametersNumber', () => {
         </TestWrapper>,
       );
 
-      const slider = screen.getByRole('slider');
       const input = screen.getByRole('textbox');
-
-      // Radix UI uses aria-disabled or data-disabled attributes
-      expect(slider.getAttribute('aria-disabled') ?? Object.hasOwn(slider.dataset, 'disabled')).toBeTruthy();
       expect(input).toBeDisabled();
     });
 

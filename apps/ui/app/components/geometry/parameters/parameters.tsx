@@ -152,17 +152,28 @@ export function Parameters({
   };
 
   return (
-    <div data-slot='parameters' className={cn('group flex h-full w-full flex-col', className)}>
+    <div
+      data-slot='parameters'
+      className={cn('group flex h-full w-full flex-col', className)}
+      style={
+        {
+          '--param-field-h': '1.5rem',
+          '--param-field-radius': 'var(--radius-md)',
+          '--param-field-color': 'var(--color-muted-foreground)',
+          '--param-field-color-focus': 'var(--color-foreground)',
+        } as React.CSSProperties
+      }
+    >
       {hasParameters ? (
         <>
           {/* Search Bar */}
           {enableSearch ? (
-            <div className='flex w-full flex-row gap-2 border-b bg-sidebar p-2'>
+            <div className='flex w-full flex-row gap-1.5 border-b bg-sidebar px-2 py-1.5'>
               <SearchInput
                 ref={searchInputReference}
                 placeholder={searchPlaceholder}
                 value={searchTerm}
-                className='h-7 w-full bg-background'
+                className='h-6 w-full bg-background text-sm'
                 onChange={handleSearchChange}
                 onClear={clearSearch}
               />

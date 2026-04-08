@@ -103,8 +103,8 @@ const getColorFormat = (color: string): string => {
   }
 };
 
-// Base indicator class matching ChatParametersInputNumber styling
-const baseIndicatorClass = 'flex h-7 w-7 items-center justify-center border bg-muted text-muted-foreground select-none';
+const baseIndicatorClass =
+  'flex h-(--param-field-h) w-6 items-center justify-center text-muted-foreground/60 select-none';
 
 /**
  * String Color Picker Component
@@ -157,12 +157,12 @@ export function StringColorPicker({ value, onChange, className }: StringColorPic
   );
 
   return (
-    <div className={cn('group/color-picker flex w-full flex-row items-center gap-2', className)}>
+    <div className={cn('group/color-picker flex w-full flex-row items-center gap-1.5', className)}>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
           <Button
             variant='outline'
-            className='h-7 w-7 p-0'
+            className='h-(--param-field-h) w-(--param-field-h) shrink-0 rounded-(--param-field-radius) border-border/50 p-0 opacity-70 shadow-none transition-opacity hover:border-border hover:opacity-100'
             style={{ backgroundColor: isValid ? value : 'transparent' }}
             aria-label='Open color picker'
           >
@@ -206,31 +206,29 @@ export function StringColorPicker({ value, onChange, className }: StringColorPic
         </PopoverContent>
       </Popover>
 
-      <div
-        className={cn(
-          'group relative flex flex-1 flex-row items-center rounded-md',
-          'group-focus-within/color-picker:border-ring group-focus-within/color-picker:ring-3 group-focus-within/color-picker:ring-ring/50',
-        )}
-      >
+      <div className='group relative flex min-w-0 flex-1 flex-row items-center'>
         <Input
           autoComplete='off'
           type='text'
           value={value}
-          className='h-7 flex-1 bg-background px-3 font-mono text-sm focus-visible:ring-0'
+          className='h-(--param-field-h) w-full rounded-(--param-field-radius) border-border/50 bg-muted px-2 pr-6 text-right font-mono text-sm text-(--param-field-color) shadow-none transition-colors hover:border-border hover:text-(--param-field-color-focus) focus-visible:border-border focus-visible:text-(--param-field-color-focus) focus-visible:ring-0'
           placeholder='Color value'
           onChange={handleMainInputChange}
         />
         {colorFormat ? (
-          <span
-            className={cn(
-              baseIndicatorClass,
-              'absolute top-1/2 right-0 -translate-y-1/2',
-              'rounded-r-md border-l-0',
-              'group-focus-within/color-picker:border-ring',
-              'pointer-events-none cursor-text',
-            )}
-          >
-            <span className='font-mono text-[0.5rem] leading-none uppercase'>{colorFormat}</span>
+          <span className={cn(baseIndicatorClass, 'pointer-events-none absolute right-0')}>
+            <span
+              className={cn(
+                'font-mono text-[8px] leading-none uppercase',
+                colorFormat.length <= 2
+                  ? 'tracking-wide'
+                  : colorFormat.length <= 3
+                    ? 'tracking-normal'
+                    : 'tracking-tight',
+              )}
+            >
+              {colorFormat}
+            </span>
           </span>
         ) : null}
       </div>

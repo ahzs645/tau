@@ -36,7 +36,10 @@ export function ParametersString({
       autoComplete='off'
       type='text'
       value={value}
-      className={cn('h-7 flex-1 bg-background px-3', className)}
+      className={cn(
+        'h-(--param-field-h) w-full rounded-(--param-field-radius) border-border/50 bg-muted px-3 text-(--param-field-color) text-sm shadow-none transition-colors hover:border-border hover:text-(--param-field-color-focus) focus-visible:border-border focus-visible:text-(--param-field-color-focus) focus-visible:ring-0',
+        className,
+      )}
       onChange={(event) => {
         onChange(event.target.value);
       }}

@@ -11,6 +11,7 @@ export function ParametersBoolean({ value, onChange, ...properties }: Parameters
   return (
     <Switch
       size='md'
+      className='opacity-70 transition-opacity hover:opacity-100 data-[state=checked]:opacity-100'
       checked={Boolean(value)}
       onCheckedChange={(checkedValue) => {
         onChange(checkedValue);

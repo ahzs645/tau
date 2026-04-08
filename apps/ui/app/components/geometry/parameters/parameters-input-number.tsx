@@ -6,7 +6,7 @@ import { cn } from '#utils/ui.utils.js';
 import { Input } from '#components/ui/input.js';
 import type { MeasurementDescriptor } from '#constants/project-parameters.js';
 
-const baseIndicatorClass = 'flex h-7 w-7 items-center justify-center border bg-muted text-muted-foreground select-none';
+const baseIndicatorClass = 'flex h-6 w-6 items-center justify-center text-muted-foreground/60 select-none text-[11px]';
 
 type ParametersInputNumberProps = Omit<React.ComponentProps<'input'>, 'type' | 'value' | 'onChange'> & {
   readonly unit?: string;
@@ -102,23 +102,13 @@ export const ParametersInputNumber = React.forwardRef<HTMLInputElement, Paramete
 
     return (
       <div
-        className={cn(
-          'group/input relative flex flex-row items-center rounded-md',
-          'focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50',
-          'has-disabled:cursor-not-allowed',
-        )}
+        className={cn('group/input relative flex flex-row items-center rounded-md', 'has-disabled:cursor-not-allowed')}
       >
         {isCount ? (
           <span
-            className={cn(
-              baseIndicatorClass,
-              'absolute left-0',
-              'rounded-l-md border-r-0',
-              'group-focus-within/input:border-ring',
-              'pointer-events-none cursor-text',
-            )}
+            className={cn(baseIndicatorClass, 'absolute left-0', 'rounded-l-md', 'pointer-events-none cursor-text')}
           >
-            <span className='font-mono text-sm'>×</span>
+            <span className='font-mono text-xs'>×</span>
           </span>
         ) : null}
         <Input
@@ -128,7 +118,11 @@ export const ParametersInputNumber = React.forwardRef<HTMLInputElement, Paramete
           inputMode='decimal'
           value={text}
           step={step}
-          className={cn(isCount ? 'pl-8' : 'pr-7', 'focus-visible:ring-0', className)}
+          className={cn(
+            isCount ? 'pl-7' : 'pr-6',
+            'h-6 text-right shadow-none border-border/50 hover:border-border focus-visible:ring-0 focus-visible:border-border',
+            className,
+          )}
           {...properties}
           onFocus={() => {
             setIsFocused(true);
@@ -172,20 +166,19 @@ export const ParametersInputNumber = React.forwardRef<HTMLInputElement, Paramete
               <span
                 className={cn(
                   baseIndicatorClass,
-                  'absolute right-0 rounded-r-md border-l-0',
-                  'group-focus-within/input:border-ring',
+                  'absolute right-0 rounded-r-md',
                   'pointer-events-none cursor-text',
                   isApproximation && 'pointer-events-auto',
                 )}
               >
                 {isAngle ? (
-                  <Angle className='size-4 stroke-[1.5px]' />
+                  <Angle className='size-3.5 stroke-[1.5px]' />
                 ) : isUnitless ? (
-                  <Hash className='size-3' />
+                  <Hash className='size-2.5' />
                 ) : (
-                  <span className='inline-flex flex-col items-center justify-center font-mono text-xs tracking-wide'>
+                  <span className='inline-flex flex-col items-center justify-center font-mono text-[10px] tracking-wide'>
                     {isApproximation ? (
-                      <span className='-mb-0.5 text-[0.7rem] leading-none text-muted-foreground/60'>≈</span>
+                      <span className='-mb-0.5 text-[0.6rem] leading-none text-muted-foreground/60'>≈</span>
                     ) : null}
                     <span className={cn(isApproximation && 'leading-none')}>{unit}</span>
                   </span>
