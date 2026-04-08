@@ -24,6 +24,8 @@ export type {
   ExposeFileSystemHandle,
   ChangeEventCoalescer,
   CoalescerFactory,
+  ThrottledEventWorker,
+  ThrottledWorkerFactory,
 } from '#filesystem/filesystem-bridge.js';
 
 // Constants

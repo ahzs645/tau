@@ -40,6 +40,28 @@ export type ChangeEventCoalescer = {
 export type CoalescerFactory = (deliver: (events: ChangeEvent[]) => void, windowMs: number) => ChangeEventCoalescer;
 
 /**
+ * Minimal interface for a throttled worker that delivers events in chunks.
+ * Matches the push/flush/dispose API surface of `ThrottledWorker` from
+ * `@taucad/filesystem`.
+ * @public
+ */
+export type ThrottledEventWorker = {
+  push(items: ChangeEvent[]): void;
+  flush(): void;
+  dispose(): void;
+};
+
+/**
+ * Factory that creates a {@link ThrottledEventWorker}.
+ *
+ * Called by {@link exposeFileSystem} with a handler that delivers chunks
+ * to all connected bridge ports. The factory receives the handler and
+ * should return a throttled worker wrapping it.
+ * @public
+ */
+export type ThrottledWorkerFactory = (handler: (chunk: ChangeEvent[]) => void) => ThrottledEventWorker;
+
+/**
  * Options for configuring the filesystem bridge message type.
  * @public
  */
@@ -53,6 +75,12 @@ export type FileSystemBridgeOptions = {
    * When omitted, events pass through without batching.
    */
   createCoalescer?: CoalescerFactory;
+  /**
+   * Factory for creating a throttled event worker. When provided alongside
+   * `createCoalescer`, coalesced batches flow through the throttled worker
+   * for chunked delivery to bridge clients.
+   */
+  createThrottledWorker?: ThrottledWorkerFactory;
 };
 
 /**
@@ -119,9 +147,23 @@ export function exposeFileSystem<T extends StringKeyedObject>(
     }
   };
 
+  let throttledWorker: ThrottledEventWorker | undefined;
+  if (options?.createThrottledWorker) {
+    throttledWorker = options.createThrottledWorker(deliverToHandles);
+  }
+
+  const deliverFromCoalescer = throttledWorker
+    ? (events: ChangeEvent[]): void => {
+        throttledWorker.push(events);
+      }
+    : deliverToHandles;
+
   let coalescer: ChangeEventCoalescer | undefined;
   if (options?.createCoalescer) {
-    coalescer = options.createCoalescer(deliverToHandles, options.uiCoalescingWindowMs ?? defaultUiCoalescingWindowMs);
+    coalescer = options.createCoalescer(
+      deliverFromCoalescer,
+      options.uiCoalescingWindowMs ?? defaultUiCoalescingWindowMs,
+    );
   }
 
   const unsubscribeEventBus = options?.changeEventBus?.subscribe((event) => {
@@ -195,6 +237,7 @@ export function exposeFileSystem<T extends StringKeyedObject>(
   return {
     cleanup() {
       coalescer?.dispose();
+      throttledWorker?.dispose();
       unsubscribeEventBus?.();
       self.removeEventListener('message', handler);
       for (const port of activePorts) {
