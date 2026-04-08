@@ -352,19 +352,23 @@ function SelectWidget(props: WidgetProps): React.ReactNode {
 
   const { enumOptions, enumDisabled } = options;
 
-  const handleChange = (newValue: string) => {
-    onChange(newValue === '' ? undefined : newValue);
-  };
-
   if (!enumOptions) {
     throw new Error('No enum options provided');
   }
 
+  const handleChange = (newValue: string) => {
+    if (newValue === '') {
+      onChange(undefined);
+      return;
+    }
+    const matched = enumOptions.find((opt) => String(opt.value) === newValue);
+    onChange(matched ? matched.value : newValue);
+  };
+
   const prettyLabel = name ? toTitleCase(name) : '';
 
   return (
-    // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- value is untyped in RJSF
-    <Select value={value} onValueChange={handleChange}>
+    <Select value={String(value ?? '')} onValueChange={handleChange}>
       <SelectTrigger
         size='sm'
         className='h-(--param-field-h) min-w-0 flex-1 rounded-(--param-field-radius) border-border/50 bg-muted text-(--param-field-color) shadow-none transition-colors hover:border-border hover:text-(--param-field-color-focus) focus-visible:border-border focus-visible:text-(--param-field-color-focus) focus-visible:ring-0'
@@ -381,8 +385,7 @@ function SelectWidget(props: WidgetProps): React.ReactNode {
         {enumOptions.map((option) => (
           <SelectItem
             key={String(option.value)}
-            // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- value is untyped in RJSF
-            value={option.value}
+            value={String(option.value)}
             // oxlint-disable-next-line @typescript-eslint/no-unsafe-argument -- value is untyped in RJSF
             disabled={enumDisabled?.includes(option.value)}
             className='h-7'
