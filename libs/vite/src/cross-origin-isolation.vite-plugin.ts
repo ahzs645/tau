@@ -13,7 +13,8 @@ import type { Plugin, PreviewServer, ViteDevServer } from 'vite';
 export function crossOriginIsolation(): Plugin {
   const headers: Record<string, string> = {
     'Cross-Origin-Opener-Policy': 'same-origin',
-    'Cross-Origin-Embedder-Policy': 'credentialless',
+    'Cross-Origin-Embedder-Policy': 'require-corp',
+    'Cross-Origin-Resource-Policy': 'same-origin',
   };
 
   function applyHeaders(server: ViteDevServer | PreviewServer): void {
