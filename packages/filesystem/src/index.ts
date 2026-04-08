@@ -40,10 +40,5 @@ export { streamChunkSize, bufferToStream } from '#providers/stream-utils.js';
 export type { FileReadStreamOptions as StreamFileReadOptions } from '#providers/stream-utils.js';
 export { CrossTabCoordinator, isNavigatorLocksSupported } from '#cross-tab-coordinator.js';
 
-export { SharedMemoryArena, ARENA_ENTRY_STATE, ARENA_HEADER_BYTES, ARENA_ENTRY_BYTES } from '#shared-memory-arena.js';
-export type { ArenaEntry, SharedMemoryArenaOptions } from '#shared-memory-arena.js';
-export { SharedContentPool } from '#shared-content-pool.js';
-export type { SharedContentPoolOptions } from '#shared-content-pool.js';
-
 export { MountTable } from '#mount-table.js';
 export type { MountConfig, MountEntry, MountOptions, MountResolution } from '#mount-table.js';

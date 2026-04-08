@@ -8,6 +8,7 @@ import { ResourceQueue } from '#resource-queue.js';
 import { DirectoryTreeCache } from '#directory-tree-cache.js';
 import { ChangeEventBus } from '#change-event-bus.js';
 import { MountTable } from '#mount-table.js';
+import { SharedPool } from '@taucad/memory';
 import type { ChangeEvent, FileSystemProvider, WatchEvent } from '#types.js';
 
 const encoder = new TextEncoder();
@@ -1218,15 +1219,13 @@ describe('FileService integration [DirectIDB]', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // SharedContentPool integration
+  // SharedPool integration
   // ---------------------------------------------------------------------------
 
-  describe('SharedContentPool integration', () => {
+  describe('SharedPool integration', () => {
     async function createFileServiceWithPool() {
-      // eslint-disable-next-line @typescript-eslint/naming-convention -- class constructor
-      const { SharedContentPool } = await import('#shared-content-pool.js');
       const buffer = new SharedArrayBuffer(128 * 1024);
-      const pool = new SharedContentPool(buffer, { maxEntries: 128 });
+      const pool = new SharedPool(buffer, { maxEntries: 128 });
 
       const providerRegistry = new ProviderRegistry();
       const provider = await providerRegistry.createMountProvider('memory');
@@ -1255,7 +1254,7 @@ describe('FileService integration [DirectIDB]', () => {
 
       await svc.readFile('/cached.txt');
 
-      const cached = pool.resolve('/cached.txt');
+      const cached = pool.resolveCopy('/cached.txt');
       expect(cached).toBeDefined();
       expect(decoder.decode(cached)).toBe('pooled content');
     });
@@ -1297,6 +1296,36 @@ describe('FileService integration [DirectIDB]', () => {
 
       const content = await svc.readFile('/no-pool.txt', 'utf8');
       expect(content).toBe('data');
+    });
+
+    it('should accept contentPool via setContentPool after construction', async () => {
+      const { service: svc } = await createFileService();
+      const buffer = new SharedArrayBuffer(128 * 1024);
+      const pool = new SharedPool(buffer, { maxEntries: 128 });
+
+      svc.setContentPool(pool);
+
+      await svc.writeFile('/late-pool.txt', 'late binding');
+      await svc.readFile('/late-pool.txt');
+
+      const cached = pool.resolveCopy('/late-pool.txt');
+      expect(cached).toBeDefined();
+      expect(decoder.decode(cached)).toBe('late binding');
+    });
+
+    it('should invalidate late-bound pool on writeFile', async () => {
+      const { service: svc } = await createFileService();
+      const buffer = new SharedArrayBuffer(128 * 1024);
+      const pool = new SharedPool(buffer, { maxEntries: 128 });
+
+      svc.setContentPool(pool);
+
+      await svc.writeFile('/invalidate.txt', 'original');
+      await svc.readFile('/invalidate.txt');
+      expect(pool.has('/invalidate.txt')).toBe(true);
+
+      await svc.writeFile('/invalidate.txt', 'updated');
+      expect(pool.has('/invalidate.txt')).toBe(false);
     });
   });
 

@@ -15,7 +15,7 @@ import { InMemoryFileTree } from '#in-memory-file-tree.js';
 import { WatchRegistry } from '#watch-registry.js';
 import { bufferToStream } from '#providers/stream-utils.js';
 import { CrossTabCoordinator } from '#cross-tab-coordinator.js';
-import type { SharedContentPool } from '#shared-content-pool.js';
+import type { SharedPool } from '@taucad/memory';
 import type { MountTable, MountOptions, MountResolution } from '#mount-table.js';
 import { parentDirectory, joinPath, normalizePath } from '@taucad/utils/path';
 
@@ -50,7 +50,7 @@ export class FileService {
   private readonly _eventBus: ChangeEventBus;
   private readonly _watchRegistry: WatchRegistry;
   private readonly _crossTabCoordinator: CrossTabCoordinator;
-  private readonly _contentPool: SharedContentPool | undefined;
+  private _contentPool: SharedPool | undefined;
   private readonly _mountTable: MountTable;
   private readonly _inMemoryTree = new InMemoryFileTree();
   /** Absolute path passed to the first {@link getDirectoryStat} that populated the tree; in-memory paths are relative to this root. */
@@ -68,7 +68,7 @@ export class FileService {
     eventBus: ChangeEventBus;
     crossTabCoordinator?: CrossTabCoordinator;
     /** Writer-side shared content pool for zero-IPC cached reads across threads. */
-    contentPool?: SharedContentPool;
+    contentPool?: SharedPool;
     /** Mount table for multi-backend path routing. */
     mountTable: MountTable;
   }) {
@@ -80,6 +80,16 @@ export class FileService {
     this._crossTabCoordinator = options.crossTabCoordinator ?? new CrossTabCoordinator();
     this._contentPool = options.contentPool;
     this._mountTable = options.mountTable;
+  }
+
+  /**
+   * Set or replace the shared content pool for zero-IPC cached reads.
+   * Enables late binding when the SharedArrayBuffer arrives after construction.
+   *
+   * @param pool - Writer-side shared content pool.
+   */
+  public setContentPool(pool: SharedPool): void {
+    this._contentPool = pool;
   }
 
   // --- Read operations (direct to provider, no serialization) ---
