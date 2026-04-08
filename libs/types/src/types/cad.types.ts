@@ -143,28 +143,20 @@ export type ParsedCadModule = {
 };
 
 /**
- * Filesystem-based parameter configuration.
- * Contains per-file parameter entries with named parameter sets.
- */
-export type FileParameterConfig = {
-  version: 1;
-  files: Record<string, FileParameterEntry>;
-};
-
-/**
  * Parameter configuration for a single source file.
- * Tracks which parameter set is active and all available sets.
+ * Tracks which parameter group is active and all available groups.
+ * Stored as a per-CU file at `.tau/parameters/<entryFile>.json`.
  */
 export type FileParameterEntry = {
-  activeSet: string;
+  activeGroup: string;
   order?: string[];
-  sets: Record<string, ParameterSet>;
+  groups: Record<string, ParameterGroup>;
 };
 
 /**
  * A named collection of parameter override values.
  * Values are overrides of source-code defaults — only non-default values are stored.
  */
-export type ParameterSet = {
+export type ParameterGroup = {
   values: Record<string, unknown>;
 };

@@ -1,8 +1,9 @@
-/* eslint-disable import-x/no-extraneous-dependencies -- Allowable for devDependencies. */
 // JSCAD example code
 import jscadCubeCode from '#kernels/jscad/cube/main.ts?raw';
 import jscadCylinderCode from '#kernels/jscad/cylinder/main.ts?raw';
 import jscadGearCode from '#kernels/jscad/gear/main.ts?raw';
+// OpenSCAD example code
+import openscadKitchenSinkCode from '#kernels/openscad/kitchen-sink/main.scad?raw';
 // Replicad example code
 import birdhouseCode from '#kernels/replicad/birdhouse/main.ts?raw';
 import hollowBoxCode from '#kernels/replicad/hollow-box/main.ts?raw';
@@ -56,6 +57,17 @@ export const jscadExamples: Model[] = [
     description:
       'Design precision mechanical gears with mathematically accurate involute profiles. This advanced example showcases complex parametric modeling with customizable tooth count, pitch, pressure angle, and thickness. Perfect for creating functional gear systems, educational demonstrations, or replacement parts. Features optional center hole for shaft mounting and professional-grade gear geometry calculations.',
     code: jscadGearCode,
+    thumbnail: '/placeholder.svg',
+  },
+] as const;
+
+export const openscadExamples: Model[] = [
+  {
+    id: 'openscad_kitchen_sink',
+    name: 'Parameter Kitchen Sink',
+    description:
+      'A comprehensive showcase of every OpenSCAD Customizer parameter type: spinboxes, sliders, dropdowns, checkboxes, text fields, color pickers, and vectors. Use this to test and validate parameter UI rendering across all supported input types.',
+    code: openscadKitchenSinkCode,
     thumbnail: '/placeholder.svg',
   },
 ] as const;
