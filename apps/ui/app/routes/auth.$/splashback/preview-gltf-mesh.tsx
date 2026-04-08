@@ -61,15 +61,7 @@ export function PreviewGltfMesh({
     const loadGltf = async (): Promise<void> => {
       try {
         const loader = new GLTFLoader();
-
-        if (typeof SharedArrayBuffer === 'function' && gltfFile.buffer instanceof SharedArrayBuffer) {
-          throw new TypeError('SharedArrayBuffer is not supported in <PreviewGltfMesh />');
-        }
-
-        const gltf = await loader.parseAsync(
-          gltfFile.buffer,
-          '', // Path (not needed for ArrayBuffer)
-        );
+        const gltf = await loader.parseAsync(gltfFile.buffer, '');
 
         // Apply metallic standard material to all meshes (no lines)
         const metallicMaterial = new THREE.MeshStandardMaterial({
