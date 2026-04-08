@@ -5,10 +5,16 @@
  * and plugin configuration. This is the primary API for consumers.
  */
 
-import type { GeometryFile, ExportFormat, ExportFile, LogOrigin } from '@taucad/types';
+import type { Geometry, GeometryFile, ExportFormat, ExportFile, LogOrigin } from '@taucad/types';
 import type { HashedGeometryResult, GetParametersResult, KernelResult, KernelIssue } from '#types/runtime.types.js';
 import type { RuntimeFileSystemBase, Tessellation } from '#types/runtime-kernel.types.js';
-import type { PerformanceEntryData, RenderPhase, WorkerState } from '#types/runtime-protocol.types.js';
+import type {
+  PerformanceEntryData,
+  RenderPhase,
+  WorkerState,
+  GeometryTransport,
+  HashedGeometryResultTransport,
+} from '#types/runtime-protocol.types.js';
 import { RuntimeWorkerClient } from '#framework/runtime-worker-client.js';
 import type { BridgeHandle } from '#framework/runtime-filesystem-bridge.js';
 import { createBridgePort } from '#framework/runtime-filesystem-bridge.js';
@@ -16,6 +22,8 @@ import { fromMemoryFS } from '#filesystem/from-memory-fs.js';
 import { createWorkerTransport } from '#transport/worker-transport.js';
 import type { RuntimeTransport } from '#transport/runtime-transport.js';
 import type { KernelPlugin, MiddlewarePlugin, BundlerPlugin } from '#plugins/plugin-types.js';
+import { SharedPool } from '@taucad/memory';
+import type { SharedPoolOptions } from '@taucad/memory';
 
 // =============================================================================
 // RenderInput Types
@@ -109,6 +117,15 @@ function resolveFileString(file: string): GeometryFile {
 }
 
 /**
+ * Configuration for a shared-memory pool.
+ * @public
+ */
+export type SharedMemoryConfig = SharedPoolOptions & {
+  /** Size of the SharedArrayBuffer to allocate in bytes. */
+  bytes: number;
+};
+
+/**
  * Options for creating a RuntimeClient.
  * @public
  */
@@ -137,6 +154,17 @@ export type RuntimeClientOptions = {
     /** Tessellation quality for file export (client.export). */
     export?: Tessellation;
   };
+  /**
+   * Shared memory configuration for zero-IPC geometry data exchange.
+   * Allocates a SharedArrayBuffer and creates a SharedPool on both the main thread and the worker.
+   *
+   * File pool SABs are owned by the file manager (domain-driven allocation) and
+   * passed through via `connect({ filePoolBuffer })`.
+   */
+  sharedMemory?: {
+    /** Geometry pool for zero-copy geometry data transfer between worker and main thread. */
+    geometry?: SharedMemoryConfig;
+  };
 };
 
 /**
@@ -144,11 +172,16 @@ export type RuntimeClientOptions = {
  *
  * - `{ fileSystem }` -- main-thread relay: the client creates a MessagePort bridge internally.
  * - `{ port }` -- direct bridge: pass a pre-existing MessagePort (e.g., from `createFileSystemBridge`).
+ *
+ * `filePoolBuffer` is an optional SharedArrayBuffer allocated by the file manager for
+ * zero-IPC file content caching. When provided, it is forwarded to the kernel worker
+ * so the filesystem bridge can resolve file reads from shared memory.
  * @public
  */
 export type ConnectOptions =
   //
-  { fileSystem: RuntimeFileSystemBase } | { port: MessagePort };
+  | { fileSystem: RuntimeFileSystemBase; filePoolBuffer?: SharedArrayBuffer }
+  | { port: MessagePort; filePoolBuffer?: SharedArrayBuffer };
 
 type LogEntry = {
   level: string;
@@ -173,6 +206,9 @@ type EventHandlers = {
  * @public
  */
 export type RuntimeClient = {
+  /** Shared memory pool for zero-IPC geometry data exchange. Populated during connect(). */
+  readonly geometryPool: SharedPool | undefined;
+
   /**
    * Connect to the runtime worker and initialize with a filesystem.
    *
@@ -332,6 +368,10 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
   let connectedViaPort = false;
   let managedFileSystem: RuntimeFileSystemBase | undefined;
 
+  let _geometryPool: SharedPool | undefined;
+  let _geometryPoolBuffer: SharedArrayBuffer | undefined;
+  let poolsInitialized = false;
+
   const handlers: EventHandlers = {
     log: new Set(),
     progress: new Set(),
@@ -377,8 +417,8 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
             handler(state, detail);
           }
         },
-        onGeometryComputed(result) {
-          emitGeometry(result);
+        onGeometryComputed(transportResult) {
+          emitGeometry(resolveTransportResult(transportResult, _geometryPool));
         },
         onParametersResolved(result) {
           for (const handler of handlers.parametersResolved) {
@@ -427,15 +467,66 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
       fileSystemPort = fileSystemBridge.port;
     }
 
+    if (!poolsInitialized && options.sharedMemory) {
+      try {
+        const { geometry } = options.sharedMemory;
+        if (geometry) {
+          _geometryPoolBuffer = new SharedArrayBuffer(geometry.bytes);
+          _geometryPool = new SharedPool(_geometryPoolBuffer, {
+            maxEntries: geometry.maxEntries,
+            maxEntryBytes: geometry.maxEntryBytes,
+            eviction: geometry.eviction,
+          });
+        }
+      } catch {
+        // SAB unavailable (non-secure context or missing COEP/COOP headers).
+        // All geometry transport falls back to inline postMessage delivery.
+      }
+      poolsInitialized = true;
+    }
+
     await workerClient.initialize({
       options: { kernelModules },
       fileSystemPort,
       middlewareEntries,
       bundlerEntries,
+      geometryPoolBuffer: _geometryPoolBuffer,
+      filePoolBuffer: resolvedOptions.filePoolBuffer,
     });
 
     connected = true;
     return workerClient;
+  }
+
+  function resolveGeometry(geo: GeometryTransport, geometryPool: SharedPool | undefined): Geometry {
+    if (geo.format !== 'gltf') {
+      return geo;
+    }
+
+    const { contentRef, hash } = geo;
+    if (contentRef.delivery === 'inline') {
+      return { format: 'gltf', content: contentRef.bytes, hash };
+    }
+
+    const view = geometryPool?.resolveCopy(contentRef.key);
+    if (!view) {
+      throw new Error(`SharedPool entry not found: key=${contentRef.key}`);
+    }
+    return { format: 'gltf', content: view, hash };
+  }
+
+  function resolveTransportResult(
+    transport: HashedGeometryResultTransport,
+    geometryPool: SharedPool | undefined,
+  ): HashedGeometryResult {
+    if (!transport.success) {
+      return transport;
+    }
+
+    return {
+      ...transport,
+      data: transport.data.map((geo) => resolveGeometry(geo, geometryPool)),
+    };
   }
 
   function emitGeometry(result: HashedGeometryResult): void {
@@ -450,7 +541,7 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
     tessellation: Tessellation | undefined;
     client: RuntimeWorkerClient;
   }): Promise<HashedGeometryResult> {
-    const result = await input.client.render({
+    const transportResult = await input.client.render({
       file: input.file,
       parameters: input.parameters,
       onParametersResolved(parametersResult) {
@@ -465,8 +556,9 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
       },
       tessellation: input.tessellation,
     });
-    emitGeometry(result);
-    return result;
+    const resolved = resolveTransportResult(transportResult, _geometryPool);
+    emitGeometry(resolved);
+    return resolved;
   }
 
   return {
@@ -594,6 +686,11 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
       return () => {
         set.delete(handler);
       };
+    },
+
+    /** Shared memory pool for zero-IPC geometry data exchange. */
+    get geometryPool() {
+      return _geometryPool;
     },
 
     terminate(): void {

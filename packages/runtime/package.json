@@ -298,6 +298,7 @@
     "@jscad/modeling": "catalog:",
     "@kittycad/lib": "catalog:",
     "@msgpack/msgpack": "catalog:",
+    "@taucad/memory": "workspace:*",
     "@taucad/converter": "workspace:*",
     "@taucad/json-schema": "workspace:*",
     "@taucad/kcl-wasm-lib": "catalog:",

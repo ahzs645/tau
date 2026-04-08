@@ -11,6 +11,7 @@ export {
 export type {
   RuntimeClient,
   RuntimeClientOptions,
+  SharedMemoryConfig,
   ConnectOptions,
   CodeInput,
   FileInput,

@@ -188,8 +188,10 @@ export class RuntimeWorkerClient {
     fileSystemPort: MessagePort;
     middlewareEntries: MiddlewareRegistrations;
     bundlerEntries?: BundlerRegistrations;
-    /** Shared memory buffer for zero-IPC file content reads. */
-    contentPoolBuffer?: SharedArrayBuffer;
+    /** SharedArrayBuffer for the geometry pool (zero-IPC geometry data exchange). */
+    geometryPoolBuffer?: SharedArrayBuffer;
+    /** SharedArrayBuffer for the file pool (zero-IPC file content caching). */
+    filePoolBuffer?: SharedArrayBuffer;
   }): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       this.pendingInit = {
@@ -207,7 +209,8 @@ export class RuntimeWorkerClient {
         bundlerEntries: input.bundlerEntries,
         fileSystemPort: input.fileSystemPort,
         signalBuffer: this.signalBuffer,
-        contentPoolBuffer: input.contentPoolBuffer,
+        geometryPoolBuffer: input.geometryPoolBuffer,
+        filePoolBuffer: input.filePoolBuffer,
       };
       this.transport.send(command, [input.fileSystemPort]);
     });

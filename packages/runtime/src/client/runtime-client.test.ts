@@ -8,7 +8,8 @@
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import type { HashedGeometryResult } from '#types/runtime.types.js';
-import type { PerformanceEntryData } from '#types/runtime-protocol.types.js';
+import type { PerformanceEntryData, RuntimeCommand, RuntimeResponse } from '#types/runtime-protocol.types.js';
+import type { RuntimeTransport } from '#transport/runtime-transport.js';
 import { createRuntimeClient, fromMemoryFS } from '#index.js';
 import { createInProcessTransport } from '#transport/in-process-transport.js';
 import { replicad } from '#plugins/kernel-factories.js';
@@ -507,6 +508,571 @@ describe('telemetry', () => {
 
     const allEntries = telemetryBatches.flat();
     expect(allEntries.length).toBeGreaterThan(0);
+
+    client.terminate();
+  });
+});
+
+// =============================================================================
+// Shared memory pools
+// =============================================================================
+
+describe('shared memory pools', () => {
+  function createAutoInitTransport(): {
+    transport: RuntimeTransport;
+    capturedCommands: RuntimeCommand[];
+  } {
+    const capturedCommands: RuntimeCommand[] = [];
+    let handler: ((message: RuntimeResponse) => void) | undefined;
+
+    const transport: RuntimeTransport = {
+      send(message: RuntimeCommand) {
+        capturedCommands.push(message);
+        if (message.type === 'initialize' && handler) {
+          handler({ type: 'initialized', requestId: message.requestId });
+        }
+      },
+      onMessage(h) {
+        handler = h;
+      },
+      // oxlint-disable-next-line no-empty-function -- mock transport
+      close() {},
+    };
+
+    return { transport, capturedCommands };
+  }
+
+  it('should allocate geometryPoolBuffer for configured geometry pool', async () => {
+    const { transport, capturedCommands } = createAutoInitTransport();
+
+    const client = createRuntimeClient({
+      kernels: [],
+      transport,
+      sharedMemory: {
+        geometry: { bytes: 1024, maxEntries: 10, eviction: 'lru' },
+      },
+    });
+
+    await client.connect({ fileSystem: fromMemoryFS() });
+
+    const initCmd = capturedCommands.find((c) => c.type === 'initialize');
+    expect(initCmd).toBeDefined();
+    expect(initCmd!.geometryPoolBuffer).toBeInstanceOf(SharedArrayBuffer);
+    expect(initCmd!.geometryPoolBuffer!.byteLength).toBe(1024);
+
+    client.terminate();
+  });
+
+  it('should pass external filePoolBuffer through to initialize command', async () => {
+    const { transport, capturedCommands } = createAutoInitTransport();
+    const externalSAB = new SharedArrayBuffer(4096);
+
+    const client = createRuntimeClient({
+      kernels: [],
+      transport,
+      sharedMemory: {
+        geometry: { bytes: 2048, maxEntries: 5, eviction: 'lru' },
+      },
+    });
+
+    await client.connect({ fileSystem: fromMemoryFS(), filePoolBuffer: externalSAB });
+
+    const initCmd = capturedCommands.find((c) => c.type === 'initialize');
+    expect(initCmd!.geometryPoolBuffer).toBeInstanceOf(SharedArrayBuffer);
+    expect(initCmd!.geometryPoolBuffer!.byteLength).toBe(2048);
+    expect(initCmd!.filePoolBuffer).toBe(externalSAB);
+
+    client.terminate();
+  });
+
+  it('should pass external filePoolBuffer via port-based connect', async () => {
+    const { transport, capturedCommands } = createAutoInitTransport();
+    const externalSAB = new SharedArrayBuffer(4096);
+    const { port1 } = new MessageChannel();
+
+    const client = createRuntimeClient({
+      kernels: [],
+      transport,
+      sharedMemory: {
+        geometry: { bytes: 1024, maxEntries: 10, eviction: 'lru' },
+      },
+    });
+
+    await client.connect({ port: port1, filePoolBuffer: externalSAB });
+
+    const initCmd = capturedCommands.find((c) => c.type === 'initialize');
+    expect(initCmd!.filePoolBuffer).toBe(externalSAB);
+
+    client.terminate();
+  });
+
+  it('should expose geometryPool on client after connect', async () => {
+    const { transport } = createAutoInitTransport();
+
+    const client = createRuntimeClient({
+      kernels: [],
+      transport,
+      sharedMemory: {
+        geometry: { bytes: 1024, maxEntries: 10, eviction: 'lru' },
+      },
+    });
+
+    await client.connect({ fileSystem: fromMemoryFS() });
+
+    expect(client.geometryPool).toBeDefined();
+    expect(typeof client.geometryPool!.store).toBe('function');
+    expect(typeof client.geometryPool!.resolve).toBe('function');
+
+    client.terminate();
+  });
+
+  it('should not include filePoolBuffer in initialize when not provided to connect', async () => {
+    const { transport, capturedCommands } = createAutoInitTransport();
+
+    const client = createRuntimeClient({
+      kernels: [],
+      transport,
+      sharedMemory: {
+        geometry: { bytes: 1024, maxEntries: 10, eviction: 'lru' },
+      },
+    });
+
+    await client.connect({ fileSystem: fromMemoryFS() });
+
+    const initCmd = capturedCommands.find((c) => c.type === 'initialize');
+    expect(initCmd!.filePoolBuffer).toBeUndefined();
+
+    client.terminate();
+  });
+
+  it('should not create pools when sharedMemory is not configured', async () => {
+    const { transport, capturedCommands } = createAutoInitTransport();
+
+    const client = createRuntimeClient({
+      kernels: [],
+      transport,
+    });
+
+    await client.connect({ fileSystem: fromMemoryFS() });
+
+    const initCmd = capturedCommands.find((c) => c.type === 'initialize');
+    expect(initCmd!.geometryPoolBuffer).toBeUndefined();
+    expect(initCmd!.filePoolBuffer).toBeUndefined();
+    expect(client.geometryPool).toBeUndefined();
+
+    client.terminate();
+  });
+
+  it('should gracefully skip pool creation when SharedArrayBuffer is unavailable', async () => {
+    const originalSAB = globalThis.SharedArrayBuffer;
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- test simulates missing SAB
+    (globalThis as Record<string, unknown>)['SharedArrayBuffer'] = class {
+      constructor() {
+        throw new TypeError('SharedArrayBuffer is not available');
+      }
+    };
+
+    try {
+      const { transport, capturedCommands } = createAutoInitTransport();
+
+      const client = createRuntimeClient({
+        kernels: [],
+        transport,
+        sharedMemory: {
+          geometry: { bytes: 1024, maxEntries: 10, eviction: 'lru' },
+        },
+      });
+
+      await client.connect({ fileSystem: fromMemoryFS() });
+
+      const initCmd = capturedCommands.find((c) => c.type === 'initialize');
+      expect(initCmd!.geometryPoolBuffer).toBeUndefined();
+      expect(client.geometryPool).toBeUndefined();
+
+      client.terminate();
+    } finally {
+      globalThis.SharedArrayBuffer = originalSAB;
+    }
+  });
+});
+
+// =============================================================================
+// Geometry transport resolution (two-layer type boundary)
+// =============================================================================
+
+describe('geometry transport resolution', () => {
+  function createResolvingTransport(): {
+    transport: RuntimeTransport;
+    pushResponse: (response: RuntimeResponse) => void;
+  } {
+    let handler: ((message: RuntimeResponse) => void) | undefined;
+
+    const transport: RuntimeTransport = {
+      send(message: RuntimeCommand) {
+        if (message.type === 'initialize' && handler) {
+          handler({ type: 'initialized', requestId: message.requestId });
+        }
+      },
+      onMessage(h) {
+        handler = h;
+      },
+      // oxlint-disable-next-line no-empty-function -- mock transport
+      close() {},
+    };
+
+    return {
+      transport,
+      pushResponse(response: RuntimeResponse) {
+        handler?.(response);
+      },
+    };
+  }
+
+  it('should resolve pooled delivery from SharedPool before emitting to geometry subscribers', async () => {
+    const { transport, pushResponse } = createResolvingTransport();
+
+    const client = createRuntimeClient({
+      kernels: [],
+      transport,
+      sharedMemory: {
+        geometry: { bytes: 256 * 1024, maxEntries: 64, eviction: 'lru' },
+      },
+    });
+
+    await client.connect({ fileSystem: fromMemoryFS() });
+
+    const pool = client.geometryPool!;
+    const content = new Uint8Array([10, 20, 30]);
+    pool.store('hash-0', content);
+
+    let eventResult: HashedGeometryResult | undefined;
+    client.on('geometry', (result) => {
+      eventResult = result;
+    });
+
+    pushResponse({
+      type: 'geometryComputed',
+      requestId: '',
+      result: {
+        success: true,
+        data: [
+          {
+            format: 'gltf',
+            contentRef: { delivery: 'pooled', key: 'hash-0' },
+            hash: 'hash-0',
+          },
+        ],
+        issues: [],
+      },
+    });
+
+    expect(eventResult).toBeDefined();
+    expect(eventResult!.success).toBe(true);
+    if (eventResult!.success) {
+      expect(eventResult!.data[0]!.format).toBe('gltf');
+      if (eventResult!.data[0]!.format === 'gltf') {
+        const resolved = eventResult!.data[0]!.content;
+        expect(resolved).toBeInstanceOf(Uint8Array);
+        expect(resolved.byteLength).toBe(3);
+        expect(resolved.buffer).toBeInstanceOf(ArrayBuffer);
+        expect(resolved.buffer).not.toBeInstanceOf(SharedArrayBuffer);
+        expect(resolved.byteOffset).toBe(0);
+      }
+    }
+
+    client.terminate();
+  });
+
+  it('should pass inline delivery bytes through as content', async () => {
+    const { transport, pushResponse } = createResolvingTransport();
+
+    const client = createRuntimeClient({
+      kernels: [],
+      transport,
+    });
+
+    await client.connect({ fileSystem: fromMemoryFS() });
+
+    let eventResult: HashedGeometryResult | undefined;
+    client.on('geometry', (result) => {
+      eventResult = result;
+    });
+
+    const inlineBytes = new Uint8Array([1, 2, 3]);
+    pushResponse({
+      type: 'geometryComputed',
+      requestId: '',
+      result: {
+        success: true,
+        data: [
+          {
+            format: 'gltf',
+            contentRef: { delivery: 'inline', bytes: inlineBytes },
+            hash: 'h1',
+          },
+        ],
+        issues: [],
+      },
+    });
+
+    expect(eventResult).toBeDefined();
+    expect(eventResult!.success).toBe(true);
+    if (eventResult!.success && eventResult!.data[0]!.format === 'gltf') {
+      expect(eventResult!.data[0]!.content).toEqual(inlineBytes);
+    }
+
+    client.terminate();
+  });
+
+  it('should resolve geometry via inline delivery when SAB pools failed to initialize', async () => {
+    const originalSAB = globalThis.SharedArrayBuffer;
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- test simulates missing SAB
+    (globalThis as Record<string, unknown>)['SharedArrayBuffer'] = class {
+      constructor() {
+        throw new TypeError('SharedArrayBuffer is not available');
+      }
+    };
+
+    try {
+      const { transport, pushResponse } = createResolvingTransport();
+
+      const client = createRuntimeClient({
+        kernels: [],
+        transport,
+        sharedMemory: {
+          geometry: { bytes: 1024, maxEntries: 10, eviction: 'lru' },
+        },
+      });
+
+      await client.connect({ fileSystem: fromMemoryFS() });
+
+      let eventResult: HashedGeometryResult | undefined;
+      client.on('geometry', (result) => {
+        eventResult = result;
+      });
+
+      const inlineBytes = new Uint8Array([7, 8, 9]);
+      pushResponse({
+        type: 'geometryComputed',
+        requestId: '',
+        result: {
+          success: true,
+          data: [
+            {
+              format: 'gltf',
+              contentRef: { delivery: 'inline', bytes: inlineBytes },
+              hash: 'fallback-h1',
+            },
+          ],
+          issues: [],
+        },
+      });
+
+      expect(eventResult).toBeDefined();
+      expect(eventResult!.success).toBe(true);
+      if (eventResult!.success && eventResult!.data[0]!.format === 'gltf') {
+        expect(eventResult!.data[0]!.content).toEqual(inlineBytes);
+      }
+
+      client.terminate();
+    } finally {
+      globalThis.SharedArrayBuffer = originalSAB;
+    }
+  });
+
+  it('should pass SVG geometries through unchanged', async () => {
+    const { transport, pushResponse } = createResolvingTransport();
+
+    const client = createRuntimeClient({
+      kernels: [],
+      transport,
+    });
+
+    await client.connect({ fileSystem: fromMemoryFS() });
+
+    let eventResult: HashedGeometryResult | undefined;
+    client.on('geometry', (result) => {
+      eventResult = result;
+    });
+
+    pushResponse({
+      type: 'geometryComputed',
+      requestId: '',
+      result: {
+        success: true,
+        data: [
+          {
+            format: 'svg',
+            paths: ['M0 0'],
+            viewbox: '0 0 100 100',
+            name: 'test',
+            hash: 'svg-h',
+          },
+        ],
+        issues: [],
+      },
+    });
+
+    expect(eventResult).toBeDefined();
+    expect(eventResult!.success).toBe(true);
+    if (eventResult!.success) {
+      expect(eventResult!.data[0]!.format).toBe('svg');
+    }
+
+    client.terminate();
+  });
+
+  it('should pass error results through unchanged', async () => {
+    const { transport, pushResponse } = createResolvingTransport();
+
+    const client = createRuntimeClient({
+      kernels: [],
+      transport,
+    });
+
+    await client.connect({ fileSystem: fromMemoryFS() });
+
+    let eventResult: HashedGeometryResult | undefined;
+    client.on('geometry', (result) => {
+      eventResult = result;
+    });
+
+    pushResponse({
+      type: 'geometryComputed',
+      requestId: '',
+      result: {
+        success: false,
+        issues: [{ message: 'fail', type: 'kernel', severity: 'error' }],
+      },
+    });
+
+    expect(eventResult).toBeDefined();
+    expect(eventResult!.success).toBe(false);
+
+    client.terminate();
+  });
+
+  it('should resolve pooled content as standalone ArrayBuffer-backed Uint8Array', async () => {
+    const { transport, pushResponse } = createResolvingTransport();
+
+    const client = createRuntimeClient({
+      kernels: [],
+      transport,
+      sharedMemory: {
+        geometry: { bytes: 256 * 1024, maxEntries: 64, eviction: 'lru' },
+      },
+    });
+
+    await client.connect({ fileSystem: fromMemoryFS() });
+
+    const pool = client.geometryPool!;
+    const glbMagic = new Uint8Array([0x67, 0x6c, 0x54, 0x46]); // 'glTF'
+    pool.store('sab-test-0', glbMagic);
+
+    let eventResult: HashedGeometryResult | undefined;
+    client.on('geometry', (result) => {
+      eventResult = result;
+    });
+
+    pushResponse({
+      type: 'geometryComputed',
+      requestId: '',
+      result: {
+        success: true,
+        data: [
+          {
+            format: 'gltf',
+            contentRef: { delivery: 'pooled', key: 'sab-test-0' },
+            hash: 'sab-test-0',
+          },
+        ],
+        issues: [],
+      },
+    });
+
+    expect(eventResult).toBeDefined();
+    expect(eventResult!.success).toBe(true);
+    if (eventResult!.success && eventResult!.data[0]!.format === 'gltf') {
+      const content = eventResult!.data[0]!.content;
+
+      // RuntimeClient encapsulates SAB resolution — consumers get ArrayBuffer-backed content
+      expect(content.buffer).toBeInstanceOf(ArrayBuffer);
+      expect(content.buffer).not.toBeInstanceOf(SharedArrayBuffer);
+      expect(content.byteOffset).toBe(0);
+      expect(content.byteLength).toBe(4);
+      expect(content.buffer.byteLength).toBe(content.byteLength);
+      expect([...content]).toEqual([0x67, 0x6c, 0x54, 0x46]);
+
+      // Consumers can safely pass content.buffer to GLTFLoader without offset concerns
+      const decoded = new TextDecoder().decode(content);
+      expect(decoded).toBe('glTF');
+    }
+
+    client.terminate();
+  });
+
+  it('should resolve render() Promise with resolved content', async () => {
+    let handler: ((message: RuntimeResponse) => void) | undefined;
+    let capturedRequestId: string | undefined;
+
+    const transport: RuntimeTransport = {
+      send(message: RuntimeCommand) {
+        if (message.type === 'initialize' && handler) {
+          handler({ type: 'initialized', requestId: message.requestId });
+        }
+        if (message.type === 'render') {
+          capturedRequestId = message.requestId;
+        }
+      },
+      onMessage(h) {
+        handler = h;
+      },
+      // oxlint-disable-next-line no-empty-function -- mock transport
+      close() {},
+    };
+
+    const client = createRuntimeClient({
+      kernels: [],
+      transport,
+      sharedMemory: {
+        geometry: { bytes: 256 * 1024, maxEntries: 64, eviction: 'lru' },
+      },
+    });
+
+    await client.connect({ fileSystem: fromMemoryFS() });
+
+    const pool = client.geometryPool!;
+    const content = new Uint8Array([42, 43, 44]);
+    pool.store('render-0', content);
+
+    const renderPromise = client.render({ file: '/test.ts' });
+
+    // Push response on next microtask so render() has time to set up pendingRender
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    handler!({
+      type: 'geometryComputed',
+      requestId: capturedRequestId!,
+      result: {
+        success: true,
+        data: [
+          {
+            format: 'gltf',
+            contentRef: { delivery: 'pooled', key: 'render-0' },
+            hash: 'render-0',
+          },
+        ],
+        issues: [],
+      },
+    });
+
+    const result = await renderPromise;
+    expect(result.success).toBe(true);
+    if (result.success && result.data[0]!.format === 'gltf') {
+      expect(result.data[0]!.content.byteLength).toBe(3);
+    }
 
     client.terminate();
   });

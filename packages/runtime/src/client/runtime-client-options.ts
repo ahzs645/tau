@@ -5,7 +5,7 @@ import type { KernelPlugin, MiddlewarePlugin, BundlerPlugin } from '#plugins/plu
 type PluginWithId = KernelPlugin | MiddlewarePlugin | BundlerPlugin;
 
 const pluginArrayKeys = new Set(['kernels', 'middleware', 'bundlers']);
-const opaqueKeys = new Set(['transport', 'fileSystem']);
+const opaqueKeys = new Set(['transport', 'fileSystem', 'sharedMemory']);
 
 /**
  * Merge two plugin arrays by ID: replace existing plugins in-place (preserving

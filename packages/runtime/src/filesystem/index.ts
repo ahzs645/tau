@@ -40,9 +40,4 @@ export {
   catchMessages,
   extractTransferables,
 } from '#framework/runtime-filesystem-bridge.js';
-export type {
-  BridgeError,
-  BridgeHandle,
-  BridgeServerHandle,
-  ContentPool,
-} from '#framework/runtime-filesystem-bridge.js';
+export type { BridgeError, BridgeHandle, BridgeServerHandle, FilePool } from '#framework/runtime-filesystem-bridge.js';

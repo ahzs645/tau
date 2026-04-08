@@ -3,6 +3,7 @@ import { logLevels } from '@taucad/types/constants';
 import { joinPath } from '@taucad/utils/path';
 import { named, preserveMethodNames } from '#framework/named.js';
 import type { ExportFormat, GeometryFile, OnWorkerLog } from '@taucad/types';
+import { SharedPool } from '@taucad/memory';
 import type {
   HashedGeometryResult,
   CreateGeometryResult,
@@ -22,6 +23,7 @@ import type {
   GetParametersInput,
   CreateGeometryInput,
   GetDependenciesInput,
+  GetDependenciesResult,
   CanHandleInput,
   ExportGeometryInput,
 } from '#types/runtime-kernel.types.js';
@@ -310,8 +312,20 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   /** SharedArrayBuffer signal channel for bidirectional abort/state signaling. */
   private signalView: Int32Array | undefined;
 
-  /** SharedArrayBuffer for the shared content pool, set before initialize. */
-  private contentPoolBuffer: SharedArrayBuffer | undefined;
+  private _geometryPoolBuffer: SharedArrayBuffer | undefined;
+  private _filePoolBuffer: SharedArrayBuffer | undefined;
+  private _geometryPool: SharedPool | undefined;
+  private _filePool: SharedPool | undefined;
+
+  /** Shared memory pool for zero-IPC geometry data exchange. */
+  public get geometryPool(): SharedPool | undefined {
+    return this._geometryPool;
+  }
+
+  /** Shared memory pool for zero-IPC file content caching. */
+  public get filePool(): SharedPool | undefined {
+    return this._filePool;
+  }
 
   /** Current render generation for abort detection. */
   private renderGeneration = 0;
@@ -416,20 +430,17 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
     // Create logger (depends on onLog being set)
     this._logger = this.createLogger();
 
+    if (this._geometryPoolBuffer) {
+      this._geometryPool = new SharedPool(this._geometryPoolBuffer);
+    }
+    if (this._filePoolBuffer) {
+      this._filePool = new SharedPool(this._filePoolBuffer);
+    }
+
     // Register file manager and create filesystem if port is provided
     if (input.transferables.fileSystemPort) {
-      let readerPool: ContentPool | undefined;
-      if (this.contentPoolBuffer) {
-        try {
-          // eslint-disable-next-line import-x/no-extraneous-dependencies -- resolved by consumer's bundler; runtime is consumed as source
-          const filesystemModule = await import('@taucad/filesystem');
-          readerPool = new filesystemModule.SharedContentPool(this.contentPoolBuffer);
-        } catch {
-          // Graceful degradation: pool unavailable
-        }
-      }
       this.fileSystem = createBridgeProxy<RuntimeFileSystemBase>(input.transferables.fileSystemPort, {
-        contentPool: readerPool,
+        filePool: this._filePool as FilePool | undefined,
       });
       this._filesystem = this.createFileSystem();
     }
@@ -487,13 +498,23 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   }
 
   /**
-   * Set the SharedArrayBuffer for the shared content pool.
-   * Called by the dispatcher during initialization if the main thread provides a content pool buffer.
+   * Set the SharedArrayBuffer for the geometry pool.
+   * Called by the dispatcher during initialization.
    *
-   * @param buffer - SharedArrayBuffer backing the shared content pool.
+   * @param buffer - SharedArrayBuffer for the geometry pool.
    */
-  public setContentPoolBuffer(buffer: SharedArrayBuffer): void {
-    this.contentPoolBuffer = buffer;
+  public setGeometryPoolBuffer(buffer: SharedArrayBuffer): void {
+    this._geometryPoolBuffer = buffer;
+  }
+
+  /**
+   * Set the SharedArrayBuffer for the file pool.
+   * Called by the dispatcher during initialization.
+   *
+   * @param buffer - SharedArrayBuffer for the file pool.
+   */
+  public setFilePoolBuffer(buffer: SharedArrayBuffer): void {
+    this._filePoolBuffer = buffer;
   }
 
   /**
@@ -806,7 +827,6 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       data: { ms: performance.now() - start },
     });
 
-    // Transferable extraction is handled by the dispatcher (extractGltfTransferables)
     return result;
   }
 
@@ -1341,7 +1361,10 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * @param runtime - Runtime services (filesystem, logger)
    * @returns Array of absolute file paths that are dependencies (including the entry file)
    */
-  protected abstract onGetDependencies(input: GetDependenciesInput, runtime: KernelRuntime): Promise<string[]>;
+  protected abstract onGetDependencies(
+    input: GetDependenciesInput,
+    runtime: KernelRuntime,
+  ): Promise<GetDependenciesResult>;
 
   /**
    * Get the absolute path of the active file.
@@ -1510,6 +1533,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       this.fileHashCache.delete(path);
       this.fileContentCache.delete(path);
       this.fileContentCache.delete(`utf8:${path}`);
+      this._filePool?.invalidate(path);
     }
     for (const [entryPath, result] of this.bundleResultCache) {
       if (

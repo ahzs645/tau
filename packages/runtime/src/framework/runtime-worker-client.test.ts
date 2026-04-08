@@ -492,6 +492,27 @@ describe('RuntimeWorkerClient', () => {
 
       expect(Atomics.load(workerView, signalSlot.abortGeneration)).toBe(4);
     });
+
+    it('should include geometryPoolBuffer and filePoolBuffer in initialize command', () => {
+      const geometryBuffer = new SharedArrayBuffer(4096);
+      const fileBuffer = new SharedArrayBuffer(8192);
+      initPromise = client.initialize({
+        options: {},
+        fileSystemPort: channel.port1,
+        middlewareEntries: [],
+        geometryPoolBuffer: geometryBuffer,
+        filePoolBuffer: fileBuffer,
+      });
+
+      const initCall = vi.mocked(transport.send).mock.calls.find(([cmd]) => cmd.type === 'initialize');
+      expect(initCall).toBeDefined();
+      const command = initCall![0] as RuntimeCommand & {
+        geometryPoolBuffer?: SharedArrayBuffer;
+        filePoolBuffer?: SharedArrayBuffer;
+      };
+      expect(command.geometryPoolBuffer).toBe(geometryBuffer);
+      expect(command.filePoolBuffer).toBe(fileBuffer);
+    });
   });
 
   describe('RuntimeClient error event forwarding', () => {

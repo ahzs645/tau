@@ -5,6 +5,7 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { OnWorkerLog } from '@taucad/types';
+import { SharedPool } from '@taucad/memory';
 import type { CreateGeometryResult } from '#types/runtime.types.js';
 import type { KernelRuntime, CreateGeometryInput } from '#types/runtime-kernel.types.js';
 import type { MockKernelWorkerOptions } from '#testing/kernel-testing.utils.js';
@@ -436,7 +437,7 @@ describe('KernelWorker lifecycle', () => {
 
       // Simulate middleware registering a watch path
       // @ts-expect-error - accessing private for test verification
-      worker.handleRegisterWatchPath('/projects/test/.tau/parameters.json', { debounceMs: 200 });
+      worker.handleRegisterWatchPath('/projects/test/.tau/parameters/main.ts.json', { debounceMs: 200 });
 
       const spy = vi.spyOn(worker, 'updateWatchSet');
 
@@ -445,7 +446,7 @@ describe('KernelWorker lifecycle', () => {
 
       expect(spy).toHaveBeenCalled();
       const watchedPaths = spy.mock.calls[0]![0];
-      expect(watchedPaths).toContain('/projects/test/.tau/parameters.json');
+      expect(watchedPaths).toContain('/projects/test/.tau/parameters/main.ts.json');
       expect(watchedPaths).toContain('/projects/test/main.ts');
     });
 
@@ -461,7 +462,7 @@ describe('KernelWorker lifecycle', () => {
         worker.onGeometryComputed = vi.fn();
 
         // @ts-expect-error - accessing private for test verification
-        worker.handleRegisterWatchPath('/projects/test/.tau/parameters.json', { debounceMs: 200 });
+        worker.handleRegisterWatchPath('/projects/test/.tau/parameters/main.ts.json', { debounceMs: 200 });
 
         // @ts-expect-error - accessing private for test verification
         worker.currentFile = createGeometryFile('main.ts');
@@ -479,9 +480,9 @@ describe('KernelWorker lifecycle', () => {
         // @ts-expect-error - accessing private for test verification
         worker.fileSystem = { watch: mockWatch, dispose: vi.fn(), listen: vi.fn() };
 
-        worker.updateWatchSet(['/projects/test/main.ts', '/projects/test/.tau/parameters.json']);
+        worker.updateWatchSet(['/projects/test/main.ts', '/projects/test/.tau/parameters/main.ts.json']);
 
-        capturedWatchCallback!({ type: 'change', path: '/projects/test/.tau/parameters.json' });
+        capturedWatchCallback!({ type: 'change', path: '/projects/test/.tau/parameters/main.ts.json' });
 
         // Buffering should be emitted immediately
         expect(worker.onStateChanged).toHaveBeenCalledWith('buffering');
@@ -510,7 +511,7 @@ describe('KernelWorker lifecycle', () => {
         worker.onGeometryComputed = vi.fn();
 
         // @ts-expect-error - accessing private for test verification
-        worker.handleRegisterWatchPath('/projects/test/.tau/parameters.json', { debounceMs: 200 });
+        worker.handleRegisterWatchPath('/projects/test/.tau/parameters/main.ts.json', { debounceMs: 200 });
 
         // @ts-expect-error - accessing private for test verification
         worker.currentFile = createGeometryFile('main.ts');
@@ -528,7 +529,7 @@ describe('KernelWorker lifecycle', () => {
         // @ts-expect-error - accessing private for test verification
         worker.fileSystem = { watch: mockWatch, dispose: vi.fn(), listen: vi.fn() };
 
-        worker.updateWatchSet(['/projects/test/main.ts', '/projects/test/.tau/parameters.json']);
+        worker.updateWatchSet(['/projects/test/main.ts', '/projects/test/.tau/parameters/main.ts.json']);
 
         capturedWatchCallback!({ type: 'change', path: '/projects/test/main.ts' });
 
@@ -551,21 +552,21 @@ describe('KernelWorker lifecycle', () => {
       const worker = createConfiguredWorker();
 
       // @ts-expect-error - accessing private for test verification
-      worker.handleRegisterWatchPath('/projects/test/.tau/parameters.json', { debounceMs: 100 });
+      worker.handleRegisterWatchPath('/projects/test/.tau/parameters/main.ts.json', { debounceMs: 100 });
 
-      expect(worker.getMiddlewareWatchPaths().get('/projects/test/.tau/parameters.json')).toBe(100);
+      expect(worker.getMiddlewareWatchPaths().get('/projects/test/.tau/parameters/main.ts.json')).toBe(100);
 
       // @ts-expect-error - accessing private for test verification
-      worker.handleRegisterWatchPath('/projects/test/.tau/parameters.json', { debounceMs: 200 });
+      worker.handleRegisterWatchPath('/projects/test/.tau/parameters/main.ts.json', { debounceMs: 200 });
 
-      expect(worker.getMiddlewareWatchPaths().get('/projects/test/.tau/parameters.json')).toBe(200);
+      expect(worker.getMiddlewareWatchPaths().get('/projects/test/.tau/parameters/main.ts.json')).toBe(200);
     });
 
     it('should clear middleware watch paths on cleanup', async () => {
       const worker = createConfiguredWorker();
 
       // @ts-expect-error - accessing private for test verification
-      worker.handleRegisterWatchPath('/projects/test/.tau/parameters.json', { debounceMs: 200 });
+      worker.handleRegisterWatchPath('/projects/test/.tau/parameters/main.ts.json', { debounceMs: 200 });
 
       expect(worker.getMiddlewareWatchPaths().size).toBe(1);
 
@@ -800,7 +801,7 @@ describe('KernelWorker lifecycle', () => {
       const middlewareWithDeps = defineMiddleware({
         name: 'test-deps',
         getDependencies({ basePath }) {
-          return [`${basePath}/.tau/parameters.json`];
+          return [`${basePath}/.tau/parameters/main.ts.json`];
         },
       });
 
@@ -826,7 +827,7 @@ describe('KernelWorker lifecycle', () => {
       // (simulates a watch-triggered file change between render cycles)
       filesystem.mocks.readFile.mockResolvedValue(new Uint8Array([99, 99, 99]));
       // @ts-expect-error - accessing private for test verification
-      worker._invalidateCachesForPaths(['/projects/test/.tau/parameters.json']);
+      worker._invalidateCachesForPaths(['/projects/test/.tau/parameters/main.ts.json']);
       // @ts-expect-error - accessing private for test verification
       worker.renderDependencyCache = undefined;
 
@@ -845,7 +846,7 @@ describe('KernelWorker lifecycle', () => {
       const middlewareWithDeps = defineMiddleware({
         name: 'test-deps',
         getDependencies({ basePath }) {
-          return [`${basePath}/.tau/parameters.json`];
+          return [`${basePath}/.tau/parameters/main.ts.json`];
         },
       });
 
@@ -1013,5 +1014,56 @@ describe('KernelWorker lifecycle', () => {
       expect(watchedPaths).toContain('/projects/test/lib/cylinder.ts');
       expect(watchedPaths).toContain('/projects/test/main.ts');
     });
+  });
+});
+describe('shared pools', () => {
+  it('should accept geometry pool buffer via setGeometryPoolBuffer', () => {
+    const worker = createConfiguredWorker();
+    const buffer = new SharedArrayBuffer(4096);
+
+    expect(() => worker.setGeometryPoolBuffer(buffer)).not.toThrow();
+  });
+
+  it('should accept file pool buffer via setFilePoolBuffer', () => {
+    const worker = createConfiguredWorker();
+    const buffer = new SharedArrayBuffer(8192);
+
+    expect(() => worker.setFilePoolBuffer(buffer)).not.toThrow();
+  });
+
+  it('should expose geometryPool after setGeometryPoolBuffer and initialize', async () => {
+    const worker = createConfiguredWorker();
+    const buffer = new SharedArrayBuffer(256 * 1024);
+    worker.setGeometryPoolBuffer(buffer);
+
+    expect(worker.geometryPool).toBeUndefined();
+
+    await worker.initialize({
+      callbacks: { onLog: vi.fn() },
+      transferables: {},
+      options: {},
+      middlewareEntries: [],
+    });
+
+    expect(worker.geometryPool).toBeDefined();
+    expect(worker.geometryPool).toBeInstanceOf(SharedPool);
+  });
+
+  it('should expose filePool after setFilePoolBuffer and initialize', async () => {
+    const worker = createConfiguredWorker();
+    const buffer = new SharedArrayBuffer(256 * 1024);
+    worker.setFilePoolBuffer(buffer);
+
+    expect(worker.filePool).toBeUndefined();
+
+    await worker.initialize({
+      callbacks: { onLog: vi.fn() },
+      transferables: {},
+      options: {},
+      middlewareEntries: [],
+    });
+
+    expect(worker.filePool).toBeDefined();
+    expect(worker.filePool).toBeInstanceOf(SharedPool);
   });
 });
