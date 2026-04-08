@@ -573,16 +573,16 @@ describe('FileService', () => {
 
   describe('recursive mkdir + readDirectory cache coherence', () => {
     it('should show new subdirectories in readDirectory after recursive mkdir', async () => {
-      await service.writeFile('/project/.tau/parameters.json', '{}');
+      await service.writeFile('/project/.tau/parameters/main.ts.json', '{}');
       const before = await service.readDirectory('/project/.tau');
-      expect(before.map((n) => n.name)).toEqual(['parameters.json']);
+      expect(before.map((n) => n.name)).toEqual(['parameters']);
 
       await service.mkdir('/project/.tau/cache/params', { recursive: true });
       await service.writeFile('/project/.tau/cache/params/hash.json', '{"key":"value"}');
 
       const after = await service.readDirectory('/project/.tau');
       const names = after.map((n) => n.name);
-      expect(names).toContain('parameters.json');
+      expect(names).toContain('parameters');
       expect(names).toContain('cache');
     });
   });
@@ -1241,7 +1241,7 @@ describe('FileService integration [DirectIDB]', () => {
         resourceQueue,
         treeCache,
         eventBus,
-        contentPool: pool,
+        filePool: pool,
         mountTable,
       });
 
@@ -1298,12 +1298,12 @@ describe('FileService integration [DirectIDB]', () => {
       expect(content).toBe('data');
     });
 
-    it('should accept contentPool via setContentPool after construction', async () => {
+    it('should accept filePool via setFilePool after construction', async () => {
       const { service: svc } = await createFileService();
       const buffer = new SharedArrayBuffer(128 * 1024);
       const pool = new SharedPool(buffer, { maxEntries: 128 });
 
-      svc.setContentPool(pool);
+      svc.setFilePool(pool);
 
       await svc.writeFile('/late-pool.txt', 'late binding');
       await svc.readFile('/late-pool.txt');
@@ -1318,7 +1318,7 @@ describe('FileService integration [DirectIDB]', () => {
       const buffer = new SharedArrayBuffer(128 * 1024);
       const pool = new SharedPool(buffer, { maxEntries: 128 });
 
-      svc.setContentPool(pool);
+      svc.setFilePool(pool);
 
       await svc.writeFile('/invalidate.txt', 'original');
       await svc.readFile('/invalidate.txt');

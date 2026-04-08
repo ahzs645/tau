@@ -50,7 +50,7 @@ export class FileService {
   private readonly _eventBus: ChangeEventBus;
   private readonly _watchRegistry: WatchRegistry;
   private readonly _crossTabCoordinator: CrossTabCoordinator;
-  private _contentPool: SharedPool | undefined;
+  private _filePool: SharedPool | undefined;
   private readonly _mountTable: MountTable;
   private readonly _inMemoryTree = new InMemoryFileTree();
   /** Absolute path passed to the first {@link getDirectoryStat} that populated the tree; in-memory paths are relative to this root. */
@@ -67,8 +67,8 @@ export class FileService {
     treeCache: DirectoryTreeCache;
     eventBus: ChangeEventBus;
     crossTabCoordinator?: CrossTabCoordinator;
-    /** Writer-side shared content pool for zero-IPC cached reads across threads. */
-    contentPool?: SharedPool;
+    /** Writer-side shared file pool for zero-IPC cached reads across threads. */
+    filePool?: SharedPool;
     /** Mount table for multi-backend path routing. */
     mountTable: MountTable;
   }) {
@@ -78,18 +78,18 @@ export class FileService {
     this._eventBus = options.eventBus;
     this._watchRegistry = new WatchRegistry(options.eventBus, { windowMs: kernelCoalescingWindowMs });
     this._crossTabCoordinator = options.crossTabCoordinator ?? new CrossTabCoordinator();
-    this._contentPool = options.contentPool;
+    this._filePool = options.filePool;
     this._mountTable = options.mountTable;
   }
 
   /**
-   * Set or replace the shared content pool for zero-IPC cached reads.
+   * Set or replace the shared file pool for zero-IPC cached reads.
    * Enables late binding when the SharedArrayBuffer arrives after construction.
    *
-   * @param pool - Writer-side shared content pool.
+   * @param pool - Writer-side shared file pool.
    */
-  public setContentPool(pool: SharedPool): void {
-    this._contentPool = pool;
+  public setFilePool(pool: SharedPool): void {
+    this._filePool = pool;
   }
 
   // --- Read operations (direct to provider, no serialization) ---
@@ -118,7 +118,7 @@ export class FileService {
       return provider.readFile(resolvedPath, 'utf8');
     }
     const data = await provider.readFile(resolvedPath);
-    this._contentPool?.store(filepath, data);
+    this._filePool?.store(filepath, data);
     return data;
   }
 
@@ -268,7 +268,7 @@ export class FileService {
         await this._ensureParentDir(provider, resolvedPath);
         await provider.writeFile(resolvedPath, data);
 
-        this._contentPool?.invalidate(path);
+        this._filePool?.invalidate(path);
         const size = typeof data === 'string' ? new TextEncoder().encode(data).byteLength : data.byteLength;
         this._inMemoryTreeAddFile(path, size);
         this._treeCache.invalidate(parentDirectory(path));
@@ -369,8 +369,8 @@ export class FileService {
         await source.provider.unlink(source.path);
       }
 
-      this._contentPool?.invalidate(from);
-      this._contentPool?.invalidate(to);
+      this._filePool?.invalidate(from);
+      this._filePool?.invalidate(to);
       this._inMemoryTreeRename(from, to);
       this._treeCache.invalidate(parentDirectory(from));
       this._treeCache.invalidate(parentDirectory(to));
@@ -395,7 +395,7 @@ export class FileService {
       const { provider, path: resolvedPath, backend: resolvedBackend } = this._resolveProvider(path);
       await provider.unlink(resolvedPath);
 
-      this._contentPool?.invalidate(path);
+      this._filePool?.invalidate(path);
       this._inMemoryTreeRemoveFile(path);
       this._treeCache.invalidate(parentDirectory(path));
       this._eventBus.emit({
