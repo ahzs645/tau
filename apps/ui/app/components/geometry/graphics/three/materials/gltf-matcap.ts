@@ -22,8 +22,9 @@ function disposeMaterials(material: Material | Material[]): void {
  * We must exclude LineSegments2 from matcap application to preserve edge rendering.
  *
  * @param gltf - The GLTF scene to apply matcap to.
+ * @param tint - Color multiplier applied to every matcap material (1.0 = full brightness, lower = dimmed).
  */
-export const applyMatcap = async (gltf: GLTF): Promise<void> => {
+export const applyMatcap = async (gltf: GLTF, tint = 1): Promise<void> => {
   // Load matcap texture
   const matcapTexture = matcapMaterial();
 
@@ -64,6 +65,10 @@ export const applyMatcap = async (gltf: GLTF): Promise<void> => {
         }
       }
 
+      if (tint < 1) {
+        meshMatcap.color.multiplyScalar(tint);
+      }
+
       // Dispose the old material(s) before replacing to prevent GPU memory leaks
       disposeMaterials(mesh.material);
 
@@ -81,8 +86,9 @@ export const applyMatcap = async (gltf: GLTF): Promise<void> => {
  *
  * @param scene - The cloned THREE.Scene to apply matcap materials to.
  * @param matcapTexture - A fully-loaded matcap texture (use `ensureMatcapTextureLoaded()`).
+ * @param tint - Color multiplier applied to every matcap material (1.0 = full brightness, lower = dimmed).
  */
-export function applyMatcapToClonedScene(scene: Scene, matcapTexture: Texture): void {
+export function applyMatcapToClonedScene(scene: Scene, matcapTexture: Texture, tint = 1): void {
   scene.traverse((child) => {
     // Skip LineSegments2 — they extend Mesh but use LineMaterial for fat lines
     if (child instanceof LineSegments2) {
@@ -124,6 +130,10 @@ export function applyMatcapToClonedScene(scene: Scene, matcapTexture: Texture): 
             meshMatcap.transparent = true;
           }
         }
+      }
+
+      if (tint < 1) {
+        meshMatcap.color.multiplyScalar(tint);
       }
 
       // Do NOT dispose — materials are shared references with the original live scene

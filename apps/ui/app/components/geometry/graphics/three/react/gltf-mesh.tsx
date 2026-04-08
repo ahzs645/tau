@@ -9,6 +9,8 @@ import {
   applyFatLineSegments,
   updateLineMaterialResolution,
 } from '#components/geometry/graphics/three/materials/gltf-edges.js';
+import { Theme, useTheme } from '#hooks/use-theme.js';
+import { darkModeIntensityScale } from '#components/geometry/graphics/three/utils/lights.utils.js';
 
 // Module-scoped GLTFLoader instance. GLTFLoader is stateless and fully reusable,
 // so creating a fresh instance per parse wastes initialization overhead and GC pressure.
@@ -214,6 +216,8 @@ export function GltfMesh({
   // The rendered scene has material mode applied and is what <primitive> displays.
   const [scene, setScene] = useState<Group | undefined>(undefined);
   const { size, invalidate } = useThree();
+  const { theme } = useTheme();
+  const matcapTint = theme === Theme.DARK ? darkModeIntensityScale : 1;
 
   // Memoize resolution vector to avoid creating new objects on each render
   const resolutionRef = useRef(new Vector2(size.width, size.height));
@@ -305,12 +309,12 @@ export function GltfMesh({
   const applyMaterials = useCallback(
     (targetScene: Group): void => {
       if (enableMatcap) {
-        void applyMatcap({ scene: targetScene } as GLTF);
+        void applyMatcap({ scene: targetScene } as GLTF, matcapTint);
       } else {
         restoreOriginalMaterials(targetScene, originalMaterialsRef.current);
       }
     },
-    [enableMatcap],
+    [enableMatcap, matcapTint],
   );
 
   useEffect(() => {
