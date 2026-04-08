@@ -191,6 +191,22 @@ describe('EventCoalescer (timed)', () => {
     coalescer.dispose();
   });
 
+  it('should overflow at 10,000 events by default', () => {
+    const deliver = vi.fn();
+    const onOverflow = vi.fn();
+    const coalescer = new EventCoalescer(deliver, { onOverflow });
+
+    for (let i = 0; i < 10_000; i++) {
+      coalescer.push(written(`/${i}.txt`));
+    }
+    expect(onOverflow).not.toHaveBeenCalled();
+
+    coalescer.push(written('/overflow.txt'));
+    expect(onOverflow).toHaveBeenCalledTimes(1);
+
+    coalescer.dispose();
+  });
+
   it('should prevent further delivery after dispose()', () => {
     const deliver = vi.fn();
     const coalescer = new EventCoalescer(deliver, { windowMs: 50 });

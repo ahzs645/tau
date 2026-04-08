@@ -27,6 +27,8 @@ export { InMemoryFileTree } from '#in-memory-file-tree.js';
 export type { TreeNode } from '#in-memory-file-tree.js';
 export { EventCoalescer, coalesceEvents } from '#event-coalescer.js';
 export type { CoalescerOptions } from '#event-coalescer.js';
+export { ThrottledWorker } from '#throttled-worker.js';
+export type { ThrottledWorkerOptions } from '#throttled-worker.js';
 export { WatchRegistry } from '#watch-registry.js';
 export type { WatchRegistryOptions } from '#watch-registry.js';
 export {
