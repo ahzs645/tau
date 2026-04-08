@@ -365,15 +365,19 @@ export default defineKernel({
     return { geometry, nativeHandle: shapeEntries };
   },
 
-  async exportGeometry({ fileType, nativeHandle }, _runtime, context) {
+  async exportGeometry({ fileType, tessellation, nativeHandle }, _runtime, context) {
     if (nativeHandle.length === 0) {
       return createKernelError([{ message: 'No geometry available for export', type: 'runtime', severity: 'error' }]);
     }
 
+    const linearTolerance = tessellation?.linearTolerance ?? 0.01;
+    const angularTolerance = tessellation?.angularTolerance ?? 30;
+    const angularToleranceRad = angularTolerance * (Math.PI / 180);
+
     if (fileType === 'glb' || fileType === 'gltf') {
       const gltfData = meshShapesToGltf(context.oc, nativeHandle, {
-        linearTolerance: 0.01,
-        angularTolerance: 0.5,
+        linearTolerance,
+        angularTolerance: angularToleranceRad,
       });
 
       return createKernelSuccess([
@@ -403,7 +407,7 @@ export default defineKernel({
     if (fileType === 'stl' || fileType === 'stl-binary') {
       const { oc } = context;
       const results = nativeHandle.map((entry) => {
-        const mesh = new oc.BRepMesh_IncrementalMesh(entry.shape, 0.01, false, 0.5, false);
+        const mesh = new oc.BRepMesh_IncrementalMesh(entry.shape, linearTolerance, false, angularToleranceRad, false);
         const filePath = `/tmp/export_${Date.now()}.stl`;
         const writer = new oc.StlAPI_Writer();
         const progress = new oc.Message_ProgressRange();

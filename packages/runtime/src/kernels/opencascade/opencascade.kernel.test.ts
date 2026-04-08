@@ -323,6 +323,31 @@ export default function main() {}`,
       expect(exportResult.success).toBe(false);
     });
 
+    // -- Tessellation --
+
+    it('should respect tessellation parameter for GLB export', async () => {
+      const geometryFile = createGeometryFile('fillet.ts');
+      await worker.createGeometry({ file: geometryFile, parameters: {} });
+
+      const coarseExport = await worker.exportGeometry('glb', {
+        linearTolerance: 1,
+        angularTolerance: 60,
+      });
+      assertSuccess(coarseExport, 'coarse GLB export');
+
+      const fineExport = await worker.exportGeometry('glb', {
+        linearTolerance: 0.001,
+        angularTolerance: 5,
+      });
+      assertSuccess(fineExport, 'fine GLB export');
+
+      const coarseSize = coarseExport.data[0]!.bytes.byteLength;
+      const fineSize = fineExport.data[0]!.bytes.byteLength;
+
+      // Finer tessellation must produce a larger GLB (more triangles on curved fillet surfaces)
+      expect(fineSize).toBeGreaterThan(coarseSize);
+    });
+
     // -- Boolean operations --
 
     it('should perform boolean union (fuse)', async () => {
