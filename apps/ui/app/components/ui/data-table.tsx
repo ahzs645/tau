@@ -283,7 +283,7 @@ export function DataTablePagination<Data>({
             <SelectTrigger size='sm' className='w-[70px] pr-2'>
               <SelectValue placeholder={table.getState().pagination.pageSize} />
             </SelectTrigger>
-            <SelectContent side='top'>
+            <SelectContent position='popper' side='top'>
               {pageSizeOptions.map((pageSize) => (
                 <SelectItem key={pageSize} value={`${pageSize}`}>
                   {pageSize}
