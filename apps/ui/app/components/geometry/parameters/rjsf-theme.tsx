@@ -11,7 +11,7 @@ import type {
   ErrorListProps,
   RJSFSchema,
 } from '@rjsf/utils';
-import { ChevronRight, RefreshCcwDot } from 'lucide-react';
+import { ChevronRight } from 'lucide-react';
 import { Fragment, useEffect, useState } from 'react';
 import { Button } from '#components/ui/button.js';
 import { Input } from '#components/ui/input.js';
@@ -20,7 +20,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '#
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '#components/ui/collapsible.js';
 import { cn } from '#utils/ui.utils.js';
 import { toTitleCase } from '#utils/string.utils.js';
-import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
+import { ModifiedIndicator } from '#components/ui/modified-indicator.js';
 import { HighlightText } from '#components/highlight-text.js';
 import { ParametersWidget } from '#components/geometry/parameters/parameters-widget.js';
 import {
@@ -149,20 +149,12 @@ function FieldTemplate(props: FieldTemplateProps<Record<string, unknown>, RJSFSc
             {required ? <span className='text-destructive/50'>*</span> : null}
           </span>
           {fieldHasValue ? (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type='button'
-                  className='relative flex size-4 shrink-0 items-center justify-center'
-                  aria-label={`Reset ${prettyLabel}`}
-                  onClick={handleReset}
-                >
-                  <span className='size-1.5 rounded-full bg-primary transition-opacity group-hover/field:opacity-0' />
-                  <RefreshCcwDot className='absolute inset-0 m-auto size-3 text-muted-foreground opacity-0 transition-opacity group-hover/field:opacity-100' />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side='left'>Reset &quot;{prettyLabel}&quot;</TooltipContent>
-            </Tooltip>
+            <ModifiedIndicator
+              onReset={handleReset}
+              tooltip={`Reset ${prettyLabel}`}
+              tooltipSide='left'
+              className='group-hover/field:**:data-[slot=dot]:opacity-0 group-hover/field:**:data-[slot=icon]:opacity-100'
+            />
           ) : null}
         </div>
         <div className='flex min-w-0 flex-1 items-center justify-end gap-2'>{children}</div>
