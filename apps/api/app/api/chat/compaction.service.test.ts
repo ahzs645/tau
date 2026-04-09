@@ -1,19 +1,46 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { Test } from '@nestjs/testing';
+import type { TestingModule } from '@nestjs/testing';
+import { ConfigService } from '@nestjs/config';
 import { HumanMessage, AIMessage } from '@langchain/core/messages';
 import { CompactionService } from '#api/chat/compaction.service.js';
 
 describe('CompactionService', () => {
   let service: CompactionService;
+  let moduleRef: TestingModule | undefined;
   const originalFetch = globalThis.fetch;
+  const createService = async (morphApiKey: string | undefined): Promise<CompactionService> => {
+    moduleRef = await Test.createTestingModule({
+      providers: [
+        CompactionService,
+        {
+          provide: ConfigService,
+          useValue: {
+            get: vi.fn().mockReturnValue(morphApiKey),
+          },
+        },
+      ],
+    }).compile();
 
-  beforeEach(() => {
-    vi.stubEnv('MORPH_API_KEY', 'test-key');
-    service = new CompactionService();
+    return moduleRef.get<CompactionService>(CompactionService);
+  };
+
+  beforeEach(async () => {
+    service = await createService('test-key');
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     globalThis.fetch = originalFetch;
-    vi.unstubAllEnvs();
+    if (moduleRef) {
+      await moduleRef.close();
+      moduleRef = undefined;
+    }
+  });
+
+  it('should throw when MORPH_API_KEY is missing', async () => {
+    await expect(createService(undefined)).rejects.toThrow(
+      'MORPH_API_KEY is required for context compaction functionality',
+    );
   });
 
   it('should call Morph API with correct parameters', async () => {

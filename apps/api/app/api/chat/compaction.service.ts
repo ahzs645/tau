@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import type { BaseMessage } from '@langchain/core/messages';
 import { HumanMessage, SystemMessage, AIMessage, ToolMessage } from '@langchain/core/messages';
+import type { Environment } from '#config/environment.config.js';
 
 /**
  * Statistics from a compaction operation.
@@ -24,8 +26,12 @@ export class CompactionService {
     return 'https://api.morphllm.com/v1/chat/completions';
   }
 
-  public constructor() {
-    this.apiKey = process.env.MORPH_API_KEY ?? '';
+  public constructor(private readonly configService: ConfigService<Environment, true>) {
+    const morphApiKey = this.configService.get<string>('MORPH_API_KEY', { infer: true });
+    if (!morphApiKey) {
+      throw new Error('MORPH_API_KEY is required for context compaction functionality');
+    }
+    this.apiKey = morphApiKey;
   }
 
   /**
