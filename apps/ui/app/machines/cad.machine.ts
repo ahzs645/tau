@@ -165,7 +165,7 @@ const connectKernelActor = fromSafeAsync<KernelConnectedEvent, ConnectKernelInpu
   const { port, dispose } = createFileSystemBridge(snapshot.context.worker);
   cleanups.push(dispose);
   console.log('[CadMachine] connectKernelActor: connecting client...');
-  await client.connect({ port });
+  await client.connect({ port, filePoolBuffer: snapshot.context.filePoolBuffer });
 
   signal.removeEventListener('abort', teardown);
   console.log('[CadMachine] connectKernelActor: connected successfully');
@@ -181,7 +181,7 @@ const connectKernelActor = fromSafeAsync<KernelConnectedEvent, ConnectKernelInpu
  * The worker self-schedules rendering internally. The main thread is a
  * display-only consumer of geometry results and worker state changes.
  * Debouncing is handled in the worker (500ms for files, 50ms for params).
- * Render timeout is handled via AbortSignal.timeout() in the worker.
+ * Render timeout is forwarded to the worker via setRenderTimeout.
  */
 export const cadMachine = setup({
   types: {

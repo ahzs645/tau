@@ -8,7 +8,7 @@
  */
 
 import { exposeFileSystem, workerReadyMessageType } from '@taucad/runtime/filesystem';
-// eslint-disable-next-line @nx/enforce-module-boundaries -- worker entry point; inherently lazy-loaded
+
 import {
   ProviderRegistry,
   ResourceQueue,
@@ -17,8 +17,10 @@ import {
   FileService,
   MountTable,
   EventCoalescer,
+  ThrottledWorker,
 } from '@taucad/filesystem';
 import { FileSystemAccessProvider } from '@taucad/filesystem/providers';
+import { SharedPool } from '@taucad/memory';
 import { metaConfig } from '#constants/meta.constants.js';
 
 const providerRegistry = new ProviderRegistry({ databasePrefix: metaConfig.databasePrefix });
@@ -68,6 +70,15 @@ exposeFileSystem(fileService, {
   },
   changeEventBus: eventBus,
   createCoalescer: (deliver, windowMs) => new EventCoalescer(deliver, { windowMs }),
+  createThrottledWorker: (handler) => new ThrottledWorker(handler),
+});
+
+self.addEventListener('message', (event: MessageEvent<{ type: string; buffer?: SharedArrayBuffer }>) => {
+  const { data } = event;
+  if (data.type === 'filePool' && data.buffer instanceof SharedArrayBuffer) {
+    fileService.setFilePool(new SharedPool(data.buffer));
+    console.debug('[FM-Worker] filePool attached');
+  }
 });
 
 console.debug(`[FM-Worker] exposeFileSystem registered at +${(performance.now() - t0).toFixed(1)}ms`);

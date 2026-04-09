@@ -1,6 +1,5 @@
-// eslint-disable-next-line @nx/enforce-module-boundaries -- filesystem is lazy-loaded via worker; this service runs on main thread
 import { BoundedFileCache } from '@taucad/filesystem';
-import type { SharedContentPool } from '@taucad/filesystem';
+import type { SharedPool } from '@taucad/memory';
 import type { FileWriteSource, FileManagerProxy } from '#machines/file-manager.machine.types.js';
 import { joinPath } from '@taucad/utils/path';
 
@@ -19,8 +18,8 @@ type FileContentServiceInit = {
     maxTotalBytes?: number;
     maxSingleFileBytes?: number;
   };
-  /** Reader-side shared content pool for zero-IPC cached reads across threads. */
-  contentPool?: SharedContentPool;
+  /** Reader-side shared file pool for zero-IPC cached reads across threads. */
+  filePool?: SharedPool;
 };
 
 const defaultMaxEntries = 500;
@@ -38,7 +37,7 @@ export type OrphanChangeEvent = { path: string; orphaned: boolean };
 export class FileContentService {
   private readonly cache: BoundedFileCache;
   private readonly proxy: FileManagerProxy;
-  private readonly contentPool: SharedContentPool | undefined;
+  private readonly filePool: SharedPool | undefined;
   private rootDirectory: string;
   private readonly pendingResolves = new Map<string, Promise<Uint8Array<ArrayBuffer>>>();
   private readonly pathSubscribers = new Map<string, Set<() => void>>();
@@ -49,7 +48,7 @@ export class FileContentService {
   public constructor(init: FileContentServiceInit) {
     this.proxy = init.proxy;
     this.rootDirectory = init.rootDirectory;
-    this.contentPool = init.contentPool;
+    this.filePool = init.filePool;
     this.cache = new BoundedFileCache({
       maxEntries: init.cacheOptions?.maxEntries ?? defaultMaxEntries,
       maxTotalBytes: init.cacheOptions?.maxTotalBytes ?? defaultMaxTotalBytes,
@@ -68,13 +67,12 @@ export class FileContentService {
       return cached;
     }
 
-    if (this.contentPool) {
+    if (this.filePool) {
       const absolutePath = joinPath(this.rootDirectory, path);
-      const poolData = this.contentPool.resolve(absolutePath);
+      const poolData = this.filePool.resolveCopy(absolutePath);
       if (poolData) {
-        const copy = new Uint8Array(poolData);
-        this.cache.set(path, copy);
-        return copy;
+        this.cache.set(path, poolData);
+        return poolData;
       }
     }
 

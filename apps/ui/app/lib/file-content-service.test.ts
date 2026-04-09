@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { FileContentService } from '#lib/file-content-service.js';
 // eslint-disable-next-line @nx/enforce-module-boundaries -- test file; not part of lazy-loaded bundle
-import { SharedContentPool } from '@taucad/filesystem';
+import { SharedPool } from '@taucad/memory';
 import type { FileManagerProxy } from '#machines/file-manager.machine.types.js';
 import type { ContentChangeEvent } from '#lib/file-content-service.js';
 
@@ -295,17 +295,17 @@ describe('FileContentService', () => {
     });
   });
 
-  describe('SharedContentPool integration', () => {
+  describe('SharedPool integration', () => {
     const encoder = new TextEncoder();
 
     function createPoolService() {
       const buffer = new SharedArrayBuffer(128 * 1024);
-      const pool = new SharedContentPool(buffer, { maxEntries: 128 });
+      const pool = new SharedPool(buffer, { maxEntries: 128 });
       const mockProxy = createMockProxy();
       const svc = new FileContentService({
         proxy: mockProxy,
         rootDirectory: '/project',
-        contentPool: pool,
+        filePool: pool,
       });
       return { service: svc, pool, proxy: mockProxy };
     }

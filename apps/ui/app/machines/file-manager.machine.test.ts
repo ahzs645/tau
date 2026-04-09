@@ -64,7 +64,7 @@ describe('fileManagerMachine', () => {
     actor.stop();
   });
 
-  it('should transition to creatingWorker when shouldInitializeOnStart is true', () => {
+  it('should transition to connectingWorker when shouldInitializeOnStart is true', () => {
     const actor = createActor(fileManagerMachine, {
       input: {
         rootDirectory: '/test',
@@ -73,7 +73,7 @@ describe('fileManagerMachine', () => {
     });
     actor.start();
 
-    expect(actor.getSnapshot().value).toBe('creatingWorker');
+    expect(actor.getSnapshot().value).toBe('connectingWorker');
     actor.stop();
   });
 
@@ -138,7 +138,7 @@ describe('fileManagerMachine', () => {
 
     expect(actor.getSnapshot().value).toBe('initializing');
     actor.send({ type: 'initialize' });
-    expect(actor.getSnapshot().value).toBe('creatingWorker');
+    expect(actor.getSnapshot().value).toBe('connectingWorker');
 
     actor.stop();
   });
@@ -409,6 +409,148 @@ describe('fileManagerMachine', () => {
     });
   });
 
+  // ── two-phase init (R1) ──────────────────────────────────────────────
+
+  describe('two-phase init', () => {
+    it('should transition to connectingWorker when initialize is sent', () => {
+      const actor = createActor(fileManagerMachine, {
+        input: {
+          rootDirectory: '/test',
+          shouldInitializeOnStart: false,
+        },
+      });
+      actor.start();
+
+      expect(actor.getSnapshot().value).toBe('initializing');
+      actor.send({ type: 'initialize' });
+      expect(actor.getSnapshot().value).toBe('connectingWorker');
+
+      actor.stop();
+    });
+
+    it('should set context.worker after connectingWorker completes but before services are ready', async () => {
+      let resolveServices!: () => void;
+      const servicesGate = new Promise<void>((resolve) => {
+        resolveServices = resolve;
+      });
+
+      mockGetProjectFileSystemConfig.mockImplementation(async () => {
+        await servicesGate;
+        return undefined;
+      });
+
+      const actor = createActor(fileManagerMachine, {
+        input: {
+          rootDirectory: '/projects/test-id',
+          shouldInitializeOnStart: true,
+          projectId: 'test-id',
+        },
+      });
+      actor.start();
+
+      await vi.waitFor(() => {
+        expect(actor.getSnapshot().value).toBe('initializingServices');
+      });
+
+      const snapshot = actor.getSnapshot();
+      expect(snapshot.context.worker).toBeDefined();
+      expect(snapshot.context.proxy).toBeDefined();
+      expect(snapshot.context.contentService).toBeUndefined();
+      expect(snapshot.context.treeService).toBeUndefined();
+
+      resolveServices();
+
+      await vi.waitFor(() => {
+        expect(actor.getSnapshot().value).toBe('ready');
+      });
+
+      actor.stop();
+    });
+
+    it('should transition through connectingWorker then initializingServices then ready', async () => {
+      const states: string[] = [];
+      const actor = createActor(fileManagerMachine, {
+        input: {
+          rootDirectory: '/test',
+          shouldInitializeOnStart: true,
+        },
+      });
+      actor.subscribe((snapshot) => {
+        const value = snapshot.value as string;
+        if (states.at(-1) !== value) {
+          states.push(value);
+        }
+      });
+      actor.start();
+
+      await vi.waitFor(() => {
+        expect(actor.getSnapshot().value).toBe('ready');
+      });
+
+      expect(states).toEqual(['initializing', 'connectingWorker', 'initializingServices', 'ready']);
+      actor.stop();
+    });
+
+    it('should set services only after initializingServices completes', async () => {
+      const actor = createActor(fileManagerMachine, {
+        input: {
+          rootDirectory: '/test',
+          shouldInitializeOnStart: true,
+        },
+      });
+      actor.start();
+
+      await vi.waitFor(() => {
+        expect(actor.getSnapshot().value).toBe('ready');
+      });
+
+      const snapshot = actor.getSnapshot();
+      expect(snapshot.context.contentService).toBeDefined();
+      expect(snapshot.context.treeService).toBeDefined();
+      expect(snapshot.context.worker).toBeDefined();
+      expect(snapshot.context.proxy).toBeDefined();
+
+      actor.stop();
+    });
+
+    it('should handle setRoot in initializingServices state', async () => {
+      let resolveServices!: () => void;
+      const servicesGate = new Promise<void>((resolve) => {
+        resolveServices = resolve;
+      });
+
+      mockGetProjectFileSystemConfig.mockImplementation(async () => {
+        await servicesGate;
+        return undefined;
+      });
+
+      const actor = createActor(fileManagerMachine, {
+        input: {
+          rootDirectory: '/projects/proj-a',
+          shouldInitializeOnStart: true,
+          projectId: 'proj-a',
+        },
+      });
+      actor.start();
+
+      await vi.waitFor(() => {
+        expect(actor.getSnapshot().value).toBe('initializingServices');
+      });
+
+      resolveServices();
+      mockGetProjectFileSystemConfig.mockResolvedValue(undefined);
+
+      actor.send({ type: 'setRoot', path: '/projects/proj-b', projectId: 'proj-b' });
+      expect(actor.getSnapshot().context.rootDirectory).toBe('/projects/proj-b');
+
+      await vi.waitFor(() => {
+        expect(actor.getSnapshot().value).toBe('ready');
+      });
+
+      actor.stop();
+    });
+  });
+
   // ── project mount lifecycle cleanup ────────────────────────────────────
 
   describe('project mount lifecycle', () => {
@@ -451,6 +593,107 @@ describe('fileManagerMachine', () => {
 
       expect(mockUnmount).not.toHaveBeenCalled();
       actor.stop();
+    });
+  });
+
+  describe('shared file pool', () => {
+    it('should post filePool message to worker after ready', async () => {
+      const actor = createActor(fileManagerMachine, {
+        input: {
+          rootDirectory: '/test',
+          shouldInitializeOnStart: true,
+        },
+      });
+      actor.start();
+
+      await vi.waitFor(() => {
+        expect(actor.getSnapshot().value).toBe('ready');
+      });
+
+      const { worker: fmWorker } = actor.getSnapshot().context;
+      expect(fmWorker).toBeDefined();
+      const postMessage = vi.mocked(fmWorker!.postMessage);
+      const filePoolCall = postMessage.mock.calls.find(
+        ([message]) => (message as { type?: string }).type === 'filePool',
+      );
+      expect(filePoolCall).toBeDefined();
+      expect((filePoolCall![0] as { buffer: SharedArrayBuffer }).buffer).toBeInstanceOf(SharedArrayBuffer);
+
+      actor.stop();
+    });
+
+    it('should store filePoolBuffer on context after worker connect', async () => {
+      const actor = createActor(fileManagerMachine, {
+        input: {
+          rootDirectory: '/test',
+          shouldInitializeOnStart: true,
+        },
+      });
+      actor.start();
+
+      await vi.waitFor(() => {
+        expect(actor.getSnapshot().value).toBe('ready');
+      });
+
+      expect(actor.getSnapshot().context.filePoolBuffer).toBeInstanceOf(SharedArrayBuffer);
+
+      actor.stop();
+    });
+
+    it('should reach ready state when SharedArrayBuffer is unavailable', async () => {
+      const original = globalThis.SharedArrayBuffer;
+      (globalThis as Record<string, unknown>)['SharedArrayBuffer'] = undefined;
+
+      try {
+        const actor = createActor(fileManagerMachine, {
+          input: {
+            rootDirectory: '/test',
+            shouldInitializeOnStart: true,
+          },
+        });
+        actor.start();
+
+        await vi.waitFor(() => {
+          expect(actor.getSnapshot().value).toBe('ready');
+        });
+
+        expect(actor.getSnapshot().context.filePoolBuffer).toBeUndefined();
+
+        actor.stop();
+      } finally {
+        (globalThis as Record<string, unknown>)['SharedArrayBuffer'] = original;
+      }
+    });
+
+    it('should not post filePool message to worker when SharedArrayBuffer is unavailable', async () => {
+      const original = globalThis.SharedArrayBuffer;
+      (globalThis as Record<string, unknown>)['SharedArrayBuffer'] = undefined;
+
+      try {
+        const actor = createActor(fileManagerMachine, {
+          input: {
+            rootDirectory: '/test',
+            shouldInitializeOnStart: true,
+          },
+        });
+        actor.start();
+
+        await vi.waitFor(() => {
+          expect(actor.getSnapshot().value).toBe('ready');
+        });
+
+        const { worker: fmWorker } = actor.getSnapshot().context;
+        expect(fmWorker).toBeDefined();
+        const postMessage = vi.mocked(fmWorker!.postMessage);
+        const filePoolCall = postMessage.mock.calls.find(
+          ([message]) => (message as { type?: string }).type === 'filePool',
+        );
+        expect(filePoolCall).toBeUndefined();
+
+        actor.stop();
+      } finally {
+        (globalThis as Record<string, unknown>)['SharedArrayBuffer'] = original;
+      }
     });
   });
 });
