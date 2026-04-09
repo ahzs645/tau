@@ -38,21 +38,22 @@ The runtime worker becomes an **autonomous reactive render service**. Like a Lan
 ### Thread Topology
 
 ```
-┌───────────────────────────────────────────────────────────────────┐
-│ MAIN THREAD  (display + user input only)                          │
-│                                                                   │
-│  Editor ─── setFile / setParameters ──▶ RuntimeClient              │
-│  Params UI ┘                             │    ▲                   │
-│                                     (1) Atomics.store            │
-│                                     (2) postMessage              │
-│  Three.js ◀── geometry ────────────────┘    │ events             │
-│  Progress ◀── progress ─────────────────────┘                   │
-│  Errors   ◀── error ───────────────────────┘                    │
-│                                                                   │
-│  cadMachine: idle | rendering | error  (display state only)       │
-└───────────────────┬───────────────────────────────────────────────┘
-                    │ MessagePort          SharedArrayBuffer
-                    │ (kernel protocol)    (abort generation)
+┌───────────────────────────────────────────────────────────────────────┐
+│ MAIN THREAD  (display + user input only)                              │
+│                                                                       │
+│  Editor ─── setFile / setParameters ──▶ RuntimeClient                  │
+│  Params UI ┘                             │    ▲                       │
+│                                     (1) Atomics.store                │
+│                                     (2) postMessage                  │
+│  Three.js ◀── geometry ────────────────┘    │ events                 │
+│  Progress ◀── progress ─────────────────────┘                       │
+│  Errors   ◀── error ───────────────────────┘                        │
+│                                                                       │
+│  cadMachine: idle | rendering | error  (display state only)           │
+│  FileContentService ◀── filePool (SAB) ──▶ resolveCopy() zero-IPC   │
+└───────────────────┬───────────────────────────────────────────────────┘
+                    │ MessagePort          SharedArrayBuffer(s)
+                    │ (kernel protocol)    (abort + geometry pool + file pool)
                   ┌─▼──────────────────────────┼────────────────┐
                   │ KERNEL WORKER              ▼                │
                   │ (autonomous render service)                  │
@@ -66,25 +67,30 @@ The runtime worker becomes an **autonomous reactive render service**. Like a Lan
                   │  ├─ OC Proxy abort check (Atomics.load)     │
                   │  ├─ fileHashCache, fileContentCache          │
                   │  ├─ bundleResultCache                       │
+                  │  ├─ geometryPool (SharedPool, SAB-backed)   │
+                  │  ├─ filePool (SharedPool, SAB-backed)       │
                   │  └─ render() → push geometry                │
                   │                    ▲                         │
                   │                    │ watch events            │
                   │         ┌──────────┴──────────┐             │
                   │         │ File Manager Worker │             │
-                  │         │ (ZenFS + EventBus)  │             │
+                  │         │ (FS + EventBus)     │             │
+                  │         │ filePool (SAB) ◀────│── FM Machine│
                   │         └─────────────────────┘             │
                   └─────────────────────────────────────────────┘
 ```
 
 ### Protocol
 
-The protocol shifts from request/response to event-driven, with a shared-memory abort channel.
+The protocol shifts from request/response to event-driven, with shared-memory channels for abort signaling and zero-copy data transport.
 
-**Shared memory (out-of-band, for abort):**
+**Shared memory (out-of-band):**
 
-| Resource               | Setup                                                               | Purpose                                                                                                                                                                           |
-| ---------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SharedArrayBuffer(4)` | Allocated by `RuntimeClient`, transferred to worker at connect time | Abort generation counter. Main thread writes via `Atomics.store` before posting `setFile`/`setParameters`. Worker's OC Proxy reads via `Atomics.load` at each WASM call boundary. |
+| Resource               | Owner                | Setup                                                       | Purpose                                                                                                                                                                           |
+| ---------------------- | -------------------- | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SharedArrayBuffer(4)` | `RuntimeClient`      | Allocated at connect, transferred to worker                 | Abort generation counter. Main thread writes via `Atomics.store` before posting `setFile`/`setParameters`. Worker's OC Proxy reads via `Atomics.load` at each WASM call boundary. |
+| Geometry pool SAB      | `RuntimeClient`      | Allocated at connect from `sharedMemory.geometry` config    | LRU-backed pool for zero-copy geometry (GLB) transfer from worker to main thread. Dispatcher stores; `RuntimeClient` resolves.                                                    |
+| File pool SAB          | File Manager Machine | Allocated by FM during worker init, bridged via `connect()` | LRU-backed pool for zero-copy file content caching. Shared by FM worker (`FileService`), main thread (`FileContentService`), and kernel worker (bridge proxy).                    |
 
 **Main thread → Worker (commands, infrequent):**
 
@@ -105,7 +111,7 @@ The protocol shifts from request/response to event-driven, with a shared-memory 
 | `error`              | Render fails / timeout | Diagnostics panel            |
 | `log`, `telemetry`   | Ongoing                | Console, perf panel          |
 
-Three commands in. Six event types out. One shared-memory abort channel.
+Three commands in. Six event types out. Three shared-memory channels (abort, geometry pool, file pool).
 
 ---
 
@@ -309,6 +315,86 @@ Cache invalidation (`Map.delete()`) is synchronous and monotonically correct:
 
 ---
 
+## Shared Memory Data Transport
+
+Beyond the abort signal channel, the runtime uses `SharedArrayBuffer`-backed `SharedPool` instances (from `@taucad/memory`) for zero-copy data exchange. Each pool is an LRU cache with configurable size and entry limits. Two pools exist, each owned by its domain:
+
+### Geometry Pool (RuntimeClient-owned)
+
+The geometry pool eliminates `postMessage` transfer overhead for geometry data (GLB files, typically 100KB–10MB). The flow:
+
+```
+Kernel Worker                                Main Thread
+─────────────                                ───────────
+toTransportGeometry()
+  ├─ geometryPool.store(hash, glbBytes)      RuntimeClient receives geometryComputed
+  ├─ success → { delivery: 'pooled', key }     ├─ geometryPool.resolveCopy(key)
+  └─ fail    → { delivery: 'inline', bytes }   ├─ copies into standalone ArrayBuffer
+                                                └─ emits to Three.js consumer
+```
+
+The `resolveCopy()` step produces a `Uint8Array<ArrayBuffer>` (not SAB-backed) because downstream consumers (Three.js `GLTFLoader`, `TextDecoder`) reject `SharedArrayBuffer`-backed views. The copy is a single `slice()` — far cheaper than structured clone via `postMessage`.
+
+When SAB is unavailable (non-secure context, missing COEP/COOP), the dispatcher falls back to `inline` delivery and geometry flows via `postMessage` transfer. The `GeometryContentRef` discriminated union (`'pooled' | 'inline'`) makes this transparent to consumers.
+
+**Configuration:**
+
+```typescript
+const client = createRuntimeClient({
+  kernels,
+  sharedMemory: {
+    geometry: { bytes: 50 * 1024 * 1024, maxEntries: 64, eviction: 'lru' },
+  },
+});
+```
+
+### File Pool (File Manager-owned)
+
+The file pool enables zero-copy file content reads across three consumers: the file manager worker (`FileService`), the main thread (`FileContentService`), and the kernel worker (filesystem bridge proxy). The FM machine allocates the SAB as part of its startup sequence:
+
+```
+FM Machine (main thread)
+  ├─ allocate SharedArrayBuffer
+  ├─ postMessage({ type: 'filePool', buffer }) → FM Worker
+  │    └─ FileService.setFilePool(new SharedPool(buffer))
+  ├─ new FileContentService({ filePool: new SharedPool(buffer) })
+  └─ store buffer in context.filePoolBuffer
+          │
+          ▼
+cad.machine reads snapshot.context.filePoolBuffer
+          │
+          ▼
+client.connect({ port, filePoolBuffer })
+          │
+          ▼
+KernelWorker.initialize({ filePoolBuffer })
+  └─ bridge proxy uses SharedPool for zero-copy file reads
+```
+
+The file pool is not configured on `RuntimeClientOptions` — the RuntimeClient does not own it. It flows through `ConnectOptions.filePoolBuffer` as an opaque pass-through from the domain owner (FM machine) to the kernel worker.
+
+### Domain-Driven SAB Allocation
+
+Each domain owns its pool:
+
+| Pool     | Owner                | Allocator                  | Consumers                                                |
+| -------- | -------------------- | -------------------------- | -------------------------------------------------------- |
+| Geometry | `RuntimeClient`      | `ensureConnected()` method | Worker dispatcher (store), RuntimeClient (resolve)       |
+| File     | File Manager Machine | `connectWorkerActor`       | FM worker, main-thread FileContentService, kernel bridge |
+
+This avoids temporal gaps (FM's `FileContentService` has the pool from initialization), keeps ownership aligned with domain boundaries, and lets each pool be independently present or absent based on SAB availability.
+
+### Graceful Degradation
+
+When `SharedArrayBuffer` is unavailable:
+
+1. **Geometry pool**: `RuntimeClient.ensureConnected()` catches the `TypeError` and leaves the pool `undefined`. The dispatcher sees no pool, sends all geometry via `inline` delivery through `postMessage`. No behavioral change — only a performance difference.
+2. **File pool**: FM machine's `connectWorkerActor` catches the allocation error and sets `filePoolBuffer` to `undefined`. `FileContentService` falls back to worker RPC for file reads. The kernel bridge proxy operates without a pool.
+
+No consumer code needs SAB awareness — the pool-or-fallback decision is encapsulated at the allocation boundary.
+
+---
+
 ## JSPI & Future Work
 
 **JSPI (WebAssembly JS Promise Integration)** allows synchronous WASM code to suspend at JS import boundaries. In theory, this could enable aborting mid-`BRepMesh_IncrementalMesh` -- the one blocking call that the Proxy cannot intercept because it's a single WASM invocation.
@@ -374,11 +460,20 @@ The current kernelMachine exists because the old protocol required orchestrating
 
 ### RuntimeClient
 
-Becomes the primary reactive API surface. Internally allocates the SharedArrayBuffer abort channel and writes `Atomics.store` before posting `setFile`/`setParameters`:
+Becomes the primary reactive API surface. Internally allocates the SharedArrayBuffer abort channel and geometry pool, and writes `Atomics.store` before posting `setFile`/`setParameters`:
 
 ```typescript
-const client = createRuntimeClient({ kernels, middleware, bundlers });
-await client.connect({ port });
+const client = createRuntimeClient({
+  kernels,
+  middleware,
+  bundlers,
+  sharedMemory: {
+    geometry: { bytes: 50 * 1024 * 1024, maxEntries: 64, eviction: 'lru' },
+  },
+});
+
+// filePoolBuffer comes from the file manager machine (domain-driven ownership)
+await client.connect({ port, filePoolBuffer });
 
 // These write Atomics.store(abortFlag) then postMessage -- the abort
 // signal reaches the worker's OC Proxy before the message is processed.
@@ -386,7 +481,7 @@ client.setFile({ path: '/projects/xxx', filename: 'main.ts' });
 client.setParameters({ width: 10 });
 
 client.on('geometry', (result) => {
-  /* Three.js */
+  /* Three.js -- geometry bytes are already ArrayBuffer-backed (SAB resolved) */
 });
 client.on('parametersResolved', (schema) => {
   /* parameter UI */
@@ -396,16 +491,17 @@ client.on('state', (state) => {
 });
 ```
 
-This is a clean, publishable API for `@taucad/runtime` as an npm package.
+This is a clean, publishable API for `@taucad/runtime` as an npm package. The `geometryPool` getter provides direct pool access for consumers that need it; all other consumers receive resolved `ArrayBuffer`-backed geometry via the `'geometry'` event.
 
 ### KernelWorker
 
-Gains a render loop, abort infrastructure, and watch subscription management. The `notifyFileChanged` command path is removed. New internal methods:
+Gains a render loop, abort infrastructure, watch subscription management, and shared memory pools. The `notifyFileChanged` command path is removed. New internal methods:
 
 - `scheduleRender(delayMs)` -- debounced render scheduling with abort of in-progress render
 - `executeRender()` -- generation-checked render execution with abort checkpoints
 - `updateWatchSet(dependencies)` -- incremental watch subscription diffing
 - OC Proxy integration: reads `Atomics.load(abortFlag, 0)` at each WASM call boundary
+- `setGeometryPoolBuffer(sab)` / `setFilePoolBuffer(sab)` -- receive SABs from `initialize` command, create `SharedPool` instances on `initialize()`. The geometry pool is passed to the dispatcher for geometry storage; the file pool is wired to the filesystem bridge proxy for zero-copy file reads.
 
 ### RuntimeCommand / RuntimeResponse protocol
 
@@ -471,13 +567,14 @@ These components must be implemented first. The autonomous render loop is the fo
 1. Complete filesystem watch infrastructure (current plan).
 2. Add `setFile` and `setParameters` commands to kernel protocol.
 3. Add SharedArrayBuffer abort channel: allocate in `RuntimeClient`, transfer at connect, wire `Atomics.store` into `setFile`/`setParameters`.
-4. Extend OC Proxy (`oc-tracing.ts` / new `oc-abort.ts`) with `Atomics.load` abort check. Add `RenderAbortedError` type.
-5. Implement worker-internal render loop with debounce, generation counter, and abort checkpoints at async boundaries.
-6. Add watch subscription management to `KernelWorker` (`updateWatchSet`).
-7. Wire watch events → debounced re-render inside worker (no main thread round-trip).
-8. Add `stateChanged` response type to kernel protocol.
-9. Collapse `kernelMachine` into `cadMachine` -- move RuntimeClient lifecycle (creation, connection, event subscription, cleanup) into cadMachine as a `connecting` state with a promise actor.
-10. Simplify unified `cadMachine` to display-state machine (connecting | idle | rendering | error).
-11. Remove `use-project.tsx` relay, `changedPaths` threading, `notifyFileChanged` command.
-12. Update `RuntimeClient` API to reactive event emitter pattern.
-13. Delete `kernel.machine.ts`.
+4. Add SharedArrayBuffer data pools: geometry pool (allocated by `RuntimeClient` from `sharedMemory.geometry` config) and file pool (allocated by FM machine, bridged via `connect({ filePoolBuffer })`). Wire `SharedPool` LRU caches on both main thread and worker.
+5. Extend OC Proxy (`oc-tracing.ts` / new `oc-abort.ts`) with `Atomics.load` abort check. Add `RenderAbortedError` type.
+6. Implement worker-internal render loop with debounce, generation counter, and abort checkpoints at async boundaries.
+7. Add watch subscription management to `KernelWorker` (`updateWatchSet`).
+8. Wire watch events → debounced re-render inside worker (no main thread round-trip).
+9. Add `stateChanged` response type to kernel protocol.
+10. Collapse `kernelMachine` into `cadMachine` -- move RuntimeClient lifecycle (creation, connection, event subscription, cleanup) into cadMachine as a `connecting` state with a promise actor.
+11. Simplify unified `cadMachine` to display-state machine (connecting | idle | rendering | error).
+12. Remove `use-project.tsx` relay, `changedPaths` threading, `notifyFileChanged` command.
+13. Update `RuntimeClient` API to reactive event emitter pattern.
+14. Delete `kernel.machine.ts`.
