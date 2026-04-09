@@ -13,6 +13,15 @@ const chipTypeIcons: Record<Exclude<ChipType, 'file'>, React.ComponentType<{ cla
   skill: BookOpen,
 };
 
+const chipColorClass: Record<ChipType, { base: string; hover: string }> = {
+  file: { base: 'bg-purple/10 text-purple', hover: 'hover:bg-purple/15' },
+  folder: { base: 'bg-purple/10 text-purple', hover: 'hover:bg-purple/15' },
+  skill: { base: 'bg-yellow/10 text-yellow', hover: 'hover:bg-yellow/15' },
+  chat: { base: 'bg-primary/10 text-primary', hover: 'hover:bg-primary/15' },
+  screenshot: { base: 'bg-primary/10 text-primary', hover: 'hover:bg-primary/15' },
+  code: { base: 'bg-primary/10 text-primary', hover: 'hover:bg-primary/15' },
+};
+
 type ContextChipProps = React.ComponentPropsWithRef<'span'> & {
   readonly label: string;
   readonly chipType: ChipType;
@@ -76,8 +85,8 @@ export function ContextChip({
       ref={ref}
       className={cn(
         'inline-flex items-center gap-0.5 rounded-xs px-1.5 py-px text-xs',
-        'bg-primary/10 text-primary',
-        isInteractive ? 'cursor-pointer hover:bg-primary/15' : 'cursor-default',
+        chipColorClass[chipType].base,
+        isInteractive ? `cursor-pointer ${chipColorClass[chipType].hover}` : 'cursor-default',
         className,
       )}
       {...hoverProps}
