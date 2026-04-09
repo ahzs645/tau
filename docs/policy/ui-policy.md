@@ -153,6 +153,7 @@ Use `0.01ms` rather than `0s` to preserve `transitionend` and `animationend` eve
 
 ## References
 
+- [UX Policy](ux-policy.md) — Interaction design: inline editing, progressive disclosure, confirmation patterns
 - [Color Policy](color-policy.md) — OKLCH system, chroma ranges, contrast requirements
 - [Diagram Policy](diagram-policy.md) — Mermaid diagram styling and authoring
 - [Accessibility Policy](accessibility-policy.md) — ARIA conventions, E2E selectors
