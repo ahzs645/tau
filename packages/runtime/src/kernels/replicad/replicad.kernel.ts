@@ -459,22 +459,6 @@ export default defineKernel({
     };
   },
 
-  async canHandle({ filePath, extension }, { filesystem }) {
-    if (!['ts', 'js'].includes(extension)) {
-      return false;
-    }
-
-    const code = await filesystem.readFile(filePath, 'utf8');
-
-    const hasImport = /import.*from\s+["']replicad["']/s.test(code);
-    const hasRequire = /require\s*\(["']replicad["']\)/.test(code);
-    const hasDestructure = /\bconst\s*{\s*[\s\w,]*}\s*=\s*replicad\s*;/.test(code);
-    const hasTypedef = /@typedef.*import\s*\(\s*["']replicad["']\s*\)/.test(code);
-    const hasCdnImport = /import.*from\s+["']https?:\/\/[^"']*replicad[^"']*["']/s.test(code);
-
-    return hasImport || hasRequire || hasDestructure || hasTypedef || hasCdnImport;
-  },
-
   async getDependencies({ filePath }, runtime) {
     return runtime.bundler.resolveDependencies(filePath);
   },

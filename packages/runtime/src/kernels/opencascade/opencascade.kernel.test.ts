@@ -156,37 +156,6 @@ export default function main() {}`,
   });
 
   // =============================================================================
-  // canHandle
-  // =============================================================================
-
-  describe('canHandle', () => {
-    it('should handle files importing from opencascade', async () => {
-      const result = await worker.canHandle(createGeometryFile('box-import.ts'));
-      expect(result).toBe(true);
-    });
-
-    it('should handle files importing from opencascade.js', async () => {
-      const result = await worker.canHandle(createGeometryFile('box-import-js.ts'));
-      expect(result).toBe(true);
-    });
-
-    it('should not handle files without opencascade imports', async () => {
-      const result = await worker.canHandle(createGeometryFile('no-import.ts'));
-      expect(result).toBe(false);
-    });
-
-    it('should not handle non-JS/TS files', async () => {
-      const result = await worker.canHandle(createGeometryFile('model.scad'));
-      expect(result).toBe(false);
-    });
-
-    it('should handle files using require', async () => {
-      const result = await worker.canHandle(createGeometryFile('box-require.js'));
-      expect(result).toBe(true);
-    });
-  });
-
-  // =============================================================================
   // getParameters
   // =============================================================================
 

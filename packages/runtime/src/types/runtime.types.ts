@@ -137,7 +137,7 @@ export type KernelProviderId = KnownKernelProvider | (string & {});
 /**
  * A single runtime worker registration.
  * Bundles the kernel module URL and initialization options together.
- * Array position in `KernelModules` determines `canHandle` priority.
+ * Array position in `KernelModules` determines selection priority.
  * @public
  */
 export type KernelRegistration = {
@@ -163,7 +163,7 @@ export type KernelRegistration = {
 
 /**
  * Ordered array of runtime worker registrations.
- * Position determines `canHandle` priority (first match wins).
+ * Position determines selection priority (first match wins).
  * @public
  */
 export type KernelModules = KernelRegistration[];

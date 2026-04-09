@@ -53,13 +53,6 @@ describe('defineKernel type inference', () => {
       async initialize() {
         return { contextValue: 'hello', count: 42 };
       },
-      async canHandle(_input, _runtime, context) {
-        expectTypeOf(context).toEqualTypeOf<{
-          contextValue: string;
-          count: number;
-        }>();
-        return true;
-      },
       async getDependencies(_input, _runtime, context) {
         expectTypeOf(context).toEqualTypeOf<{
           contextValue: string;

@@ -230,8 +230,9 @@ export type WrapGetParametersHook<
  *
  * const parameterResolver = defineMiddleware({
  *   name: 'ParameterResolver',
- *   getDependencies({ basePath }, options) {
- *     return [`${basePath}/${options.parametersFile}`];
+ *   getDependencies({ filePath, basePath }, options) {
+ *     const relativePath = filePath.replace(`${basePath}/`, '');
+ *     return [`${basePath}/${options.parametersDir}/${relativePath}.json`];
  *   },
  * });
  * ```

@@ -7,7 +7,7 @@
  * This is the reference implementation of the defineKernel pattern.
  */
 
-import { importToGlb, exportFromGlb, supportedImportFormats } from '@taucad/converter';
+import { importToGlb, exportFromGlb } from '@taucad/converter';
 import type { SupportedImportFormat, SupportedExportFormat, FileResolver } from '@taucad/converter';
 import { defineKernel } from '#types/runtime-kernel.types.js';
 import type { RuntimeFileSystem } from '#types/runtime-kernel.types.js';
@@ -94,10 +94,6 @@ export default defineKernel({
 
   async initialize() {
     return {};
-  },
-
-  async canHandle({ extension }) {
-    return supportedImportFormats.includes(extension as SupportedImportFormat);
   },
 
   async getDependencies({ filePath }) {

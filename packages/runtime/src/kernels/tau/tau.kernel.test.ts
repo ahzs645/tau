@@ -3,7 +3,6 @@ import { mock } from 'vitest-mock-extended';
 import { importToGlb, exportFromGlb } from '@taucad/converter';
 import type {
   KernelRuntime,
-  CanHandleInput,
   GetDependenciesInput,
   GetParametersInput,
   CreateGeometryInput,
@@ -14,7 +13,6 @@ import tauKernel from '#kernels/tau/tau.kernel.js';
 vi.mock('@taucad/converter', () => ({
   importToGlb: vi.fn(),
   exportFromGlb: vi.fn(),
-  supportedImportFormats: ['step', 'stl', 'obj', 'iges', 'brep', 'gltf', 'glb', '3mf', 'fbx', 'dxf'],
 }));
 
 const stepBytes = new Uint8Array([0x53, 0x54, 0x45, 0x50]);
@@ -24,18 +22,6 @@ afterEach(() => {
 });
 
 describe('TauKernel', () => {
-  describe('canHandle', () => {
-    it('should return true for STEP extension', async () => {
-      const result = await tauKernel.canHandle!(mock<CanHandleInput>({ extension: 'step' }), mock<KernelRuntime>(), {});
-      expect(result).toBe(true);
-    });
-
-    it('should return false for unsupported extension', async () => {
-      const result = await tauKernel.canHandle!(mock<CanHandleInput>({ extension: 'xyz' }), mock<KernelRuntime>(), {});
-      expect(result).toBe(false);
-    });
-  });
-
   describe('getDependencies', () => {
     it('should return array containing the input filePath', async () => {
       const result = await tauKernel.getDependencies(

@@ -394,10 +394,6 @@ export default defineKernel({
     return { fontCache: new Map<string, Uint8Array<ArrayBuffer>>() };
   },
 
-  async canHandle({ extension }) {
-    return extension === 'scad';
-  },
-
   async getDependencies({ filePath, basePath }, { filesystem, logger }) {
     const relativeFilePath = resolveToRelative(filePath, basePath);
     const { resolved, unresolved } = await getReferencedScadFiles({

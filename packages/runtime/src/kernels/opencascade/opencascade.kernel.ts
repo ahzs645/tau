@@ -21,6 +21,7 @@ import { createKernelError, createKernelSuccess } from '#kernels/kernel-helpers.
 import { initOpenCascade } from '#kernels/opencascade/init-opencascade.js';
 import type { OpenCascadeModule } from '#kernels/opencascade/init-opencascade.js';
 import { meshShapesToGltf } from '#kernels/opencascade/opencascade-mesh.js';
+
 // eslint-disable-next-line import-x/no-extraneous-dependencies -- internal # imports resolve to self
 import type { OpenCascadeInstance, TopoDS_Shape } from '#kernels/opencascade/wasm/opencascade_full.js';
 
@@ -236,17 +237,6 @@ export default defineKernel({
     logger.debug('OpenCascade kernel initialized');
 
     return { oc };
-  },
-
-  async canHandle({ filePath, extension }, { filesystem }) {
-    if (!['ts', 'js'].includes(extension)) {
-      return false;
-    }
-
-    const code = await filesystem.readFile(filePath, 'utf8');
-    return (
-      /import.*from\s+["']opencascade(\.js)?["']/s.test(code) || /require\s*\(["']opencascade(\.js)?["']\)/.test(code)
-    );
   },
 
   async getDependencies({ filePath }, runtime) {

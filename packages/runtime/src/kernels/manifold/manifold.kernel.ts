@@ -278,18 +278,6 @@ export default defineKernel({
     return { manifoldCadModule };
   },
 
-  async canHandle({ filePath, extension }, { filesystem }) {
-    if (!['ts', 'js'].includes(extension)) {
-      return false;
-    }
-
-    const code = await filesystem.readFile(filePath, 'utf8');
-    const hasEsmImport = /import\s+.*from\s+["']manifold-3d(?:\/[^"']*)?["']/.test(code);
-    const hasRequire = /require\s*\(\s*["']manifold-3d(?:\/[^"']*)?["']\s*\)/.test(code);
-    const hasDynamicImport = /import\s*\(\s*["']manifold-3d(?:\/[^"']*)?["']\s*\)/.test(code);
-    return hasEsmImport || hasRequire || hasDynamicImport;
-  },
-
   async getDependencies({ filePath }, runtime) {
     return runtime.bundler.resolveDependencies(filePath);
   },

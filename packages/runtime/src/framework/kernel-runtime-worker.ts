@@ -23,7 +23,6 @@ import type {
   KernelIssue,
 } from '#types/runtime.types.js';
 import type {
-  CanHandleInput,
   CreateGeometryInput,
   ExportGeometryInput,
   GetDependenciesInput,
@@ -68,7 +67,7 @@ type RuntimeWorkerOptions = {
  * Generic kernel runtime worker.
  * Loads kernel modules dynamically and delegates to the active kernel.
  */
-/** How a kernel was selected — determines whether to re-check via kernel.canHandle. */
+/** How a kernel was selected. */
 type SelectionMethod = 'regex' | 'bundler' | 'extension' | 'catchall';
 
 type KernelSelection = {
@@ -95,28 +94,6 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
     _runtime: KernelRuntime,
   ): Promise<void> {
     this.kernelModules = options.kernelModules;
-  }
-
-  protected override async onCanHandle(input: CanHandleInput, runtime: KernelRuntime): Promise<boolean> {
-    const selection = await this.selectKernel(input.filePath, runtime);
-    if (!selection) {
-      return false;
-    }
-
-    this.activeKernelId = selection.kernel.entry.id;
-
-    // When selected via bundler detection (transitive import analysis),
-    // the framework's detection is authoritative — skip kernel-level canHandle
-    // which only checks the entry file and would reject transitive imports.
-    if (selection.method === 'bundler') {
-      return true;
-    }
-
-    if (selection.kernel.definition.canHandle) {
-      return selection.kernel.definition.canHandle(input, runtime, selection.kernel.ctx);
-    }
-
-    return true;
   }
 
   protected override async onGetDependencies(
@@ -313,11 +290,6 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
    * 2. Bundler-assisted detection via detectImports (transitive, no stubs)
    * 3. Catch-all fallback (extensions: ['*'])
    *
-   * Returns the selected kernel and the method used for selection.
-   * The selection method is used by canHandle to decide whether to
-   * re-check via the kernel's own canHandle (skipped for bundler detection
-   * since it already traced transitive imports).
-   *
    * @param filePath - Full path to the file (used as cache key for collision safety)
    * @param runtime - the kernel runtime context for initialization
    * @returns the selected kernel and selection method, or undefined if no kernel matches
@@ -437,42 +409,23 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
 
     /* oxlint-enable no-await-in-loop -- End sequential kernel selection */
 
-    // Pass 3: Catch-all fallback — guarded by canHandle when defined
+    // Pass 3: Catch-all fallback
     if (catchAllEntry) {
-      return this.tryCatchAllKernel(catchAllEntry, {
-        filePath,
-        extension,
-        runtime,
-      });
+      return this.tryCatchAllKernel(catchAllEntry, { filePath, runtime });
     }
 
     return undefined;
   }
 
   /**
-   * Attempt catch-all kernel selection, rejecting if the kernel's canHandle returns false.
-   *
-   * @param entry - the catch-all kernel module entry to try
-   * @returns the selected kernel if accepted, or undefined if rejected
+   * Select the catch-all kernel for files that no other kernel matched.
    */
   private async tryCatchAllKernel(
     entry: KernelModuleEntry,
-    { filePath, extension, runtime }: { filePath: string; extension: string; runtime: KernelRuntime },
-  ): Promise<KernelSelection | undefined> {
+    { filePath, runtime }: { filePath: string; runtime: KernelRuntime },
+  ): Promise<KernelSelection> {
     const kernel = await this.loadKernelModule(entry, runtime.tracer);
     await this.ensureKernelInitialized(kernel, runtime);
-
-    if (kernel.definition.canHandle) {
-      const canHandleInput: CanHandleInput = {
-        filePath,
-        basePath: filePath.slice(0, filePath.lastIndexOf('/')),
-        extension,
-      };
-      const accepted = await kernel.definition.canHandle(canHandleInput, runtime, kernel.ctx);
-      if (!accepted) {
-        return undefined;
-      }
-    }
 
     this.selectionCache.set(filePath, { id: entry.id, method: 'catchall' });
     return { kernel, method: 'catchall' };

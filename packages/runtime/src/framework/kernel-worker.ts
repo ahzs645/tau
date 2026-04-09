@@ -24,7 +24,6 @@ import type {
   CreateGeometryInput,
   GetDependenciesInput,
   GetDependenciesResult,
-  CanHandleInput,
   ExportGeometryInput,
 } from '#types/runtime-kernel.types.js';
 import type {
@@ -52,12 +51,16 @@ import type {
 import type { PerformanceEntryData, RenderPhase, WorkerState } from '#types/runtime-protocol.types.js';
 import { signalSlot, workerStateEnum } from '#types/runtime-protocol.types.js';
 import { isRenderAbortedError } from '#framework/runtime-worker-client.js';
-import type { FileSystemProxy, ContentPool } from '#framework/runtime-filesystem-bridge.js';
+import type { FileSystemProxy, FilePool } from '#framework/runtime-filesystem-bridge.js';
 import { createBridgeProxy } from '#framework/runtime-filesystem-bridge.js';
 import { createRuntimeFileSystem } from '#filesystem/create-runtime-filesystem.js';
 import { createKernelError } from '#kernels/kernel-helpers.js';
 import { cooperativeYield } from '#framework/async-polyfills.js';
-import { parameterDebounceMs, fileChangeDebounceMs } from '#framework/runtime-framework.constants.js';
+import {
+  parameterDebounceMs,
+  fileChangeDebounceMs,
+  defaultRenderTimeoutMs,
+} from '#framework/runtime-framework.constants.js';
 import { hashBytes, hashString } from '#utils/hash.utils.js';
 import { RuntimeTracer } from '#framework/runtime-tracer.js';
 import { WorkerTelemetryCollector } from '#framework/worker-telemetry.js';
@@ -580,26 +583,6 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
     this.fileSystem?.dispose();
     this.fileSystem = undefined;
     await this.onCleanup();
-  }
-
-  /**
-   * Entry point for checking if this worker can handle the given file.
-   *
-   * @param file - The geometry file to check.
-   * @returns True if this worker can handle the file, false otherwise.
-   */
-  public async canHandle(file: GeometryFile): Promise<boolean> {
-    this.setBasePath(file);
-    const basename = KernelWorker.getBasename(file.filename);
-    const extension = KernelWorker.getFileExtension(basename);
-
-    const input: CanHandleInput = {
-      filePath: this.activeFileAbsolutePath,
-      basePath: this.getProjectRootPath(),
-      extension,
-    };
-
-    return this.onCanHandle(input, this.createRuntime());
   }
 
   /**
@@ -1311,15 +1294,6 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   }
 
   /**
-   * Check if this kernel can handle a file.
-   *
-   * @param input - Input containing file path, project root, and extension
-   * @param runtime - Runtime services (filesystem, logger)
-   * @returns True if the kernel can handle this file
-   */
-  protected abstract onCanHandle(input: CanHandleInput, runtime: KernelRuntime): Promise<boolean>;
-
-  /**
    * Extract parameters from a file.
    *
    * @param input - Input containing file path and project root
@@ -1533,7 +1507,6 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       this.fileHashCache.delete(path);
       this.fileContentCache.delete(path);
       this.fileContentCache.delete(`utf8:${path}`);
-      this._filePool?.invalidate(path);
     }
     for (const [entryPath, result] of this.bundleResultCache) {
       if (

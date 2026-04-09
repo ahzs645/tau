@@ -30,7 +30,6 @@ import type {
   KernelRuntime,
   KernelDefinition,
   RuntimeFileSystem,
-  CanHandleInput,
   GetDependenciesInput,
   GetDependenciesResult,
   GetParametersInput,
@@ -531,7 +530,7 @@ export function createMockInput(overrides?: Partial<CreateGeometryInput>): Creat
 }
 
 /**
- * Creates a GeometryFile for use with worker methods (canHandle, getParameters, createGeometry).
+ * Creates a GeometryFile for use with worker methods (getParameters, createGeometry).
  *
  * @param filename - The file name (e.g. `'test.ts'`)
  * @param basePath - The project base path (defaults to `/projects/test`)
@@ -604,16 +603,11 @@ function inferExtensions(definition: KernelDefinition): string[] {
 
 /**
  * Infer an import-detection regex from the kernel name.
- * Returns undefined when the kernel has its own canHandle() that performs detection.
  *
- * @param definition - the kernel definition to infer import detection from
- * @returns a regex string for import detection, or undefined if the kernel handles it
+ * @param _definition - the kernel definition (unused — detection is handled at the plugin layer)
+ * @returns undefined — detection is always handled at the plugin layer
  */
-function inferDetectImport(definition: KernelDefinition): string | undefined {
-  if (definition.canHandle) {
-    return undefined;
-  }
-
+function inferDetectImport(_definition: KernelDefinition): string | undefined {
   return undefined;
 }
 
@@ -964,10 +958,6 @@ export class MockKernelWorker extends KernelWorker {
   }
 
   // Stub implementations of abstract methods
-  protected override async onCanHandle(_input: CanHandleInput, _runtime: KernelRuntime): Promise<boolean> {
-    return true;
-  }
-
   protected override async onGetParameters(
     _input: GetParametersInput,
     _runtime: KernelRuntime,

@@ -59,60 +59,7 @@ async function getParametersWithError(
   return worker.getParameters(createGeometryFile(mainFile));
 }
 
-// =============================================================================
-// Tests: canHandle - File Type Detection
-// =============================================================================
-
 describe('ZooWorker', () => {
-  describe('canHandle', () => {
-    it('should handle KCL files', async () => {
-      const worker = await createWorker({
-        'main.kcl': `
-          width = 10
-          box = startSketchOn(XY)
-            |> startProfile(at = [0, 0])
-            |> line(end = [width, 0])
-            |> line(end = [0, 10])
-            |> line(end = [-width, 0])
-            |> close(%)
-            |> extrude(length = 5)
-        `,
-      });
-      const result = await worker.canHandle(createGeometryFile('main.kcl'));
-      expect(result).toBe(true);
-    });
-
-    it('should not handle JavaScript files', async () => {
-      const worker = await createWorker({
-        'main.js': `
-          console.log('hello');
-        `,
-      });
-      const result = await worker.canHandle(createGeometryFile('main.js'));
-      expect(result).toBe(false);
-    });
-
-    it('should not handle TypeScript files', async () => {
-      const worker = await createWorker({
-        'main.ts': `
-          const x: number = 10;
-        `,
-      });
-      const result = await worker.canHandle(createGeometryFile('main.ts'));
-      expect(result).toBe(false);
-    });
-
-    it('should not handle OpenSCAD files', async () => {
-      const worker = await createWorker({
-        'main.scad': `
-          cube([10, 10, 10]);
-        `,
-      });
-      const result = await worker.canHandle(createGeometryFile('main.scad'));
-      expect(result).toBe(false);
-    });
-  });
-
   // ===========================================================================
   // Tests: Parameter Extraction - Single File Projects
   // ===========================================================================

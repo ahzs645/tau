@@ -255,19 +255,6 @@ export type GetDependenciesResult = {
 };
 
 /**
- * File path and extension used to determine whether a kernel supports a given file.
- * @public
- */
-export type CanHandleInput = {
-  /** Absolute path to the active file */
-  filePath: string;
-  /** Absolute path to the project root directory */
-  basePath: string;
-  /** File extension (without dot) */
-  extension: string;
-};
-
-/**
  * Validated options passed to a kernel during worker initialization.
  * @public
  */
@@ -340,9 +327,6 @@ export type KernelDefinition<
 
   /** Initialize kernel with typed options. Options type is inferred from optionsSchema. */
   initialize(options: Options, runtime: KernelRuntime): Promise<Context>;
-
-  /** Optional guard that determines whether this kernel can process a given file. Called during kernel selection. */
-  canHandle?(input: CanHandleInput, runtime: KernelRuntime, context: Context): Promise<boolean>;
 
   /** Return resolved and unresolved dependency paths for change-detection, cache invalidation, and watch-set expansion. */
   getDependencies(

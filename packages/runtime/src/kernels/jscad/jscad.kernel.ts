@@ -17,6 +17,7 @@ import { defineKernel } from '#types/runtime-kernel.types.js';
 import { createKernelError, createKernelSuccess } from '#kernels/kernel-helpers.js';
 import { parseStackTrace, resolveSourcePath, deriveLocationFromFrames } from '#framework/error-enrichment.js';
 import { jscadToGltf } from '#kernels/jscad/jscad-to-gltf.js';
+
 import type { JscadParameterDefinition } from '#kernels/jscad/jscad.schema.js';
 import {
   convertParameterDefinitionsToDefaults,
@@ -198,17 +199,6 @@ export default defineKernel({
     registerJscadModules(runtime);
     runtime.logger.debug('Initialized JSCAD kernel with @jscad/modeling');
     return { modulesRegistered: true };
-  },
-
-  async canHandle({ filePath, extension }, { filesystem }) {
-    if (!['ts', 'js'].includes(extension)) {
-      return false;
-    }
-
-    const code = await filesystem.readFile(filePath, 'utf8');
-    const hasEsmImport = /import\s+.*from\s+["']@jscad\/modeling(\/[^"']*)?["']/.test(code);
-    const hasRequire = /require\s*\(\s*["']@jscad\/modeling(\/[^"']*)?["']\s*\)/.test(code);
-    return hasEsmImport || hasRequire;
   },
 
   async getDependencies({ filePath }, runtime) {

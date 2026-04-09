@@ -171,10 +171,6 @@ export default defineKernel({
     };
   },
 
-  async canHandle({ extension }) {
-    return extension === 'kcl';
-  },
-
   async getDependencies({ filePath, basePath }, { filesystem }, context) {
     ensureFileSystemManager(context, basePath, filesystem);
     const utilities = await getKclUtils(context);
