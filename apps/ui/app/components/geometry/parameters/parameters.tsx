@@ -197,7 +197,7 @@ export function Parameters({
           />
         </>
       ) : (
-        <EmptyItems>
+        <EmptyItems className='mt-0'>
           <div className='mb-3 rounded-full bg-muted/50 p-2'>
             <Info className='size-6 text-muted-foreground' strokeWidth={1.5} />
           </div>
