@@ -1,4 +1,4 @@
-import { memo, useEffect, useCallback, useMemo } from 'react';
+import { memo, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useSelector } from '@xstate/react';
 import type { DockviewApi, DockviewPanelApi, IDockviewPanelHeaderProps } from 'dockview-react';
 import { FileX, FolderOpen } from 'lucide-react';
@@ -8,7 +8,7 @@ import { useProject } from '#hooks/use-project.js';
 import { useFileTreeMap } from '#hooks/use-file-tree.js';
 import { useFileContent } from '#hooks/use-file-content.js';
 import { defaultGraphicsSettings } from '#constants/editor.constants.js';
-import { CadProvider, useCadSelector } from '#hooks/use-cad.js';
+import { CadProvider, useCad, useCadSelector } from '#hooks/use-cad.js';
 import { GraphicsProvider, useGraphics, useGraphicsSelector } from '#hooks/use-graphics.js';
 import { useViewSettingsSync } from '#hooks/use-view-settings-sync.js';
 import { ChatStackTrace } from '#routes/projects_.$id/chat-stack-trace.js';
@@ -219,6 +219,7 @@ const ViewerContent = memo(function ({
   readonly containerApi: DockviewApi;
 }): React.JSX.Element {
   const { editorRef } = useProject();
+  const cadRef = useCad();
   const geometries = useCadSelector((state) => state.context.geometries, []);
   const units = useCadSelector((state) => state.context.units, undefined);
 
@@ -234,14 +235,27 @@ const ViewerContent = memo(function ({
     }
   }, [graphicsActor, geometries, units]);
 
-  // Sync graphics settings back to editor state for persistence
+  // Sync graphics + render timeout settings back to editor state for persistence
   useViewSettingsSync({
     viewId,
     graphicsRef: graphicsActor,
+    cadRef,
     editorRef,
   });
 
-  // Render timeout is now managed internally by the autonomous runtime worker
+  // Restore persisted render timeout on mount
+  const viewSettings = useSelector(editorRef, (state) => state.context.viewSettings);
+  const restoredTimeoutRef = useRef(false);
+  useEffect(() => {
+    if (restoredTimeoutRef.current || !cadRef) {
+      return;
+    }
+    const persisted = viewSettings[viewId]?.graphicsSettings.renderTimeout;
+    if (persisted !== undefined) {
+      restoredTimeoutRef.current = true;
+      cadRef.send({ type: 'setRenderTimeout', seconds: persisted });
+    }
+  }, [cadRef, viewId, viewSettings]);
 
   // Select individual primitive values so that useSelector's reference equality
   // check works correctly. An object-returning selector creates a new reference

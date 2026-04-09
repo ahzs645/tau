@@ -165,7 +165,7 @@ export const defaultGraphicsSettings: GraphicsViewSettings = {
   enablePostProcessing: true,
   upDirection: 'z',
   cameraFovAngle: 60,
-  renderTimeout: 60,
+  renderTimeout: 30,
   environmentPreset: 'studio',
 };
 
