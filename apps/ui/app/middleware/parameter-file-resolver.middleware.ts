@@ -2,56 +2,47 @@ import { z } from 'zod';
 import deepmerge from 'deepmerge';
 import { defineMiddleware } from '@taucad/runtime/middleware';
 
-const parametersFile = '.tau/parameters.json';
+const parametersDir = '.tau/parameters';
 const parameterWatchDebounceMs = 200;
 
 export const parameterFileResolverMiddleware = defineMiddleware({
   name: 'parameter-file-resolver',
 
   optionsSchema: z.object({
-    parametersFile: z.string().default(parametersFile),
+    parametersDir: z.string().default(parametersDir),
     watchDebounceMs: z.number().default(parameterWatchDebounceMs),
   }),
 
-  getDependencies({ basePath }, options) {
-    return [`${basePath}/${options.parametersFile}`];
+  getDependencies({ filePath, basePath }, options) {
+    const relativePath = filePath.replace(`${basePath}/`, '');
+    return [`${basePath}/${options.parametersDir}/${relativePath}.json`];
   },
 
   async wrapCreateGeometry(input, handler, runtime) {
-    const parametersPath = `${input.basePath}/${runtime.options.parametersFile}`;
+    const relativePath = input.filePath.replace(`${input.basePath}/`, '');
+    const parametersPath = `${input.basePath}/${runtime.options.parametersDir}/${relativePath}.json`;
     runtime.registerWatchPath(parametersPath, { debounceMs: runtime.options.watchDebounceMs });
 
     try {
       const content = await runtime.filesystem.readFile(parametersPath, 'utf8');
-      const config: unknown = JSON.parse(content);
+      const entry: unknown = JSON.parse(content);
 
-      if (
-        typeof config !== 'object' ||
-        config === null ||
-        !('version' in config) ||
-        (config as { version: unknown }).version !== 1 ||
-        !('files' in config)
-      ) {
+      if (typeof entry !== 'object' || entry === null || !('activeGroup' in entry) || !('groups' in entry)) {
         return await handler(input);
       }
 
-      const { files } = config as { files: Record<string, unknown> };
-      const relativePath = input.filePath.replace(`${input.basePath}/`, '');
-      const fileEntry = files[relativePath] as
-        | { activeSet: string; sets: Record<string, { values: Record<string, unknown> }> }
-        | undefined;
-
-      if (!fileEntry) {
+      const { activeGroup, groups } = entry as {
+        activeGroup: string;
+        groups: Record<string, { values: Record<string, unknown> }>;
+      };
+      const activeGroupValues = groups[activeGroup]?.values;
+      if (!activeGroupValues) {
         return await handler(input);
       }
 
-      const activeSetValues = fileEntry.sets[fileEntry.activeSet]?.values;
-      if (!activeSetValues) {
-        return await handler(input);
-      }
       return await handler({
         ...input,
-        parameters: deepmerge(input.parameters, activeSetValues, {
+        parameters: deepmerge(input.parameters, activeGroupValues, {
           arrayMerge: (_target: unknown[], source: unknown[]) => source,
         }),
       });

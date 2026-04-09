@@ -1,8 +1,7 @@
-/* eslint-disable @typescript-eslint/naming-convention -- file-path keys in FileParameterConfig test data */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import type { ActorRefFrom } from 'xstate';
-import type { FileParameterConfig } from '@taucad/types';
+import type { FileParameterEntry } from '@taucad/types';
 import type { cadMachine } from '#machines/cad.machine.js';
 
 vi.mock('@xstate/react', () => ({
@@ -47,8 +46,8 @@ let mockCompilationUnits = new Map<string, ActorRefFrom<typeof cadMachine>>();
 const mockMainEntryFile = 'main.ts';
 const mockSetParameters = vi.fn();
 const mockSetCompilationUnitParameters = vi.fn();
-const mockSwitchParameterSet = vi.fn();
-let mockParameterConfig: FileParameterConfig | undefined;
+const mockSwitchParameterGroup = vi.fn();
+let mockParameterEntries = new Map<string, FileParameterEntry>();
 
 vi.mock('#hooks/use-project.js', () => ({
   useProject: () => ({
@@ -61,10 +60,11 @@ vi.mock('#hooks/use-project.js', () => ({
     mainEntryFile: mockMainEntryFile,
     setParameters: mockSetParameters,
     setCompilationUnitParameters: mockSetCompilationUnitParameters,
-    switchParameterSet: mockSwitchParameterSet,
-    createParameterSet: vi.fn(),
-    deleteParameterSet: vi.fn(),
-    parameterConfig: mockParameterConfig,
+    switchParameterGroup: mockSwitchParameterGroup,
+    createParameterGroup: vi.fn(),
+    deleteParameterGroup: vi.fn(),
+    renameParameterGroup: vi.fn(),
+    parameterEntries: mockParameterEntries,
   }),
   useMainGraphics: () => ({
     getSnapshot: vi.fn(() => ({
@@ -79,14 +79,17 @@ vi.mock('dockview-react', () => ({
   PaneviewReact: ({
     onReady,
     components,
+    headerComponents,
   }: {
     onReady: (event: { api: { addPanel: (options: Record<string, unknown>) => void } }) => void;
     components: Record<string, React.ComponentType<{ params: Record<string, unknown> }>>;
+    headerComponents?: Record<string, React.ComponentType<{ api: unknown; params: Record<string, unknown> }>>;
   }) => {
     const panels: Array<{
       id: string;
       title: string;
       component: string;
+      headerComponent?: string;
       isExpanded: boolean;
       params: Record<string, unknown> & { entryFile: string };
     }> = [];
@@ -97,6 +100,7 @@ vi.mock('dockview-react', () => ({
             id: string;
             title: string;
             component: string;
+            headerComponent?: string;
             isExpanded: boolean;
             params: Record<string, unknown> & { entryFile: string };
           },
@@ -104,13 +108,21 @@ vi.mock('dockview-react', () => ({
       },
     };
     onReady({ api });
+    const mockPanelApi = {
+      isExpanded: true,
+      onDidExpansionChange: () => ({ dispose: () => {} }),
+      setExpanded: () => {},
+      setSize: () => {},
+      updateParameters: () => {},
+    };
     return (
       <div data-testid='paneview'>
         {panels.map((p) => {
           const Component = components[p.component];
+          const HeaderComponent = p.headerComponent && headerComponents?.[p.headerComponent];
           return (
             <div key={p.id} data-testid={`param-pane-${p.id}`} data-expanded={p.isExpanded}>
-              {p.params.entryFile}
+              {HeaderComponent ? <HeaderComponent api={mockPanelApi} params={p.params} /> : p.params.entryFile}
               {Component ? <Component params={p.params} /> : null}
             </div>
           );
@@ -186,6 +198,16 @@ vi.mock('@taucad/utils/schema', () => ({
     Boolean(schema && typeof schema === 'object' && 'properties' in schema),
 }));
 
+vi.mock('#components/ui/tooltip.js', () => ({
+  Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipContent: () => null,
+  TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
+vi.mock('#components/ui/combobox-responsive.js', () => ({
+  ComboBoxResponsive: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
 vi.mock('#routes/projects_.$id/use-chat-interface-state.js', () => ({
   usePaneviewPersistence: () => ({
     savedState: {},
@@ -203,16 +225,16 @@ describe('ChatParameters', () => {
     mockCompilationUnits = new Map<string, ActorRefFrom<typeof cadMachine>>();
     mockSetParameters.mockClear();
     mockSetCompilationUnitParameters.mockClear();
-    mockSwitchParameterSet.mockClear();
-    mockParameterConfig = {
-      version: 1,
-      files: {
-        'main.ts': {
-          activeSet: 'default',
-          sets: { default: { values: { width: 15 } } },
+    mockSwitchParameterGroup.mockClear();
+    mockParameterEntries = new Map<string, FileParameterEntry>([
+      [
+        'main.ts',
+        {
+          activeGroup: 'default',
+          groups: { default: { values: { width: 15 } } },
         },
-      },
-    };
+      ],
+    ]);
   });
 
   it('should render single CU inside PaneviewReact', async () => {
@@ -260,7 +282,7 @@ describe('ChatParameters', () => {
     expect(helperPane.dataset['expanded']).toBe('false');
   });
 
-  it('reads parameter values from parameterConfig active set', async () => {
+  it('reads parameter values from parameterEntries active group', async () => {
     mockCompilationUnits.set('main.ts', mockCadRef);
 
     const { ChatParameters } = await import('./chat-parameters.js');
@@ -288,8 +310,8 @@ describe('ChatParameters', () => {
     expect(screen.getByText('No compilation units.')).toBeInTheDocument();
   });
 
-  it('returns empty params when parameterConfig is undefined', async () => {
-    mockParameterConfig = undefined;
+  it('returns empty params when entry is missing', async () => {
+    mockParameterEntries = new Map();
     mockCompilationUnits.set('main.ts', mockCadRef);
 
     const { ChatParameters } = await import('./chat-parameters.js');
@@ -301,48 +323,118 @@ describe('ChatParameters', () => {
   });
 });
 
-describe('ParameterSetSelector', () => {
+describe('ParameterGroupSelector', () => {
   beforeEach(() => {
     mockCompilationUnits = new Map<string, ActorRefFrom<typeof cadMachine>>();
-    mockSwitchParameterSet.mockClear();
-    mockParameterConfig = {
-      version: 1,
-      files: {
-        'main.ts': {
-          activeSet: 'default',
-          sets: {
+    mockSwitchParameterGroup.mockClear();
+    mockParameterEntries = new Map<string, FileParameterEntry>([
+      [
+        'main.ts',
+        {
+          activeGroup: 'default',
+          groups: {
             default: { values: {} },
             preset1: { values: { width: 50 } },
           },
         },
-      },
-    };
+      ],
+    ]);
   });
 
-  it('renders set selector with multiple sets in multi-CU paneview header', async () => {
+  it('renders group selector with multiple groups in multi-CU paneview header', async () => {
     mockCompilationUnits.set('main.ts', mockCadRef);
     mockCompilationUnits.set('helper.ts', mockCadRef2);
-    mockParameterConfig = {
-      version: 1,
-      files: {
-        'main.ts': {
-          activeSet: 'default',
-          sets: {
+    mockParameterEntries = new Map<string, FileParameterEntry>([
+      [
+        'main.ts',
+        {
+          activeGroup: 'default',
+          groups: {
             default: { values: {} },
             preset1: { values: { width: 50 } },
           },
         },
-        'helper.ts': {
-          activeSet: 'default',
-          sets: { default: { values: {} } },
+      ],
+      [
+        'helper.ts',
+        {
+          activeGroup: 'default',
+          groups: { default: { values: {} } },
         },
-      },
-    };
+      ],
+    ]);
 
     const { ChatParameters } = await import('./chat-parameters.js');
     render(<ChatParameters isExpanded setIsExpanded={vi.fn()} />);
 
     expect(screen.getByTestId('paneview')).toBeInTheDocument();
+  });
+});
+
+describe('ParameterGroupManager — active group name', () => {
+  beforeEach(() => {
+    mockCompilationUnits = new Map<string, ActorRefFrom<typeof cadMachine>>();
+    mockSwitchParameterGroup.mockClear();
+  });
+
+  it('displays the active group name dynamically in the header', async () => {
+    mockCompilationUnits.set('main.ts', mockCadRef);
+    mockParameterEntries = new Map<string, FileParameterEntry>([
+      [
+        'main.ts',
+        {
+          activeGroup: 'my-custom-group',
+          groups: {
+            default: { values: {} },
+            'my-custom-group': { values: { width: 99 } },
+          },
+        },
+      ],
+    ]);
+
+    const { ChatParameters } = await import('./chat-parameters.js');
+    render(<ChatParameters isExpanded setIsExpanded={vi.fn()} />);
+
+    expect(screen.getByText('my-custom-group')).toBeInTheDocument();
+  });
+
+  it('updates the displayed group name when activeGroup changes', async () => {
+    mockCompilationUnits.set('main.ts', mockCadRef);
+    mockParameterEntries = new Map<string, FileParameterEntry>([
+      [
+        'main.ts',
+        {
+          activeGroup: 'default',
+          groups: {
+            default: { values: {} },
+            alternate: { values: { width: 50 } },
+          },
+        },
+      ],
+    ]);
+
+    const { ChatParameters } = await import('./chat-parameters.js');
+    const { rerender } = render(<ChatParameters isExpanded setIsExpanded={vi.fn()} />);
+
+    expect(screen.getByText('default')).toBeInTheDocument();
+    expect(screen.queryByText('alternate')).not.toBeInTheDocument();
+
+    mockParameterEntries = new Map<string, FileParameterEntry>([
+      [
+        'main.ts',
+        {
+          activeGroup: 'alternate',
+          groups: {
+            default: { values: {} },
+            alternate: { values: { width: 50 } },
+          },
+        },
+      ],
+    ]);
+
+    rerender(<ChatParameters isExpanded setIsExpanded={vi.fn()} />);
+
+    expect(screen.getByText('alternate')).toBeInTheDocument();
   });
 });
 

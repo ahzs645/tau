@@ -1,177 +1,173 @@
-import type { FileParameterConfig, FileParameterEntry } from '@taucad/types';
+import type { FileParameterEntry } from '@taucad/types';
 
-const defaultParameterSetName = 'default';
+const defaultParameterGroupName = 'default';
 
 /**
- * Parse a JSON string into a validated FileParameterConfig.
- * Throws on invalid JSON or missing version field.
+ * Parse a JSON string into a validated FileParameterEntry.
+ * Throws on invalid JSON or missing required fields.
  */
-export const parseParameterConfig = (json: string): FileParameterConfig => {
+export const parseParameterEntry = (json: string): FileParameterEntry => {
   const parsed: unknown = JSON.parse(json);
-  if (
-    typeof parsed !== 'object' ||
-    parsed === null ||
-    !('version' in parsed) ||
-    (parsed as { version: unknown }).version !== 1
-  ) {
-    throw new Error('Invalid parameter config: missing or unsupported version');
+  if (typeof parsed !== 'object' || parsed === null || !('activeGroup' in parsed) || !('groups' in parsed)) {
+    throw new Error('Invalid parameter entry: missing activeGroup or groups');
   }
-  return parsed as FileParameterConfig;
+  return parsed as FileParameterEntry;
 };
 
 /**
- * Create a default config with a single file entry and empty default set.
+ * Create a default entry with a single empty default group.
  */
-export const createDefaultConfig = (mainEntryFile: string): FileParameterConfig => ({
-  version: 1,
-  files: {
-    [mainEntryFile]: {
-      activeSet: defaultParameterSetName,
-      sets: {
-        [defaultParameterSetName]: { values: {} },
-      },
-    },
+export const createDefaultEntry = (): FileParameterEntry => ({
+  activeGroup: defaultParameterGroupName,
+  groups: {
+    [defaultParameterGroupName]: { values: {} },
   },
 });
 
 /**
- * Get the active parameter set values for a file.
- * Returns an empty object if the file or set is not found.
+ * Get the active parameter group values for an entry.
+ * Returns an empty object if the entry is undefined or the active group is missing.
  */
-export const getActiveSetValues = (config: FileParameterConfig, filePath: string): Record<string, unknown> => {
-  const entry = config.files[filePath];
+export const getActiveGroupValues = (entry: FileParameterEntry | undefined): Record<string, unknown> => {
   if (!entry) {
     return {};
   }
-  return entry.sets[entry.activeSet]?.values ?? {};
+  return entry.groups[entry.activeGroup]?.values ?? {};
 };
 
 /**
- * Return a new config with updated values for a specific set in a file entry.
- * Creates the file entry and set if they don't exist.
+ * Return a new entry with updated values for a specific group.
+ * Creates the group if it doesn't exist.
  */
-export const updateSetValues = (
-  config: FileParameterConfig,
-  options: { filePath: string; setName: string; values: Record<string, unknown> },
-): FileParameterConfig => {
-  const { filePath, setName, values } = options;
-  const existingEntry: FileParameterEntry = config.files[filePath] ?? {
-    activeSet: setName,
-    sets: {},
-  };
-
+export const updateGroupValues = (
+  entry: FileParameterEntry,
+  options: { groupName: string; values: Record<string, unknown> },
+): FileParameterEntry => {
+  const { groupName, values } = options;
   return {
-    ...config,
-    files: {
-      ...config.files,
-      [filePath]: {
-        ...existingEntry,
-        sets: {
-          ...existingEntry.sets,
-          [setName]: { values },
-        },
-      },
+    ...entry,
+    groups: {
+      ...entry.groups,
+      [groupName]: { values },
     },
   };
 };
 
 /**
- * Create a new parameter set for a file.
- * Throws if the set already exists.
+ * Create a new parameter group in an entry.
+ * Throws if the group already exists.
  */
-export const createSet = (
-  config: FileParameterConfig,
-  options: { filePath: string; setName: string; values?: Record<string, unknown> },
-): FileParameterConfig => {
-  const { filePath, setName, values = {} } = options;
-  const entry = config.files[filePath];
-  if (entry?.sets[setName]) {
-    throw new Error(`Parameter set "${setName}" already exists for "${filePath}"`);
+export const createGroup = (
+  entry: FileParameterEntry,
+  options: { groupName: string; values?: Record<string, unknown> },
+): FileParameterEntry => {
+  const { groupName, values = {} } = options;
+  if (entry.groups[groupName]) {
+    throw new Error(`Parameter group "${groupName}" already exists`);
   }
-  return updateSetValues(config, { filePath, setName, values });
+  return updateGroupValues(entry, { groupName, values });
 };
 
 /**
- * Delete a parameter set from a file entry.
- * Throws if deleting the active set or if the set doesn't exist.
+ * Delete a parameter group from an entry.
+ * Throws if deleting the active group or if the group doesn't exist.
  */
-export const deleteSet = (config: FileParameterConfig, filePath: string, setName: string): FileParameterConfig => {
-  const entry = config.files[filePath];
-  if (!entry?.sets[setName]) {
-    throw new Error(`Parameter set "${setName}" does not exist for "${filePath}"`);
+export const deleteGroup = (entry: FileParameterEntry, groupName: string): FileParameterEntry => {
+  if (!entry.groups[groupName]) {
+    throw new Error(`Parameter group "${groupName}" does not exist`);
   }
-  if (entry.activeSet === setName) {
-    throw new Error(`Cannot delete the active parameter set "${setName}"`);
+  if (entry.activeGroup === groupName) {
+    throw new Error(`Cannot delete the active parameter group "${groupName}"`);
   }
 
-  const { [setName]: _, ...remainingSets } = entry.sets;
+  const { [groupName]: _, ...remainingGroups } = entry.groups;
   return {
-    ...config,
-    files: {
-      ...config.files,
-      [filePath]: {
-        ...entry,
-        sets: remainingSets,
-      },
+    ...entry,
+    groups: remainingGroups,
+  };
+};
+
+/**
+ * Rename a parameter group in an entry.
+ * Throws if the old name doesn't exist or the new name already exists.
+ * Updates `activeGroup` and `order` when they reference the old name.
+ */
+export const renameGroup = (
+  entry: FileParameterEntry,
+  options: { oldName: string; newName: string },
+): FileParameterEntry => {
+  const { oldName, newName } = options;
+  if (!entry.groups[oldName]) {
+    throw new Error(`Parameter group "${oldName}" does not exist`);
+  }
+  if (entry.groups[newName]) {
+    throw new Error(`Parameter group "${newName}" already exists`);
+  }
+
+  const { [oldName]: groupToRename, ...remainingGroups } = entry.groups;
+  const updatedOrder = entry.order?.map((name) => (name === oldName ? newName : name));
+
+  return {
+    ...entry,
+    activeGroup: entry.activeGroup === oldName ? newName : entry.activeGroup,
+    ...(updatedOrder ? { order: updatedOrder } : {}),
+    groups: {
+      ...remainingGroups,
+      [newName]: groupToRename!,
     },
   };
 };
 
 /**
- * Switch the active parameter set for a file.
- * Throws if the target set doesn't exist.
+ * Switch the active parameter group for an entry.
+ * Throws if the target group doesn't exist.
  */
-export const switchActiveSet = (
-  config: FileParameterConfig,
-  filePath: string,
-  setName: string,
-): FileParameterConfig => {
-  const entry = config.files[filePath];
-  if (!entry?.sets[setName]) {
-    throw new Error(`Parameter set "${setName}" does not exist for "${filePath}"`);
+export const switchActiveGroup = (entry: FileParameterEntry, groupName: string): FileParameterEntry => {
+  if (!entry.groups[groupName]) {
+    throw new Error(`Parameter group "${groupName}" does not exist`);
   }
   return {
-    ...config,
-    files: {
-      ...config.files,
-      [filePath]: {
-        ...entry,
-        activeSet: setName,
-      },
-    },
+    ...entry,
+    activeGroup: groupName,
   };
 };
 
 /**
- * Validate that a value is a structurally sound FileParameterConfig.
+ * Validate that a value is a structurally sound FileParameterEntry.
  * Throws with a descriptive message on any structural issue.
  */
-export function validateParameterConfig(config: unknown): asserts config is FileParameterConfig {
-  if (typeof config !== 'object' || config === null) {
-    throw new Error('Invalid parameter config: expected a non-null object');
+export function validateParameterEntry(entry: unknown): asserts entry is FileParameterEntry {
+  if (typeof entry !== 'object' || entry === null) {
+    throw new Error('Invalid parameter entry: expected a non-null object');
   }
-  if (!('version' in config) || (config as { version: unknown }).version !== 1) {
-    throw new Error('Invalid parameter config: missing or unsupported version');
+  if (!('activeGroup' in entry) || typeof (entry as { activeGroup: unknown }).activeGroup !== 'string') {
+    throw new Error('Invalid parameter entry: missing or invalid activeGroup');
   }
   if (
-    !('files' in config) ||
-    typeof (config as { files: unknown }).files !== 'object' ||
-    (config as { files: unknown }).files === null
+    !('groups' in entry) ||
+    typeof (entry as { groups: unknown }).groups !== 'object' ||
+    (entry as { groups: unknown }).groups === null
   ) {
-    throw new Error('Invalid parameter config: missing or invalid files object');
+    throw new Error('Invalid parameter entry: missing or invalid groups object');
   }
 }
 
 /**
- * Serialize a FileParameterConfig to a formatted JSON string.
+ * Serialize a FileParameterEntry to a formatted JSON string.
  *
- * Validates the config structure before serializing and round-trip
+ * Validates the entry structure before serializing and round-trip
  * parses the output to guarantee the written content is recoverable.
  * Throws if validation or round-trip parsing fails.
  */
-export const serializeParameterConfig = (config: FileParameterConfig): string => {
-  validateParameterConfig(config);
-  const json = JSON.stringify(config, null, 2);
-  parseParameterConfig(json);
+export const serializeParameterEntry = (entry: FileParameterEntry): string => {
+  validateParameterEntry(entry);
+  const json = JSON.stringify(entry, null, 2);
+  parseParameterEntry(json);
   return json;
 };
+
+/**
+ * Compute the parameter file path for a given entry file.
+ * Returns a project-relative path under `.tau/parameters/`.
+ */
+export const parameterEntryPath = (entryFile: string): string => `.tau/parameters/${entryFile}.json`;

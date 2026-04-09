@@ -1,12 +1,12 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mock } from 'vitest-mock-extended';
 import { createActor, waitFor } from 'xstate';
-import type { FileParameterConfig, Project } from '@taucad/types';
+import type { FileParameterEntry, Project } from '@taucad/types';
 import type { RuntimeClientOptions } from '@taucad/runtime';
 import { projectMachine } from '#machines/project.machine.js';
 import type { ProjectContext } from '#machines/project.machine.js';
 import { fromSafeAsync } from '#lib/xstate.lib.js';
-import { createDefaultConfig, getActiveSetValues } from '#utils/parameter-config.utils.js';
+import { createDefaultEntry, getActiveGroupValues } from '#utils/parameter-config.utils.js';
 
 vi.mock('#constants/browser.constants.js', () => ({
   isBrowser: true,
@@ -42,24 +42,26 @@ const stubProjectWithMechanical: Project = {
 // Factory helpers
 // ---------------------------------------------------------------------------
 
+type WriteParameterInput = { projectId: string; filePath: string; entry: FileParameterEntry };
+
 function createTestActor(options?: {
   loadResult?: Project | (() => Promise<Project>);
   writeResult?: () => Promise<void>;
-  writeParameterResult?: () => Promise<void>;
-  parameterConfig?: FileParameterConfig;
+  writeParameterResult?: (input?: WriteParameterInput) => Promise<void>;
+  parameterEntries?: Map<string, FileParameterEntry>;
   shouldAutoLoad?: boolean;
   shouldLoadModelOnStart?: boolean;
   projectId?: string;
 }) {
   const loadResult = options?.loadResult ?? stubProject;
   const loadFunction = typeof loadResult === 'function' ? loadResult : async () => loadResult;
-  const parameterConfig = options?.parameterConfig;
+  const parameterEntries = options?.parameterEntries;
 
   const machine = projectMachine.provide({
     actors: {
       loadProjectActor: fromSafeAsync(async () => {
         const project = await loadFunction();
-        return { type: 'projectRetrieved', project, ...(parameterConfig !== undefined && { parameterConfig }) };
+        return { type: 'projectRetrieved', project, parameterEntries: parameterEntries ?? new Map() };
       }),
       ...(options?.writeResult
         ? {
@@ -70,8 +72,8 @@ function createTestActor(options?: {
         : {}),
       ...(options?.writeParameterResult
         ? {
-            writeParameterFileActor: fromSafeAsync(async () => {
-              await options.writeParameterResult!();
+            writeParameterFileActor: fromSafeAsync<void, WriteParameterInput>(async ({ input }) => {
+              await options.writeParameterResult!(input);
             }),
           }
         : {}),
@@ -134,7 +136,7 @@ describe('projectMachine', () => {
       const machine = projectMachine.provide({
         actors: {
           loadProjectActor: fromSafeAsync(async () => {
-            return { type: 'projectRetrieved', project: stubProject };
+            return { type: 'projectRetrieved', project: stubProject, parameterEntries: new Map() };
           }),
         },
         guards: {
@@ -539,18 +541,19 @@ describe('projectMachine', () => {
     });
 
     it('should update parameters and forward to main compilation unit', async () => {
+      const entries = new Map<string, FileParameterEntry>([['main.ts', createDefaultEntry()]]);
       const actor = await startAndLoad({
         loadResult: stubProjectWithMechanical,
         shouldLoadModelOnStart: true,
-        parameterConfig: createDefaultConfig('main.ts'),
+        parameterEntries: entries,
       });
       const mainUnit = actor.getSnapshot().context.compilationUnits.get('main.ts');
       expect(mainUnit).toBeDefined();
 
       actor.send({ type: 'setParameters', parameters: { depth: 5 } });
-      const { parameterConfig } = actor.getSnapshot().context;
-      expect(parameterConfig).toBeDefined();
-      expect(getActiveSetValues(parameterConfig!, 'main.ts')).toEqual({ depth: 5 });
+      const { parameterEntries } = actor.getSnapshot().context;
+      expect(parameterEntries.size).toBeGreaterThan(0);
+      expect(getActiveGroupValues(parameterEntries.get('main.ts'))).toEqual({ depth: 5 });
       actor.stop();
     });
 
@@ -819,30 +822,31 @@ describe('projectMachine', () => {
   // State: ready – parameterStoring (immediate write, no debounce)
   // =========================================================================
   describe('ready – parameterStoring', () => {
-    it('should not transition to writing when parameterConfig is undefined', async () => {
+    it('should not transition to writing when parameterEntries is empty', async () => {
       const actor = await startAndLoad();
-      expect(actor.getSnapshot().context.parameterConfig).toBeUndefined();
+      expect(actor.getSnapshot().context.parameterEntries.size).toBe(0);
 
       actor.send({ type: 'setParameters', parameters: { width: 10 } });
       expect(actor.getSnapshot().matches({ ready: { parameterStoring: 'idle' } })).toBe(true);
       actor.stop();
     });
 
-    it('should enter writing after a parameter event when config is defined', async () => {
+    it('should enter writing after a parameter event when entries exist', async () => {
       let resolveWrite!: () => void;
       const gate = new Promise<void>((resolve) => {
         resolveWrite = resolve;
       });
 
+      const entries = new Map<string, FileParameterEntry>([['main.ts', createDefaultEntry()]]);
       const actor = await startAndLoad({
-        parameterConfig: createDefaultConfig('main.ts'),
+        parameterEntries: entries,
         loadResult: stubProjectWithMechanical,
         shouldLoadModelOnStart: true,
         writeParameterResult: async () => {
           await gate;
         },
       });
-      expect(actor.getSnapshot().context.parameterConfig).toBeDefined();
+      expect(actor.getSnapshot().context.parameterEntries.size).toBeGreaterThan(0);
 
       actor.send({ type: 'setParameters', parameters: { width: 10 } });
       await waitFor(actor, (s) => s.matches({ ready: { parameterStoring: 'writing' } }));
@@ -853,8 +857,9 @@ describe('projectMachine', () => {
 
     it('should coalesce rapid parameter events into fewer writes than events', async () => {
       let writeCallCount = 0;
+      const entries = new Map<string, FileParameterEntry>([['main.ts', createDefaultEntry()]]);
       const actor = await startAndLoad({
-        parameterConfig: createDefaultConfig('main.ts'),
+        parameterEntries: entries,
         loadResult: stubProjectWithMechanical,
         shouldLoadModelOnStart: true,
         writeParameterResult: async () => {
@@ -876,8 +881,9 @@ describe('projectMachine', () => {
       try {
         let writeCallCount = 0;
         const writeResolvers: Array<() => void> = [];
+        const entries = new Map<string, FileParameterEntry>([['main.ts', createDefaultEntry()]]);
         const actor = await startAndLoad({
-          parameterConfig: createDefaultConfig('main.ts'),
+          parameterEntries: entries,
           loadResult: stubProjectWithMechanical,
           shouldLoadModelOnStart: true,
           writeParameterResult: async () => {
@@ -910,8 +916,9 @@ describe('projectMachine', () => {
 
     it('should land in idle with error on parameter write failure and allow retry', async () => {
       let writeCallCount = 0;
+      const entries = new Map<string, FileParameterEntry>([['main.ts', createDefaultEntry()]]);
       const actor = await startAndLoad({
-        parameterConfig: createDefaultConfig('main.ts'),
+        parameterEntries: entries,
         loadResult: stubProjectWithMechanical,
         shouldLoadModelOnStart: true,
         writeParameterResult: async () => {
@@ -931,6 +938,256 @@ describe('projectMachine', () => {
       await waitFor(actor, (s) => s.matches({ ready: { parameterStoring: 'idle' } }));
       expect(writeCallCount).toBe(2);
 
+      actor.stop();
+    });
+
+    it('should write the correct CU file path, not mainEntryFile', async () => {
+      const writtenPaths: string[] = [];
+      const entries = new Map<string, FileParameterEntry>([
+        ['main.ts', createDefaultEntry()],
+        ['other.ts', createDefaultEntry()],
+      ]);
+      const actor = await startAndLoad({
+        parameterEntries: entries,
+        loadResult: stubProjectWithMechanical,
+        shouldLoadModelOnStart: true,
+        writeParameterResult: async (input) => {
+          writtenPaths.push(input!.filePath);
+        },
+      });
+
+      actor.send({ type: 'setCompilationUnitParameters', filePath: 'other.ts', parameters: { radius: 5 } });
+      await waitFor(actor, (s) => s.matches({ ready: { parameterStoring: 'idle' } }));
+
+      expect(writtenPaths).toEqual(['other.ts']);
+      actor.stop();
+    });
+
+    it('should drain dirty set and write both CUs when two different CUs change rapidly', async () => {
+      const writtenPaths: string[] = [];
+      const entries = new Map<string, FileParameterEntry>([
+        ['main.ts', createDefaultEntry()],
+        ['other.ts', createDefaultEntry()],
+      ]);
+      const actor = await startAndLoad({
+        parameterEntries: entries,
+        loadResult: stubProjectWithMechanical,
+        shouldLoadModelOnStart: true,
+        writeParameterResult: async (input) => {
+          writtenPaths.push(input!.filePath);
+        },
+      });
+
+      actor.send({ type: 'setCompilationUnitParameters', filePath: 'main.ts', parameters: { width: 1 } });
+      actor.send({ type: 'setCompilationUnitParameters', filePath: 'other.ts', parameters: { radius: 2 } });
+
+      await waitFor(actor, (s) => s.matches({ ready: { parameterStoring: 'idle' } }));
+
+      expect(writtenPaths).toContain('main.ts');
+      expect(writtenPaths).toContain('other.ts');
+      actor.stop();
+    });
+
+    it('should deduplicate same-CU rapid fire in dirty set', async () => {
+      const writtenPaths: string[] = [];
+      const entries = new Map<string, FileParameterEntry>([['main.ts', createDefaultEntry()]]);
+      const actor = await startAndLoad({
+        parameterEntries: entries,
+        loadResult: stubProjectWithMechanical,
+        shouldLoadModelOnStart: true,
+        writeParameterResult: async (input) => {
+          writtenPaths.push(input!.filePath);
+        },
+      });
+
+      actor.send({ type: 'setCompilationUnitParameters', filePath: 'main.ts', parameters: { width: 1 } });
+      actor.send({ type: 'setCompilationUnitParameters', filePath: 'main.ts', parameters: { width: 2 } });
+      actor.send({ type: 'setCompilationUnitParameters', filePath: 'main.ts', parameters: { width: 3 } });
+
+      await waitFor(actor, (s) => s.matches({ ready: { parameterStoring: 'idle' } }));
+
+      expect(writtenPaths).toEqual(['main.ts', 'main.ts']);
+      const { parameterEntries } = actor.getSnapshot().context;
+      expect(getActiveGroupValues(parameterEntries.get('main.ts'))).toEqual({ width: 3 });
+      actor.stop();
+    });
+
+    it('should clear dirtyParameterPaths after all writes complete', async () => {
+      const entries = new Map<string, FileParameterEntry>([
+        ['main.ts', createDefaultEntry()],
+        ['other.ts', createDefaultEntry()],
+      ]);
+      const actor = await startAndLoad({
+        parameterEntries: entries,
+        loadResult: stubProjectWithMechanical,
+        shouldLoadModelOnStart: true,
+        writeParameterResult: async () => {},
+      });
+
+      actor.send({ type: 'setCompilationUnitParameters', filePath: 'main.ts', parameters: { width: 1 } });
+      actor.send({ type: 'setCompilationUnitParameters', filePath: 'other.ts', parameters: { radius: 2 } });
+
+      await waitFor(actor, (s) => s.matches({ ready: { parameterStoring: 'idle' } }));
+
+      expect(actor.getSnapshot().context.dirtyParameterPaths.size).toBe(0);
+      actor.stop();
+    });
+
+    it('should lazily create a default entry for a non-main CU on setCompilationUnitParameters', async () => {
+      const entries = new Map<string, FileParameterEntry>([['main.ts', createDefaultEntry()]]);
+      const writtenInputs: WriteParameterInput[] = [];
+      const actor = await startAndLoad({
+        parameterEntries: entries,
+        loadResult: stubProjectWithMechanical,
+        shouldLoadModelOnStart: true,
+        writeParameterResult: async (input) => {
+          writtenInputs.push(input!);
+        },
+      });
+
+      expect(actor.getSnapshot().context.parameterEntries.has('other.ts')).toBe(false);
+
+      actor.send({ type: 'setCompilationUnitParameters', filePath: 'other.ts', parameters: { radius: 5 } });
+      await waitFor(actor, (s) => s.matches({ ready: { parameterStoring: 'idle' } }));
+
+      const { parameterEntries } = actor.getSnapshot().context;
+      expect(parameterEntries.has('other.ts')).toBe(true);
+      expect(getActiveGroupValues(parameterEntries.get('other.ts'))).toEqual({ radius: 5 });
+
+      const otherWrite = writtenInputs.find((w) => w.filePath === 'other.ts');
+      expect(otherWrite).toBeDefined();
+      expect(otherWrite!.entry).toBeDefined();
+      actor.stop();
+    });
+
+    it('should lazily init and write valid entry for a non-main CU without throwing', async () => {
+      const entries = new Map<string, FileParameterEntry>([['main.ts', createDefaultEntry()]]);
+      let writeError: Error | undefined;
+      const actor = await startAndLoad({
+        parameterEntries: entries,
+        loadResult: stubProjectWithMechanical,
+        shouldLoadModelOnStart: true,
+        writeParameterResult: async (input) => {
+          if (!input?.entry) {
+            writeError = new Error('entry was undefined');
+            throw writeError;
+          }
+        },
+      });
+
+      actor.send({ type: 'setCompilationUnitParameters', filePath: 'new-cu.ts', parameters: { height: 10 } });
+      await waitFor(actor, (s) => s.matches({ ready: { parameterStoring: 'idle' } }));
+
+      expect(writeError).toBeUndefined();
+      expect(actor.getSnapshot().context.error).toBeUndefined();
+      actor.stop();
+    });
+
+    it('should handle rapid parameter changes for a CU that starts without an entry', async () => {
+      const entries = new Map<string, FileParameterEntry>([['main.ts', createDefaultEntry()]]);
+      const writtenInputs: WriteParameterInput[] = [];
+      const actor = await startAndLoad({
+        parameterEntries: entries,
+        loadResult: stubProjectWithMechanical,
+        shouldLoadModelOnStart: true,
+        writeParameterResult: async (input) => {
+          writtenInputs.push(input!);
+        },
+      });
+
+      actor.send({ type: 'setCompilationUnitParameters', filePath: 'new-cu.ts', parameters: { x: 1 } });
+      actor.send({ type: 'setCompilationUnitParameters', filePath: 'new-cu.ts', parameters: { x: 2 } });
+      actor.send({ type: 'setCompilationUnitParameters', filePath: 'new-cu.ts', parameters: { x: 3 } });
+
+      await waitFor(actor, (s) => s.matches({ ready: { parameterStoring: 'idle' } }));
+
+      const { parameterEntries } = actor.getSnapshot().context;
+      expect(getActiveGroupValues(parameterEntries.get('new-cu.ts'))).toEqual({ x: 3 });
+
+      const newCuWrites = writtenInputs.filter((w) => w.filePath === 'new-cu.ts');
+      expect(newCuWrites.length).toBeGreaterThan(0);
+      expect(newCuWrites.every((w) => w.entry !== undefined)).toBe(true);
+      actor.stop();
+    });
+
+    it('should load multi-CU parameter entries from loadProjectActor and make all accessible', async () => {
+      const secondaryEntry: FileParameterEntry = {
+        activeGroup: 'preset-a',
+        groups: { 'preset-a': { values: { radius: 42, height: 100 } } },
+      };
+      const entries = new Map<string, FileParameterEntry>([
+        ['main.ts', createDefaultEntry()],
+        ['public/models/box-corner.js', secondaryEntry],
+      ]);
+
+      const actor = await startAndLoad({
+        parameterEntries: entries,
+        loadResult: stubProjectWithMechanical,
+        shouldLoadModelOnStart: true,
+      });
+
+      const { parameterEntries } = actor.getSnapshot().context;
+      expect(parameterEntries.has('main.ts')).toBe(true);
+      expect(parameterEntries.has('public/models/box-corner.js')).toBe(true);
+      expect(getActiveGroupValues(parameterEntries.get('public/models/box-corner.js'))).toEqual({
+        radius: 42,
+        height: 100,
+      });
+      actor.stop();
+    });
+
+    it('should merge with pre-loaded non-main CU entry on setCompilationUnitParameters', async () => {
+      const secondaryEntry: FileParameterEntry = {
+        activeGroup: 'default',
+        groups: { default: { values: { radius: 42, depth: 10 } } },
+      };
+      const entries = new Map<string, FileParameterEntry>([
+        ['main.ts', createDefaultEntry()],
+        ['other.ts', secondaryEntry],
+      ]);
+
+      const actor = await startAndLoad({
+        parameterEntries: entries,
+        loadResult: stubProjectWithMechanical,
+        shouldLoadModelOnStart: true,
+        writeParameterResult: async () => {},
+      });
+
+      actor.send({ type: 'setCompilationUnitParameters', filePath: 'other.ts', parameters: { radius: 99 } });
+      await waitFor(actor, (s) => s.matches({ ready: { parameterStoring: 'idle' } }));
+
+      const { parameterEntries } = actor.getSnapshot().context;
+      expect(getActiveGroupValues(parameterEntries.get('other.ts'))).toEqual({ radius: 99 });
+      actor.stop();
+    });
+
+    it('should write pre-loaded non-main CU entry content via writeParameterFileActor', async () => {
+      const secondaryEntry: FileParameterEntry = {
+        activeGroup: 'default',
+        groups: { default: { values: { radius: 42 } } },
+      };
+      const entries = new Map<string, FileParameterEntry>([
+        ['main.ts', createDefaultEntry()],
+        ['other.ts', secondaryEntry],
+      ]);
+      const writtenInputs: WriteParameterInput[] = [];
+
+      const actor = await startAndLoad({
+        parameterEntries: entries,
+        loadResult: stubProjectWithMechanical,
+        shouldLoadModelOnStart: true,
+        writeParameterResult: async (input) => {
+          writtenInputs.push(input!);
+        },
+      });
+
+      actor.send({ type: 'setCompilationUnitParameters', filePath: 'other.ts', parameters: { radius: 99 } });
+      await waitFor(actor, (s) => s.matches({ ready: { parameterStoring: 'idle' } }));
+
+      const otherWrite = writtenInputs.find((w) => w.filePath === 'other.ts');
+      expect(otherWrite).toBeDefined();
+      expect(otherWrite!.entry.activeGroup).toBe('default');
+      expect(otherWrite!.entry.groups.default.values).toEqual({ radius: 99 });
       actor.stop();
     });
   });

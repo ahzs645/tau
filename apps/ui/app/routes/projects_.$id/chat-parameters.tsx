@@ -1,4 +1,4 @@
-import { XIcon, SlidersHorizontal, Search, ChevronRight, RefreshCcw } from 'lucide-react';
+import { XIcon, SlidersHorizontal, Search, ChevronRight, ChevronDown, Pencil, Trash } from 'lucide-react';
 import { useCallback, memo, useState, useMemo } from 'react';
 import { useSelector } from '@xstate/react';
 import type { ActorRefFrom } from 'xstate';
@@ -6,7 +6,6 @@ import type { PaneviewApi, PaneviewPanelApi } from 'dockview-react';
 import { PaneviewReact } from 'dockview-react';
 import { hasJsonSchemaObjectProperties } from '@taucad/utils/schema';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '#components/ui/select.js';
 import {
   FloatingPanel,
   FloatingPanelClose,
@@ -19,20 +18,25 @@ import {
   FloatingPanelContentTitle,
   FloatingPanelTrigger,
 } from '#components/ui/floating-panel.js';
+import { Button } from '#components/ui/button.js';
+import { Input } from '#components/ui/input.js';
+import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
 import { cn } from '#utils/ui.utils.js';
 import {
   PaneviewHeader,
   PaneviewHeaderAction,
-  PaneviewHeaderActionGroup,
+  PaneviewHeaderControls,
+  PaneviewHeaderContentActions,
   paneviewStyleOverrides,
 } from '#components/panes/paneview-header.js';
+import { ModifiedIndicator } from '#components/ui/modified-indicator.js';
 import { useKeybinding } from '#hooks/use-keyboard.js';
 import type { KeyCombination } from '#utils/keys.utils.js';
 import { formatKeyCombination } from '#utils/keys.utils.js';
 import { useProject, useMainGraphics } from '#hooks/use-project.js';
 import { Parameters } from '#components/geometry/parameters/parameters.js';
 import type { cadMachine } from '#machines/cad.machine.js';
-import { getActiveSetValues } from '#utils/parameter-config.utils.js';
+import { getActiveGroupValues } from '#utils/parameter-config.utils.js';
 import { sortCompilationEntries } from '#routes/projects_.$id/compilation-unit.utils.js';
 import { usePaneviewPersistence, getInitialPanelOptions } from '#routes/projects_.$id/use-chat-interface-state.js';
 
@@ -41,46 +45,287 @@ const toggleParametersKeyCombination = {
   ctrlKey: true,
 } satisfies KeyCombination;
 
+type ParameterGroupItem = {
+  name: string;
+  parameterCount: number;
+  isActive: boolean;
+};
+
 // ---------------------------------------------------------------------------
-// Parameter set selector (dropdown for switching active set)
+// Parameter group selector: VS Code branch-selector-style dropdown
 // ---------------------------------------------------------------------------
 
-function ParameterSetSelector({
+const createNewGroupValue = '__create_new_group__';
+
+type ParameterGroupSelectorItem =
+  | ParameterGroupItem
+  | { name: typeof createNewGroupValue; parameterCount: 0; isActive: false };
+
+function ParameterGroupSelector({
   filePath,
-  sets,
-  activeSet,
+  groups,
+  activeGroup,
 }: {
   readonly filePath: string;
-  readonly sets: Record<string, { values: Record<string, unknown> }>;
-  readonly activeSet: string;
+  readonly groups: Record<string, { values: Record<string, unknown> }>;
+  readonly activeGroup: string;
 }): React.JSX.Element {
-  const { switchParameterSet } = useProject();
-  const setNames = Object.keys(sets);
+  const { switchParameterGroup, createParameterGroup, deleteParameterGroup, renameParameterGroup } = useProject();
 
-  const handleChange = useCallback(
-    (value: string) => {
-      switchParameterSet(filePath, value);
-    },
-    [switchParameterSet, filePath],
+  const [isCreating, setIsCreating] = useState(false);
+  const [createValue, setCreateValue] = useState('');
+  const [renamingGroup, setRenamingGroup] = useState<string | undefined>(undefined);
+  const [renameValue, setRenameValue] = useState('');
+
+  const groupItems = useMemo<ParameterGroupItem[]>(
+    () =>
+      Object.entries(groups).map(([name, group]) => ({
+        name,
+        parameterCount: Object.keys(group.values).length,
+        isActive: name === activeGroup,
+      })),
+    [groups, activeGroup],
   );
 
-  if (setNames.length <= 1) {
-    return <span className='text-[10px] text-muted-foreground'>{activeSet}</span>;
-  }
+  const selectorItems = useMemo<ParameterGroupSelectorItem[]>(
+    () => [...groupItems, { name: createNewGroupValue, parameterCount: 0, isActive: false }],
+    [groupItems],
+  );
+
+  const groupedItems = useMemo(() => [{ name: 'Parameter Groups', items: selectorItems }], [selectorItems]);
+
+  const handleSelect = useCallback(
+    (value: string) => {
+      if (value === createNewGroupValue) {
+        setCreateValue(`${activeGroup} copy`);
+        setIsCreating(true);
+        return;
+      }
+      switchParameterGroup(filePath, value);
+    },
+    [switchParameterGroup, filePath, activeGroup],
+  );
+
+  const shouldCloseOnSelect = useCallback((value: string) => value !== createNewGroupValue, []);
+
+  const handleCommitCreate = useCallback(() => {
+    const trimmed = createValue.trim();
+    if (!trimmed || groups[trimmed]) {
+      setIsCreating(false);
+      return;
+    }
+    const currentValues = groups[activeGroup]?.values ?? {};
+    createParameterGroup(filePath, trimmed, currentValues);
+    switchParameterGroup(filePath, trimmed);
+    setIsCreating(false);
+  }, [createValue, groups, activeGroup, filePath, createParameterGroup, switchParameterGroup]);
+
+  const handleCancelCreate = useCallback(() => {
+    setIsCreating(false);
+  }, []);
+
+  const handleStartRename = useCallback((groupName: string) => {
+    setRenamingGroup(groupName);
+    setRenameValue(groupName);
+  }, []);
+
+  const handleCommitRename = useCallback(() => {
+    const trimmed = renameValue.trim();
+    if (!renamingGroup || !trimmed || trimmed === renamingGroup || groups[trimmed]) {
+      setRenamingGroup(undefined);
+      return;
+    }
+    renameParameterGroup(filePath, renamingGroup, trimmed);
+    setRenamingGroup(undefined);
+  }, [renameValue, renamingGroup, groups, filePath, renameParameterGroup]);
+
+  const handleCancelRename = useCallback(() => {
+    setRenamingGroup(undefined);
+  }, []);
+
+  const handleDelete = useCallback(
+    (groupName: string) => {
+      deleteParameterGroup(filePath, groupName);
+    },
+    [deleteParameterGroup, filePath],
+  );
+
+  const getItemValue = useCallback((item: ParameterGroupSelectorItem) => item.name, []);
+
+  const renderLabel = useCallback(
+    (item: ParameterGroupSelectorItem, _selected: ParameterGroupSelectorItem | undefined) => {
+      if (item.name === createNewGroupValue) {
+        if (isCreating) {
+          return (
+            <form
+              className='flex w-full items-center gap-1'
+              onSubmit={(event) => {
+                event.preventDefault();
+                handleCommitCreate();
+              }}
+            >
+              <Input
+                autoFocus
+                autoComplete='off'
+                value={createValue}
+                className='h-6 text-xs'
+                onChange={(event) => {
+                  setCreateValue(event.target.value);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    handleCancelCreate();
+                  }
+                }}
+                onBlur={handleCommitCreate}
+                onFocus={(event) => {
+                  event.target.select();
+                }}
+                onClick={(event) => {
+                  event.stopPropagation();
+                }}
+              />
+              <Button
+                type='submit'
+                size='sm'
+                className='h-6 px-2 text-xs'
+                disabled={!createValue.trim() || Boolean(groups[createValue.trim()])}
+              >
+                Save
+              </Button>
+            </form>
+          );
+        }
+
+        return <span className='text-sm text-muted-foreground'>Save as new group&hellip;</span>;
+      }
+
+      if (renamingGroup === item.name) {
+        return (
+          <form
+            className='flex w-full items-center gap-1'
+            onSubmit={(event) => {
+              event.preventDefault();
+              handleCommitRename();
+            }}
+          >
+            <Input
+              autoFocus
+              autoComplete='off'
+              value={renameValue}
+              className='h-6 text-xs'
+              onChange={(event) => {
+                setRenameValue(event.target.value);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  handleCancelRename();
+                }
+              }}
+              onBlur={handleCommitRename}
+              onFocus={(event) => {
+                event.target.select();
+              }}
+              onClick={(event) => {
+                event.stopPropagation();
+              }}
+            />
+            <Button
+              type='submit'
+              size='sm'
+              className='h-6 px-2 text-xs'
+              disabled={!renameValue.trim() || renameValue === item.name}
+            >
+              Save
+            </Button>
+          </form>
+        );
+      }
+
+      return (
+        <div className='group flex w-full items-start justify-between'>
+          <div className='flex min-w-0 flex-col'>
+            <span className={cn('text-sm font-medium', item.isActive && 'text-primary')}>{item.name}</span>
+            <span className='text-xs text-muted-foreground'>
+              {item.parameterCount} {item.parameterCount === 1 ? 'override' : 'overrides'}
+            </span>
+          </div>
+          <div className='flex gap-1 opacity-0 group-hover:opacity-100'>
+            <Button
+              variant='ghost'
+              size='icon'
+              className='size-6 hover:bg-neutral/20!'
+              onClick={(event) => {
+                event.stopPropagation();
+                handleStartRename(item.name);
+              }}
+            >
+              <Pencil className='size-3' />
+            </Button>
+            <Button
+              variant='ghost'
+              size='icon'
+              className='size-6 hover:bg-destructive/20!'
+              disabled={item.isActive}
+              onClick={(event) => {
+                event.stopPropagation();
+                handleDelete(item.name);
+              }}
+            >
+              <Trash className='size-3' />
+            </Button>
+          </div>
+        </div>
+      );
+    },
+    [
+      isCreating,
+      createValue,
+      renamingGroup,
+      renameValue,
+      groups,
+      handleCommitCreate,
+      handleCancelCreate,
+      handleCommitRename,
+      handleCancelRename,
+      handleStartRename,
+      handleDelete,
+    ],
+  );
+
+  const selectedItem = useMemo(() => groupItems.find((item) => item.isActive), [groupItems]);
 
   return (
-    <Select value={activeSet} onValueChange={handleChange}>
-      <SelectTrigger size='sm' className='h-5 min-w-0 gap-1 border-0 bg-transparent px-1 text-[10px] shadow-none'>
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        {setNames.map((name) => (
-          <SelectItem key={name} value={name} className='text-xs'>
-            {name}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <ComboBoxResponsive
+      groupedItems={groupedItems}
+      renderLabel={renderLabel}
+      getValue={getItemValue}
+      defaultValue={selectedItem}
+      placeholder='Select a parameter group'
+      searchPlaceHolder='Search groups...'
+      title='Parameter Groups'
+      description='Select a parameter group to apply.'
+      isSearchEnabled={groupItems.length > 5}
+      shouldCloseOnSelect={shouldCloseOnSelect}
+      popoverProperties={{
+        align: 'end',
+        className: 'w-[260px]',
+      }}
+      onSelect={handleSelect}
+    >
+      <button
+        type='button'
+        aria-label='Parameter groups'
+        className='hover:text-accent-foreground flex h-5 max-w-24 items-center gap-0.5 rounded-sm px-1 text-[10px] text-muted-foreground transition-colors hover:bg-accent'
+      >
+        <span className='truncate'>{activeGroup}</span>
+        <ChevronDown className='size-2.5 shrink-0 opacity-60' />
+      </button>
+    </ComboBoxResponsive>
   );
 }
 
@@ -99,12 +344,12 @@ function CompilationUnitParameters({
   readonly enableSearch: boolean;
   readonly isAllExpanded: boolean;
 }): React.JSX.Element {
-  const { parameterConfig, setCompilationUnitParameters } = useProject();
+  const { parameterEntries, setCompilationUnitParameters } = useProject();
   const graphicsActor = useMainGraphics();
 
   const parameters = useMemo(
-    () => (parameterConfig ? getActiveSetValues(parameterConfig, entryFile) : {}),
-    [parameterConfig, entryFile],
+    () => getActiveGroupValues(parameterEntries.get(entryFile)),
+    [parameterEntries, entryFile],
   );
 
   const defaultParameters = useSelector(cadRef, (state) => state.context.defaultParameters);
@@ -166,18 +411,15 @@ function ParametersPanelHeader({
   readonly api: PaneviewPanelApi;
   readonly params: ParametersPanelParams;
 }): React.JSX.Element {
-  const { parameterConfig, setCompilationUnitParameters } = useProject();
-  const fileEntry = parameterConfig?.files[params.entryFile];
+  const { parameterEntries, setCompilationUnitParameters } = useProject();
+  const entry = parameterEntries.get(params.entryFile);
   const jsonSchema = useSelector(params.cadRef, (state) => state.context.jsonSchema);
 
-  const showCollapseToggle = jsonSchema && hasJsonSchemaObjectProperties(jsonSchema);
+  const showCollapseToggle = Boolean(jsonSchema && hasJsonSchemaObjectProperties(jsonSchema));
 
   const hasModifiedParameters = useMemo(() => {
-    if (!parameterConfig) {
-      return false;
-    }
-    return Object.keys(getActiveSetValues(parameterConfig, params.entryFile)).length > 0;
-  }, [parameterConfig, params.entryFile]);
+    return Object.keys(getActiveGroupValues(entry)).length > 0;
+  }, [entry]);
 
   const handleReset = useCallback(() => {
     setCompilationUnitParameters(params.entryFile, {});
@@ -188,36 +430,33 @@ function ParametersPanelHeader({
   }, [api, params.isAllExpanded]);
 
   return (
-    <PaneviewHeader
-      api={api}
-      title={params.entryFile}
-      actions={
-        showCollapseToggle || hasModifiedParameters ? (
-          <PaneviewHeaderActionGroup>
-            {showCollapseToggle ? (
-              <PaneviewHeaderAction
-                aria-expanded={params.isAllExpanded}
-                aria-label={params.isAllExpanded ? 'Collapse all' : 'Expand all'}
-                tooltip={params.isAllExpanded ? 'Collapse all' : 'Expand all'}
-                onClick={handleToggleAllExpanded}
-              >
-                <ChevronRight
-                  className={cn('transition-transform duration-300 ease-in-out', params.isAllExpanded && 'rotate-90')}
-                />
-              </PaneviewHeaderAction>
-            ) : null}
-            {hasModifiedParameters ? (
-              <PaneviewHeaderAction tooltip='Reset parameters' aria-label='Reset parameters' onClick={handleReset}>
-                <RefreshCcw />
-              </PaneviewHeaderAction>
-            ) : null}
-          </PaneviewHeaderActionGroup>
-        ) : undefined
-      }
-    >
-      {fileEntry ? (
-        <ParameterSetSelector filePath={params.entryFile} sets={fileEntry.sets} activeSet={fileEntry.activeSet} />
-      ) : undefined}
+    <PaneviewHeader api={api} title={params.entryFile}>
+      {hasModifiedParameters ? (
+        <ModifiedIndicator
+          onReset={handleReset}
+          tooltip='Reset parameters'
+          className='[.dv-pane:hover_&]:**:data-[slot=dot]:opacity-0 [.dv-pane:hover_&]:**:data-[slot=icon]:opacity-100'
+        />
+      ) : null}
+      <PaneviewHeaderControls>
+        {entry ? (
+          <ParameterGroupSelector filePath={params.entryFile} groups={entry.groups} activeGroup={entry.activeGroup} />
+        ) : null}
+        <PaneviewHeaderContentActions>
+          {showCollapseToggle ? (
+            <PaneviewHeaderAction
+              aria-expanded={params.isAllExpanded}
+              aria-label={params.isAllExpanded ? 'Collapse all' : 'Expand all'}
+              tooltip={params.isAllExpanded ? 'Collapse all' : 'Expand all'}
+              onClick={handleToggleAllExpanded}
+            >
+              <ChevronRight
+                className={cn('transition-transform duration-300 ease-in-out', params.isAllExpanded && 'rotate-90')}
+              />
+            </PaneviewHeaderAction>
+          ) : null}
+        </PaneviewHeaderContentActions>
+      </PaneviewHeaderControls>
     </PaneviewHeader>
   );
 }
@@ -273,7 +512,7 @@ function ParametersPaneview({
   return (
     <PaneviewReact
       key={paneviewKey}
-      className={paneviewStyleOverrides}
+      className={cn(paneviewStyleOverrides, '[&_.dv-pane-body]:overflow-y-hidden!')}
       components={paneviewComponents}
       headerComponents={paneviewHeaderComponents}
       onReady={handleReady}

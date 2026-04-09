@@ -1,7 +1,7 @@
 import { assign, assertEvent, setup, emit, enqueueActions } from 'xstate';
 import type { ActorRefFrom, AnyStateMachine } from 'xstate';
 import { produce } from 'immer';
-import type { FileParameterConfig, Project } from '@taucad/types';
+import type { FileParameterEntry, Project } from '@taucad/types';
 import type { RuntimeClientOptions } from '@taucad/runtime';
 import { isBrowser } from '#constants/browser.constants.js';
 import type { GraphicsViewSettings } from '#constants/editor.constants.js';
@@ -12,7 +12,14 @@ import { gitMachine } from '#machines/git.machine.js';
 import { graphicsMachine } from '#machines/graphics.machine.js';
 import { logMachine } from '#machines/logs.machine.js';
 import type { fileManagerMachine } from '#machines/file-manager.machine.js';
-import { updateSetValues, createSet, deleteSet, switchActiveSet } from '#utils/parameter-config.utils.js';
+import {
+  updateGroupValues,
+  createGroup,
+  createDefaultEntry,
+  deleteGroup,
+  renameGroup,
+  switchActiveGroup,
+} from '#utils/parameter-config.utils.js';
 
 /**
  * Project Machine Context
@@ -33,8 +40,10 @@ export type ProjectContext = {
   /** The main entry file path from project.assets.mechanical.main. Set after project loads. */
   mainEntryFile: string;
   logRef: ActorRefFrom<typeof logMachine>;
-  /** Filesystem-based parameter configuration parameters file. */
-  parameterConfig: FileParameterConfig | undefined;
+  /** Per-CU parameter entries, keyed by entry file path. */
+  parameterEntries: Map<string, FileParameterEntry>;
+  /** CU file paths whose parameter entries need writing to disk. */
+  dirtyParameterPaths: Set<string>;
 };
 
 /**
@@ -49,7 +58,7 @@ type ProjectInput = {
 
 // Define the actors that the machine can invoke
 const loadProjectActor = fromSafeAsync<
-  { type: 'projectRetrieved'; project: Project; parameterConfig?: FileParameterConfig },
+  { type: 'projectRetrieved'; project: Project; parameterEntries: Map<string, FileParameterEntry> },
   { projectId: string }
 >(async () => {
   throw new Error(
@@ -63,11 +72,13 @@ const writeProjectActor = fromSafeAsync<void, { project: Project }>(async () => 
   );
 });
 
-const writeParameterFileActor = fromSafeAsync<void, { projectId: string; config: FileParameterConfig }>(async () => {
-  throw new Error(
-    'Not implemented. Please supply the `provide.actors.writeParameterFileActor` option to the project machine.',
-  );
-});
+const writeParameterFileActor = fromSafeAsync<void, { projectId: string; filePath: string; entry: FileParameterEntry }>(
+  async () => {
+    throw new Error(
+      'Not implemented. Please supply the `provide.actors.writeParameterFileActor` option to the project machine.',
+    );
+  },
+);
 
 const projectActors = {
   loadProjectActor,
@@ -101,10 +112,11 @@ type ProjectEventInternal =
     }
   | { type: 'setParameters'; parameters: Record<string, unknown> }
   | { type: 'setCompilationUnitParameters'; filePath: string; parameters: Record<string, unknown> }
-  | { type: 'parameterFileChanged'; config: FileParameterConfig }
-  | { type: 'switchParameterSet'; filePath: string; setName: string }
-  | { type: 'createParameterSet'; filePath: string; setName: string; values?: Record<string, unknown> }
-  | { type: 'deleteParameterSet'; filePath: string; setName: string }
+  | { type: 'parameterFileChanged'; filePath: string; entry: FileParameterEntry }
+  | { type: 'switchParameterGroup'; filePath: string; groupName: string }
+  | { type: 'createParameterGroup'; filePath: string; groupName: string; values?: Record<string, unknown> }
+  | { type: 'deleteParameterGroup'; filePath: string; groupName: string }
+  | { type: 'renameParameterGroup'; filePath: string; oldName: string; newName: string }
   | { type: 'loadModel' }
   | { type: 'setMainFile'; path: string }
   | { type: 'createCompilationUnit'; entryFile: string }
@@ -120,7 +132,7 @@ type ProjectEventInternal =
 
 type ProjectEvent =
   | ProjectEventInternal
-  | { type: 'projectRetrieved'; project: Project; parameterConfig?: FileParameterConfig };
+  | { type: 'projectRetrieved'; project: Project; parameterEntries: Map<string, FileParameterEntry> };
 
 /**
  * Project Machine Emitted Events
@@ -188,9 +200,9 @@ export const projectMachine = setup({
         assertEvent(event, 'projectRetrieved');
         return event.project;
       },
-      parameterConfig({ event }) {
+      parameterEntries({ event }) {
         assertEvent(event, 'projectRetrieved');
-        return event.parameterConfig;
+        return event.parameterEntries;
       },
       isLoading: false,
     }),
@@ -263,63 +275,56 @@ export const projectMachine = setup({
     }),
     setParametersInContext: assign(({ context, event }) => {
       assertEvent(event, 'setParameters');
-      if (!context.parameterConfig) {
-        return {};
-      }
-
       const filePath = context.mainEntryFile;
-      const activeSet = context.parameterConfig.files[filePath]?.activeSet ?? 'default';
-      const newConfig = updateSetValues(context.parameterConfig, {
-        filePath,
-        setName: activeSet,
-        values: event.parameters,
-      });
-      return { parameterConfig: newConfig };
+      const entry = context.parameterEntries.get(filePath) ?? createDefaultEntry();
+      const activeGroup = entry.activeGroup;
+      const updated = updateGroupValues(entry, { groupName: activeGroup, values: event.parameters });
+      const newEntries = new Map(context.parameterEntries);
+      newEntries.set(filePath, updated);
+      return { parameterEntries: newEntries };
     }),
     setCompilationUnitParametersInContext: assign(({ context, event }) => {
       assertEvent(event, 'setCompilationUnitParameters');
-      if (!context.parameterConfig) {
-        return {};
-      }
-
-      const activeSet = context.parameterConfig.files[event.filePath]?.activeSet ?? 'default';
-      const newConfig = updateSetValues(context.parameterConfig, {
-        filePath: event.filePath,
-        setName: activeSet,
-        values: event.parameters,
-      });
-      return { parameterConfig: newConfig };
+      const entry = context.parameterEntries.get(event.filePath) ?? createDefaultEntry();
+      const activeGroup = entry.activeGroup;
+      const updated = updateGroupValues(entry, { groupName: activeGroup, values: event.parameters });
+      const newEntries = new Map(context.parameterEntries);
+      newEntries.set(event.filePath, updated);
+      return { parameterEntries: newEntries };
     }),
-    handleParameterFileChanged: assign(({ event }) => {
+    handleParameterFileChanged: assign(({ context, event }) => {
       assertEvent(event, 'parameterFileChanged');
-      return { parameterConfig: event.config };
+      const newEntries = new Map(context.parameterEntries);
+      newEntries.set(event.filePath, event.entry);
+      return { parameterEntries: newEntries };
     }),
-    handleSwitchParameterSet: assign(({ context, event }) => {
-      assertEvent(event, 'switchParameterSet');
-      if (!context.parameterConfig) {
-        return {};
-      }
-      return { parameterConfig: switchActiveSet(context.parameterConfig, event.filePath, event.setName) };
+    handleSwitchParameterGroup: assign(({ context, event }) => {
+      assertEvent(event, 'switchParameterGroup');
+      const entry = context.parameterEntries.get(event.filePath) ?? createDefaultEntry();
+      const newEntries = new Map(context.parameterEntries);
+      newEntries.set(event.filePath, switchActiveGroup(entry, event.groupName));
+      return { parameterEntries: newEntries };
     }),
-    handleCreateParameterSet: assign(({ context, event }) => {
-      assertEvent(event, 'createParameterSet');
-      if (!context.parameterConfig) {
-        return {};
-      }
-      return {
-        parameterConfig: createSet(context.parameterConfig, {
-          filePath: event.filePath,
-          setName: event.setName,
-          values: event.values ?? {},
-        }),
-      };
+    handleCreateParameterGroup: assign(({ context, event }) => {
+      assertEvent(event, 'createParameterGroup');
+      const entry = context.parameterEntries.get(event.filePath) ?? createDefaultEntry();
+      const newEntries = new Map(context.parameterEntries);
+      newEntries.set(event.filePath, createGroup(entry, { groupName: event.groupName, values: event.values ?? {} }));
+      return { parameterEntries: newEntries };
     }),
-    handleDeleteParameterSet: assign(({ context, event }) => {
-      assertEvent(event, 'deleteParameterSet');
-      if (!context.parameterConfig) {
-        return {};
-      }
-      return { parameterConfig: deleteSet(context.parameterConfig, event.filePath, event.setName) };
+    handleDeleteParameterGroup: assign(({ context, event }) => {
+      assertEvent(event, 'deleteParameterGroup');
+      const entry = context.parameterEntries.get(event.filePath) ?? createDefaultEntry();
+      const newEntries = new Map(context.parameterEntries);
+      newEntries.set(event.filePath, deleteGroup(entry, event.groupName));
+      return { parameterEntries: newEntries };
+    }),
+    handleRenameParameterGroup: assign(({ context, event }) => {
+      assertEvent(event, 'renameParameterGroup');
+      const entry = context.parameterEntries.get(event.filePath) ?? createDefaultEntry();
+      const newEntries = new Map(context.parameterEntries);
+      newEntries.set(event.filePath, renameGroup(entry, { oldName: event.oldName, newName: event.newName }));
+      return { parameterEntries: newEntries };
     }),
     setMainFileInContext: assign(({ context, event }) => {
       assertEvent(event, 'setMainFile');
@@ -573,6 +578,18 @@ export const projectMachine = setup({
         project: event.project,
       };
     }),
+    addDirtyParameterPath: assign(({ context, event }) => {
+      const filePath = 'filePath' in event ? (event as { filePath: string }).filePath : context.mainEntryFile;
+      const next = new Set(context.dirtyParameterPaths);
+      next.add(filePath);
+      return { dirtyParameterPaths: next };
+    }),
+    removeWrittenParameterPath: assign(({ context }) => {
+      const next = new Set(context.dirtyParameterPaths);
+      const [first] = next;
+      if (first !== undefined) next.delete(first);
+      return { dirtyParameterPaths: next };
+    }),
     emitProjectUpdated: emit(({ context }) => ({
       type: 'projectUpdated',
       project: context.project!,
@@ -589,8 +606,11 @@ export const projectMachine = setup({
       assertEvent(event, 'loadProject');
       return context.projectId !== event.projectId;
     },
-    hasParameterConfig({ context }) {
-      return context.parameterConfig !== undefined;
+    hasParameterEntries({ context }) {
+      return context.parameterEntries.size > 0;
+    },
+    hasRemainingDirtyPaths({ context }) {
+      return context.dirtyParameterPaths.size > 1;
     },
   },
   delays: {
@@ -631,7 +651,8 @@ export const projectMachine = setup({
       compilationUnits,
       mainEntryFile: '',
       logRef,
-      parameterConfig: undefined,
+      parameterEntries: new Map(),
+      dirtyParameterPaths: new Set(),
     };
   },
   on: {},
@@ -746,14 +767,17 @@ export const projectMachine = setup({
             parameterFileChanged: {
               actions: ['handleParameterFileChanged'],
             },
-            switchParameterSet: {
-              actions: ['handleSwitchParameterSet'],
+            switchParameterGroup: {
+              actions: ['handleSwitchParameterGroup'],
             },
-            createParameterSet: {
-              actions: ['handleCreateParameterSet'],
+            createParameterGroup: {
+              actions: ['handleCreateParameterGroup'],
             },
-            deleteParameterSet: {
-              actions: ['handleDeleteParameterSet'],
+            deleteParameterGroup: {
+              actions: ['handleDeleteParameterGroup'],
+            },
+            renameParameterGroup: {
+              actions: ['handleRenameParameterGroup'],
             },
             loadModel: {
               actions: 'loadModel',
@@ -878,11 +902,32 @@ export const projectMachine = setup({
           states: {
             idle: {
               on: {
-                setParameters: { guard: 'hasParameterConfig', target: 'writing' },
-                setCompilationUnitParameters: { guard: 'hasParameterConfig', target: 'writing' },
-                switchParameterSet: { guard: 'hasParameterConfig', target: 'writing' },
-                createParameterSet: { guard: 'hasParameterConfig', target: 'writing' },
-                deleteParameterSet: { guard: 'hasParameterConfig', target: 'writing' },
+                setParameters: { guard: 'hasParameterEntries', target: 'writing', actions: ['addDirtyParameterPath'] },
+                setCompilationUnitParameters: {
+                  guard: 'hasParameterEntries',
+                  target: 'writing',
+                  actions: ['addDirtyParameterPath'],
+                },
+                switchParameterGroup: {
+                  guard: 'hasParameterEntries',
+                  target: 'writing',
+                  actions: ['addDirtyParameterPath'],
+                },
+                createParameterGroup: {
+                  guard: 'hasParameterEntries',
+                  target: 'writing',
+                  actions: ['addDirtyParameterPath'],
+                },
+                deleteParameterGroup: {
+                  guard: 'hasParameterEntries',
+                  target: 'writing',
+                  actions: ['addDirtyParameterPath'],
+                },
+                renameParameterGroup: {
+                  guard: 'hasParameterEntries',
+                  target: 'writing',
+                  actions: ['addDirtyParameterPath'],
+                },
               },
             },
             pending: {
@@ -890,34 +935,99 @@ export const projectMachine = setup({
                 pendingToWriting: 'writing',
               },
               on: {
-                setParameters: { guard: 'hasParameterConfig', target: 'pending', reenter: true },
-                setCompilationUnitParameters: { guard: 'hasParameterConfig', target: 'pending', reenter: true },
-                switchParameterSet: { guard: 'hasParameterConfig', target: 'pending', reenter: true },
-                createParameterSet: { guard: 'hasParameterConfig', target: 'pending', reenter: true },
-                deleteParameterSet: { guard: 'hasParameterConfig', target: 'pending', reenter: true },
+                setParameters: {
+                  guard: 'hasParameterEntries',
+                  target: 'pending',
+                  reenter: true,
+                  actions: ['addDirtyParameterPath'],
+                },
+                setCompilationUnitParameters: {
+                  guard: 'hasParameterEntries',
+                  target: 'pending',
+                  reenter: true,
+                  actions: ['addDirtyParameterPath'],
+                },
+                switchParameterGroup: {
+                  guard: 'hasParameterEntries',
+                  target: 'pending',
+                  reenter: true,
+                  actions: ['addDirtyParameterPath'],
+                },
+                createParameterGroup: {
+                  guard: 'hasParameterEntries',
+                  target: 'pending',
+                  reenter: true,
+                  actions: ['addDirtyParameterPath'],
+                },
+                deleteParameterGroup: {
+                  guard: 'hasParameterEntries',
+                  target: 'pending',
+                  reenter: true,
+                  actions: ['addDirtyParameterPath'],
+                },
+                renameParameterGroup: {
+                  guard: 'hasParameterEntries',
+                  target: 'pending',
+                  reenter: true,
+                  actions: ['addDirtyParameterPath'],
+                },
               },
             },
             writing: {
               invoke: {
                 src: 'writeParameterFileActor',
                 input({ context }) {
+                  const [filePath] = context.dirtyParameterPaths;
                   return {
                     projectId: context.projectId,
-                    config: context.parameterConfig!,
+                    filePath: filePath!,
+                    entry: context.parameterEntries.get(filePath!)!,
                   };
                 },
-                onDone: { target: 'idle' },
+                onDone: [
+                  {
+                    guard: 'hasRemainingDirtyPaths',
+                    target: 'writing',
+                    reenter: true,
+                    actions: ['removeWrittenParameterPath'],
+                  },
+                  {
+                    target: 'idle',
+                    actions: ['removeWrittenParameterPath'],
+                  },
+                ],
                 onError: {
                   target: 'idle',
-                  actions: ['setError'],
+                  actions: ['removeWrittenParameterPath', 'setError'],
                 },
               },
               on: {
-                setParameters: { guard: 'hasParameterConfig', target: 'pending' },
-                setCompilationUnitParameters: { guard: 'hasParameterConfig', target: 'pending' },
-                switchParameterSet: { guard: 'hasParameterConfig', target: 'pending' },
-                createParameterSet: { guard: 'hasParameterConfig', target: 'pending' },
-                deleteParameterSet: { guard: 'hasParameterConfig', target: 'pending' },
+                setParameters: { guard: 'hasParameterEntries', target: 'pending', actions: ['addDirtyParameterPath'] },
+                setCompilationUnitParameters: {
+                  guard: 'hasParameterEntries',
+                  target: 'pending',
+                  actions: ['addDirtyParameterPath'],
+                },
+                switchParameterGroup: {
+                  guard: 'hasParameterEntries',
+                  target: 'pending',
+                  actions: ['addDirtyParameterPath'],
+                },
+                createParameterGroup: {
+                  guard: 'hasParameterEntries',
+                  target: 'pending',
+                  actions: ['addDirtyParameterPath'],
+                },
+                deleteParameterGroup: {
+                  guard: 'hasParameterEntries',
+                  target: 'pending',
+                  actions: ['addDirtyParameterPath'],
+                },
+                renameParameterGroup: {
+                  guard: 'hasParameterEntries',
+                  target: 'pending',
+                  actions: ['addDirtyParameterPath'],
+                },
               },
             },
           },

@@ -1,10 +1,9 @@
 // @vitest-environment node
-/* eslint-disable @typescript-eslint/naming-convention -- file-path keys in FileParameterConfig test data */
 import { describe, it, expect, vi } from 'vitest';
 import { createMockRuntime, createMockInput, createMockCreateGeometryHandler } from '@taucad/runtime/testing';
 import { parameterFileResolverMiddleware } from '#middleware/parameter-file-resolver.middleware.js';
 
-type ParameterFileOptions = { parametersFile: string; watchDebounceMs: number };
+type ParameterFileOptions = { parametersDir: string; watchDebounceMs: number };
 
 function createTestContext(options?: {
   readFileResult?: string;
@@ -12,7 +11,7 @@ function createTestContext(options?: {
   input?: Parameters<typeof createMockInput>[0];
 }) {
   const runtime = createMockRuntime<Record<string, never>, ParameterFileOptions>({
-    options: { parametersFile: '.tau/parameters.json', watchDebounceMs: 200 },
+    options: { parametersDir: '.tau/parameters', watchDebounceMs: 200 },
   });
 
   if (options?.readFileError) {
@@ -33,8 +32,8 @@ function createTestContext(options?: {
   };
 }
 
-function makeConfig(files: Record<string, unknown>, version = 1): string {
-  return JSON.stringify({ version, files });
+function makeEntry(entry: { activeGroup: string; groups: Record<string, unknown> }): string {
+  return JSON.stringify(entry);
 }
 
 describe('parameterFileResolverMiddleware', () => {
@@ -44,11 +43,9 @@ describe('parameterFileResolverMiddleware', () => {
 
   it('should merge file override values into input parameters', async () => {
     const { input, handler, runtime } = createTestContext({
-      readFileResult: makeConfig({
-        'main.ts': {
-          activeSet: 'default',
-          sets: { default: { values: { width: 99, height: 50 } } },
-        },
+      readFileResult: makeEntry({
+        activeGroup: 'default',
+        groups: { default: { values: { width: 99, height: 50 } } },
       }),
     });
 
@@ -81,9 +78,9 @@ describe('parameterFileResolverMiddleware', () => {
     expect(handler).toHaveBeenCalledWith(input);
   });
 
-  it('should pass through when version is not 1', async () => {
+  it('should pass through when entry is missing activeGroup', async () => {
     const { input, handler, runtime } = createTestContext({
-      readFileResult: makeConfig({}, 2),
+      readFileResult: JSON.stringify({ groups: {} }),
     });
 
     await parameterFileResolverMiddleware.wrapCreateGeometry!(input, handler, runtime);
@@ -91,14 +88,9 @@ describe('parameterFileResolverMiddleware', () => {
     expect(handler).toHaveBeenCalledWith(input);
   });
 
-  it('should pass through when no file entry exists for current file', async () => {
+  it('should pass through when entry is missing groups', async () => {
     const { input, handler, runtime } = createTestContext({
-      readFileResult: makeConfig({
-        'other.ts': {
-          activeSet: 'default',
-          sets: { default: { values: { size: 5 } } },
-        },
-      }),
+      readFileResult: JSON.stringify({ activeGroup: 'default' }),
     });
 
     await parameterFileResolverMiddleware.wrapCreateGeometry!(input, handler, runtime);
@@ -106,23 +98,23 @@ describe('parameterFileResolverMiddleware', () => {
     expect(handler).toHaveBeenCalledWith(input);
   });
 
-  it('should register watch path with 200ms debounce', async () => {
+  it('should register watch path for per-CU parameter file', async () => {
     const { input, handler, runtime } = createTestContext({
-      readFileResult: makeConfig({}),
+      readFileResult: makeEntry({ activeGroup: 'default', groups: {} }),
     });
 
     await parameterFileResolverMiddleware.wrapCreateGeometry!(input, handler, runtime);
 
-    expect(runtime.registerWatchPath).toHaveBeenCalledWith('/projects/test/.tau/parameters.json', { debounceMs: 200 });
+    expect(runtime.registerWatchPath).toHaveBeenCalledWith('/projects/test/.tau/parameters/main.ts.json', {
+      debounceMs: 200,
+    });
   });
 
   it('should preserve existing input parameters when no file overrides apply', async () => {
     const { input, handler, runtime } = createTestContext({
-      readFileResult: makeConfig({
-        'main.ts': {
-          activeSet: 'empty',
-          sets: { empty: { values: {} } },
-        },
+      readFileResult: makeEntry({
+        activeGroup: 'empty',
+        groups: { empty: { values: {} } },
       }),
       input: { parameters: { width: 10, depth: 5 } },
     });
@@ -138,11 +130,9 @@ describe('parameterFileResolverMiddleware', () => {
 
   it('should override specific parameters while preserving others', async () => {
     const { input, handler, runtime } = createTestContext({
-      readFileResult: makeConfig({
-        'main.ts': {
-          activeSet: 'default',
-          sets: { default: { values: { width: 99 } } },
-        },
+      readFileResult: makeEntry({
+        activeGroup: 'default',
+        groups: { default: { values: { width: 99 } } },
       }),
       input: { parameters: { width: 10, height: 20 } },
     });
@@ -159,11 +149,9 @@ describe('parameterFileResolverMiddleware', () => {
   describe('nested parameter deep merge', () => {
     it('should deep-merge nested object overrides with input parameters', async () => {
       const { input, handler, runtime } = createTestContext({
-        readFileResult: makeConfig({
-          'main.ts': {
-            activeSet: 'default',
-            sets: { default: { values: { base: { cornerRadius: 10 } } } },
-          },
+        readFileResult: makeEntry({
+          activeGroup: 'default',
+          groups: { default: { values: { base: { cornerRadius: 10 } } } },
         }),
         input: {
           parameters: {
@@ -184,15 +172,13 @@ describe('parameterFileResolverMiddleware', () => {
 
     it('should deep-merge multiple nested groups without losing sibling properties', async () => {
       const { input, handler, runtime } = createTestContext({
-        readFileResult: makeConfig({
-          'main.ts': {
-            activeSet: 'default',
-            sets: {
-              default: {
-                values: {
-                  base: { cornerRadius: 10 },
-                  brim: { height: 3 },
-                },
+        readFileResult: makeEntry({
+          activeGroup: 'default',
+          groups: {
+            default: {
+              values: {
+                base: { cornerRadius: 10 },
+                brim: { height: 3 },
               },
             },
           },
@@ -218,28 +204,28 @@ describe('parameterFileResolverMiddleware', () => {
   });
 
   describe('getDependencies', () => {
-    it('should return the parameters file path', () => {
+    it('should return the per-CU parameter file path', () => {
       const result = parameterFileResolverMiddleware.getDependencies!(
         { filePath: '/projects/test/main.ts', basePath: '/projects/test' },
-        { parametersFile: '.tau/parameters.json', watchDebounceMs: 200 },
+        { parametersDir: '.tau/parameters', watchDebounceMs: 200 },
       );
 
-      expect(result).toEqual(['/projects/test/.tau/parameters.json']);
+      expect(result).toEqual(['/projects/test/.tau/parameters/main.ts.json']);
     });
 
-    it('should use custom parametersFile option', () => {
+    it('should use custom parametersDir option', () => {
       const result = parameterFileResolverMiddleware.getDependencies!(
         { filePath: '/projects/test/main.ts', basePath: '/projects/test' },
-        { parametersFile: '.config/params.json', watchDebounceMs: 200 },
+        { parametersDir: '.config/params', watchDebounceMs: 200 },
       );
 
-      expect(result).toEqual(['/projects/test/.config/params.json']);
+      expect(result).toEqual(['/projects/test/.config/params/main.ts.json']);
     });
 
     it('should return synchronously (not a promise)', () => {
       const result = parameterFileResolverMiddleware.getDependencies!(
         { filePath: '/projects/test/main.ts', basePath: '/projects/test' },
-        { parametersFile: '.tau/parameters.json', watchDebounceMs: 200 },
+        { parametersDir: '.tau/parameters', watchDebounceMs: 200 },
       );
 
       expect(Array.isArray(result)).toBe(true);
