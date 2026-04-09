@@ -192,7 +192,7 @@ export function Parameters({
             widgets={widgets}
             formData={mergedData}
             formContext={formContext}
-            className='flex flex-1 flex-col overflow-y-auto px-0 py-0'
+            className='flex flex-1 scroll-shadows-y flex-col overflow-x-hidden px-0 py-0'
             onChange={handleChange}
           />
         </>
