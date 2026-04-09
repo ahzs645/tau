@@ -90,7 +90,10 @@ export function PaneviewHeader({
             handleClick();
           }
         }}
-        className='group/paneview-header flex h-full w-full cursor-pointer items-center gap-1 pr-2 pl-1 select-none'
+        className={cn(
+          'group/paneview-header flex h-full w-full cursor-pointer items-center gap-1 pl-1 select-none',
+          expanded ? 'pr-1' : 'pr-2',
+        )}
       >
         <ChevronRight
           className={cn(
