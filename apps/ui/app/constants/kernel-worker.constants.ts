@@ -16,6 +16,9 @@ export const defaultKernelOptions = createRuntimeClientOptions({
   tessellation: {
     preview: { linearTolerance: 0.1, angularTolerance: 30 },
   },
+  sharedMemory: {
+    geometry: { bytes: 100 * 1024 * 1024, maxEntries: 20, eviction: 'lru' },
+  },
   kernels: [
     openscad(),
     zoo({ baseUrl: `${ENV.TAU_WEBSOCKET_URL}/v1/kernels/zoo` }),
