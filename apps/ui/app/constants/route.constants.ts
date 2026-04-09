@@ -1,7 +1,6 @@
 import {
   BookOpen,
   ChartColumn,
-  FileAxis3D,
   Files,
   Frame,
   Hammer,
@@ -9,6 +8,7 @@ import {
   Map,
   PieChart,
   Settings,
+  Shuffle,
   UsersRound,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -59,12 +59,12 @@ export const navRoutes: {
       icon: UsersRound,
     },
     {
-      title: 'Converter',
+      title: 'Convert',
       url: '/converter',
-      icon: FileAxis3D,
+      icon: Shuffle,
     },
     {
-      title: 'Importer',
+      title: 'Import',
       url: '/import',
       icon: Import,
     },
