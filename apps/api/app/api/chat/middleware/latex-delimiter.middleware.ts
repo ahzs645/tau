@@ -1,5 +1,5 @@
 import { createMiddleware } from 'langchain';
-import { transformAIMessageContent } from '#api/chat/utils/transform-ai-message-content.js';
+import { transformAiMessageContent } from '#api/chat/utils/transform-ai-message-content.js';
 
 /**
  * Regex that matches segments of text where LaTeX delimiters should NOT
@@ -65,6 +65,6 @@ export const latexDelimiterMiddleware = createMiddleware({
 
   async wrapModelCall(request, handler) {
     const response = await handler(request);
-    return transformAIMessageContent(response, normalizeLatexDelimiters);
+    return transformAiMessageContent(response, normalizeLatexDelimiters);
   },
 });

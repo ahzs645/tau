@@ -24,6 +24,7 @@ import { toolResultTrimmerMiddleware } from '#api/chat/middleware/tool-result-tr
 import { promptCachingMiddleware } from '#api/chat/middleware/prompt-caching.middleware.js';
 import { messageContentSanitizerMiddleware } from '#api/chat/middleware/message-content-sanitizer.middleware.js';
 import { newlineTrimmerMiddleware } from '#api/chat/middleware/newline-trimmer.middleware.js';
+import { latexDelimiterMiddleware } from '#api/chat/middleware/latex-delimiter.middleware.js';
 import { createCompactionMiddleware } from '#api/chat/middleware/compaction.middleware.js';
 import { createToolOffloadingMiddleware } from '#api/chat/middleware/tool-offloading.middleware.js';
 import { createTranscriptMiddleware } from '#api/chat/middleware/transcript.middleware.js';
@@ -129,6 +130,7 @@ export class ChatService {
         // --- Message processing ---
         messageContentSanitizerMiddleware,
         newlineTrimmerMiddleware,
+        latexDelimiterMiddleware,
 
         // --- Prompt caching (must follow compaction) ---
         promptCachingMiddleware,
