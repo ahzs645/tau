@@ -356,7 +356,7 @@ export const ParametersNumberField = React.forwardRef<HTMLInputElement, Paramete
           value={text}
           disabled={disabled}
           className={cn(
-            'h-full w-full bg-transparent px-2 pr-6 text-right text-[var(--param-field-color-focus,var(--color-foreground))] text-sm outline-none',
+            'h-full w-full bg-transparent px-2 pr-6 text-right text-(--param-field-color-focus,var(--color-foreground)) text-sm tabular-nums outline-none',
             isEditing ? 'opacity-100' : 'pointer-events-none opacity-0',
           )}
           data-lpignore='true'
