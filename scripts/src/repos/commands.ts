@@ -22,6 +22,7 @@ import {
 const shortFlagMap: Record<string, string> = {
   g: 'group',
   b: 'branch',
+  c: 'commit',
   d: 'description',
   p: 'path',
 };
@@ -151,8 +152,8 @@ function cmdStatus(positional: string[], flags: Record<string, string | boolean>
   }
 
   const nameWidth = Math.max(...statuses.map((s) => s.name.length), 4);
-  console.log(`${'NAME'.padEnd(nameWidth)}  STATUS   BRANCH               DIRTY  AHEAD  BEHIND`);
-  console.log('─'.repeat(nameWidth + 55));
+  console.log(`${'NAME'.padEnd(nameWidth)}  STATUS   BRANCH               DIRTY  AHEAD  BEHIND  PINNED`);
+  console.log('─'.repeat(nameWidth + 63));
 
   for (const s of statuses) {
     const status = s.cloned ? 'cloned' : '─';
@@ -160,8 +161,13 @@ function cmdStatus(positional: string[], flags: Record<string, string | boolean>
     const dirty = s.dirty ? 'yes' : s.cloned ? 'no' : '─';
     const ahead = s.ahead === undefined ? '─' : String(s.ahead);
     const behind = s.behind === undefined ? '─' : String(s.behind);
+    const pinned = s.pinnedCommit
+      ? s.atPinnedCommit
+        ? `✓ ${s.pinnedCommit.slice(0, 7)}`
+        : `✗ ${s.pinnedCommit.slice(0, 7)}`
+      : '─';
     console.log(
-      `${s.name.padEnd(nameWidth)}  ${status.padEnd(7)}  ${branch.padEnd(20)} ${dirty.padEnd(6)} ${ahead.padEnd(6)} ${behind}`,
+      `${s.name.padEnd(nameWidth)}  ${status.padEnd(7)}  ${branch.padEnd(20)} ${dirty.padEnd(6)} ${ahead.padEnd(6)} ${behind.padEnd(7)} ${pinned}`,
     );
   }
 }
@@ -199,6 +205,7 @@ function cmdList(flags: Record<string, string | boolean>): void {
       upstream: repo.upstream,
       fork: repo.fork,
       branch: repo.branch,
+      commit: repo.commit,
       description: repo.description,
       cloned: isCloned({ name, repo, manifest, root }),
       path: repo.path ?? name,
@@ -327,6 +334,7 @@ function cmdAdd(positional: string[], flags: Record<string, string | boolean>): 
   const config: RepoConfig = {
     upstream: slug,
     ...(typeof flags['branch'] === 'string' && { branch: flags['branch'] }),
+    ...(typeof flags['commit'] === 'string' && { commit: flags['commit'] }),
     ...(description && { description }),
     ...(typeof flags['path'] === 'string' && { path: flags['path'] }),
     ...(flags['shallow'] && { shallow: true }),
@@ -386,17 +394,17 @@ const helpText = `
 Usage: repos <command> [options]
 
 Commands:
-  add    <owner/repo> [-g group] [-b branch] [-d desc] [--shallow] [--clone]
+  add    <owner/repo> [-g group] [-b branch] [-c commit] [-d desc] [--shallow] [--clone]
   remove <name>                               Remove repo from manifest
   clone  [name] [--group G] [--all]           Clone repos
-  sync   [name] [--group G] [--all]           Pull latest changes
+  sync   [name] [--group G] [--all]           Pull latest / checkout pinned commit
   status [name] [--group G] [--all] [--json]  Show repo status
   list   [--groups] [--cloned] [--json]       List repos/groups
   exec   [--group G] [--all] -- <cmd>         Run command across repos
   fork   <name>                               Fork repo to owner org
   unfork <name>                               Remove fork config
 
-Short flags: -g (group) -b (branch) -d (description) -p (path)
+Short flags: -g (group) -b (branch) -c (commit) -d (description) -p (path)
 
 Run without arguments for interactive TUI.
 `.trim();

@@ -17,6 +17,7 @@ pnpm repos
 pnpm repos add bitbybit-dev/bitbybit -g cad                # Add by owner/repo slug
 pnpm repos add https://github.com/user/repo.git -g ai      # Add by GitHub URL
 pnpm repos add owner/repo -g cad -b main -d "Description"  # With branch + description
+pnpm repos add owner/repo -g cad -c abc123                 # Pin to specific commit
 pnpm repos add owner/repo -g cad --clone                   # Add and clone immediately
 pnpm repos remove bitbybit                                  # Remove from manifest
 pnpm repos rm bitbybit                                      # Alias for remove
@@ -43,7 +44,7 @@ pnpm repos exec --group cad -- git status
 
 ### Short Flags
 
-`-g` (group), `-b` (branch), `-d` (description), `-p` (path)
+`-g` (group), `-b` (branch), `-c` (commit), `-d` (description), `-p` (path)
 
 ### Auto-populated Descriptions
 
@@ -68,6 +69,24 @@ repos:
 
 - Repos with `fork` field: you can push to origin (the fork). Upstream is read-only.
 - Repos without `fork`: origin points to upstream. Read-only exploration.
+- Repos with `commit` field: pinned to a specific commit hash. Clone checks out that commit; sync verifies/restores it instead of pulling latest.
+
+## Commit Pinning
+
+Pin a repo to a specific upstream commit for reproducible snapshots:
+
+```yaml
+repos:
+  ForgeCAD:
+    upstream: KoStard/ForgeCAD
+    fork: rifont/ForgeCAD
+    commit: 48853a53c84c943ee95d329524837dd2103ead83
+```
+
+- `clone` checks out the pinned commit after cloning (detached HEAD)
+- `sync` fetches all remotes then checks out the pinned commit (no `pull --ff-only`)
+- `status` shows `✓ <hash>` or `✗ <hash>` to indicate whether HEAD matches
+- Shallow clone (`--depth 1`) is disabled when a commit is pinned, since the target commit may not be at the branch tip
 
 ## Fork Workflow
 

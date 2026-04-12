@@ -10,6 +10,7 @@ export type RepoConfig = {
   upstream: string;
   fork?: string;
   branch?: string;
+  commit?: string;
   path?: string;
   description?: string;
   shallow?: boolean;
@@ -37,6 +38,8 @@ export type RepoStatus = {
   behind?: number;
   upstreamAhead?: number;
   lastActivity?: number;
+  pinnedCommit?: string;
+  atPinnedCommit?: boolean;
 };
 
 export type RepoContext = {
@@ -209,6 +212,18 @@ export function getRepoStatus(context: RepoContext): RepoStatus {
 
     const lastActivity = getLastActivity(context);
 
+    let pinnedCommit: string | undefined;
+    let atPinnedCommit: boolean | undefined;
+    if (repo.commit) {
+      pinnedCommit = repo.commit;
+      try {
+        const head = gitExec(context, ['rev-parse', 'HEAD']);
+        atPinnedCommit = head.startsWith(repo.commit) || repo.commit.startsWith(head);
+      } catch {
+        atPinnedCommit = false;
+      }
+    }
+
     return {
       name,
       cloned: true,
@@ -218,6 +233,8 @@ export function getRepoStatus(context: RepoContext): RepoStatus {
       behind,
       upstreamAhead,
       lastActivity,
+      pinnedCommit,
+      atPinnedCommit,
     };
   } catch {
     return { name, cloned: true };
@@ -270,7 +287,7 @@ export function cloneRepo(context: RepoContext): { action: 'cloned' | 'skipped';
 
   const cloneUrl = repo.fork ? repoUrl(repo.fork) : repoUrl(repo.upstream);
   const args = ['git', 'clone', cloneUrl, directory];
-  if (repo.shallow) {
+  if (repo.shallow && !repo.commit) {
     args.splice(1, 0, '--depth', '1');
   }
 
@@ -286,19 +303,34 @@ export function cloneRepo(context: RepoContext): { action: 'cloned' | 'skipped';
     });
   }
 
+  if (repo.commit) {
+    execSync(`git -C ${directory} checkout ${repo.commit}`, { stdio: 'inherit' });
+  }
+
   return { action: 'cloned', message: `${name}: cloned` };
 }
 
 // ── Sync ────────────────────────────────────────────────────────
 
 export function syncRepo(context: RepoContext): { ok: boolean; message: string } {
-  const { name } = context;
+  const { name, repo } = context;
   if (!isCloned(context)) {
     return { ok: false, message: `${name}: not cloned` };
   }
 
   try {
     gitExec(context, ['fetch', '--all', '--prune']);
+
+    if (repo.commit) {
+      const currentHead = gitExec(context, ['rev-parse', 'HEAD']);
+      if (currentHead.startsWith(repo.commit) || repo.commit.startsWith(currentHead)) {
+        return { ok: true, message: `${name}: already at pinned commit ${repo.commit.slice(0, 7)}` };
+      }
+
+      gitExec(context, ['checkout', repo.commit]);
+      return { ok: true, message: `${name}: checked out pinned commit ${repo.commit.slice(0, 7)}` };
+    }
+
     try {
       gitExec(context, ['pull', '--ff-only']);
     } catch {

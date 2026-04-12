@@ -2603,6 +2603,17 @@ function getRepoStatus(context) {
         upstreamAhead = Number.parseInt(uaOutput, 10);
       } catch {}
     const lastActivity = getLastActivity(context);
+    let pinnedCommit;
+    let atPinnedCommit;
+    if (repo.commit) {
+      pinnedCommit = repo.commit;
+      try {
+        const head = gitExec(context, ['rev-parse', 'HEAD']);
+        atPinnedCommit = head.startsWith(repo.commit) || repo.commit.startsWith(head);
+      } catch {
+        atPinnedCommit = false;
+      }
+    }
     return {
       name,
       cloned: true,
@@ -2612,6 +2623,8 @@ function getRepoStatus(context) {
       behind,
       upstreamAhead,
       lastActivity,
+      pinnedCommit,
+      atPinnedCommit,
     };
   } catch {
     return {
@@ -2657,17 +2670,18 @@ function cloneRepo(context) {
     }
   }
   const args = ['git', 'clone', repo.fork ? repoUrl(repo.fork) : repoUrl(repo.upstream), directory];
-  if (repo.shallow) args.splice(1, 0, '--depth', '1');
+  if (repo.shallow && !repo.commit) args.splice(1, 0, '--depth', '1');
   if (repo.branch) args.splice(1, 0, '--branch', repo.branch);
   execSync(args.join(' '), { stdio: 'inherit' });
   if (repo.fork) execSync(`git -C ${directory} remote add upstream ${repoUrl(repo.upstream)}`, { stdio: 'inherit' });
+  if (repo.commit) execSync(`git -C ${directory} checkout ${repo.commit}`, { stdio: 'inherit' });
   return {
     action: 'cloned',
     message: `${name}: cloned`,
   };
 }
 function syncRepo(context) {
-  const { name } = context;
+  const { name, repo } = context;
   if (!isCloned(context))
     return {
       ok: false,
@@ -2675,6 +2689,19 @@ function syncRepo(context) {
     };
   try {
     gitExec(context, ['fetch', '--all', '--prune']);
+    if (repo.commit) {
+      const currentHead = gitExec(context, ['rev-parse', 'HEAD']);
+      if (currentHead.startsWith(repo.commit) || repo.commit.startsWith(currentHead))
+        return {
+          ok: true,
+          message: `${name}: already at pinned commit ${repo.commit.slice(0, 7)}`,
+        };
+      gitExec(context, ['checkout', repo.commit]);
+      return {
+        ok: true,
+        message: `${name}: checked out pinned commit ${repo.commit.slice(0, 7)}`,
+      };
+    }
     try {
       gitExec(context, ['pull', '--ff-only']);
     } catch {
@@ -2773,6 +2800,7 @@ function unforkRepo(name, manifest, root) {
 const shortFlagMap = {
   g: 'group',
   b: 'branch',
+  c: 'commit',
   d: 'description',
   p: 'path',
 };
@@ -2890,16 +2918,21 @@ function cmdStatus(positional, flags) {
     return;
   }
   const nameWidth = Math.max(...statuses.map((s) => s.name.length), 4);
-  console.log(`${'NAME'.padEnd(nameWidth)}  STATUS   BRANCH               DIRTY  AHEAD  BEHIND`);
-  console.log('─'.repeat(nameWidth + 55));
+  console.log(`${'NAME'.padEnd(nameWidth)}  STATUS   BRANCH               DIRTY  AHEAD  BEHIND  PINNED`);
+  console.log('─'.repeat(nameWidth + 63));
   for (const s of statuses) {
     const status = s.cloned ? 'cloned' : '─';
     const branch = s.branch ?? '─';
     const dirty = s.dirty ? 'yes' : s.cloned ? 'no' : '─';
     const ahead = s.ahead === void 0 ? '─' : String(s.ahead);
     const behind = s.behind === void 0 ? '─' : String(s.behind);
+    const pinned = s.pinnedCommit
+      ? s.atPinnedCommit
+        ? `✓ ${s.pinnedCommit.slice(0, 7)}`
+        : `✗ ${s.pinnedCommit.slice(0, 7)}`
+      : '─';
     console.log(
-      `${s.name.padEnd(nameWidth)}  ${status.padEnd(7)}  ${branch.padEnd(20)} ${dirty.padEnd(6)} ${ahead.padEnd(6)} ${behind}`,
+      `${s.name.padEnd(nameWidth)}  ${status.padEnd(7)}  ${branch.padEnd(20)} ${dirty.padEnd(6)} ${ahead.padEnd(6)} ${behind.padEnd(7)} ${pinned}`,
     );
   }
 }
@@ -2936,6 +2969,7 @@ function cmdList(flags) {
       upstream: repo.upstream,
       fork: repo.fork,
       branch: repo.branch,
+      commit: repo.commit,
       description: repo.description,
       cloned: isCloned({
         name,
@@ -3057,6 +3091,7 @@ function cmdAdd(positional, flags) {
   const config = {
     upstream: slug,
     ...(typeof flags['branch'] === 'string' && { branch: flags['branch'] }),
+    ...(typeof flags['commit'] === 'string' && { commit: flags['commit'] }),
     ...(description && { description }),
     ...(typeof flags['path'] === 'string' && { path: flags['path'] }),
     ...(flags['shallow'] && { shallow: true }),
@@ -3098,17 +3133,17 @@ const helpText = `
 Usage: repos <command> [options]
 
 Commands:
-  add    <owner/repo> [-g group] [-b branch] [-d desc] [--shallow] [--clone]
+  add    <owner/repo> [-g group] [-b branch] [-c commit] [-d desc] [--shallow] [--clone]
   remove <name>                               Remove repo from manifest
   clone  [name] [--group G] [--all]           Clone repos
-  sync   [name] [--group G] [--all]           Pull latest changes
+  sync   [name] [--group G] [--all]           Pull latest / checkout pinned commit
   status [name] [--group G] [--all] [--json]  Show repo status
   list   [--groups] [--cloned] [--json]       List repos/groups
   exec   [--group G] [--all] -- <cmd>         Run command across repos
   fork   <name>                               Fork repo to owner org
   unfork <name>                               Remove fork config
 
-Short flags: -g (group) -b (branch) -d (description) -p (path)
+Short flags: -g (group) -b (branch) -c (commit) -d (description) -p (path)
 
 Run without arguments for interactive TUI.
 `.trim();
