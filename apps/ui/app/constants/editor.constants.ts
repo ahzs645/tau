@@ -9,8 +9,11 @@ import { z } from 'zod';
  * Used for both default sizes and minimum constraints on panes
  */
 
-/** Minimum width for standard side panels (Chat History, Explorer, Parameters, Converter, Git, Details) */
+/** Minimum width for standard side panels (Explorer, Parameters, Converter, Git, Details) */
 export const panelMinSizeStandard = 200;
+
+/** Minimum width for standard side panels (Explorer, Parameters, Converter, Git, Details) */
+export const panelMinSizeChat = 240;
 
 /** Minimum width for the Editor panel (code editing area) */
 export const panelMinSizeEditor = 400;
