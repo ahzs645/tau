@@ -431,9 +431,7 @@ function FileSelectorItemList({
         totalCount={items.length}
         itemContent={renderItem}
         components={{
-          Scroller: ({ children, ...properties }) => (
-            <div {...properties} className={cn(properties.className, 'scroll-shadows-y')} />
-          ),
+          Scroller: ({ children, ...properties }) => <div {...properties} className='scroll-shadows-y' />,
           List: (properties) => <div {...properties} className='px-1' />,
           Header: () => <div className='h-1' />,
           Footer: () => <div className='h-1' />,
