@@ -198,11 +198,10 @@ export function Page({ error }: { readonly error?: ReactNode }): React.JSX.Eleme
                 </Tooltip>
               )}
               <AlphaBadge />
-              <Commands />
               {hasActionItems
                 ? actionItems.map((match) => <Fragment key={match.id}>{match.handle.actions?.(match)}</Fragment>)
                 : null}
-
+              <Commands />
               <NavUser />
             </div>
           </header>
