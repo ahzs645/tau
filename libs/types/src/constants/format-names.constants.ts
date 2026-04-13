@@ -6,6 +6,11 @@ type FormatConfiguration = {
   description: string;
 };
 
+/**
+ * Map of file extensions to format configurations.
+ *
+ * @public
+ */
 export const formatConfigurations = {
   '3dm': {
     name: '3D Manufacturing (3DM)',
@@ -207,4 +212,4 @@ export const formatConfigurations = {
     description:
       'Developed by RealityWave for use in web-based 3D visualization, providing an XML-based format for interactive 3D graphics.',
   },
-} as const satisfies Partial<Record<FileExtension, FormatConfiguration>>;
+} as const satisfies Record<FileExtension, FormatConfiguration>;

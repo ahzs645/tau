@@ -4,52 +4,23 @@
  * Import from `@taucad/converter/formats` when only format lists or types are needed,
  * avoiding the heavyweight loader/exporter evaluation chain.
  *
- * @public
+ * Import formats are derived from `@taucad/types` {@link fileExtensions} (the canonical
+ * extension list) minus formats that lack a loader implementation.
  */
 
-/* eslint-disable @typescript-eslint/naming-convention -- formats can be valid identifiers */
+import type { FileExtension } from '@taucad/types';
+import { fileExtensions } from '@taucad/types/constants';
 
-const importFormatKeys = [
-  '3dm',
-  '3ds',
-  '3mf',
-  'ac',
-  'ase',
-  'amf',
-  'brep',
-  'bvh',
-  'cob',
-  'dae',
-  'drc',
-  'dxf',
-  'fbx',
-  'glb',
-  'gltf',
-  'ifc',
-  'iges',
-  'igs',
-  'lwo',
-  'md2',
-  'md5mesh',
-  'mesh.xml',
-  'nff',
-  'obj',
-  'off',
-  'ogex',
-  'ply',
-  'step',
-  'stl',
-  'stp',
-  'smd',
-  'usda',
-  'usdz',
-  'wrl',
-  'x',
-  'x3d',
-  'x3db',
-  'x3dv',
-  'xgl',
-] as const;
+/** Extensions present in `mimeTypes` that have no Assimp/OCCT/specialized loader. */
+const unsupportedImportExtensions = ['usdc'] as const satisfies readonly FileExtension[];
+
+type UnsupportedImportExtension = (typeof unsupportedImportExtensions)[number];
+
+const unsupportedImportSet: ReadonlySet<FileExtension> = new Set(unsupportedImportExtensions);
+
+const importFormatKeys = fileExtensions.filter(
+  (extension): extension is Exclude<FileExtension, UnsupportedImportExtension> => !unsupportedImportSet.has(extension),
+);
 
 const exportFormatKeys = [
   '3ds',
@@ -72,7 +43,7 @@ const exportFormatKeys = [
  *
  * @public
  */
-export type SupportedImportFormat = (typeof importFormatKeys)[number];
+export type SupportedImportFormat = Exclude<FileExtension, UnsupportedImportExtension>;
 
 /**
  * File extension recognized by the converter's export pipeline.
