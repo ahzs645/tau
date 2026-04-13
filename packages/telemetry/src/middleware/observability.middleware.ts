@@ -11,8 +11,9 @@ import { reportToApi } from '#middleware/utils/report-to-api.js';
  * - Success/failure status
  * - Export format (from exportGeometry input)
  *
- * When `reportUrl` is set, metrics are sent directly from the worker
- * to the API via fire-and-forget `fetch()`, bypassing the main thread.
+ * When `reportUrl` is set, metrics are recorded via `performance.measure` and sent
+ * directly from the worker to the API via fire-and-forget `fetch()`, bypassing the main thread.
+ * When `reportUrl` is omitted or empty, the handler is invoked directly; errors propagate unchanged.
  *
  * @public
  */
@@ -22,6 +23,10 @@ export const observabilityMiddleware = defineMiddleware({
   optionsSchema: z.object({ reportUrl: z.string().optional().default('') }),
 
   async wrapCreateGeometry(input, handler, { logger, options }) {
+    if (!options.reportUrl) {
+      return handler(input);
+    }
+
     const start = performance.now();
 
     try {
@@ -34,14 +39,12 @@ export const observabilityMiddleware = defineMiddleware({
         detail: { status: 'success' },
       });
 
-      if (options.reportUrl) {
-        reportToApi({
-          reportUrl: options.reportUrl,
-          name: IngestEntryName.KERNEL_CREATE_GEOMETRY,
-          durationMs: duration,
-          detail: { status: 'success' },
-        });
-      }
+      reportToApi({
+        reportUrl: options.reportUrl,
+        name: IngestEntryName.KERNEL_CREATE_GEOMETRY,
+        durationMs: duration,
+        detail: { status: 'success' },
+      });
 
       return result;
     } catch (error) {
@@ -54,14 +57,12 @@ export const observabilityMiddleware = defineMiddleware({
         detail: { status: 'error', error: message },
       });
 
-      if (options.reportUrl) {
-        reportToApi({
-          reportUrl: options.reportUrl,
-          name: IngestEntryName.KERNEL_CREATE_GEOMETRY,
-          durationMs: duration,
-          detail: { status: 'error' },
-        });
-      }
+      reportToApi({
+        reportUrl: options.reportUrl,
+        name: IngestEntryName.KERNEL_CREATE_GEOMETRY,
+        durationMs: duration,
+        detail: { status: 'error' },
+      });
 
       logger.error(`Geometry creation failed: ${message}`);
       throw error;
@@ -69,6 +70,10 @@ export const observabilityMiddleware = defineMiddleware({
   },
 
   async wrapExportGeometry(input, handler, { logger, options }) {
+    if (!options.reportUrl) {
+      return handler(input);
+    }
+
     const start = performance.now();
 
     try {
@@ -78,17 +83,15 @@ export const observabilityMiddleware = defineMiddleware({
       performance.measure(IngestEntryName.KERNEL_EXPORT_GEOMETRY, {
         start,
         duration,
-        detail: { status: 'success', exportFormat: input.fileType },
+        detail: { status: 'success', exportFormat: input.format },
       });
 
-      if (options.reportUrl) {
-        reportToApi({
-          reportUrl: options.reportUrl,
-          name: IngestEntryName.KERNEL_EXPORT_GEOMETRY,
-          durationMs: duration,
-          detail: { status: 'success', exportFormat: input.fileType },
-        });
-      }
+      reportToApi({
+        reportUrl: options.reportUrl,
+        name: IngestEntryName.KERNEL_EXPORT_GEOMETRY,
+        durationMs: duration,
+        detail: { status: 'success', exportFormat: input.format },
+      });
 
       return result;
     } catch (error) {
@@ -100,19 +103,17 @@ export const observabilityMiddleware = defineMiddleware({
         duration,
         detail: {
           status: 'error',
-          exportFormat: input.fileType,
+          exportFormat: input.format,
           error: message,
         },
       });
 
-      if (options.reportUrl) {
-        reportToApi({
-          reportUrl: options.reportUrl,
-          name: IngestEntryName.KERNEL_EXPORT_GEOMETRY,
-          durationMs: duration,
-          detail: { status: 'error', exportFormat: input.fileType },
-        });
-      }
+      reportToApi({
+        reportUrl: options.reportUrl,
+        name: IngestEntryName.KERNEL_EXPORT_GEOMETRY,
+        durationMs: duration,
+        detail: { status: 'error', exportFormat: input.format },
+      });
 
       logger.error(`Geometry export failed: ${message}`);
       throw error;

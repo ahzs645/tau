@@ -4,6 +4,7 @@ import { createMockRuntime, createMockInput, createMockCreateGeometryHandler } f
 import type { ExportGeometryInput, ExportGeometryResult } from '@taucad/runtime/types';
 import { IngestEntryName } from '#ingest.js';
 import { observabilityMiddleware } from '#middleware/observability.middleware.js';
+import type { FileExtension } from '@taucad/types';
 
 vi.mock('#middleware/utils/report-to-api.js', () => ({
   reportToApi: vi.fn(),
@@ -14,8 +15,9 @@ const getReportToApiMock = async () => {
   return vi.mocked(reportModule.reportToApi);
 };
 
-const createMockExportInput = (fileType = 'step'): ExportGeometryInput => ({
-  fileType: fileType as ExportGeometryInput['fileType'],
+const createMockExportInput = (format: FileExtension = 'step'): ExportGeometryInput => ({
+  format,
+  options: {},
   nativeHandle: {},
 });
 
@@ -27,6 +29,8 @@ const createMockExportHandler = (result?: ExportGeometryResult) =>
       issues: [],
     },
   );
+
+const reportUrlForMeasurements = 'https://api.test/ingest';
 
 describe('observabilityMiddleware', () => {
   let measureSpy: ReturnType<typeof vi.spyOn>;
@@ -62,10 +66,20 @@ describe('observabilityMiddleware', () => {
       expect(result.success).toBe(true);
     });
 
-    it('should emit performance.measure with correct name and success detail on success', async () => {
+    it('should not call performance.measure when reportUrl is empty', async () => {
       const handler = createMockCreateGeometryHandler();
       const input = createMockInput();
       const runtime = createMockRuntime({ options: { reportUrl: '' } });
+
+      await observabilityMiddleware.wrapCreateGeometry!(input, handler, runtime);
+
+      expect(measureSpy).not.toHaveBeenCalled();
+    });
+
+    it('should emit performance.measure with correct name and success detail on success', async () => {
+      const handler = createMockCreateGeometryHandler();
+      const input = createMockInput();
+      const runtime = createMockRuntime({ options: { reportUrl: reportUrlForMeasurements } });
 
       await observabilityMiddleware.wrapCreateGeometry!(input, handler, runtime);
 
@@ -78,7 +92,7 @@ describe('observabilityMiddleware', () => {
     it('should emit performance.measure with error detail on failure', async () => {
       const handler = vi.fn().mockRejectedValue(new Error('kernel crash'));
       const input = createMockInput();
-      const runtime = createMockRuntime({ options: { reportUrl: '' } });
+      const runtime = createMockRuntime({ options: { reportUrl: reportUrlForMeasurements } });
 
       await expect(observabilityMiddleware.wrapCreateGeometry!(input, handler, runtime)).rejects.toThrow(
         'kernel crash',
@@ -90,13 +104,15 @@ describe('observabilityMiddleware', () => {
       );
     });
 
-    it('should re-throw the original error after measuring', async () => {
+    it('should propagate handler rejection unchanged when reportUrl is empty', async () => {
       const originalError = new Error('original');
       const handler = vi.fn().mockRejectedValue(originalError);
       const input = createMockInput();
       const runtime = createMockRuntime({ options: { reportUrl: '' } });
 
       await expect(observabilityMiddleware.wrapCreateGeometry!(input, handler, runtime)).rejects.toBe(originalError);
+
+      expect(runtime.logger.error).not.toHaveBeenCalled();
     });
 
     it('should call reportToApi when reportUrl option is set on success', async () => {
@@ -139,10 +155,10 @@ describe('observabilityMiddleware', () => {
       expect(reportToApiMock).not.toHaveBeenCalled();
     });
 
-    it('should log error message on failure', async () => {
+    it('should log error message on failure when reportUrl is set', async () => {
       const handler = vi.fn().mockRejectedValue(new Error('bad geometry'));
       const input = createMockInput();
-      const runtime = createMockRuntime({ options: { reportUrl: '' } });
+      const runtime = createMockRuntime({ options: { reportUrl: reportUrlForMeasurements } });
 
       await expect(observabilityMiddleware.wrapCreateGeometry!(input, handler, runtime)).rejects.toThrow();
 
@@ -152,7 +168,7 @@ describe('observabilityMiddleware', () => {
     it('should measure correct duration (positive elapsed time)', async () => {
       const handler = createMockCreateGeometryHandler();
       const input = createMockInput();
-      const runtime = createMockRuntime({ options: { reportUrl: '' } });
+      const runtime = createMockRuntime({ options: { reportUrl: reportUrlForMeasurements } });
 
       await observabilityMiddleware.wrapCreateGeometry!(input, handler, runtime);
 
@@ -178,10 +194,20 @@ describe('observabilityMiddleware', () => {
       expect(result.success).toBe(true);
     });
 
+    it('should not call performance.measure when reportUrl is empty', async () => {
+      const handler = createMockExportHandler();
+      const input = createMockExportInput('stl');
+      const runtime = createMockRuntime({ options: { reportUrl: '' } });
+
+      await observabilityMiddleware.wrapExportGeometry!(input, handler, runtime);
+
+      expect(measureSpy).not.toHaveBeenCalled();
+    });
+
     it('should emit performance.measure with correct name and success detail on success', async () => {
       const handler = createMockExportHandler();
       const input = createMockExportInput('step');
-      const runtime = createMockRuntime({ options: { reportUrl: '' } });
+      const runtime = createMockRuntime({ options: { reportUrl: reportUrlForMeasurements } });
 
       await observabilityMiddleware.wrapExportGeometry!(input, handler, runtime);
 
@@ -194,7 +220,7 @@ describe('observabilityMiddleware', () => {
     it('should emit performance.measure with export format in detail on success', async () => {
       const handler = createMockExportHandler();
       const input = createMockExportInput('3mf');
-      const runtime = createMockRuntime({ options: { reportUrl: '' } });
+      const runtime = createMockRuntime({ options: { reportUrl: reportUrlForMeasurements } });
 
       await observabilityMiddleware.wrapExportGeometry!(input, handler, runtime);
 
@@ -209,7 +235,7 @@ describe('observabilityMiddleware', () => {
     it('should emit performance.measure with correct name on failure (bug fix)', async () => {
       const handler = vi.fn().mockRejectedValue(new Error('export failed'));
       const input = createMockExportInput('stl');
-      const runtime = createMockRuntime({ options: { reportUrl: '' } });
+      const runtime = createMockRuntime({ options: { reportUrl: reportUrlForMeasurements } });
 
       await expect(observabilityMiddleware.wrapExportGeometry!(input, handler, runtime)).rejects.toThrow(
         'export failed',
@@ -263,10 +289,21 @@ describe('observabilityMiddleware', () => {
       expect(reportToApiMock).not.toHaveBeenCalled();
     });
 
-    it('should log error message on failure', async () => {
-      const handler = vi.fn().mockRejectedValue(new Error('export crash'));
+    it('should propagate handler rejection unchanged when reportUrl is empty', async () => {
+      const originalError = new Error('export rejected');
+      const handler = vi.fn().mockRejectedValue(originalError);
       const input = createMockExportInput('stl');
       const runtime = createMockRuntime({ options: { reportUrl: '' } });
+
+      await expect(observabilityMiddleware.wrapExportGeometry!(input, handler, runtime)).rejects.toBe(originalError);
+
+      expect(runtime.logger.error).not.toHaveBeenCalled();
+    });
+
+    it('should log error message on failure when reportUrl is set', async () => {
+      const handler = vi.fn().mockRejectedValue(new Error('export crash'));
+      const input = createMockExportInput('stl');
+      const runtime = createMockRuntime({ options: { reportUrl: reportUrlForMeasurements } });
 
       await expect(observabilityMiddleware.wrapExportGeometry!(input, handler, runtime)).rejects.toThrow();
 
