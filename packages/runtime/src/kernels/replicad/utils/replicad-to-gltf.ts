@@ -44,8 +44,8 @@ function buildNodeFromReplicadGeometry(geometry: GeometryReplicad, geometryIndex
       indices,
       material: {
         baseColorFactor: baseColor,
-        metallicFactor: cadMaterialDefaults.metallicFactor,
-        roughnessFactor: cadMaterialDefaults.roughnessFactor,
+        metallicFactor: geometry.metalness ?? cadMaterialDefaults.metalnessFactor,
+        roughnessFactor: geometry.roughness ?? cadMaterialDefaults.roughnessFactor,
         doubleSided: true,
         alphaMode: baseColor[3] < 1 ? 'BLEND' : 'OPAQUE',
         name: geometry.color ?? 'default',

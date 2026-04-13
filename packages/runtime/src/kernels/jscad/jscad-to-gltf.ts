@@ -190,7 +190,7 @@ function buildNodeFromJscadShape(shape: unknown, shapeIndex: number): GlbNode | 
     indices: indicesArray,
     material: {
       baseColorFactor: baseColor,
-      metallicFactor: cadMaterialDefaults.metallicFactor,
+      metallicFactor: cadMaterialDefaults.metalnessFactor,
       roughnessFactor: cadMaterialDefaults.roughnessFactor,
       doubleSided: true,
       alphaMode: baseColor[3] < 1 ? 'BLEND' : 'OPAQUE',
@@ -233,7 +233,7 @@ function buildNodeFromJscadShape(shape: unknown, shapeIndex: number): GlbNode | 
  * - Empty geometry (returns valid GLB with empty scene)
  * - Throws error for invalid or unconvertible shapes
  *
- * Material properties are set to sensible defaults (matte, double-sided, low metallic)
+ * Material properties are set to sensible defaults (matte, double-sided, low metalness)
  * suitable for preview visualization. For production export, use specialized exporters.
  *
  * @internal

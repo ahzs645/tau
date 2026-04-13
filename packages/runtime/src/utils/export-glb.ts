@@ -220,7 +220,7 @@ function colorGroupToPrimitive(geometry: ColorGroupGeometry): GlbPrimitive {
     indices,
     material: {
       baseColorFactor: color,
-      metallicFactor: cadMaterialDefaults.metallicFactor,
+      metallicFactor: cadMaterialDefaults.metalnessFactor,
       roughnessFactor: cadMaterialDefaults.roughnessFactor,
       doubleSided: true,
       alphaMode: color[3] < 1 ? 'BLEND' : 'OPAQUE',
@@ -248,7 +248,7 @@ function buildGlbInput(meshData: IndexedPolyhedron): GlbInput {
       indices: new Uint32Array([0]),
       material: {
         baseColorFactor: [1, 1, 1, 1],
-        metallicFactor: cadMaterialDefaults.metallicFactor,
+        metallicFactor: cadMaterialDefaults.metalnessFactor,
         roughnessFactor: cadMaterialDefaults.roughnessFactor,
         doubleSided: true,
         alphaMode: 'OPAQUE',
