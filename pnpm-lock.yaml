@@ -1015,11 +1015,11 @@ importers:
         specifier: ^2.0.4
         version: 2.0.4(react-router@7.12.0(react-dom@19.2.4(react@19.2.4))(react@19.2.4))
       replicad:
-        specifier: file:tarballs/replicad-0.21.0-v8.47.tgz
-        version: file:tarballs/replicad-0.21.0-v8.47.tgz(patch_hash=59cf5cbe6dcb0ce32119979689ef3a990770acec19c449981b1e943fdce85977)
+        specifier: file:tarballs/replicad-0.21.0-v8.48.tgz
+        version: file:tarballs/replicad-0.21.0-v8.48.tgz(patch_hash=59cf5cbe6dcb0ce32119979689ef3a990770acec19c449981b1e943fdce85977)
       replicad-opencascadejs:
-        specifier: file:tarballs/replicad-opencascadejs-0.21.0-v8.47.tgz
-        version: file:tarballs/replicad-opencascadejs-0.21.0-v8.47.tgz
+        specifier: file:tarballs/replicad-opencascadejs-0.21.0-v8.48.tgz
+        version: file:tarballs/replicad-opencascadejs-0.21.0-v8.48.tgz
       rxjs:
         specifier: ^7.8.2
         version: 7.8.2
@@ -1639,11 +1639,11 @@ importers:
         specifier: 'catalog:'
         version: 1.2.0
       replicad:
-        specifier: file:../../tarballs/replicad-0.21.0-v8.47.tgz
-        version: file:tarballs/replicad-0.21.0-v8.47.tgz(patch_hash=59cf5cbe6dcb0ce32119979689ef3a990770acec19c449981b1e943fdce85977)
+        specifier: file:../../tarballs/replicad-0.21.0-v8.48.tgz
+        version: file:tarballs/replicad-0.21.0-v8.48.tgz(patch_hash=59cf5cbe6dcb0ce32119979689ef3a990770acec19c449981b1e943fdce85977)
       replicad-opencascadejs:
-        specifier: file:../../tarballs/replicad-opencascadejs-0.21.0-v8.47.tgz
-        version: file:tarballs/replicad-opencascadejs-0.21.0-v8.47.tgz
+        specifier: file:../../tarballs/replicad-opencascadejs-0.21.0-v8.48.tgz
+        version: file:tarballs/replicad-opencascadejs-0.21.0-v8.48.tgz
       source-map-js:
         specifier: 'catalog:'
         version: 1.2.1
@@ -16944,13 +16944,13 @@ packages:
     resolution: {integrity: sha512-yD5BHCe7quCgBph4rMQ+0KkIRKwWCrHDOX1p1Gp6HwjPM5kVoCdKGNhN7ydqqsX6lJEnQDKZ/tFMiEdQ1dvPEw==}
     engines: {node: '>= 0.10'}
 
-  replicad-opencascadejs@file:tarballs/replicad-opencascadejs-0.21.0-v8.47.tgz:
-    resolution: {integrity: sha512-JwvcO5Dc2wvdmDIuhYYB7eCPBw22GEw2qpQ6+V5U7XBOYYPGK/0R8g3XWJJJ+OYMlWJd0AhSHtN03fUx7nASWg==, tarball: file:tarballs/replicad-opencascadejs-0.21.0-v8.47.tgz}
-    version: 0.21.0-v8.47
+  replicad-opencascadejs@file:tarballs/replicad-opencascadejs-0.21.0-v8.48.tgz:
+    resolution: {integrity: sha512-2Y/E47+xnNYPq7KD7EfoOhSHMaQi0OESf/3nPoTEy1suuHiIrE8bR9N1Uc0xIRwRowmnGVID0rISimB8mGNq+A==, tarball: file:tarballs/replicad-opencascadejs-0.21.0-v8.48.tgz}
+    version: 0.21.0-v8.48
 
-  replicad@file:tarballs/replicad-0.21.0-v8.47.tgz:
-    resolution: {integrity: sha512-Kf7gJbOo7IC+MrwWPMLKT90/aoPgQbWtNcdBFCGHlzgi5m13CfPMSg4Ob4ejrF8nzq9898cOGbikYxZbEmWZQQ==, tarball: file:tarballs/replicad-0.21.0-v8.47.tgz}
-    version: 0.21.0-v8.47
+  replicad@file:tarballs/replicad-0.21.0-v8.48.tgz:
+    resolution: {integrity: sha512-A0IkcamazQvdEDBLIb+czbfRGsBATJZt+C23xobARwB6jqvpRPVLSfWGIDLjpEp3vQebXoj0LcugefRzjeca1A==, tarball: file:tarballs/replicad-0.21.0-v8.48.tgz}
+    version: 0.21.0-v8.48
 
   require-directory@2.1.1:
     resolution: {integrity: sha512-fGxEI7+wsG9xrvdjsrlmL22OMTTiHRwAMroiEeMgq8gzoLC/PQr7RsRDSTLUg/bZAZtF+TVIkHc6/4RIKrui+Q==}
@@ -31908,7 +31908,7 @@ snapshots:
       isstream: 0.1.2
       jsonwebtoken: 9.0.3
       mime-types: 2.1.35
-      retry-axios: 2.6.0(axios@1.7.9)
+      retry-axios: 2.6.0(axios@1.7.9(debug@4.4.3))
       tough-cookie: 4.1.4
     transitivePeerDependencies:
       - supports-color
@@ -36618,9 +36618,9 @@ snapshots:
 
   replace-ext@1.0.1: {}
 
-  replicad-opencascadejs@file:tarballs/replicad-opencascadejs-0.21.0-v8.47.tgz: {}
+  replicad-opencascadejs@file:tarballs/replicad-opencascadejs-0.21.0-v8.48.tgz: {}
 
-  replicad@file:tarballs/replicad-0.21.0-v8.47.tgz(patch_hash=59cf5cbe6dcb0ce32119979689ef3a990770acec19c449981b1e943fdce85977):
+  replicad@file:tarballs/replicad-0.21.0-v8.48.tgz(patch_hash=59cf5cbe6dcb0ce32119979689ef3a990770acec19c449981b1e943fdce85977):
     dependencies:
       '@types/opentype.js': 1.3.4
       flatbush: 4.5.0
@@ -36717,7 +36717,7 @@ snapshots:
 
   ret@0.5.0: {}
 
-  retry-axios@2.6.0(axios@1.7.9):
+  retry-axios@2.6.0(axios@1.7.9(debug@4.4.3)):
     dependencies:
       axios: 1.7.9(debug@4.4.3)
 
