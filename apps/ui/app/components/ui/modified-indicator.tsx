@@ -3,12 +3,11 @@ import { cn } from '#utils/ui.utils.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 
 /**
- * Dot indicator that signals a value has been modified from its default.
+ * Signals a value has been modified from its default.
  *
- * Renders a small `bg-yellow/50` dot that morphs into a reset icon on hover.
- * Uses its own `group/modified` scope for self-contained hover behavior.
- * Consumers can layer wider hover scopes via `className` targeting
- * `[data-slot=dot]` and `[data-slot=icon]`.
+ * Below `md`: shows the reset icon only (always tappable).
+ * `md` and up: small yellow dot; hover morphs into the reset icon.
+ * Uses `group/modified` for hover on larger breakpoints.
  */
 export function ModifiedIndicator({
   onReset,
@@ -35,11 +34,11 @@ export function ModifiedIndicator({
         >
           <span
             data-slot='dot'
-            className='size-1.5 rounded-full bg-yellow transition-opacity group-hover/modified:opacity-0 dark:bg-yellow'
+            className='size-1.5 rounded-full bg-yellow opacity-0 transition-opacity md:opacity-100 md:group-hover/modified:opacity-0 dark:bg-yellow'
           />
           <RefreshCcwDot
             data-slot='icon'
-            className='absolute inset-0 m-auto size-3 text-muted-foreground opacity-0 transition-opacity group-hover/modified:opacity-100'
+            className='absolute inset-0 m-auto size-3 text-muted-foreground opacity-100 transition-opacity md:opacity-0 md:group-hover/modified:opacity-100'
           />
         </button>
       </TooltipTrigger>
