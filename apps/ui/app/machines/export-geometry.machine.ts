@@ -1,14 +1,15 @@
 import { setup, fromCallback, assign } from 'xstate';
 import type { ActorRefFrom } from 'xstate';
-import type { ExportFormat } from '@taucad/types';
+import type { FileExtension } from '@taucad/types';
 import type { cadMachine } from '#machines/cad.machine.js';
 
 // Context
 type ExportGeometryContext = {
   cadRef: ActorRefFrom<typeof cadMachine> | undefined;
   activeRequest?: {
-    format: ExportFormat;
-    onSuccess: (blob: Blob, format: string) => void;
+    format: FileExtension;
+    options?: Record<string, unknown>;
+    onSuccess: (blob: Blob, format: FileExtension) => void;
     onError: (error: string) => void;
   };
 };
@@ -17,11 +18,12 @@ type ExportGeometryContext = {
 type ExportGeometryEvent =
   | {
       type: 'requestExport';
-      format: ExportFormat;
-      onSuccess: (blob: Blob, format: string) => void;
+      format: FileExtension;
+      options?: Record<string, unknown>;
+      onSuccess: (blob: Blob, format: FileExtension) => void;
       onError: (error: string) => void;
     }
-  | { type: 'exportCompleted'; blob: Blob; format: string }
+  | { type: 'exportCompleted'; blob: Blob; format: FileExtension }
   | { type: 'exportFailed'; error: string };
 
 // Input
@@ -86,6 +88,7 @@ export const exportGeometryMachine = setup({
 
         return {
           format: event.format,
+          options: event.options,
           onSuccess: event.onSuccess,
           onError: event.onError,
         };
@@ -102,6 +105,7 @@ export const exportGeometryMachine = setup({
       context.cadRef.send({
         type: 'exportGeometry',
         format: context.activeRequest.format,
+        options: context.activeRequest.options,
       });
     },
     handleExportSuccess({ context, event }) {
