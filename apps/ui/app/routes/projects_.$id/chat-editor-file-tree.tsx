@@ -82,12 +82,19 @@ import { getFileExtension, encodeTextFile } from '#utils/filesystem.utils.js';
 import { downloadBlob, asBuffer } from '@taucad/utils/file';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import { useFileTreeMap } from '#hooks/use-file-tree.js';
+import { useKeybinding } from '#hooks/use-keyboard.js';
+import type { KeyCombination } from '#utils/keys.utils.js';
+import { KeyShortcut } from '#components/ui/key-shortcut.js';
 import { parentDirectory } from '@taucad/utils/path';
 
 import type { TreeItemData } from '#routes/projects_.$id/chat-editor-file-tree.utils.js';
 import { getItemData, isPathFolder } from '#routes/projects_.$id/chat-editor-file-tree.utils.js';
 
 const rootId = '';
+
+const confirmDeleteKeyCombination = {
+  key: 'Enter',
+} satisfies KeyCombination;
 
 type PendingFolder = {
   parentPath: string; // '' for root
@@ -837,6 +844,11 @@ export const ChatEditorFileTree = memo(function ({
     setFocusedItem(firstRemainingItem?.getId());
   }, [editorRef, deleteFile, fileTreeMap, treeService, itemsToDelete, tree]);
 
+  const { formattedKeyCombination: confirmDeleteKeyLabel } = useKeybinding(confirmDeleteKeyCombination, confirmDelete, {
+    enabled: deleteDialogOpen,
+    scope: 'global',
+  });
+
   const handleDuplicate = useCallback(
     (items: Array<ItemInstance<TreeItemData>>) => {
       for (const item of items) {
@@ -1040,8 +1052,12 @@ export const ChatEditorFileTree = memo(function ({
           </AlertDialogHeader>
           <AlertDialogFooter className='gap-2'>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction className={buttonVariants({ variant: 'destructive' })} onClick={confirmDelete}>
+            <AlertDialogAction
+              className={buttonVariants({ variant: 'destructive', className: 'pr-3' })}
+              onClick={confirmDelete}
+            >
               Delete
+              <KeyShortcut variant='tooltip'>{confirmDeleteKeyLabel}</KeyShortcut>
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
