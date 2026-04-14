@@ -10,6 +10,7 @@ import { ProjectNameEditor } from '#routes/projects_.$id/project-name-editor.js'
 import { ViewContextProvider } from '#routes/projects_.$id/chat-interface-view-context.js';
 import { useKeybinding } from '#hooks/use-keyboard.js';
 import { ProjectCommandPaletteItems } from '#routes/projects_.$id/project-command-items.js';
+import { ProjectExportAction } from '#routes/projects_.$id/project-export-action.js';
 import { FileManagerProvider, SharedWorkerGate } from '#hooks/use-file-manager.js';
 import { ChatRpcSocketProvider, useChatRpcConnection } from '#hooks/use-chat-rpc-socket.js';
 import { MonacoModelServiceProvider } from '#hooks/use-monaco-model-service.js';
@@ -46,6 +47,9 @@ export const handle: Handle = {
       // Disabled until publishing is implemented
       // <ChatModeSelector key={`${id}-chat-mode-selector`} />
     ];
+  },
+  actions() {
+    return <ProjectExportAction />;
   },
   commandPalette(match) {
     return <ProjectCommandPaletteItems match={match} />;
