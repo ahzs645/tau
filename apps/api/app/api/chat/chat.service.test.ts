@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Test } from '@nestjs/testing';
 import type { TestingModule } from '@nestjs/testing';
+import { createAgent } from 'langchain';
 import { ChatService } from '#api/chat/chat.service.js';
 import { ModelService } from '#api/models/model.service.js';
 import { ToolService } from '#api/tools/tool.service.js';
@@ -9,6 +10,8 @@ import { CompactionService } from '#api/chat/compaction.service.js';
 import { TauRpcBackendFactory } from '#api/chat/tau-rpc-backend.js';
 import { ChatRpcService } from '#api/chat/chat-rpc.service.js';
 import { MetricsService } from '#telemetry/metrics.js';
+import { newlineTrimmerMiddleware } from '#api/chat/middleware/newline-trimmer.middleware.js';
+import { latexDelimiterMiddleware } from '#api/chat/middleware/latex-delimiter.middleware.js';
 
 // Mock other dependencies
 vi.mock('ai', () => ({
@@ -178,6 +181,28 @@ describe('ChatService', () => {
 
       // Assert
       expect(mockToolService.getTools).toHaveBeenCalledWith('auto');
+    });
+
+    it('should include latex delimiter normalization middleware for checkpointed state', async () => {
+      await service.createAgent({
+        chatId: 'test-chat-1',
+        modelId: 'model-1',
+        kernel: 'openscad',
+        tools: { choice: 'auto' },
+      });
+
+      const createAgentMock = vi.mocked(createAgent);
+      const firstCall = createAgentMock.mock.calls[0]?.[0];
+      const middleware = firstCall?.middleware;
+
+      expect(middleware).toBeDefined();
+      expect(middleware).toContain(newlineTrimmerMiddleware);
+      expect(middleware).toContain(latexDelimiterMiddleware);
+
+      const newlineMiddlewareIndex = middleware?.indexOf(newlineTrimmerMiddleware) ?? -1;
+      const latexMiddlewareIndex = middleware?.indexOf(latexDelimiterMiddleware) ?? -1;
+      expect(newlineMiddlewareIndex).toBeGreaterThanOrEqual(0);
+      expect(latexMiddlewareIndex).toBeGreaterThan(newlineMiddlewareIndex);
     });
   });
 });
