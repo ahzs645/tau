@@ -68,7 +68,7 @@ function FieldTemplate(props: FieldTemplateProps<Record<string, unknown>, RJSFSc
           'data-[is-root-nested-only=true]:-ml-0.5',
 
           // Non root object fields: subtle left accent for nesting
-          !isRoot && 'ml-1 border-l-2 border-primary/20 hover:border-primary/40 transition-colors',
+          !isRoot && 'ml-0 border-l-2 border-primary/20 hover:border-primary/40 transition-colors',
         )}
         data-is-root-nested-only={isRootNestedOnlyChildren}
       >
