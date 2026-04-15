@@ -340,16 +340,16 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
         streaming: true,
       },
     },
-    'glm-5': {
-      id: 'together-glm-5',
-      name: 'GLM-5',
-      slug: 'glm-5',
-      description: '#1 open-source coding model (LMSYS 1447 Elo) with parallel tool calling for CAD workflows.',
+    'glm-5.1': {
+      id: 'together-glm-5.1',
+      name: 'GLM-5.1',
+      slug: 'glm-5.1',
+      description: 'Flagship open-source model for long-horizon agentic coding and complex engineering tasks.',
       provider: {
         id: 'together',
         name: 'Together AI',
       },
-      model: 'zai-org/GLM-5',
+      model: 'zai-org/GLM-5.1',
       support: {
         toolChoice: false,
       },
@@ -359,8 +359,8 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
         contextWindow: 202_752,
         maxTokens: 128_000,
         cost: {
-          inputTokens: 1,
-          outputTokens: 3.2,
+          inputTokens: 1.4,
+          outputTokens: 4.4,
           cacheReadTokens: 0,
           cacheWriteTokens: 0,
         },
