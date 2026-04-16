@@ -187,19 +187,14 @@ function ParameterGroupSelector({
                   event.stopPropagation();
                 }}
               />
-              <Button
-                type='submit'
-                size='sm'
-                className='h-6 px-2 text-xs'
-                disabled={!createValue.trim() || Boolean(groups[createValue.trim()])}
-              >
+              <Button type='submit' size='xs' disabled={!createValue.trim() || Boolean(groups[createValue.trim()])}>
                 Save
               </Button>
             </form>
           );
         }
 
-        return <span className='text-sm text-muted-foreground'>Save as new group&hellip;</span>;
+        return <span className='text-xs text-muted-foreground'>Save as new group&hellip;</span>;
       }
 
       if (renamingGroup === item.name) {
