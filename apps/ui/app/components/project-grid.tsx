@@ -113,7 +113,7 @@ function ProjectCard({
   }, [navigate, id]);
 
   return (
-    <Card className='group relative flex flex-col overflow-hidden py-0'>
+    <Card className='group relative flex flex-col overflow-hidden py-0 transition-all duration-300 hover:border-primary/30 hover:bg-muted/70'>
       <div className='flex flex-1 cursor-pointer flex-col' onClick={handleCardClick}>
         <div className='inset-0 aspect-video h-fit w-full overflow-hidden bg-muted group-hover:bg-accent/70 sm:aspect-video'>
           {!visible && (
@@ -140,14 +140,19 @@ function ProjectCard({
               </CadPreviewProvider>
             </div>
           ) : null}
-          <Button
-            variant='overlay'
-            size='icon'
-            className='absolute top-1 right-1 z-10 size-7 sm:top-2 sm:right-2 sm:size-9'
-            onClick={handlePreviewToggle}
-          >
-            <Eye className={visible ? 'size-3.5 text-primary sm:size-4' : 'size-3.5 sm:size-4'} />
-          </Button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant='overlay'
+                size='icon'
+                className='absolute top-1 right-1 z-10 size-7 sm:top-2 sm:right-2 sm:size-9'
+                onClick={handlePreviewToggle}
+              >
+                <Eye className={visible ? 'size-3.5 text-primary sm:size-4' : 'size-3.5 sm:size-4'} />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Preview model</TooltipContent>
+          </Tooltip>
         </div>
         <div className='flex flex-1 flex-col sm:pt-4'>
           <CardHeader className='max-md:p-2'>
