@@ -85,26 +85,28 @@ vi.mock('dockview-react', () => ({
     components: Record<string, React.ComponentType<{ params: Record<string, unknown> }>>;
     headerComponents?: Record<string, React.ComponentType<{ api: unknown; params: Record<string, unknown> }>>;
   }) => {
-    const panels: Array<{
+    type MockPanel = {
       id: string;
       title: string;
       component: string;
       headerComponent?: string;
       isExpanded: boolean;
       params: Record<string, unknown> & { entryFile: string };
-    }> = [];
+      api: { updateParameters: (newParams: Record<string, unknown>) => void };
+    };
+    const panels: MockPanel[] = [];
     const api = {
+      panels,
       addPanel: (options: Record<string, unknown>) => {
-        panels.push(
-          options as unknown as {
-            id: string;
-            title: string;
-            component: string;
-            headerComponent?: string;
-            isExpanded: boolean;
-            params: Record<string, unknown> & { entryFile: string };
+        const panel = options as unknown as Omit<MockPanel, 'api'>;
+        panels.push({
+          ...panel,
+          api: {
+            updateParameters: (newParams: Record<string, unknown>) => {
+              Object.assign(panel.params, newParams);
+            },
           },
-        );
+        });
       },
     };
     onReady({ api });

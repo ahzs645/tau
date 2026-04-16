@@ -1,5 +1,5 @@
 import { XIcon, SlidersHorizontal, Search, ChevronRight, ChevronDown, Pencil, Trash } from 'lucide-react';
-import { useCallback, memo, useState, useMemo } from 'react';
+import { useCallback, memo, useState, useMemo, useRef, useEffect } from 'react';
 import { useSelector } from '@xstate/react';
 import type { ActorRefFrom } from 'xstate';
 import type { PaneviewApi, PaneviewPanelApi } from 'dockview-react';
@@ -473,6 +473,7 @@ function ParametersPaneview({
   readonly enableSearch: boolean;
 }): React.JSX.Element {
   const { savedState, connectApi } = usePaneviewPersistence('parametersPaneview');
+  const paneviewApiRef = useRef<PaneviewApi | undefined>(undefined);
 
   const sortedEntries = useMemo(() => sortCompilationEntries(entries, mainEntryFile), [entries, mainEntryFile]);
 
@@ -480,6 +481,7 @@ function ParametersPaneview({
 
   const handleReady = useCallback(
     (event: { api: PaneviewApi }) => {
+      paneviewApiRef.current = event.api;
       connectApi(event.api);
 
       for (const [entryFile, cadRef] of sortedEntries) {
@@ -503,6 +505,16 @@ function ParametersPaneview({
     },
     [sortedEntries, mainEntryFile, enableSearch, savedState, connectApi],
   );
+
+  useEffect(() => {
+    const api = paneviewApiRef.current;
+    if (!api) {
+      return;
+    }
+    for (const panel of api.panels) {
+      panel.api.updateParameters({ enableSearch });
+    }
+  }, [enableSearch]);
 
   return (
     <PaneviewReact
