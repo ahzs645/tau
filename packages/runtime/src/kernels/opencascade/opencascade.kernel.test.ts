@@ -247,7 +247,7 @@ export default function main() {}`,
       const createResult = await worker.createGeometry({ file: geometryFile, parameters: {} });
       assertSuccess(createResult, 'createGeometry for STL-binary export');
 
-      const exportResult = await worker.exportGeometry('stl-binary');
+      const exportResult = await worker.exportGeometry('stl', { binary: true });
       assertSuccess(exportResult, 'STL-binary export');
       expect(exportResult.data.length).toBeGreaterThan(0);
     });
@@ -277,9 +277,10 @@ export default function main() {}`,
       const createResult = await worker.createGeometry({ file: geometryFile, parameters: {} });
       assertSuccess(createResult, 'createGeometry for assembly export');
 
-      const exportResult = await worker.exportGeometry('step-assembly');
-      assertSuccess(exportResult, 'STEP assembly export');
-      expect(exportResult.data.length).toBe(2);
+      const exportResult = await worker.exportGeometry('step');
+      assertSuccess(exportResult, 'STEP export');
+      expect(exportResult.data.length).toBe(1);
+      expect(exportResult.data[0]?.name).toBe('assembly');
     });
 
     it('should return error for unsupported export format', async () => {
@@ -299,14 +300,12 @@ export default function main() {}`,
       await worker.createGeometry({ file: geometryFile, parameters: {} });
 
       const coarseExport = await worker.exportGeometry('glb', {
-        linearTolerance: 1,
-        angularTolerance: 60,
+        tessellation: { linearTolerance: 1, angularTolerance: 60 },
       });
       assertSuccess(coarseExport, 'coarse GLB export');
 
       const fineExport = await worker.exportGeometry('glb', {
-        linearTolerance: 0.001,
-        angularTolerance: 5,
+        tessellation: { linearTolerance: 0.001, angularTolerance: 5 },
       });
       assertSuccess(fineExport, 'fine GLB export');
 
@@ -315,6 +314,43 @@ export default function main() {}`,
 
       // Finer tessellation must produce a larger GLB (more triangles on curved fillet surfaces)
       expect(fineSize).toBeGreaterThan(coarseSize);
+    });
+
+    it('should respect tessellation parameter for STL export', async () => {
+      const geometryFile = createGeometryFile('fillet.ts');
+      await worker.createGeometry({ file: geometryFile, parameters: {} });
+
+      const coarseExport = await worker.exportGeometry('stl', {
+        tessellation: { linearTolerance: 1, angularTolerance: 60 },
+      });
+      assertSuccess(coarseExport, 'coarse STL export');
+
+      const fineExport = await worker.exportGeometry('stl', {
+        tessellation: { linearTolerance: 0.001, angularTolerance: 5 },
+      });
+      assertSuccess(fineExport, 'fine STL export');
+
+      const coarseSize = coarseExport.data[0]!.bytes.byteLength;
+      const fineSize = fineExport.data[0]!.bytes.byteLength;
+
+      expect(fineSize).toBeGreaterThan(coarseSize);
+    });
+
+    // -- Coordinate system --
+
+    it('should produce different GLB output for y-up vs z-up coordinate system', async () => {
+      const geometryFile = createGeometryFile('box.ts');
+      await worker.createGeometry({ file: geometryFile, parameters: {} });
+
+      const yUpExport = await worker.exportGeometry('glb', { coordinateSystem: 'y-up' });
+      const zUpExport = await worker.exportGeometry('glb', { coordinateSystem: 'z-up' });
+
+      assertSuccess(yUpExport, 'y-up GLB export');
+      assertSuccess(zUpExport, 'z-up GLB export');
+
+      const yUpBytes = yUpExport.data[0]!.bytes;
+      const zUpBytes = zUpExport.data[0]!.bytes;
+      expect(yUpBytes).not.toEqual(zUpBytes);
     });
 
     // -- Boolean operations --

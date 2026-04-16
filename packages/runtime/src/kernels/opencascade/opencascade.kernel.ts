@@ -188,6 +188,9 @@ function normalizeShapes(value: unknown): ShapeEntry[] {
           name: typeof item['name'] === 'string' ? item['name'] : undefined,
           color: typeof item['color'] === 'string' ? item['color'] : undefined,
           opacity: typeof item['opacity'] === 'number' ? item['opacity'] : undefined,
+          metalness: typeof item['metalness'] === 'number' ? item['metalness'] : undefined,
+          roughness: typeof item['roughness'] === 'number' ? item['roughness'] : undefined,
+          density: typeof item['density'] === 'number' ? item['density'] : undefined,
         });
       }
     }
@@ -202,6 +205,9 @@ function normalizeShapes(value: unknown): ShapeEntry[] {
         name: typeof value['name'] === 'string' ? value['name'] : undefined,
         color: typeof value['color'] === 'string' ? value['color'] : undefined,
         opacity: typeof value['opacity'] === 'number' ? value['opacity'] : undefined,
+        metalness: typeof value['metalness'] === 'number' ? value['metalness'] : undefined,
+        roughness: typeof value['roughness'] === 'number' ? value['roughness'] : undefined,
+        density: typeof value['density'] === 'number' ? value['density'] : undefined,
       },
     ];
   }
@@ -360,63 +366,174 @@ export default defineKernel({
       return createKernelError([{ message: 'No geometry available for export', type: 'runtime', severity: 'error' }]);
     }
 
-    const linearTolerance = tessellation?.linearTolerance ?? 0.01;
-    const angularTolerance = tessellation?.angularTolerance ?? 30;
-    const angularToleranceRad = angularTolerance * (Math.PI / 180);
+    switch (format) {
+      case 'glb':
+      case 'gltf': {
+        const { linearTolerance, angularTolerance } = options.tessellation;
+        const { coordinateSystem } = options;
 
-    if (fileType === 'glb' || fileType === 'gltf') {
-      const gltfData = meshShapesToGltf(context.oc, nativeHandle, {
-        linearTolerance,
-        angularTolerance: angularToleranceRad,
-      });
+        const gltfData = meshShapesToGltf(context.oc, nativeHandle, {
+          linearTolerance,
+          angularTolerance: angularTolerance * (Math.PI / 180),
+          coordinateSystem,
+        });
 
-      return createKernelSuccess([
-        createExportFile(fileType, fileType === 'glb' ? 'model.glb' : 'model.gltf', asBuffer(gltfData)),
-      ]);
-    }
+        return createKernelSuccess([
+          createExportFile(format, format === 'glb' ? 'model.glb' : 'model.gltf', asBuffer(gltfData)),
+        ]);
+      }
 
-    if (fileType === 'step' || fileType === 'step-assembly') {
-      const { oc } = context;
-      const results = nativeHandle.map((entry) => {
-        const writer = new oc.STEPControl_Writer();
+      case 'step': {
+        const { oc } = context;
+        const documentName = new oc.TCollection_ExtendedString();
+        const document = new oc.TDocStd_Document(documentName);
+        const mainLabel = document.Main();
+        const shapeTool = oc.XCAFDoc_DocumentTool.ShapeTool(mainLabel);
+        const colorTool = oc.XCAFDoc_DocumentTool.ColorTool(mainLabel);
+
+        for (const entry of nativeHandle) {
+          if (entry.shape.IsNull()) {
+            continue;
+          }
+
+          const label = shapeTool.NewShape();
+          shapeTool.SetShape(label, entry.shape);
+
+          if (entry.name) {
+            const entryName = new oc.TCollection_ExtendedString(entry.name, true);
+            oc.TDataStd_Name.Set(label, entryName);
+            entryName.delete();
+          }
+
+          if (entry.color) {
+            const [r, g, b] = parseHexColor(entry.color);
+            const color = new oc.Quantity_Color(r, g, b, oc.Quantity_TypeOfColor.Quantity_TOC_sRGB);
+            colorTool.SetColor(label, color, oc.XCAFDoc_ColorType.XCAFDoc_ColorSurf);
+            color.delete();
+          }
+
+          if (entry.metalness !== undefined || entry.roughness !== undefined) {
+            const visTool = oc.XCAFDoc_DocumentTool.VisMaterialTool(mainLabel);
+            const pbrMat = new oc.XCAFDoc_VisMaterialPBR();
+            if (entry.color) {
+              const [r, g, b] = parseHexColor(entry.color);
+              const baseColor = new oc.Quantity_ColorRGBA(r, g, b, entry.opacity ?? 1);
+              pbrMat.BaseColor = baseColor;
+              baseColor.delete();
+            }
+            pbrMat.Metallic = entry.metalness ?? cadMaterialDefaults.metalnessFactor;
+            pbrMat.Roughness = entry.roughness ?? cadMaterialDefaults.roughnessFactor;
+            pbrMat.IsDefined = true;
+            const visMat = new oc.XCAFDoc_VisMaterial();
+            visMat.SetPbrMaterial(pbrMat);
+            const matName = new oc.TCollection_AsciiString(entry.name ?? 'material');
+            const visMatLabel = visTool.AddMaterial(visMat, matName);
+            visTool.SetShapeMaterial(label, visMatLabel);
+            matName.delete();
+            visMatLabel.delete();
+            visMat.delete();
+            pbrMat.delete();
+            visTool.delete();
+          }
+
+          if (entry.density !== undefined) {
+            const matTool = oc.XCAFDoc_DocumentTool.MaterialTool(mainLabel);
+            const materialName = new oc.TCollection_HAsciiString(entry.name ?? 'material');
+            const description = new oc.TCollection_HAsciiString('');
+            const densityName = new oc.TCollection_HAsciiString('g/cm3');
+            const densityValueType = new oc.TCollection_HAsciiString('POSITIVE_RATIO_MEASURE');
+            matTool.SetMaterial(label, materialName, description, entry.density, densityName, densityValueType);
+            densityValueType.delete();
+            densityName.delete();
+            description.delete();
+            materialName.delete();
+            matTool.delete();
+          }
+
+          label.delete();
+        }
+
+        shapeTool.UpdateAssemblies();
+
+        const session = new oc.XSControl_WorkSession();
+        const writer = new oc.STEPCAFControl_Writer(session, false);
+        writer.SetColorMode(true);
+        writer.SetNameMode(true);
+        writer.SetMaterialMode(true);
+        oc.Interface_Static.SetIVal('write.surfacecurve.mode', 1);
+        oc.Interface_Static.SetIVal('write.step.assembly', 2);
+        oc.Interface_Static.SetIVal('write.step.schema', 5);
+
         const progress = new oc.Message_ProgressRange();
-        writer.Transfer(entry.shape, oc.STEPControl_StepModelType.STEPControl_AsIs, true, progress);
+        writer.Transfer(document, oc.STEPControl_StepModelType.STEPControl_AsIs, '', progress);
+
         const filePath = `/tmp/export_${Date.now()}.step`;
         writer.Write(filePath);
         const rawData = oc.FS.readFile(filePath) as Uint8Array<ArrayBuffer>;
         const data = new Uint8Array(rawData);
         oc.FS.unlink(filePath);
+
         progress.delete();
         writer.delete();
-        return createExportFile(fileType, entry.name ?? 'Geometry', data);
-      });
+        session.delete();
+        colorTool.delete();
+        shapeTool.delete();
+        mainLabel.delete();
+        documentName.delete();
+        document.delete();
 
-      return createKernelSuccess(results);
+        return createKernelSuccess([createExportFile('step', 'assembly', data)]);
+      }
+
+      case 'stl': {
+        const { oc } = context;
+        const { linearTolerance, angularTolerance } = options.tessellation;
+        const angularToleranceRad = angularTolerance * (Math.PI / 180);
+        const { coordinateSystem } = options;
+
+        const results = nativeHandle.map((entry) => {
+          let exportShape = entry.shape;
+
+          if (coordinateSystem === 'y-up') {
+            const origin = new oc.gp_Pnt(0, 0, 0);
+            const direction = new oc.gp_Dir(1, 0, 0);
+            const axis = new oc.gp_Ax1(origin, direction);
+            const trsf = new oc.gp_Trsf();
+            trsf.SetRotation(axis, Math.PI / 2);
+            const transform = new oc.BRepBuilderAPI_Transform(entry.shape, trsf, true, false);
+            exportShape = transform.Shape();
+            origin.delete();
+            direction.delete();
+            axis.delete();
+            trsf.delete();
+            transform.delete();
+          }
+
+          oc.BRepTools.Clean(exportShape, false);
+          const mesh = new oc.BRepMesh_IncrementalMesh(exportShape, linearTolerance, false, angularToleranceRad, false);
+          const filePath = `/tmp/export_${Date.now()}.stl`;
+          const writer = new oc.StlAPI_Writer();
+          const progress = new oc.Message_ProgressRange();
+          writer.Write(exportShape, filePath, progress);
+          const rawData = oc.FS.readFile(filePath) as Uint8Array<ArrayBuffer>;
+          const data = new Uint8Array(rawData);
+          oc.FS.unlink(filePath);
+          mesh.delete();
+          progress.delete();
+          writer.delete();
+          return createExportFile('stl', entry.name ?? 'Geometry', data);
+        });
+
+        return createKernelSuccess(results);
+      }
+
+      default: {
+        const _exhaustive: never = format;
+        return createKernelError([
+          { message: `Unsupported export format: ${_exhaustive as string}`, type: 'runtime', severity: 'error' },
+        ]);
+      }
     }
-
-    if (fileType === 'stl' || fileType === 'stl-binary') {
-      const { oc } = context;
-      const results = nativeHandle.map((entry) => {
-        const mesh = new oc.BRepMesh_IncrementalMesh(entry.shape, linearTolerance, false, angularToleranceRad, false);
-        const filePath = `/tmp/export_${Date.now()}.stl`;
-        const writer = new oc.StlAPI_Writer();
-        const progress = new oc.Message_ProgressRange();
-        writer.Write(entry.shape, filePath, progress);
-        const rawData = oc.FS.readFile(filePath) as Uint8Array<ArrayBuffer>;
-        const data = new Uint8Array(rawData);
-        oc.FS.unlink(filePath);
-        mesh.delete();
-        progress.delete();
-        writer.delete();
-        return createExportFile(fileType, entry.name ?? 'Geometry', data);
-      });
-
-      return createKernelSuccess(results);
-    }
-
-    return createKernelError([
-      { message: `Unsupported export format: ${fileType}`, type: 'runtime', severity: 'error' },
-    ]);
   },
 });
 
