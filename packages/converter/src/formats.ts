@@ -23,6 +23,7 @@ const importFormatKeys = fileExtensions.filter(
 );
 
 const exportFormatKeys = [
+  '3mf',
   '3ds',
   'dae',
   'fbx',

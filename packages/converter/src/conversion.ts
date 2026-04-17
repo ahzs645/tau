@@ -12,12 +12,16 @@ import type { SupportedImportFormat, SupportedExportFormat } from '#formats.js';
  * @param inputFiles - The input files to convert.
  * @param inputFormat - source file format (e.g. 'step', 'stl', 'glb')
  * @param outputFormat - target file format to convert into
+ * @param options - optional conversion options
+ * @param options.exportProperties - Assimp export properties (e.g. `{ '3MF_EXPORT_UNIT': 'centimeter' }`)
  * @returns A promise that resolves to an array of output files.
  */
+// oxlint-disable-next-line max-params -- 4th param is an options bag, not a positional arg
 export const convertFile = async (
   inputFiles: FileInput[],
   inputFormat: SupportedImportFormat,
   outputFormat: SupportedExportFormat,
+  options?: { exportProperties?: Record<string, boolean | number | string> },
 ): Promise<ExportFile[]> => {
   // GLB to GLB pass-through optimization
   if (inputFormat === 'glb' && outputFormat === 'glb') {
@@ -30,7 +34,7 @@ export const convertFile = async (
 
   // Standard conversion pipeline
   const glb = await importFiles(inputFiles, inputFormat);
-  return exportFiles(glb, outputFormat);
+  return exportFiles(glb, outputFormat, options?.exportProperties);
 };
 
 /**
@@ -67,11 +71,13 @@ export const importToGlb = async (
  *
  * @param glbData - The GLB data to export.
  * @param outputFormat - target file format to export into
+ * @param exportProperties - optional Assimp export properties (e.g. `{ '3MF_EXPORT_UNIT': 'centimeter' }`)
  * @returns A promise that resolves to an array of output files.
  */
 export const exportFromGlb = async (
   glbData: Uint8Array<ArrayBuffer>,
   outputFormat: SupportedExportFormat,
+  exportProperties?: Record<string, boolean | number | string>,
 ): Promise<ExportFile[]> => {
   // GLB pass-through optimization
   if (outputFormat === 'glb') {
@@ -85,7 +91,7 @@ export const exportFromGlb = async (
   }
 
   // Standard export pipeline
-  return exportFiles(glbData, outputFormat);
+  return exportFiles(glbData, outputFormat, exportProperties);
 };
 
 /**

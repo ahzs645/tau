@@ -6,6 +6,7 @@ import { BaseExporter } from '#exporters/base.exporter.js';
 
 /** Tuple of all export format identifiers supported by the Assimp backend. */
 export const assimpExportFormats = [
+  '3mf',
   'obj',
   'ply',
   'stl',
@@ -32,6 +33,11 @@ type AssimpExporterOptions = {
    * For example, 'step' when format is 'stp'.
    */
   targetExtension?: string;
+  /**
+   * Optional Assimp export properties forwarded as the third argument to
+   * `ConvertFileList`. Keys are Assimp property strings (e.g. `3MF_EXPORT_UNIT`).
+   */
+  exportProperties?: Record<string, boolean | number | string>;
 };
 
 /**
@@ -74,8 +80,9 @@ export class AssimpExporter extends BaseExporter<AssimpExporterOptions> {
       const fileList = new ajs.FileList();
       fileList.AddFile('input.glb', glbData);
 
-      // Convert GLB to target format using assimpjs
-      const result = ajs.ConvertFileList(fileList, format);
+      const result = mergedOptions.exportProperties
+        ? ajs.ConvertFileList(fileList, format, mergedOptions.exportProperties)
+        : ajs.ConvertFileList(fileList, format);
 
       // Check if conversion succeeded
       if (!result.IsSuccess()) {
