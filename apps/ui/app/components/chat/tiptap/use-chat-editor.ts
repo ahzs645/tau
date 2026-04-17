@@ -12,6 +12,7 @@ import type { EditorView } from '@tiptap/pm/view';
 import type { Chat } from '@taucad/chat';
 import type { FileEntry } from '@taucad/types';
 import type { FileTreeService } from '#lib/file-tree-service.js';
+import { resizeImageForChat } from '#utils/resize-image.js';
 import type { ChipType } from '#components/chat/context-chip.js';
 import { buildPastedContent, slashCommandRegex } from '#utils/at-reference.utils.js';
 import type { PastedContentSegment } from '#utils/at-reference.utils.js';
@@ -296,7 +297,10 @@ export function useChatEditor({
                 reader.addEventListener('load', (readerEvent) => {
                   const result = readerEvent.target?.result;
                   if (typeof result === 'string' && result !== '') {
-                    onImagePasteRef.current?.(result);
+                    void (async () => {
+                      const resized = await resizeImageForChat(result);
+                      onImagePasteRef.current?.(resized);
+                    })();
                   }
                 });
                 reader.readAsDataURL(file);

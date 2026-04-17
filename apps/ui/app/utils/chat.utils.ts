@@ -35,7 +35,7 @@ export const useChatConstants: Parameters<typeof useChat>[0] = {
  * @param dataUrl
  * @returns
  */
-const extractMimeTypeFromDataUrl = (dataUrl: string): string => {
+export const extractMimeTypeFromDataUrl = (dataUrl: string): string => {
   const mimeType = dataUrl.split(',')[0]?.split(':')[1]?.split(';')[0];
   if (!mimeType) {
     throw new Error('Invalid data URL');
