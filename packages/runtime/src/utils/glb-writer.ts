@@ -10,6 +10,8 @@
  * @see docs/policy/gltf-construction-policy.md
  */
 
+import { packageName, packageVersion } from '#utils/package-info.js';
+
 // =============================================================================
 // Types
 // =============================================================================
@@ -333,7 +335,7 @@ function buildGltf(input: GlbInput): { json: GltfJson; binBuffer: Uint8Array<Arr
   }
 
   const json: GltfJson = {
-    asset: { version: '2.0', generator: 'tau-runtime' },
+    asset: { version: '2.0', generator: `${packageName}@${packageVersion}` },
     scene: 0,
     scenes: [{ nodes: sceneNodes }],
     nodes,

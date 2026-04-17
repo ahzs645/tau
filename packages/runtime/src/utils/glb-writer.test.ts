@@ -2,6 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { NodeIO } from '@gltf-transform/core';
 import { writeGlb, writeGltfJson } from '#utils/glb-writer.js';
 import type { GlbInput } from '#utils/glb-writer.js';
+import { packageName, packageVersion } from '#utils/package-info.js';
+
+const expectedGenerator = `${packageName}@${packageVersion}`;
 
 // =============================================================================
 // Fixtures
@@ -331,7 +334,7 @@ describe('writeGlb', () => {
     expect(material.getDoubleSided()).toBe(true);
   });
 
-  it('should set generator field in asset metadata', async () => {
+  it('should set generator field in asset metadata to package name and version', async () => {
     const glb = writeGlb(createSingleTriangleInput());
     const document = await new NodeIO().readBinary(glb);
 
@@ -339,7 +342,8 @@ describe('writeGlb', () => {
     const json = JSON.parse(
       new TextDecoder().decode(glb.slice(20, 20 + new DataView(glb.buffer).getUint32(12, true))),
     ) as { asset: { generator: string } };
-    expect(json.asset.generator).toBe('tau-runtime');
+    expect(json.asset.generator).toBe(expectedGenerator);
+    expect(json.asset.generator).toMatch(/^@taucad\/runtime@\d+\.\d+\.\d+/);
   });
 
   it('should deduplicate identical materials', async () => {
@@ -450,7 +454,7 @@ describe('writeGltfJson', () => {
     };
 
     expect(json.asset.version).toBe('2.0');
-    expect(json.asset.generator).toBe('tau-runtime');
+    expect(json.asset.generator).toBe(expectedGenerator);
     expect(json.meshes).toHaveLength(1);
     expect(json.buffers).toHaveLength(1);
     expect(json.buffers[0]!.uri).toMatch(/^data:application\/octet-stream;base64,/);
