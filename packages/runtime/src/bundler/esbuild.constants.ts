@@ -31,6 +31,13 @@ export const esbuildNamespace = {
  */
 export const vfsNamespacePrefix = `${esbuildNamespace.vfs}:`;
 
+/**
+ * Filename prefix for Node.js temp-file code execution.
+ * Used by executeCodeNode to write bundled code and by error-enrichment
+ * to identify bundled-code stack frames for source map resolution.
+ */
+export const nodeExecFilePrefix = 'taucad-exec-';
+
 /** Maximum time (ms) to wait for a remote HTTP module before aborting. */
 export const httpFetchTimeoutMs = 30_000;
 

@@ -1083,7 +1083,8 @@ export function clearExecuteCache(code?: string): void {
 
 /**
  * Execute bundled JS/TS code via dynamic import.
- * Browser uses Blob URL, Node.js uses URL-encoded data URL.
+ * Browser uses Blob URL, Node.js writes a temp file (data: URL imports
+ * break under ESM loader hooks like `@oxc-node/core/register` or `tsx`).
  *
  * Results are cached by code string — identical code returns the same
  * module object without re-evaluating. Use `clearExecuteCache` to invalidate.
@@ -1097,29 +1098,27 @@ export async function executeCode(code: string): Promise<ExecuteResult> {
     return { success: true, value: cached };
   }
 
-  const isNodejsRuntime = isNode();
-
   try {
-    let url: string;
-    let shouldRevoke = false;
+    let moduleExports: unknown;
+    let entryUrl: string | undefined;
 
-    if (isNodejsRuntime) {
-      url = `data:text/javascript;charset=utf-8,${encodeURIComponent(code)}`;
+    if (isNode()) {
+      const { executeCodeNode } = await import('#bundler/execute-code-node.js');
+      const result = await executeCodeNode(code);
+      moduleExports = result.value;
+      entryUrl = result.entryUrl;
     } else {
       const blob = new Blob([code], { type: 'application/javascript' });
-      url = URL.createObjectURL(blob);
-      shouldRevoke = true;
-    }
-
-    try {
-      const moduleExports: unknown = await import(/* @vite-ignore */ url);
-      executeCacheMap.set(code, moduleExports);
-      return { success: true, value: moduleExports };
-    } finally {
-      if (shouldRevoke) {
-        URL.revokeObjectURL(url);
+      entryUrl = URL.createObjectURL(blob);
+      try {
+        moduleExports = await import(/* @vite-ignore */ entryUrl);
+      } finally {
+        URL.revokeObjectURL(entryUrl);
       }
     }
+
+    executeCacheMap.set(code, moduleExports);
+    return { success: true, value: moduleExports, entryUrl };
   } catch (error) {
     return {
       success: false,
