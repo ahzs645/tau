@@ -93,17 +93,9 @@ function SourcesList({ sources }: { readonly sources: WebSource[] }): React.JSX.
 
 export function ChatMessageToolWebSearch({
   part,
-  hasContent,
 }: {
   readonly part: ToolInvocation<typeof toolName.webSearch>;
-  /**
-   * Whether there is subsequent content in the message after this tool.
-   * When true, the sources list will collapse. When false, it stays open.
-   */
-  readonly hasContent: boolean;
 }): React.JSX.Element | undefined {
-  const [isOpen, setIsOpen] = useState(false);
-
   switch (part.state) {
     case 'input-available':
     case 'input-streaming': {
@@ -149,15 +141,12 @@ export function ChatMessageToolWebSearch({
         );
       }
 
-      // Show sources while there's no subsequent content, collapse when content arrives
-      const shouldBeOpen = !hasContent || isOpen;
-
       return (
-        <ChatToolCard variant='minimal' status='ready' isOpen={shouldBeOpen} onOpenChange={setIsOpen}>
+        <ChatToolCard variant='minimal' status='ready' isDefaultOpen={false}>
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={Globe} />
             <ChatToolCardTitle>
-              <ChatToolAction>Searched web</ChatToolAction>
+              <ChatToolAction>Searched</ChatToolAction>
               <ChatToolDescription>
                 <span className='italic'>{query}</span>
               </ChatToolDescription>

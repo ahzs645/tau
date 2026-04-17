@@ -328,6 +328,7 @@ export const ChatTextarea = memo(function ({
       <ChatTextareaDesktop
         className={className}
         enableAutoFocus={enableAutoFocus}
+        enableContextActions={enableContextActions}
         enableKernelSelector={enableKernelSelector}
         // State
         isDragging={logic.isDragging}

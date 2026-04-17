@@ -177,7 +177,7 @@ export const ChatTextareaMobile = memo(function ({
         'relative flex size-full flex-row items-end gap-1 border bg-background',
         'overflow-hidden',
         'shadow-md',
-        'focus-within:border-primary',
+        'focus-within:border-primary/50',
         'h-auto min-h-9 p-1.25 md:min-h-10',
         className,
         'rounded-2xl',

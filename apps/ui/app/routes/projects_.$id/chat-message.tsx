@@ -2,12 +2,20 @@ import { ChevronDown, ChevronRight, RefreshCw } from 'lucide-react';
 import { memo, useCallback, useMemo, useState } from 'react';
 import { Virtuoso } from 'react-virtuoso';
 import { messageRole } from '@taucad/chat/constants';
-import type { UsageData } from '@taucad/chat';
+import type { MyMessagePart, UsageData } from '@taucad/chat';
 import { useChatActions, useChatSelector } from '#hooks/use-chat.js';
 import { serializeMessage } from '#utils/chat.utils.js';
 import { parseInlineReferences } from '#utils/at-reference.utils.js';
+import type { ActivityGroup } from '#utils/assistant-message-activity.js';
+import {
+  groupAssistantParts,
+  findActivityPrefixEnd,
+  findLastMeaningfulPartIndex,
+} from '#utils/assistant-message-activity.js';
 import { AtReferenceChip } from '#components/chat/at-reference-chip.js';
 import { ContextChip } from '#components/chat/context-chip.js';
+import { ChatActivityGroup } from '#components/chat/chat-activity-group.js';
+import { ChatActivitySection } from '#components/chat/chat-activity-section.js';
 import { defaultSkills } from '#components/chat/tiptap/slash-command-suggestion.js';
 import { ChatMessageReasoning } from '#routes/projects_.$id/chat-message-reasoning.js';
 import { ChatMessageDataUsage } from '#routes/projects_.$id/chat-message-data-usage.js';
@@ -130,6 +138,216 @@ function TextWithAtReferences({ text }: { readonly text: string }): React.JSX.El
           return <ContextChip key={key} label={`/${segment.commandId}`} chipType='skill' />;
         }
         return <span key={key}>{`/${segment.commandId}`}</span>;
+      })}
+    </>
+  );
+}
+
+type PartRenderContext = {
+  readonly messageId: string;
+  readonly lastMeaningfulIndex: number;
+  readonly isLastGroup: boolean;
+};
+
+// oxlint-disable-next-line complexity -- Part type dispatch requires many branches
+function renderAssistantPart(
+  part: MyMessagePart,
+  index: number,
+  context: PartRenderContext,
+): React.JSX.Element | undefined {
+  const { messageId, lastMeaningfulIndex } = context;
+
+  switch (part.type) {
+    case 'text': {
+      return <ChatMessageText key={`${messageId}-message-part-${index}`} part={part} />;
+    }
+
+    case 'reasoning': {
+      return (
+        <ChatMessageReasoning
+          key={`${messageId}-message-part-${index}`}
+          part={part}
+          hasContent={index < lastMeaningfulIndex}
+        />
+      );
+    }
+
+    case 'step-start':
+    case 'file':
+    case 'data-usage':
+    case 'data-context-usage': {
+      return undefined;
+    }
+
+    case 'dynamic-tool': {
+      return <ChatMessagePartUnknown key={part.toolCallId} part={part} />;
+    }
+
+    case 'source-url': {
+      throw new Error('Source URL rendering is not implemented');
+    }
+
+    case 'source-document': {
+      throw new Error('Source document rendering is not implemented');
+    }
+
+    case 'tool-web_search': {
+      return <ChatMessageToolWebSearch key={part.toolCallId} part={part} />;
+    }
+
+    case 'tool-web_browser': {
+      return <ChatMessageToolWebBrowser key={part.toolCallId} part={part} />;
+    }
+
+    case 'tool-edit_file': {
+      return <ChatMessageToolFileEdit key={part.toolCallId} part={part} />;
+    }
+
+    case 'tool-test_model': {
+      return <ChatMessageToolTestModel key={part.toolCallId} part={part} />;
+    }
+
+    case 'tool-edit_tests': {
+      return <ChatMessageToolEditTests key={part.toolCallId} part={part} />;
+    }
+
+    case 'tool-transfer_to_cad_expert':
+    case 'tool-transfer_to_research_expert':
+    case 'tool-transfer_back_to_supervisor': {
+      return <ChatMessageToolTransfer key={part.toolCallId} part={part} />;
+    }
+
+    case 'tool-read_file': {
+      return <ChatMessageToolReadFile key={part.toolCallId} part={part} />;
+    }
+
+    case 'tool-list_directory': {
+      return <ChatMessageToolListDirectory key={part.toolCallId} part={part} />;
+    }
+
+    case 'tool-create_file': {
+      return <ChatMessageToolCreateFile key={part.toolCallId} part={part} />;
+    }
+
+    case 'tool-delete_file': {
+      return <ChatMessageToolDeleteFile key={part.toolCallId} part={part} />;
+    }
+
+    case 'tool-grep': {
+      return <ChatMessageToolGrep key={part.toolCallId} part={part} />;
+    }
+
+    case 'tool-glob_search': {
+      return <ChatMessageToolGlobSearch key={part.toolCallId} part={part} />;
+    }
+
+    case 'tool-get_kernel_result': {
+      return <ChatMessageToolGetKernelResult key={part.toolCallId} part={part} />;
+    }
+
+    case 'tool-screenshot': {
+      return <ChatMessageToolScreenshot key={part.toolCallId} part={part} />;
+    }
+
+    case 'data-context-compaction': {
+      return <ChatMessageContextCompaction key={`${messageId}-compaction-${index}`} data={part.data} />;
+    }
+
+    default: {
+      const unknownPart: never = part;
+      return <ChatMessagePartUnknown key={String(unknownPart)} part={unknownPart} />;
+    }
+  }
+}
+
+function renderActivityGroup(
+  group: ActivityGroup,
+  groupIndex: number,
+  context: PartRenderContext,
+): React.JSX.Element | undefined {
+  if (group.kind === 'singleton') {
+    return renderAssistantPart(group.part, group.partIndex, context);
+  }
+
+  return (
+    <ChatActivityGroup
+      key={`${context.messageId}-group-${groupIndex}`}
+      summaryVerb={group.summaryVerb}
+      summaryDetail={group.summaryDetail}
+      isLast={context.isLastGroup}
+    >
+      {group.parts.map((part, i) => renderAssistantPart(part, group.partIndices[i]!, context))}
+    </ChatActivityGroup>
+  );
+}
+
+function AssistantParts({
+  parts,
+  messageId,
+}: {
+  readonly parts: readonly MyMessagePart[];
+  readonly messageId: string;
+}): React.JSX.Element {
+  const groups = useMemo(() => groupAssistantParts(parts), [parts]);
+  const prefixEnd = useMemo(() => findActivityPrefixEnd(groups), [groups]);
+  const lastMeaningfulIndex = useMemo(() => findLastMeaningfulPartIndex(parts), [parts]);
+  const hasDownstreamText = prefixEnd < groups.length;
+  const hasActivityPrefix = prefixEnd > 0;
+
+  const prefixGroups = hasActivityPrefix ? groups.slice(0, prefixEnd) : [];
+  const suffixGroups = groups.slice(prefixEnd);
+
+  const activitySummary = useMemo(() => {
+    const aggregated = prefixGroups.filter((group) => group.kind === 'aggregated');
+    if (aggregated.length === 0) {
+      return { verb: 'Activity', detail: '' };
+    }
+
+    const firstVerb = aggregated[0]!.summaryVerb;
+    const allSameVerb = aggregated.every((group) => group.summaryVerb === firstVerb);
+    if (allSameVerb) {
+      return {
+        verb: firstVerb,
+        detail: aggregated.map((group) => group.summaryDetail).join(', '),
+      };
+    }
+
+    return {
+      verb: '',
+      detail: aggregated.map((group) => group.summary).join(', '),
+    };
+  }, [prefixGroups]);
+
+  const lastGroupIndex = groups.length - 1;
+
+  const renderContextForGroup = useCallback(
+    (absoluteIndex: number): PartRenderContext => ({
+      messageId,
+      lastMeaningfulIndex,
+      isLastGroup: absoluteIndex === lastGroupIndex,
+    }),
+    [messageId, lastMeaningfulIndex, lastGroupIndex],
+  );
+
+  const shouldWrapInSection = prefixGroups.length > 1 && hasDownstreamText;
+
+  return (
+    <>
+      {shouldWrapInSection ? (
+        <ChatActivitySection
+          summaryVerb={activitySummary.verb}
+          summaryDetail={activitySummary.detail}
+          hasDownstreamText={hasDownstreamText}
+          isLast={!hasDownstreamText}
+        >
+          {prefixGroups.map((group, i) => renderActivityGroup(group, i, renderContextForGroup(i)))}
+        </ChatActivitySection>
+      ) : (
+        prefixGroups.map((group, i) => renderActivityGroup(group, i, renderContextForGroup(i)))
+      )}
+      {suffixGroups.map((group, i) => {
+        const absoluteIndex = prefixEnd + i;
+        return renderActivityGroup(group, absoluteIndex, renderContextForGroup(absoluteIndex));
       })}
     </>
   );
@@ -281,7 +499,7 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
         <When shouldRender={!isEditing}>
           <div
             className={cn(
-              'flex flex-col gap-1',
+              'flex flex-col gap-0',
               isUser && 'cursor-pointer rounded-sm border bg-background px-3 py-1 hover:border-primary',
               shouldCollapseUserMessage && 'max-h-58.5 overflow-hidden',
               fileParts.length > 0 && 'pt-3',
@@ -307,147 +525,7 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
                 }}
               />
             ) : (
-              /* oxlint-disable-next-line complexity -- This is a complex switch statement, we want to keep it simple. */
-              displayMessage.parts.map((part, index) => {
-                switch (part.type) {
-                  case 'text': {
-                    return (
-                      <ChatMessageText
-                        // oxlint-disable-next-line react/no-array-index-key -- Index is stable
-                        key={`${displayMessage.id}-message-part-${index}`}
-                        part={part}
-                      />
-                    );
-                  }
-
-                  case 'reasoning': {
-                    const hasPartsAfter = index < displayMessage.parts.length - 1;
-                    return (
-                      <ChatMessageReasoning
-                        // oxlint-disable-next-line react/no-array-index-key -- Index is stable
-                        key={`${displayMessage.id}-message-part-${index}`}
-                        part={part}
-                        hasContent={hasPartsAfter}
-                      />
-                    );
-                  }
-
-                  case 'step-start': {
-                    // We are not rendering step-start parts.
-
-                    return null;
-                  }
-
-                  case 'file': {
-                    // Files are rendered at the top of the message
-                    return null;
-                  }
-
-                  case 'dynamic-tool': {
-                    return <ChatMessagePartUnknown key={part.toolCallId} part={part} />;
-                  }
-
-                  case 'source-url': {
-                    throw new Error('Source URL rendering is not implemented');
-                  }
-
-                  case 'source-document': {
-                    throw new Error('Source document rendering is not implemented');
-                  }
-
-                  // TOOLS
-                  case 'tool-web_search': {
-                    const hasPartsAfter = index < displayMessage.parts.length - 1;
-                    return <ChatMessageToolWebSearch key={part.toolCallId} part={part} hasContent={hasPartsAfter} />;
-                  }
-
-                  case 'tool-web_browser': {
-                    const hasPartsAfter = index < displayMessage.parts.length - 1;
-                    return <ChatMessageToolWebBrowser key={part.toolCallId} part={part} hasContent={hasPartsAfter} />;
-                  }
-
-                  case 'tool-edit_file': {
-                    return <ChatMessageToolFileEdit key={part.toolCallId} part={part} />;
-                  }
-
-                  case 'tool-test_model': {
-                    return <ChatMessageToolTestModel key={part.toolCallId} part={part} />;
-                  }
-
-                  case 'tool-edit_tests': {
-                    return <ChatMessageToolEditTests key={part.toolCallId} part={part} />;
-                  }
-
-                  case 'tool-transfer_to_cad_expert': {
-                    return <ChatMessageToolTransfer key={part.toolCallId} part={part} />;
-                  }
-
-                  case 'tool-transfer_to_research_expert': {
-                    return <ChatMessageToolTransfer key={part.toolCallId} part={part} />;
-                  }
-
-                  case 'tool-transfer_back_to_supervisor': {
-                    return <ChatMessageToolTransfer key={part.toolCallId} part={part} />;
-                  }
-
-                  // FILESYSTEM TOOLS
-                  case 'tool-read_file': {
-                    return <ChatMessageToolReadFile key={part.toolCallId} part={part} />;
-                  }
-
-                  case 'tool-list_directory': {
-                    return <ChatMessageToolListDirectory key={part.toolCallId} part={part} />;
-                  }
-
-                  case 'tool-create_file': {
-                    return <ChatMessageToolCreateFile key={part.toolCallId} part={part} />;
-                  }
-
-                  case 'tool-delete_file': {
-                    return <ChatMessageToolDeleteFile key={part.toolCallId} part={part} />;
-                  }
-
-                  case 'tool-grep': {
-                    return <ChatMessageToolGrep key={part.toolCallId} part={part} />;
-                  }
-
-                  case 'tool-glob_search': {
-                    return <ChatMessageToolGlobSearch key={part.toolCallId} part={part} />;
-                  }
-
-                  case 'tool-get_kernel_result': {
-                    return <ChatMessageToolGetKernelResult key={part.toolCallId} part={part} />;
-                  }
-
-                  case 'tool-screenshot': {
-                    return <ChatMessageToolScreenshot key={part.toolCallId} part={part} />;
-                  }
-
-                  case 'data-usage': {
-                    // Usage data parts are rendered separately in the footer
-                    return null;
-                  }
-
-                  case 'data-context-compaction': {
-                    return (
-                      <ChatMessageContextCompaction
-                        // oxlint-disable-next-line react/no-array-index-key -- Index is stable
-                        key={`${displayMessage.id}-compaction-${index}`}
-                        data={part.data}
-                      />
-                    );
-                  }
-
-                  case 'data-context-usage': {
-                    return null;
-                  }
-
-                  default: {
-                    const unknownPart: never = part;
-                    return <ChatMessagePartUnknown key={String(unknownPart)} part={unknownPart} />;
-                  }
-                }
-              })
+              <AssistantParts parts={displayMessage.parts} messageId={displayMessage.id} />
             )}
           </div>
         </When>

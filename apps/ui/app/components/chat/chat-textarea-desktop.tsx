@@ -33,6 +33,7 @@ const knownSkillIds = new Set(defaultSkills.map((s) => s.id));
 type ChatTextareaDesktopProperties = {
   readonly className?: string;
   readonly enableAutoFocus?: boolean;
+  readonly enableContextActions?: boolean;
   readonly enableKernelSelector?: boolean;
 
   // State
@@ -90,6 +91,7 @@ type ChatTextareaDesktopProperties = {
 export const ChatTextareaDesktop = memo(function ({
   className,
   enableAutoFocus = true,
+  enableContextActions = true,
   enableKernelSelector = true,
 
   // State
@@ -213,7 +215,7 @@ export const ChatTextareaDesktop = memo(function ({
         'relative flex size-full flex-col rounded-2xl border bg-background',
         'cursor-text overflow-auto',
         'shadow-md',
-        'focus-within:border-primary',
+        'focus-within:border-primary/50',
         className,
       )}
       onBlur={handleTextareaBlur}

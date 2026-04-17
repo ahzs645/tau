@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { Globe } from 'lucide-react';
 import type { ToolInvocation } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
@@ -32,17 +31,9 @@ function BrowseSourceItem({ url }: { readonly url: string }): React.JSX.Element 
 
 export function ChatMessageToolWebBrowser({
   part,
-  hasContent,
 }: {
   readonly part: ToolInvocation<typeof toolName.webBrowser>;
-  /**
-   * Whether there is subsequent content in the message after this tool.
-   * When true, the sources list will collapse. When false, it stays open.
-   */
-  readonly hasContent: boolean;
 }): React.JSX.Element | undefined {
-  const [isOpen, setIsOpen] = useState(false);
-
   switch (part.state) {
     case 'input-available':
     case 'input-streaming': {
@@ -78,11 +69,8 @@ export function ChatMessageToolWebBrowser({
       const faviconUrl = createFaviconUrl(firstUrl);
       const remainingCount = urls.length - 1;
 
-      // Show sources while there's no subsequent content, collapse when content arrives
-      const shouldBeOpen = !hasContent || isOpen;
-
       return (
-        <ChatToolCard variant='minimal' status='ready' isOpen={shouldBeOpen} onOpenChange={setIsOpen}>
+        <ChatToolCard variant='minimal' status='ready' isDefaultOpen={false}>
           <ChatToolCardHeader>
             <img src={faviconUrl} alt={firstDomain} className='size-3 shrink-0 rounded-sm' />
             <ChatToolCardTitle>

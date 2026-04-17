@@ -1,5 +1,10 @@
 import type { ReasoningUIPart } from 'ai';
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+// `useState` setter functions are stable across renders, so passing them as
+// callback refs is safe — React only invokes them when the underlying element
+// changes. Storing the elements in state (rather than refs) is what makes the
+// auto-pin effect re-run the moment the scroll container actually attaches,
+// even when an earlier render took a different JSX path that omitted the refs.
 import { Brain, ChevronRight } from 'lucide-react';
 import { MarkdownViewerChat } from '#components/markdown/markdown-viewer-chat.js';
 import { useChatSelector } from '#hooks/use-chat.js';
@@ -15,6 +20,13 @@ import { cn } from '#utils/ui.utils.js';
  */
 const previewTextBudget = 3000;
 
+/**
+ * Distance (px) from the bottom that still counts as "stuck to bottom".
+ * Handles sub-pixel rounding and lets the user be effectively at the bottom
+ * without having to land exactly on `scrollHeight - clientHeight`.
+ */
+const bottomTolerance = 8;
+
 type ChatMessageReasoningProperties = {
   readonly part: ReasoningUIPart;
   /**
@@ -27,7 +39,25 @@ type ChatMessageReasoningProperties = {
 export function ChatMessageReasoning({ part, hasContent }: ChatMessageReasoningProperties): React.JSX.Element {
   const isStreaming = useChatSelector((state) => state.status === 'streaming');
   const [userToggleState, setUserToggleState] = useState<'expanded' | 'collapsed' | undefined>(undefined);
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const [scrollContainer, setScrollContainerState] = useState<HTMLDivElement | undefined>(undefined);
+  const [content, setContentState] = useState<HTMLDivElement | undefined>(undefined);
+
+  // Callback refs receive `null` from React on unmount; normalize to `undefined`
+  // so the state matches our `null`-free convention while still letting the
+  // effect re-run on attach/detach.
+  // oxlint-disable @typescript-eslint/no-restricted-types -- React's callback ref contract passes `null` on unmount.
+  const setScrollContainer = useCallback((element: HTMLDivElement | null): void => {
+    setScrollContainerState(element ?? undefined);
+  }, []);
+  const setContent = useCallback((element: HTMLDivElement | null): void => {
+    setContentState(element ?? undefined);
+  }, []);
+  // oxlint-enable @typescript-eslint/no-restricted-types
+  // Tracks whether auto-pinning is active. Defaults to true so the initial mount
+  // and any open-during-streaming transition snap to the latest reasoning. Flips
+  // to false only when the user scrolls away from the bottom; flips back to true
+  // when the user returns to within `bottomTolerance` of the bottom.
+  const stickToBottomRef = useRef(true);
 
   const trimmedText = useMemo(() => part.text.trim(), [part.text]);
   const hasReasoningText = trimmedText !== '';
@@ -59,15 +89,88 @@ export function ChatMessageReasoning({ part, hasContent }: ChatMessageReasoningP
       return;
     }
 
-    const container = scrollContainerRef.current;
-    if (!container) {
+    if (!scrollContainer || !content) {
       return;
     }
 
-    requestAnimationFrame(() => {
-      container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
-    });
-  }, [displayText, isStreaming, isContentVisible, isExpanded]);
+    // The browser dispatches scroll events as deferred tasks after a scrollTop
+    // write, with the *final* scrollTop reflecting any clamps. Under continuous
+    // streaming, scrollHeight grows between the pin write and the deferred
+    // scroll event, which would make a naive distance-from-bottom calculation
+    // see a stale (small) scrollTop against a fresh (large) scrollHeight and
+    // wrongly conclude the user moved away. We sidestep this by only mutating
+    // stickiness when an actual user-input event preceded the scroll event.
+    let userInteracting = false;
+    let interactionTimer: ReturnType<typeof setTimeout> | undefined;
+    let pinFrame = 0;
+
+    const pinNow = (): void => {
+      if (!stickToBottomRef.current) {
+        return;
+      }
+      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+    };
+
+    // ResizeObserver callbacks that synchronously mutate layout can trip the
+    // browser's "ResizeObserver loop limit exceeded" guard. Defer the write to
+    // the next animation frame; multiple resize bursts within one frame
+    // coalesce into a single pin.
+    const schedulePin = (): void => {
+      if (pinFrame !== 0) {
+        return;
+      }
+      pinFrame = globalThis.requestAnimationFrame(() => {
+        pinFrame = 0;
+        pinNow();
+      });
+    };
+
+    // 150ms covers the next-task delivery window for the queued scroll event
+    // following a user input burst, while staying short enough that subsequent
+    // programmatic pin scrolls fall outside it.
+    const markUserInteraction = (): void => {
+      userInteracting = true;
+      globalThis.clearTimeout(interactionTimer);
+      interactionTimer = globalThis.setTimeout(() => {
+        userInteracting = false;
+      }, 150);
+    };
+
+    const handleScroll = (): void => {
+      if (!userInteracting) {
+        return;
+      }
+      const distanceFromBottom =
+        scrollContainer.scrollHeight - scrollContainer.clientHeight - scrollContainer.scrollTop;
+      stickToBottomRef.current = distanceFromBottom <= bottomTolerance;
+    };
+
+    pinNow();
+
+    // `pointerdown` catches scrollbar-thumb drags (no wheel/touch precursor).
+    scrollContainer.addEventListener('wheel', markUserInteraction, { passive: true });
+    scrollContainer.addEventListener('touchstart', markUserInteraction, { passive: true });
+    scrollContainer.addEventListener('keydown', markUserInteraction, { passive: true });
+    scrollContainer.addEventListener('pointerdown', markUserInteraction, { passive: true });
+    scrollContainer.addEventListener('scroll', handleScroll, { passive: true });
+    // ResizeObserver fires post-layout, so reads of scrollHeight are accurate
+    // even when Streamdown / KaTeX / Shiki reflow asynchronously.
+    const observer = new ResizeObserver(schedulePin);
+    observer.observe(content);
+
+    return () => {
+      observer.disconnect();
+      if (pinFrame !== 0) {
+        globalThis.cancelAnimationFrame(pinFrame);
+      }
+      globalThis.clearTimeout(interactionTimer);
+      scrollContainer.removeEventListener('wheel', markUserInteraction);
+      scrollContainer.removeEventListener('touchstart', markUserInteraction);
+      scrollContainer.removeEventListener('keydown', markUserInteraction);
+      scrollContainer.removeEventListener('pointerdown', markUserInteraction);
+      scrollContainer.removeEventListener('scroll', handleScroll);
+    };
+  }, [isStreaming, isContentVisible, isExpanded, scrollContainer, content]);
 
   const handleToggle = useCallback((): void => {
     setUserToggleState((previous) => {
@@ -94,7 +197,7 @@ export function ChatMessageReasoning({ part, hasContent }: ChatMessageReasoningP
       <Button
         variant='ghost'
         size='xs'
-        className='-ml-2 max-w-full min-w-0 gap-1.5 overflow-hidden font-medium text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent'
+        className='-ml-2 h-4 max-w-full min-w-0 gap-1.5 overflow-hidden font-medium text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent'
         onClick={handleToggle}
       >
         <Brain className='size-3 shrink-0' />
@@ -107,15 +210,17 @@ export function ChatMessageReasoning({ part, hasContent }: ChatMessageReasoningP
       {isContentVisible ? (
         <div className='pl-1.5'>
           <div
-            ref={scrollContainerRef}
+            ref={setScrollContainer}
             className={cn(
               'border-l border-foreground/20 pl-4 text-sm italic',
               !isExpanded && 'max-h-48 overflow-y-auto',
             )}
           >
-            <MarkdownViewerChat className='text-muted-foreground' isStreaming={isStreaming}>
-              {displayText}
-            </MarkdownViewerChat>
+            <div ref={setContent}>
+              <MarkdownViewerChat className='text-muted-foreground' isStreaming={isStreaming}>
+                {displayText}
+              </MarkdownViewerChat>
+            </div>
           </div>
         </div>
       ) : null}

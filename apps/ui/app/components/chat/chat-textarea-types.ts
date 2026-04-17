@@ -5,6 +5,7 @@ import { useModels } from '#hooks/use-models.js';
 import type { KeyCombination } from '#utils/keys.utils.js';
 import { toast } from '#components/ui/sonner.js';
 import { useKeybinding } from '#hooks/use-keyboard.js';
+import { resizeImageForChat } from '#utils/resize-image.js';
 
 /**
  * IMPORTANT NOTE:
@@ -308,7 +309,9 @@ export function useChatTextareaLogic({
             try {
               // oxlint-disable-next-line no-await-in-loop -- reading files sequentially
               const dataUrl = await readFileAsDataUrl(file);
-              addImage(dataUrl);
+              // oxlint-disable-next-line no-await-in-loop -- must resize before adding
+              const resized = await resizeImageForChat(dataUrl);
+              addImage(resized);
             } catch {
               toast.error('Failed to read image');
             }
@@ -326,24 +329,19 @@ export function useChatTextareaLogic({
   }, []);
 
   const handleFileChange = useCallback(
-    (event: React.ChangeEvent<HTMLInputElement>): void => {
+    async (event: React.ChangeEvent<HTMLInputElement>): Promise<void> => {
       if (event.target.files && event.target.files.length > 0) {
         for (const file of event.target.files) {
           if (file.type.startsWith('image/')) {
-            const reader = new FileReader();
-            const handleLoad = (readerEvent: ProgressEvent<FileReader>): void => {
-              if (readerEvent.target?.result && typeof readerEvent.target.result === 'string') {
-                const { result } = readerEvent.target;
-                if (result !== '') {
-                  addImage(result);
-                }
-              }
-
-              reader.removeEventListener('load', handleLoad);
-            };
-
-            reader.addEventListener('load', handleLoad);
-            reader.readAsDataURL(file);
+            try {
+              // oxlint-disable-next-line no-await-in-loop -- reading files sequentially
+              const dataUrl = await readFileAsDataUrl(file);
+              // oxlint-disable-next-line no-await-in-loop -- must resize before adding
+              const resized = await resizeImageForChat(dataUrl);
+              addImage(resized);
+            } catch {
+              toast.error('Failed to process image');
+            }
           }
         }
 
@@ -370,7 +368,7 @@ export function useChatTextareaLogic({
    * Handle paste event to add images to the chat
    */
   const handlePaste = useCallback(
-    (event: ClipboardEvent): void => {
+    async (event: ClipboardEvent): Promise<void> => {
       // Check if the textarea is the active element or its ancestor contains focus
       const isTextareaFocused =
         document.activeElement === textareaReference.current ||
@@ -389,20 +387,15 @@ export function useChatTextareaLogic({
         if (item.type.startsWith('image/')) {
           const file = item.getAsFile();
           if (file) {
-            const reader = new FileReader();
-            const handleLoad = (readerEvent: ProgressEvent<FileReader>): void => {
-              if (readerEvent.target?.result && typeof readerEvent.target.result === 'string') {
-                const { result } = readerEvent.target;
-                if (result !== '') {
-                  addImage(result);
-                }
-              }
-
-              reader.removeEventListener('load', handleLoad);
-            };
-
-            reader.addEventListener('load', handleLoad);
-            reader.readAsDataURL(file);
+            try {
+              // oxlint-disable-next-line no-await-in-loop -- reading files sequentially
+              const dataUrl = await readFileAsDataUrl(file);
+              // oxlint-disable-next-line no-await-in-loop -- must resize before adding
+              const resized = await resizeImageForChat(dataUrl);
+              addImage(resized);
+            } catch {
+              toast.error('Failed to process image');
+            }
           }
         }
       }

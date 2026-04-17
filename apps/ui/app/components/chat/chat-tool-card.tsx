@@ -119,7 +119,7 @@ function ChatToolCard({
         open={isOpen}
         className={cn(
           'group/chat-tool-card',
-          variant === 'card' && '@container/chat-tool-card overflow-hidden rounded-md border bg-neutral/10',
+          variant === 'card' && '@container/chat-tool-card my-1 overflow-hidden rounded-md border bg-neutral/10',
           className,
         )}
         data-variant={variant}
@@ -189,7 +189,10 @@ function ChatToolCardHeader({ children, className }: ChatToolCardHeaderProps): R
   if (!isCollapsible) {
     return (
       <div
-        className={cn('flex h-7 w-full flex-row items-center gap-1 pr-1 pl-2 text-xs text-muted-foreground', className)}
+        className={cn(
+          'flex h-7 w-full flex-row items-center gap-1.5 pr-1 pl-2 text-xs text-muted-foreground',
+          className,
+        )}
       >
         {children}
       </div>
@@ -199,7 +202,7 @@ function ChatToolCardHeader({ children, className }: ChatToolCardHeaderProps): R
   return (
     <CollapsibleTrigger
       className={cn(
-        'group/trigger flex h-7 w-full cursor-pointer flex-row items-center gap-1 pr-1 pl-2 text-xs text-muted-foreground transition-colors hover:bg-foreground/5',
+        'group/trigger flex h-7 w-full cursor-pointer flex-row items-center gap-1.5 pr-1 pl-2 text-xs text-muted-foreground transition-colors hover:bg-foreground/5',
         className,
       )}
     >

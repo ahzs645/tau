@@ -259,7 +259,7 @@ export function CollapsibleFileOperation({
     const shouldShowContent = totalLines >= 4 || lastFourLines.trim().length > 0;
 
     return (
-      <div className='@container/code overflow-hidden rounded-md border bg-neutral/10'>
+      <div className='@container/code my-1 overflow-hidden rounded-md border bg-neutral/10'>
         <div className='flex h-7 w-full flex-row items-center gap-1 pr-1 pl-2 text-xs text-muted-foreground'>
           <LoaderCircle className='size-3 animate-spin' />
           {hasPath ? (
@@ -318,7 +318,7 @@ export function CollapsibleFileOperation({
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
-      <div className='@container/code overflow-hidden rounded-md border bg-neutral/10'>
+      <div className='@container/code my-1 overflow-hidden rounded-md border bg-neutral/10'>
         <div className='group/file-op flex items-center transition-colors hover:bg-foreground/5'>
           <CollapsibleFileOperationTrigger
             targetFile={targetFile}

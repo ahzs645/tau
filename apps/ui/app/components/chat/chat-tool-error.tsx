@@ -131,7 +131,7 @@ export function StructuredToolError({ error, className }: StructuredToolErrorPro
       className={cn('group/collapsible @container/error overflow-hidden rounded-md border bg-neutral/10', className)}
       onOpenChange={setIsOpen}
     >
-      <CollapsibleTrigger className='flex h-7 w-full items-center gap-1.5 px-2 text-left text-xs hover:bg-accent/50'>
+      <CollapsibleTrigger className='flex h-7 w-full items-center gap-1 px-2 text-left text-xs hover:bg-accent/50'>
         <Icon className='size-3 shrink-0 text-destructive' />
         <span className='shrink-0 font-medium whitespace-nowrap text-destructive'>{title}</span>
         <span className='text-muted-foreground/50'>·</span>
