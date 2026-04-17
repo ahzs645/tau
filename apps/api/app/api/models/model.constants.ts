@@ -3,26 +3,26 @@ import type { CloudProviderId } from '#api/models/model.service.js';
 
 export const modelList: Record<CloudProviderId, Record<string, Model>> = {
   anthropic: {
-    'claude-4.6-opus': {
-      id: 'anthropic-claude-opus-4.6',
-      name: 'Opus 4.6',
-      slug: 'claude-opus-4.6',
+    'claude-4.7-opus': {
+      id: 'anthropic-claude-opus-4.7',
+      name: 'Opus 4.7',
+      slug: 'claude-opus-4.7',
       description:
-        "Anthropic's most powerful model with adaptive reasoning, great for designing complex multi-part assemblies.",
+        "Anthropic's most powerful model with adaptive reasoning and 1M context, great for designing complex multi-part assemblies.",
       provider: {
         id: 'anthropic',
         name: 'Anthropic',
       },
-      model: 'claude-opus-4-6',
+      model: 'claude-opus-4-7',
       support: {
         toolChoice: false,
       },
       details: {
         family: 'claude',
         families: ['claude'],
-        contextWindow: 200_000,
+        contextWindow: 1_000_000,
         maxTokens: 128_000,
-        knowledgeCutoff: '2025-08',
+        knowledgeCutoff: '2026-01',
         cost: {
           inputTokens: 5,
           outputTokens: 25,
@@ -38,6 +38,7 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
         max_tokens: 120_000,
         thinking: {
           type: 'adaptive',
+          display: 'summarized',
         },
         outputConfig: {
           effort: 'high',

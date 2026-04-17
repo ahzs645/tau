@@ -20,12 +20,19 @@ export const modelConfigurationSchema = z.object({
       }),
       z.object({
         type: z.literal('adaptive').describe('Adaptive thinking lets the model decide when to reason'),
+        display: z
+          .enum(['summarized', 'omitted'])
+          .describe('Whether thinking content is included in the response stream (Opus 4.7+)')
+          .optional(),
       }),
     ])
     .optional(),
   outputConfig: z
     .object({
-      effort: z.enum(['low', 'medium', 'high', 'max']).describe('The effort level for adaptive thinking').optional(),
+      effort: z
+        .enum(['low', 'medium', 'high', 'xhigh', 'max'])
+        .describe('The effort level for adaptive thinking')
+        .optional(),
     })
     .optional(),
   thinkingLevel: z
