@@ -14,6 +14,26 @@ import type { ChangeEvent, FileSystemProvider, WatchEvent } from '#types.js';
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
+/**
+ * Poll a predicate until it becomes true. Used to await asynchronous
+ * timer-driven side effects (e.g. EventCoalescer flushes) without coupling
+ * the test to a specific wall-clock duration. Pure scheduler-bounded waits
+ * are inherently flaky on loaded CI runners; this loop is bounded by
+ * `timeoutMs` instead, so a slow scheduler delays the test rather than
+ * failing it.
+ */
+async function waitFor(predicate: () => boolean, timeoutMs = 2000, pollMs = 5): Promise<void> {
+  const start = Date.now();
+  while (!predicate()) {
+    if (Date.now() - start > timeoutMs) {
+      throw new Error(`waitFor timed out after ${timeoutMs}ms`);
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, pollMs);
+    });
+  }
+}
+
 async function createFileService() {
   const providerRegistry = new ProviderRegistry();
   const provider = await providerRegistry.createMountProvider('memory');
@@ -903,9 +923,7 @@ describe('FileService', () => {
       eventBus.emit({ type: 'fileWritten', path: '/src/b.txt', backend: 'memory' });
 
       expect(received).toHaveLength(0);
-      await new Promise((resolve) => {
-        setTimeout(resolve, 100);
-      });
+      await waitFor(() => received.length >= 2);
       expect(received).toHaveLength(2);
       expect(received.every((event) => event.type === 'change')).toBe(true);
     });
