@@ -2,7 +2,6 @@ import type { ChangeEvent, FileEntry, FileStatEntry, FileSystemBackend, FileStat
 import type { FileManagerProxy } from '#machines/file-manager.machine.types.js';
 import type { FileTreeNode } from '@taucad/filesystem';
 import type { FileContentService, ContentChangeEvent } from '#lib/file-content-service.js';
-// eslint-disable-next-line @nx/enforce-module-boundaries -- filesystem is lazy-loaded via worker; this service runs on main thread
 import { FileSystemObserverBridge } from '@taucad/filesystem';
 import { normalizePath, joinPath } from '@taucad/utils/path';
 

@@ -4,6 +4,7 @@ import { FileContentService } from '#lib/file-content-service.js';
 import type { FileManagerProxy } from '#machines/file-manager.machine.types.js';
 import type { ChangeEvent, FileEntry, FileStatEntry } from '@taucad/types';
 import type { FileTreeNode } from '@taucad/filesystem';
+import { parametersDirectory } from '#utils/parameter-config.utils.js';
 
 function createMockProxy(overrides?: Partial<FileManagerProxy>): FileManagerProxy {
   return {
@@ -238,7 +239,7 @@ describe('FileTreeService', () => {
       await localService.loadDirectory('.tau');
 
       expect(localService.hasChildrenLoaded('.tau')).toBe(true);
-      expect(localService.getTreeSnapshot().has('.tau/parameters')).toBe(true);
+      expect(localService.getTreeSnapshot().has(parametersDirectory)).toBe(true);
       expect(localService.getTreeSnapshot().has('.tau/cache')).toBe(true);
 
       localService.dispose();
@@ -285,14 +286,14 @@ describe('FileTreeService', () => {
       const contentService = new FileContentService({ proxy: localProxy, rootDirectory: '/project' });
       localService.connectToContentService(contentService);
 
-      await contentService.resolve('.tau/parameters/main.ts.json');
+      await contentService.resolve(`${parametersDirectory}/main.ts.json`);
 
       expect(localService.hasChildrenLoaded('.tau')).toBe(false);
 
       await localService.loadDirectory('.tau');
 
       expect(localService.hasChildrenLoaded('.tau')).toBe(true);
-      expect(localService.getTreeSnapshot().has('.tau/parameters')).toBe(true);
+      expect(localService.getTreeSnapshot().has(parametersDirectory)).toBe(true);
       expect(localService.getTreeSnapshot().has('.tau/cache')).toBe(true);
       expect(localService.getTreeSnapshot().has('.tau/artifacts')).toBe(true);
 
@@ -318,9 +319,9 @@ describe('FileTreeService', () => {
       localService.connectToContentService(contentService);
 
       vi.mocked(localProxy.writeFile).mockResolvedValue(undefined);
-      await contentService.write('.tau/parameters/main.ts.json', new Uint8Array([1, 2, 3]), 'machine');
+      await contentService.write(`${parametersDirectory}/main.ts.json`, new Uint8Array([1, 2, 3]), 'machine');
 
-      expect(localService.getTreeSnapshot().has('.tau/parameters/main.ts.json')).toBe(true);
+      expect(localService.getTreeSnapshot().has(`${parametersDirectory}/main.ts.json`)).toBe(true);
       expect(localService.hasChildrenLoaded('.tau')).toBe(false);
 
       await localService.loadDirectory('.tau');
@@ -353,7 +354,7 @@ describe('FileTreeService', () => {
       await vi.advanceTimersByTimeAsync(50);
 
       expect(localService.hasChildrenLoaded('.tau')).toBe(true);
-      expect(localService.getTreeSnapshot().has('.tau/parameters')).toBe(true);
+      expect(localService.getTreeSnapshot().has(parametersDirectory)).toBe(true);
       expect(localService.getTreeSnapshot().has('.tau/cache')).toBe(true);
 
       localService.dispose();

@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { FileContentService } from '#lib/file-content-service.js';
-// eslint-disable-next-line @nx/enforce-module-boundaries -- test file; not part of lazy-loaded bundle
 import { SharedPool } from '@taucad/memory';
 import type { FileManagerProxy } from '#machines/file-manager.machine.types.js';
 import type { ContentChangeEvent } from '#lib/file-content-service.js';

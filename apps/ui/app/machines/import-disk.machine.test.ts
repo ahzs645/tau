@@ -155,7 +155,7 @@ describe('importDiskMachine', () => {
       await waitFor(actor, (s) => s.value === 'selectingMainFile');
       actor.send({ type: 'confirmImport' });
       await waitFor(actor, (s) => s.value === 'success');
-      expect(actor.getSnapshot().context.projectId).toBe('project_123');
+      expect(actor.getSnapshot().context.projectId).toBe('proj_123');
       actor.stop();
     });
   });

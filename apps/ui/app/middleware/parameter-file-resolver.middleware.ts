@@ -1,15 +1,15 @@
 import { z } from 'zod';
 import deepmerge from 'deepmerge';
 import { defineMiddleware } from '@taucad/runtime/middleware';
+import { parametersDirectory } from '#utils/parameter-config.utils.js';
 
-const parametersDir = '.tau/parameters';
 const parameterWatchDebounceMs = 200;
 
 export const parameterFileResolverMiddleware = defineMiddleware({
   name: 'parameter-file-resolver',
 
   optionsSchema: z.object({
-    parametersDir: z.string().default(parametersDir),
+    parametersDir: z.string().default(parametersDirectory),
     watchDebounceMs: z.number().default(parameterWatchDebounceMs),
   }),
 

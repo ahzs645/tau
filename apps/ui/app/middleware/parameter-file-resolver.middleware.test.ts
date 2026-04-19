@@ -2,6 +2,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createMockRuntime, createMockInput, createMockCreateGeometryHandler } from '@taucad/runtime/testing';
 import { parameterFileResolverMiddleware } from '#middleware/parameter-file-resolver.middleware.js';
+import { parametersDirectory } from '#utils/parameter-config.utils.js';
 
 type ParameterFileOptions = { parametersDir: string; watchDebounceMs: number };
 
@@ -11,7 +12,7 @@ function createTestContext(options?: {
   input?: Parameters<typeof createMockInput>[0];
 }) {
   const runtime = createMockRuntime<Record<string, never>, ParameterFileOptions>({
-    options: { parametersDir: '.tau/parameters', watchDebounceMs: 200 },
+    options: { parametersDir: parametersDirectory, watchDebounceMs: 200 },
   });
 
   if (options?.readFileError) {
@@ -105,7 +106,7 @@ describe('parameterFileResolverMiddleware', () => {
 
     await parameterFileResolverMiddleware.wrapCreateGeometry!(input, handler, runtime);
 
-    expect(runtime.registerWatchPath).toHaveBeenCalledWith('/projects/test/.tau/parameters/main.ts.json', {
+    expect(runtime.registerWatchPath).toHaveBeenCalledWith(`/projects/test/${parametersDirectory}/main.ts.json`, {
       debounceMs: 200,
     });
   });
@@ -207,10 +208,10 @@ describe('parameterFileResolverMiddleware', () => {
     it('should return the per-CU parameter file path', () => {
       const result = parameterFileResolverMiddleware.getDependencies!(
         { filePath: '/projects/test/main.ts', basePath: '/projects/test' },
-        { parametersDir: '.tau/parameters', watchDebounceMs: 200 },
+        { parametersDir: parametersDirectory, watchDebounceMs: 200 },
       );
 
-      expect(result).toEqual(['/projects/test/.tau/parameters/main.ts.json']);
+      expect(result).toEqual([`/projects/test/${parametersDirectory}/main.ts.json`]);
     });
 
     it('should use custom parametersDir option', () => {
@@ -225,7 +226,7 @@ describe('parameterFileResolverMiddleware', () => {
     it('should return synchronously (not a promise)', () => {
       const result = parameterFileResolverMiddleware.getDependencies!(
         { filePath: '/projects/test/main.ts', basePath: '/projects/test' },
-        { parametersDir: '.tau/parameters', watchDebounceMs: 200 },
+        { parametersDir: parametersDirectory, watchDebounceMs: 200 },
       );
 
       expect(Array.isArray(result)).toBe(true);

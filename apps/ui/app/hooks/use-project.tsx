@@ -25,6 +25,7 @@ import {
   createDefaultEntry,
   serializeParameterEntry,
   parameterEntryPath,
+  parametersDirectory,
 } from '#utils/parameter-config.utils.js';
 
 type ProjectContextType = {
@@ -97,7 +98,7 @@ export function ProjectProvider({
           const mainFile = project.assets.mechanical?.main ?? 'main.ts';
 
           if (contentService && proxy) {
-            const absoluteParamsDirectory = joinPath(rootDirectory, '.tau/parameters');
+            const absoluteParamsDirectory = joinPath(rootDirectory, parametersDirectory);
             try {
               const allFiles = await proxy.getDirectoryContents(absoluteParamsDirectory);
               for (const [relativePath, data] of Object.entries(allFiles)) {
@@ -113,7 +114,7 @@ export function ProjectProvider({
                 }
               }
             } catch {
-              // .tau/parameters/ directory doesn't exist yet — new project
+              // Parameters directory doesn't exist yet — new project
             }
 
             if (!parameterEntries.has(mainFile)) {
@@ -242,14 +243,14 @@ export function ProjectProvider({
     };
   }, [actorRef, queryClient]);
 
-  // Subscribe to external parameter file changes (per-CU files under .tau/parameters/)
+  // Subscribe to external parameter file changes (per-CU files under the parameters directory)
   useEffect(() => {
     const { contentService } = fileManager;
     if (!contentService) {
       return;
     }
 
-    const parametersPrefix = '.tau/parameters/';
+    const parametersPrefix = `${parametersDirectory}/`;
     const unsubscribe = contentService.onDidContentChange((event) => {
       if (event.type !== 'written' || !event.path.startsWith(parametersPrefix) || event.source === 'machine') {
         return;

@@ -3,6 +3,13 @@ import type { FileParameterEntry } from '@taucad/types';
 const defaultParameterGroupName = 'default';
 
 /**
+ * Canonical project-relative directory where per-CU parameter files are stored.
+ * All parameter file paths in the UI app must derive from this constant so that
+ * the middleware, watchers, and persistence layers stay in sync.
+ */
+export const parametersDirectory = '.tau/parameters';
+
+/**
  * Parse a JSON string into a validated FileParameterEntry.
  * Throws on invalid JSON or missing required fields.
  */
@@ -168,6 +175,6 @@ export const serializeParameterEntry = (entry: FileParameterEntry): string => {
 
 /**
  * Compute the parameter file path for a given entry file.
- * Returns a project-relative path under `.tau/parameters/`.
+ * Returns a project-relative path under `parametersDirectory`.
  */
-export const parameterEntryPath = (entryFile: string): string => `.tau/parameters/${entryFile}.json`;
+export const parameterEntryPath = (entryFile: string): string => `${parametersDirectory}/${entryFile}.json`;

@@ -1021,7 +1021,9 @@ describe('projectMachine', () => {
         parameterEntries: entries,
         loadResult: stubProjectWithMechanical,
         shouldLoadModelOnStart: true,
-        writeParameterResult: async () => {},
+        writeParameterResult: async () => {
+          /* Test stub: no side effects needed */
+        },
       });
 
       actor.send({ type: 'setCompilationUnitParameters', filePath: 'main.ts', parameters: { width: 1 } });
@@ -1106,7 +1108,7 @@ describe('projectMachine', () => {
 
       const newCuWrites = writtenInputs.filter((w) => w.filePath === 'new-cu.ts');
       expect(newCuWrites.length).toBeGreaterThan(0);
-      expect(newCuWrites.every((w) => w.entry !== undefined)).toBe(true);
+      expect(newCuWrites.every((w) => Object.keys(w.entry.groups).length > 0)).toBe(true);
       actor.stop();
     });
 
@@ -1150,7 +1152,9 @@ describe('projectMachine', () => {
         parameterEntries: entries,
         loadResult: stubProjectWithMechanical,
         shouldLoadModelOnStart: true,
-        writeParameterResult: async () => {},
+        writeParameterResult: async () => {
+          /* Test stub: no side effects needed */
+        },
       });
 
       actor.send({ type: 'setCompilationUnitParameters', filePath: 'other.ts', parameters: { radius: 99 } });

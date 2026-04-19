@@ -110,12 +110,13 @@ vi.mock('dockview-react', () => ({
       },
     };
     onReady({ api });
+    const noop = () => undefined;
     const mockPanelApi = {
       isExpanded: true,
-      onDidExpansionChange: () => ({ dispose: () => {} }),
-      setExpanded: () => {},
-      setSize: () => {},
-      updateParameters: () => {},
+      onDidExpansionChange: () => ({ dispose: noop }),
+      setExpanded: noop,
+      setSize: noop,
+      updateParameters: noop,
     };
     return (
       <div data-testid='paneview'>
@@ -201,13 +202,13 @@ vi.mock('@taucad/utils/schema', () => ({
 }));
 
 vi.mock('#components/ui/tooltip.js', () => ({
-  Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  Tooltip: ({ children }: { children: React.ReactNode }): React.ReactNode => children,
   TooltipContent: () => null,
-  TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: React.ReactNode }): React.ReactNode => children,
 }));
 
 vi.mock('#components/ui/combobox-responsive.js', () => ({
-  ComboBoxResponsive: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  ComboBoxResponsive: ({ children }: { children: React.ReactNode }): React.ReactNode => children,
 }));
 
 vi.mock('#routes/projects_.$id/use-chat-interface-state.js', () => ({

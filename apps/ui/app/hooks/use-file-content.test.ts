@@ -21,11 +21,11 @@ describe('useFileContent', () => {
     mockContentService.peek.mockReturnValue(undefined);
     mockContentService.resolve.mockResolvedValue(new Uint8Array([1, 2, 3]));
     mockContentService.subscribe.mockImplementation((_path, _callback) => () => {
-      /* noop */
+      /* No-op unsubscribe */
     });
     mockContentService.isOrphaned.mockReturnValue(false);
     mockContentService.onDidChangeOrphaned.mockImplementation((_handler) => () => {
-      /* noop */
+      /* No-op unsubscribe */
     });
   });
 

@@ -259,7 +259,11 @@ describe('fileManagerMachine', () => {
 
   describe('shared worker initialization', () => {
     it('should skip waitForWorkerReady and reach ready when sharedWorker is provided', async () => {
-      mockWaitForWorkerReady.mockReturnValue(new Promise<void>(() => {}));
+      mockWaitForWorkerReady.mockReturnValue(
+        new Promise<void>(() => {
+          /* Never resolves: simulates pending worker readiness */
+        }),
+      );
 
       const sharedWorker = {
         terminate: vi.fn(),

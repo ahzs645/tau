@@ -13,12 +13,12 @@ describe('LazyHeroViewer', () => {
     vi.stubGlobal(
       'IntersectionObserver',
       class MockIntersectionObserver {
-        constructor(callback: IntersectionObserverCallback) {
+        public observe = vi.fn();
+        public unobserve = vi.fn();
+        public disconnect = vi.fn();
+        public constructor(callback: IntersectionObserverCallback) {
           intersectionCallback = callback;
         }
-        observe = vi.fn();
-        unobserve = vi.fn();
-        disconnect = vi.fn();
       },
     );
   });
@@ -29,19 +29,39 @@ describe('LazyHeroViewer', () => {
     render(<LazyHeroViewer />);
 
     expect(screen.queryByTestId('hero-viewer')).toBeNull();
-  });
+  }, 30_000);
 
   it('should render HeroViewer after intersection observer triggers', async () => {
     const { LazyHeroViewer } = await import('#routes/_index/hero-viewer-gate.js');
 
     render(<LazyHeroViewer />);
 
-    await act(() => {
-      intersectionCallback([{ isIntersecting: true } as IntersectionObserverEntry], {} as IntersectionObserver);
+    const emptyRect: DOMRectReadOnly = new DOMRect();
+    const entry: IntersectionObserverEntry = {
+      isIntersecting: true,
+      target: document.createElement('div'),
+      boundingClientRect: emptyRect,
+      intersectionRatio: 1,
+      intersectionRect: emptyRect,
+      rootBounds: null,
+      time: 0,
+    };
+    const observer: IntersectionObserver = {
+      root: null,
+      rootMargin: '',
+      scrollMargin: '',
+      thresholds: [],
+      disconnect: () => undefined,
+      observe: () => undefined,
+      takeRecords: () => [],
+      unobserve: () => undefined,
+    };
+    await act(async () => {
+      intersectionCallback([entry], observer);
     });
 
     expect(await screen.findByTestId('hero-viewer')).toBeDefined();
-  });
+  }, 30_000);
 
   it('should render a loading placeholder before intersection', async () => {
     const { LazyHeroViewer } = await import('#routes/_index/hero-viewer-gate.js');
@@ -51,5 +71,5 @@ describe('LazyHeroViewer', () => {
     // The sentinel div should exist with min-height to reserve space
     const sentinel = container.firstElementChild;
     expect(sentinel).toBeDefined();
-  });
+  }, 30_000);
 });

@@ -277,7 +277,7 @@ export const projectMachine = setup({
       assertEvent(event, 'setParameters');
       const filePath = context.mainEntryFile;
       const entry = context.parameterEntries.get(filePath) ?? createDefaultEntry();
-      const activeGroup = entry.activeGroup;
+      const { activeGroup } = entry;
       const updated = updateGroupValues(entry, { groupName: activeGroup, values: event.parameters });
       const newEntries = new Map(context.parameterEntries);
       newEntries.set(filePath, updated);
@@ -286,7 +286,7 @@ export const projectMachine = setup({
     setCompilationUnitParametersInContext: assign(({ context, event }) => {
       assertEvent(event, 'setCompilationUnitParameters');
       const entry = context.parameterEntries.get(event.filePath) ?? createDefaultEntry();
-      const activeGroup = entry.activeGroup;
+      const { activeGroup } = entry;
       const updated = updateGroupValues(entry, { groupName: activeGroup, values: event.parameters });
       const newEntries = new Map(context.parameterEntries);
       newEntries.set(event.filePath, updated);
@@ -587,7 +587,9 @@ export const projectMachine = setup({
     removeWrittenParameterPath: assign(({ context }) => {
       const next = new Set(context.dirtyParameterPaths);
       const [first] = next;
-      if (first !== undefined) next.delete(first);
+      if (first !== undefined) {
+        next.delete(first);
+      }
       return { dirtyParameterPaths: next };
     }),
     emitProjectUpdated: emit(({ context }) => ({

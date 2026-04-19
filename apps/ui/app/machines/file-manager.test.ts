@@ -1,5 +1,4 @@
 import { describe, it, expect } from 'vitest';
-// eslint-disable-next-line @nx/enforce-module-boundaries -- test file; not part of lazy-loaded bundle
 import { WriteCoordinator } from '@taucad/filesystem';
 
 describe('WriteCoordinator serialization', () => {

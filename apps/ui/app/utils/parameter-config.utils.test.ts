@@ -12,6 +12,7 @@ import {
   serializeParameterEntry,
   validateParameterEntry,
   parameterEntryPath,
+  parametersDirectory,
 } from '#utils/parameter-config.utils.js';
 
 const createTestEntry = (): FileParameterEntry => ({
@@ -344,11 +345,11 @@ describe('parameter-config.utils', () => {
 
   describe('parameterEntryPath', () => {
     it('should return the per-CU parameter file path', () => {
-      expect(parameterEntryPath('main.ts')).toBe('.tau/parameters/main.ts.json');
+      expect(parameterEntryPath('main.ts')).toBe(`${parametersDirectory}/main.ts.json`);
     });
 
     it('should handle nested entry files', () => {
-      expect(parameterEntryPath('src/box.ts')).toBe('.tau/parameters/src/box.ts.json');
+      expect(parameterEntryPath('src/box.ts')).toBe(`${parametersDirectory}/src/box.ts.json`);
     });
   });
 });

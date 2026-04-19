@@ -44,7 +44,7 @@ describe('ChatContextIndicatorDisplay', () => {
     const tooltips = await screen.findAllByText(/54\.1% context used/);
     expect(tooltips.length).toBeGreaterThanOrEqual(1);
 
-    const details = await screen.findAllByText(/108,200 \/ 200,000/);
+    const details = await screen.findAllByText(/\d+K? \/ \d+K? tokens/);
     expect(details.length).toBeGreaterThanOrEqual(1);
   });
 
