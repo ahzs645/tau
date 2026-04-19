@@ -2,11 +2,11 @@ import { createRuntimeClient } from '@taucad/runtime';
 import { createInProcessTransport } from '@taucad/runtime/transport';
 import { openscad } from '@taucad/runtime/kernels';
 import { gltfCoordinateTransform } from '@taucad/runtime/middleware';
-import type { RuntimeClient } from '@taucad/runtime';
 import type { MeasurementTestRequirement } from '@taucad/testing';
 import { analyzeGlb, evaluateRequirement } from '@taucad/testing/geometry';
 import type { GeometryStats } from '@taucad/testing/geometry';
 import type { GraderCheck } from '#benchmarks/model-benchmark-suite.js';
+import type { ApiRuntimeClient } from '#types/runtime-client.alias.js';
 
 // =============================================================================
 // Types
@@ -40,7 +40,7 @@ export type GeometryValidationResult = {
 
 const defaultGeometryTolerance = 1;
 
-export function createGeometryRenderer(): RuntimeClient {
+export function createGeometryRenderer(): ApiRuntimeClient {
   return createRuntimeClient({
     kernels: [openscad()],
     middleware: [gltfCoordinateTransform()],
@@ -49,7 +49,7 @@ export function createGeometryRenderer(): RuntimeClient {
 }
 
 export async function renderCodeToGlb(
-  client: RuntimeClient,
+  client: ApiRuntimeClient,
   files: Record<string, string>,
   mainFile: string,
 ): Promise<GeometryRenderResult> {
@@ -159,7 +159,7 @@ export async function gradeGeometry(
 // =============================================================================
 
 export type ValidateGeometryOptions = {
-  client: RuntimeClient;
+  client: ApiRuntimeClient;
   files: Record<string, string>;
   mainFile: string;
   expectations: BenchmarkGeometryExpectation;

@@ -1,6 +1,5 @@
 // @vitest-environment node
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import type { RuntimeClient } from '@taucad/runtime';
 import {
   createGeometryRenderer,
   renderCodeToGlb,
@@ -8,6 +7,7 @@ import {
   validateGeometry,
 } from '#benchmarks/model-benchmark-geometry.js';
 import type { BenchmarkGeometryExpectation } from '#benchmarks/model-benchmark-geometry.js';
+import type { ApiRuntimeClient } from '#types/runtime-client.alias.js';
 
 // =============================================================================
 // Test fixtures
@@ -26,7 +26,7 @@ const runtimeErrorCode = 'nonexistent_module();';
 // =============================================================================
 
 describe('model-benchmark-geometry', () => {
-  let client: RuntimeClient;
+  let client: ApiRuntimeClient;
   let boxGlb: Uint8Array<ArrayBuffer>;
 
   beforeAll(async () => {
