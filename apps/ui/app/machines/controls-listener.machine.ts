@@ -26,6 +26,7 @@ type ControlsListenerEvent =
 const controlsListenerLogic = fromCallback<ControlsListenerEvent, ControlsListenerInput>(
   ({ input, sendBack, receive }) => {
     const { controls } = input;
+    // oxlint-disable-next-line prefer-const -- false positive, it is reassigned in the code
     let originalDistance: number | undefined;
     let isListening = true;
 
@@ -143,11 +144,11 @@ const controlsListenerLogic = fromCallback<ControlsListenerEvent, ControlsListen
 
 export const controlsListenerMachine = setup({
   types: {
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate config
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate config
     input: {} as ControlsListenerInput,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate config
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate config
     events: {} as ControlsListenerEvent,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate config
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate config
     context: {} as ControlsListenerInput,
   },
   actors: {

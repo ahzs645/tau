@@ -17,7 +17,7 @@ export function withTabContextMenu(
   function TabWithContextMenu(properties: IDockviewPanelHeaderProps): React.JSX.Element {
     return (
       <ContextMenu>
-        <ContextMenuTrigger className="contents">
+        <ContextMenuTrigger className='contents'>
           <DockviewTab {...properties} />
         </ContextMenuTrigger>
         <ContextMenuContent>

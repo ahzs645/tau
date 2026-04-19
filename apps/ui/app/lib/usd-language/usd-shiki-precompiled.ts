@@ -1,4 +1,4 @@
-/* eslint-disable no-useless-escape -- required for the precompiled grammar */
+/* oxlint-disable no-useless-escape -- required for the precompiled grammar */
 /* eslint-disable @typescript-eslint/naming-convention -- required for the precompiled grammar */
 /**
  * Precompiled USD (Universal Scene Description) language for Shiki.

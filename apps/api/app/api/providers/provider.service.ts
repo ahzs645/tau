@@ -19,9 +19,9 @@ type ProviderOptionsMap = {
   openai: ChatOpenAIFields;
   ollama: ChatOllamaInput;
   anthropic: ChatAnthropicCallOptions;
-  sambanova: ChatOpenAIFields;
   vertexai: ChatVertexAIInput & { model: string };
   cerebras: ChatCerebrasInput;
+  together: ChatOpenAIFields;
 };
 
 // Enhanced type that includes the createClass method
@@ -51,6 +51,7 @@ export class ProviderService {
     return {
       openai: {
         provider: 'openai',
+        otelProviderName: 'openai',
         configuration: {
           apiKey: configService.get('OPENAI_API_KEY', { infer: true }),
         },
@@ -61,8 +62,8 @@ export class ProviderService {
       },
       ollama: {
         provider: 'ollama',
+        otelProviderName: 'ollama',
         configuration: {
-          // eslint-disable-next-line @typescript-eslint/naming-convention -- Langchain uses this format
           baseURL: 'http://localhost:11434',
         },
         inputTokensIncludesCacheReadTokens: false,
@@ -70,20 +71,9 @@ export class ProviderService {
         streamingDoublesCacheTokens: false,
         createClass: (options) => new ChatOllama(options),
       },
-      sambanova: {
-        provider: 'sambanova',
-        configuration: {
-          apiKey: configService.get('SAMBA_API_KEY', { infer: true }),
-          // eslint-disable-next-line @typescript-eslint/naming-convention -- Langchain uses this format
-          baseURL: 'https://api.sambanova.ai/v1',
-        },
-        inputTokensIncludesCacheReadTokens: false,
-        inputTokensIncludesCacheWriteTokens: false,
-        streamingDoublesCacheTokens: false,
-        createClass: (options) => new ChatOpenAI(options),
-      },
       anthropic: {
         provider: 'anthropic',
+        otelProviderName: 'anthropic',
         configuration: {
           apiKey: configService.get('ANTHROPIC_API_KEY', { infer: true }),
         },
@@ -102,6 +92,8 @@ export class ProviderService {
               // Improve model performance by allowing it to think between tool calls
               // @see https://platform.claude.com/docs/en/build-with-claude/extended-thinking#interleaved-thinking
               'interleaved-thinking-2025-05-14',
+              // Global cache scope (`prompt-caching-scope-2026-01-05`) is intentionally not enabled here:
+              // it requires beta access on the API key, and falls back to per-request caching when omitted.
             ],
             maxRetries: 2,
           }),
@@ -109,10 +101,11 @@ export class ProviderService {
 
       vertexai: {
         provider: 'vertexai',
+        otelProviderName: 'gcp.vertex_ai',
         configuration: {
           apiKey: undefined,
         },
-        inputTokensIncludesCacheReadTokens: false,
+        inputTokensIncludesCacheReadTokens: true,
         inputTokensIncludesCacheWriteTokens: false,
         streamingDoublesCacheTokens: false,
         createClass(options) {
@@ -121,10 +114,9 @@ export class ProviderService {
           return new ChatVertexAI({
             ...options,
             location: 'global',
-            // Stream for best UX with instant feedback.
             streaming: true,
-            // Stream usage data for Langchain to consume.
             streamUsage: true,
+            streamFunctionCallArguments: true,
             authOptions: {
               credentials,
               projectId: credentials.project_id,
@@ -134,6 +126,7 @@ export class ProviderService {
       },
       cerebras: {
         provider: 'cerebras',
+        otelProviderName: 'cerebras',
         configuration: {
           apiKey: configService.get('CEREBRAS_API_KEY', { infer: true }),
         },
@@ -141,6 +134,18 @@ export class ProviderService {
         inputTokensIncludesCacheWriteTokens: false,
         streamingDoublesCacheTokens: false,
         createClass: (options) => new ChatCerebras(options),
+      },
+      together: {
+        provider: 'together',
+        otelProviderName: 'together',
+        configuration: {
+          apiKey: configService.get('TOGETHER_API_KEY', { infer: true }),
+          baseURL: 'https://api.together.xyz/v1',
+        },
+        inputTokensIncludesCacheReadTokens: false,
+        inputTokensIncludesCacheWriteTokens: false,
+        streamingDoublesCacheTokens: false,
+        createClass: (options) => new ChatOpenAI(options),
       },
     };
   }

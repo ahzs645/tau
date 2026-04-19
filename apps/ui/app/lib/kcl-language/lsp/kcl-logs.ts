@@ -23,32 +23,32 @@ const consoleColors = {
  * @returns A logging object with various log level methods
  */
 export function createKclLogger(component: string): {
-  info: (...arguments_: unknown[]) => void;
-  error: (...arguments_: unknown[]) => void;
-  warn: (...arguments_: unknown[]) => void;
-  debug: (...arguments_: unknown[]) => void;
+  info: (...args: unknown[]) => void;
+  error: (...args: unknown[]) => void;
+  warn: (...args: unknown[]) => void;
+  debug: (...args: unknown[]) => void;
 } {
   const prefix = `[KCL ${component}]`;
 
   return {
-    info(...arguments_: unknown[]): void {
-      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag can be toggled
+    info(...args: unknown[]): void {
+      // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag can be toggled
       if (isDebugEnabled) {
-        console.log(`${consoleColors.info}${prefix}[INFO]${consoleColors.reset}`, ...arguments_);
+        console.log(`${consoleColors.info}${prefix}[INFO]${consoleColors.reset}`, ...args);
       }
     },
-    error(...arguments_: unknown[]): void {
+    error(...args: unknown[]): void {
       // Errors are always logged regardless of debug flag
-      console.error(`${consoleColors.error}${prefix}[ERROR]${consoleColors.reset}`, ...arguments_);
+      console.error(`${consoleColors.error}${prefix}[ERROR]${consoleColors.reset}`, ...args);
     },
-    warn(...arguments_: unknown[]): void {
+    warn(...args: unknown[]): void {
       // Warnings are always logged regardless of debug flag
-      console.warn(`${consoleColors.warn}${prefix}[WARN]${consoleColors.reset}`, ...arguments_);
+      console.warn(`${consoleColors.warn}${prefix}[WARN]${consoleColors.reset}`, ...args);
     },
-    debug(...arguments_: unknown[]): void {
-      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag can be toggled
+    debug(...args: unknown[]): void {
+      // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag can be toggled
       if (isDebugEnabled) {
-        console.log(`${consoleColors.debug}${prefix}[DEBUG]${consoleColors.reset}`, ...arguments_);
+        console.log(`${consoleColors.debug}${prefix}[DEBUG]${consoleColors.reset}`, ...args);
       }
     },
   };

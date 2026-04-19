@@ -35,7 +35,7 @@ export const useChatConstants: Parameters<typeof useChat>[0] = {
  * @param dataUrl
  * @returns
  */
-const extractMimeTypeFromDataUrl = (dataUrl: string): string => {
+export const extractMimeTypeFromDataUrl = (dataUrl: string): string => {
   const mimeType = dataUrl.split(',')[0]?.split(':')[1]?.split(';')[0];
   if (!mimeType) {
     throw new Error('Invalid data URL');
@@ -203,9 +203,9 @@ const toolSerializers = {
       return joinLines(...lines);
     },
   },
-  [toolName.reasoning]: {
-    input: (input) => `thinking: <${input.thinking?.length ?? 0} chars>`,
-    output: (output) => output,
+  [toolName.screenshot]: {
+    input: (input) => `mode: ${input.mode}`,
+    output: (output) => `Captured ${output.images.length} image(s)`,
   },
 } satisfies { [K in keyof MyTools]: ToolSerializer<K> };
 
@@ -260,6 +260,14 @@ function serializePart(part: MyMessagePart): string {
 
     case 'data-usage': {
       // Usage is aggregated in serializeMessage; no per-part segment
+      return '';
+    }
+
+    case 'data-context-compaction': {
+      return '';
+    }
+
+    case 'data-context-usage': {
       return '';
     }
 
@@ -400,7 +408,7 @@ export function serializeTranscript(messages: MyUIMessage[], title: string): str
  */
 export function finalizeInterruptedToolParts(messages: MyUIMessage[]): MyUIMessage[] {
   const lastMessage = messages.at(-1);
-  if (!lastMessage || lastMessage.role !== 'assistant') {
+  if (lastMessage?.role !== 'assistant') {
     return messages;
   }
 
@@ -424,7 +432,7 @@ export function finalizeInterruptedToolParts(messages: MyUIMessage[]): MyUIMessa
       });
       const interruptedPart = {
         ...part,
-        state: 'output-error' as const,
+        state: 'output-error',
         errorText,
       };
       return interruptedPart as MyMessagePart;
@@ -457,18 +465,21 @@ export function createMessage({
     role,
     parts: [
       // Always add image parts first so they are rendered first in the UI
-      ...imageUrls.map((url) => ({
-        type: 'file' as const,
-        url,
-        mediaType: extractMimeTypeFromDataUrl(url),
-      })),
+      ...imageUrls.map(
+        (url) =>
+          ({
+            type: 'file',
+            url,
+            mediaType: extractMimeTypeFromDataUrl(url),
+          }) as const,
+      ),
       // Only add text part if there is text content
       ...(trimmedContent.length > 0
         ? [
             {
-              type: 'text' as const,
+              type: 'text',
               text: trimmedContent,
-            },
+            } as const,
           ]
         : []),
     ],

@@ -1,4 +1,3 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -11,35 +10,19 @@ import { visualizer } from 'rollup-plugin-visualizer';
 import mdx from 'fumadocs-mdx/vite';
 import svgSpriteWrapper from 'vite-svg-sprite-wrapper';
 import { defineConfig } from 'vite';
-import type { Plugin } from 'vite';
-// eslint-disable-next-line no-restricted-imports -- allowed for Fumadocs.
-import * as MdxConfig from './app/lib/fumadocs/source.config';
+// oxlint-disable-next-line no-restricted-imports, import/extensions -- allowed for Fumadocs; .js for ESM
+import * as MdxConfig from './app/lib/fumadocs/source.config.js';
+import { crossOriginIsolation } from '@taucad/vite/cross-origin-isolation';
+import { tsModuleUrlPlugin } from '@taucad/vite/ts-module-url';
+import { base64Loader } from '@taucad/vite/base64-loader';
+import { largeDepRegexFix } from '@taucad/vite/large-dep-regex-fix';
+import { optimizeDepsFromCache } from '@taucad/vite/optimize-deps-from-cache';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Sprite generation can slow down the build time, so we disable it by default.
 // Enable it when adding a new icon to regenerate the sprite.
 const enableSpriteGeneration = false;
-
-/**
- * A simple plugin to load files as base64 strings.
- *
- * The data encoding for url() imports is not supplied.
- */
-const base64Loader: Plugin = {
-  name: 'base64-loader',
-  transform(_, id) {
-    const [path, query] = id.split('?');
-    if (query !== 'base64' || !path) {
-      return;
-    }
-
-    const data = fs.readFileSync(path);
-    const base64 = data.toString('base64');
-
-    return `export default '${base64}';`;
-  },
-};
 
 export default defineConfig(({ mode }) => {
   const isTest = mode === 'test';
@@ -49,9 +32,23 @@ export default defineConfig(({ mode }) => {
     root: __dirname,
     cacheDir: '../../node_modules/.vite/apps/ui',
     plugins: [
+      // Pre-bundle all deps known from the previous dev session's cache,
+      // eliminating cascading "new dependencies optimized → reloading" on cold start.
+      optimizeDepsFromCache(),
+
+      // Workaround: Vite 8 beta regex overflow on large pre-bundled deps (Monaco Editor)
+      largeDepRegexFix(),
+
+      // Cross-origin isolation headers for SharedArrayBuffer (multi-threaded WASM)
+      crossOriginIsolation(),
+
+      // Resolve .ts files referenced via new URL() in both build and serve modes
+      ...tsModuleUrlPlugin(),
+
       // Base64 Loader
       base64Loader,
 
+      // oxlint-disable-next-line max-nested-callbacks -- vite config structure
       ...(isTest
         ? []
         : // In non-test mode, include the React Router plugin and the Netlify plugin
@@ -67,7 +64,9 @@ export default defineConfig(({ mode }) => {
       nxViteTsPaths(),
 
       // Fumadocs
-      mdx(MdxConfig, { configPath: path.resolve(__dirname, './app/lib/fumadocs/source.config.ts') }), // Fumadocs
+      mdx(MdxConfig, {
+        configPath: path.resolve(__dirname, './app/lib/fumadocs/source.config.ts'),
+      }), // Fumadocs
 
       // Browser DevTools JSON plugin.
       devtoolsJson(),
@@ -81,7 +80,7 @@ export default defineConfig(({ mode }) => {
       // An SVG sprite is a single SVG file that contains all the SVG icons,
       // inlined as <use> elements.
       // This provides better caching performance.
-      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- allowed for quick switching of sprite generation.
+      // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- allowed for quick switching of sprite generation.
       ...(enableSpriteGeneration
         ? [
             svgSpriteWrapper({
@@ -102,6 +101,14 @@ export default defineConfig(({ mode }) => {
       format: 'es',
     },
 
+    // Force-bundle these into the SSR output so Netlify's secondary esbuild
+    // pass doesn't re-resolve them. Without this, headless-tree's broken
+    // package.json `main` field (points to .d.ts) and posthog-js's CJS/ESM
+    // interop cause runtime crashes in the Netlify SSR function.
+    ssr: {
+      noExternal: ['@headless-tree/core', '@headless-tree/react', 'posthog-js'],
+    },
+
     server: {
       port: 3000,
       // TODO: set to actual domain
@@ -110,8 +117,19 @@ export default defineConfig(({ mode }) => {
     build: {
       sourcemap: true,
       assetsInlineLimit(file) {
-        // Don't inline SVGs
-        return !file.endsWith('.svg');
+        if (file.endsWith('.svg')) {
+          return false;
+        }
+
+        if (file.endsWith('.wasm')) {
+          // WASM must not be inlined to ensure workers can cache the WASM files via Node V8 bytecode cache,
+          // thus enabling WASM compilation caching to ensure fast worker startup times.
+          // @see docs/research/dynamic-es-modules.md#42-the-assetsinlinelimit-callback-trap
+          return false;
+        }
+
+        // Returning `undefined` sets the default 4KB threshold
+        return undefined;
       },
       target: 'es2022',
     },

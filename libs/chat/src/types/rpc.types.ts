@@ -9,6 +9,7 @@ import { rpcExecutionErrorCodes } from '#constants/rpc.constants.js';
 /**
  * RPC operation names.
  * These are the names of remote procedure calls that the server can invoke on the client.
+ * @public
  */
 export type RpcName = (typeof rpcName)[keyof typeof rpcName];
 
@@ -20,6 +21,7 @@ export type RpcName = (typeof rpcName)[keyof typeof rpcName];
  * Error codes for RPC infrastructure failures.
  * These are distinct from client errors (RpcClientError with success: false).
  * Derived from rpcExecutionErrorCode constants.
+ * @public
  */
 export type RpcExecutionErrorCode = (typeof rpcExecutionErrorCode)[keyof typeof rpcExecutionErrorCode];
 
@@ -27,6 +29,7 @@ export type RpcExecutionErrorCode = (typeof rpcExecutionErrorCode)[keyof typeof 
  * Base RPC execution error for infrastructure failures.
  * Returned by ChatRpcService when RPC execution fails due to
  * connection issues, timeouts, or validation errors.
+ * @public
  */
 export type RpcExecutionError = {
   errorCode: RpcExecutionErrorCode;
@@ -37,6 +40,7 @@ export type RpcExecutionError = {
 /**
  * RPC validation error with detailed validation information.
  * Returned when input or output validation fails.
+ * @public
  */
 export type RpcValidationError = {
   errorCode: typeof rpcExecutionErrorCode.inputValidationFailed | typeof rpcExecutionErrorCode.outputValidationFailed;
@@ -55,22 +59,17 @@ export type RpcValidationError = {
  * Use this to check if an RPC result is an infrastructure error
  * before checking for client errors (isRpcClientError).
  *
- * @example
+ * @public
+ *
+ * @example <caption>Narrowing infrastructure errors</caption>
  * ```typescript
- * const result = await chatRpcService.sendRpcRequest(...);
+ * import { isRpcExecutionError } from '@taucad/chat';
+ *
+ * const result: unknown = { errorCode: 'TIMEOUT', message: 'Timed out', rpcName: 'read_file' };
  *
  * if (isRpcExecutionError(result)) {
- *   // Infrastructure error (timeout, disconnect, validation)
- *   return rpcErrorToToolError(result, toolName, toolCallId);
+ *   console.log(result.errorCode); // narrowed to RpcExecutionError
  * }
- *
- * if (isRpcClientError(result)) {
- *   // Client error (file not found, permission denied)
- *   return createToolError(result.message);
- * }
- *
- * // Success - result is narrowed to success type
- * const content = result.content;
  * ```
  */
 export function isRpcExecutionError(result: unknown): result is RpcExecutionError {
@@ -92,22 +91,17 @@ export function isRpcExecutionError(result: unknown): result is RpcExecutionErro
  * client (e.g., FILE_NOT_FOUND, PERMISSION_DENIED), as opposed to
  * infrastructure errors (timeout, disconnect) which are RpcExecutionErrors.
  *
- * @example
- * ```typescript
- * const result = await chatRpcService.sendRpcRequest(...);
+ * @public
  *
- * if (isRpcExecutionError(result)) {
- *   // Infrastructure error (timeout, disconnect)
- *   return rpcErrorToToolError(result, toolName, toolCallId);
- * }
+ * @example <caption>Checking client-level errors</caption>
+ * ```typescript
+ * import { isRpcClientError } from '@taucad/chat';
+ *
+ * const result = { success: false, errorCode: 'FILE_NOT_FOUND', message: 'Not found' };
  *
  * if (isRpcClientError(result)) {
- *   // Client error (file not found, permission denied)
- *   return createToolError(result.message);
+ *   console.log(result.errorCode); // narrowed to RpcClientError
  * }
- *
- * // Success - result is narrowed to success type
- * const content = result.content;
  * ```
  */
 export function isRpcClientError(result: { success: boolean }): result is RpcClientError {

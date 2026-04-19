@@ -78,7 +78,7 @@ export const store = cookieStore();
  * @param defaultValue - The default value of the cookie.
  * @returns The value of the cookie.
  */
-// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types -- infer type for hooks
+// oxlint-disable-next-line @typescript-eslint/explicit-module-boundary-types -- infer type for hooks
 export const useCookie = <T>(name: CookieName, defaultValue: T) => {
   const cookieName = `${metaConfig.cookiePrefix}${name}`;
   // Get the latest cookie value from route data on each render
@@ -88,7 +88,7 @@ export const useCookie = <T>(name: CookieName, defaultValue: T) => {
     () => [
       (): T => {
         // On client, use the store's already parsed value
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- can be undefined on server
+        // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- can be undefined on server
         if (globalThis.document !== undefined) {
           const cookieValue = store.get<T>(cookieName);
           if (cookieValue === undefined) {

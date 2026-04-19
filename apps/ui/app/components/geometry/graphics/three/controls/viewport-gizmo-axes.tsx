@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unnecessary-condition -- TODO: review these types, some are actually required */
+/* oxlint-disable @typescript-eslint/no-unnecessary-condition -- TODO: review these types, some are actually required */
 import { useThree, useFrame } from '@react-three/fiber';
 import type { GizmoOptions } from 'three-viewport-gizmo';
 import { ViewportGizmo } from 'three-viewport-gizmo';
@@ -47,9 +47,9 @@ export function ViewportGizmoAxes({
   const { serialized } = useColor();
   const { theme } = useTheme();
 
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- React ref
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- React ref
   const gizmoRef = useRef<ViewportGizmo | null>(null);
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- React ref
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- React ref
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
 
   const handleChange = useCallback((): void => {
@@ -119,9 +119,9 @@ export function ViewportGizmoAxes({
       gizmoRef.current = null;
       rendererRef.current = null;
 
-      disposeGizmoResources(gizmo, renderer, canvas, handleChange);
+      disposeGizmoResources({ gizmo, renderer, canvas, handleChange });
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- dependencies array is user-provided for custom recreation triggers
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- dependencies array is user-provided for custom recreation triggers
   }, [camera, gl, controls, scene, serialized.hex, theme, size, handleChange, container, ...dependencies]);
 
   return null;

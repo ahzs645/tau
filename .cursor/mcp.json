@@ -15,17 +15,12 @@
     "@magicuidesign/mcp": {
       "description": "Installing Magic UI Components. Call this when you want animations in the UI.",
       "command": "npx",
-      "args": [
-        "@magicuidesign/mcp@latest"
-      ]
+      "args": ["@magicuidesign/mcp@latest"]
     },
     "shadcn/animate-ui": {
       "description": "Installing Animate UI Components",
       "command": "npx",
-      "args": [
-        "shadcn@canary",
-        "registry:mcp"
-      ],
+      "args": ["shadcn@canary", "registry:mcp"],
       "env": {
         "REGISTRY_URL": "https://animate-ui.com/r/registry.json"
       }
@@ -33,10 +28,7 @@
     "shadcn": {
       "description": "Installing Shadcn UI Components",
       "command": "npx",
-      "args": [
-        "shadcn@canary",
-        "registry:mcp"
-      ],
+      "args": ["shadcn@canary", "registry:mcp"],
       "env": {
         "REGISTRY_URL": "https://raw.githubusercontent.com/shadcn-ui/ui/refs/heads/main/apps/v4/registry.json"
       }
@@ -44,9 +36,7 @@
     "browser-tools": {
       "description": "Browser screenshots, debugging, and more",
       "command": "npx",
-      "args": [
-        "@agentdeskai/browser-tools-mcp@1.2.0"
-      ]
+      "args": ["@agentdeskai/browser-tools-mcp@1.2.0"]
     },
     "ai-sdk-5-migration": {
       "url": "https://ai-sdk-5-migration-mcp-server.vercel.app/api/mcp"

@@ -3,6 +3,8 @@ import type { OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Redis } from 'ioredis';
 import type { Environment } from '#config/environment.config.js';
+import { AttributeKey } from '@taucad/telemetry';
+import { MetricsService } from '#telemetry/metrics.js';
 
 @Injectable()
 export class RedisService implements OnModuleInit, OnModuleDestroy {
@@ -11,7 +13,10 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
 
   private readonly logger = new Logger(RedisService.name);
 
-  public constructor(private readonly configService: ConfigService<Environment, true>) {
+  public constructor(
+    private readonly configService: ConfigService<Environment, true>,
+    private readonly metrics: MetricsService,
+  ) {
     const redisUrl = this.configService.get('REDIS_URL', { infer: true });
 
     this.client = new Redis(redisUrl, {
@@ -29,10 +34,16 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
 
     this.client.on('error', (error: Error) => {
       this.logger.error(`Redis client error: ${error.message}`);
+      this.metrics.redisConnectionState.record(0, { [AttributeKey.REDIS_ROLE]: 'primary' });
     });
 
     this.client.on('connect', () => {
       this.logger.debug('Redis client connected');
+      this.metrics.redisConnectionState.record(1, { [AttributeKey.REDIS_ROLE]: 'primary' });
+    });
+
+    this.client.on('close', () => {
+      this.metrics.redisConnectionState.record(0, { [AttributeKey.REDIS_ROLE]: 'primary' });
     });
   }
 
@@ -64,8 +75,7 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Create a duplicate client for pub/sub operations.
-   * Socket.IO Redis adapter requires separate pub and sub clients.
+   * Create a duplicate client for isolated connections (e.g. Socket.IO Redis Streams adapter).
    */
   public createDuplicateClient(): Redis {
     return this.client.duplicate();

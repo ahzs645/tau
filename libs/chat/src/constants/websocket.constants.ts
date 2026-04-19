@@ -1,5 +1,6 @@
 /**
  * WebSocket close codes for chat tools connection.
+ * @public
  */
 export const wsCloseCode = {
   /** Connection rejected due to authentication failure */

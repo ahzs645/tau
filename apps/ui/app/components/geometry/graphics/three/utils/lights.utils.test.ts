@@ -11,6 +11,8 @@ import {
   environmentBaseIntensity,
   lightingUserDataKeys,
   poleFadeAngleDeg,
+  darkModeIntensityScale,
+  darkModeAmbientBoost,
 } from '#components/geometry/graphics/three/utils/lights.utils.js';
 import type { HeadlampConfig, LightingConfig } from '#components/geometry/graphics/three/utils/lights.utils.js';
 
@@ -448,7 +450,12 @@ describe('computeHeadlampTransform', () => {
       const cameraMatrix = new THREE.Matrix4().identity();
       const radius = 5;
 
-      const { position } = computeHeadlampTransform(cameraPosition, cameraMatrix, radius, defaultHeadlampConfig);
+      const { position } = computeHeadlampTransform({
+        cameraPosition,
+        cameraMatrixWorld: cameraMatrix,
+        sceneRadius: radius,
+        config: defaultHeadlampConfig,
+      });
 
       // With identity matrix:
       // camera-right = column 0 = (1,0,0)
@@ -468,7 +475,12 @@ describe('computeHeadlampTransform', () => {
       const cameraMatrix = new THREE.Matrix4().identity();
       const radius = 5;
 
-      const { targetPosition } = computeHeadlampTransform(cameraPosition, cameraMatrix, radius, defaultHeadlampConfig);
+      const { targetPosition } = computeHeadlampTransform({
+        cameraPosition,
+        cameraMatrixWorld: cameraMatrix,
+        sceneRadius: radius,
+        config: defaultHeadlampConfig,
+      });
 
       // With identity matrix:
       // camera-forward = -column2 = (0,0,-1) negated = (0,0,1)... actually
@@ -490,8 +502,18 @@ describe('computeHeadlampTransform', () => {
       const cameraPosition = new THREE.Vector3(0, 0, 10);
       const cameraMatrix = new THREE.Matrix4().identity();
 
-      const small = computeHeadlampTransform(cameraPosition, cameraMatrix, 1, defaultHeadlampConfig);
-      const large = computeHeadlampTransform(cameraPosition, cameraMatrix, 10, defaultHeadlampConfig);
+      const small = computeHeadlampTransform({
+        cameraPosition,
+        cameraMatrixWorld: cameraMatrix,
+        sceneRadius: 1,
+        config: defaultHeadlampConfig,
+      });
+      const large = computeHeadlampTransform({
+        cameraPosition,
+        cameraMatrixWorld: cameraMatrix,
+        sceneRadius: 10,
+        config: defaultHeadlampConfig,
+      });
 
       // The offset from camera position should be 10x larger
       const smallOffset = small.position.clone().sub(cameraPosition);
@@ -513,7 +535,12 @@ describe('computeHeadlampTransform', () => {
         targetUpSkew: 0,
       };
 
-      const { position } = computeHeadlampTransform(cameraPosition, cameraMatrix, radius, config);
+      const { position } = computeHeadlampTransform({
+        cameraPosition,
+        cameraMatrixWorld: cameraMatrix,
+        sceneRadius: radius,
+        config,
+      });
 
       // Camera-right = (1,0,0), camera-up = (0,1,0)
       // position = (0,0,0) + (0,1,0)*1*1 + (1,0,0)*1*1 = (1, 1, 0)
@@ -531,7 +558,12 @@ describe('computeHeadlampTransform', () => {
       const originalZ = cameraPosition.z;
       const cameraMatrix = new THREE.Matrix4().identity();
 
-      computeHeadlampTransform(cameraPosition, cameraMatrix, 5, defaultHeadlampConfig);
+      computeHeadlampTransform({
+        cameraPosition,
+        cameraMatrixWorld: cameraMatrix,
+        sceneRadius: 5,
+        config: defaultHeadlampConfig,
+      });
 
       expect(cameraPosition.x).toBe(originalX);
       expect(cameraPosition.y).toBe(originalY);
@@ -549,7 +581,13 @@ describe('applyLightingForCamera', () => {
       const camera = createTestCamera();
       const config = createDefaultLightingConfig();
 
-      applyLightingForCamera({ scene, camera, headlamp: undefined, ambient: undefined, config });
+      applyLightingForCamera({
+        scene,
+        camera,
+        headlamp: undefined,
+        ambient: undefined,
+        config,
+      });
 
       // EnvironmentRotation should have been set (not identity if camera is looking at origin from +Z)
       const euler = scene.environmentRotation;
@@ -565,7 +603,13 @@ describe('applyLightingForCamera', () => {
       const camera = createTestCamera(54); // Reference FOV
       const config = createDefaultLightingConfig();
 
-      applyLightingForCamera({ scene, camera, headlamp: undefined, ambient: undefined, config });
+      applyLightingForCamera({
+        scene,
+        camera,
+        headlamp: undefined,
+        ambient: undefined,
+        config,
+      });
 
       // At reference FOV (54), envFactor ≈ 1.0, so intensity ≈ base
       expect(scene.environmentIntensity).toBeCloseTo(environmentBaseIntensity, 2);
@@ -576,7 +620,13 @@ describe('applyLightingForCamera', () => {
       const camera = createTestCamera(10); // Low FOV
       const config = createDefaultLightingConfig();
 
-      applyLightingForCamera({ scene, camera, headlamp: undefined, ambient: undefined, config });
+      applyLightingForCamera({
+        scene,
+        camera,
+        headlamp: undefined,
+        ambient: undefined,
+        config,
+      });
 
       expect(scene.environmentIntensity).toBeLessThan(environmentBaseIntensity);
     });
@@ -593,7 +643,13 @@ describe('applyLightingForCamera', () => {
 
       const originalPosition = headlamp.position.clone();
 
-      applyLightingForCamera({ scene, camera, headlamp, ambient: undefined, config });
+      applyLightingForCamera({
+        scene,
+        camera,
+        headlamp,
+        ambient: undefined,
+        config,
+      });
 
       // Position should have changed
       expect(headlamp.position.equals(originalPosition)).toBe(false);
@@ -607,7 +663,13 @@ describe('applyLightingForCamera', () => {
       const config = createDefaultLightingConfig();
 
       expect(() => {
-        applyLightingForCamera({ scene, camera, headlamp: undefined, ambient: undefined, config });
+        applyLightingForCamera({
+          scene,
+          camera,
+          headlamp: undefined,
+          ambient: undefined,
+          config,
+        });
       }).not.toThrow();
     });
   });
@@ -620,7 +682,13 @@ describe('applyLightingForCamera', () => {
       scene.add(ambient);
       const config = createDefaultLightingConfig();
 
-      applyLightingForCamera({ scene, camera, headlamp: undefined, ambient, config });
+      applyLightingForCamera({
+        scene,
+        camera,
+        headlamp: undefined,
+        ambient,
+        config,
+      });
 
       // At reference FOV, ambientFactor ≈ 1.0
       expect(ambient.intensity).toBeCloseTo(ambientBaseIntensity, 2);
@@ -633,7 +701,13 @@ describe('applyLightingForCamera', () => {
       scene.add(ambient);
       const config = createDefaultLightingConfig();
 
-      applyLightingForCamera({ scene, camera, headlamp: undefined, ambient, config });
+      applyLightingForCamera({
+        scene,
+        camera,
+        headlamp: undefined,
+        ambient,
+        config,
+      });
 
       // At low FOV, ambientFactor > 1.0
       expect(ambient.intensity).toBeGreaterThan(ambientBaseIntensity);
@@ -645,7 +719,13 @@ describe('applyLightingForCamera', () => {
       const config = createDefaultLightingConfig();
 
       expect(() => {
-        applyLightingForCamera({ scene, camera, headlamp: undefined, ambient: undefined, config });
+        applyLightingForCamera({
+          scene,
+          camera,
+          headlamp: undefined,
+          ambient: undefined,
+          config,
+        });
       }).not.toThrow();
     });
   });
@@ -666,8 +746,20 @@ describe('applyLightingForCamera', () => {
       camera2.quaternion.copy(orbitQuaternion(Math.PI / 2, Math.PI / 4, 'z'));
       camera2.updateMatrixWorld(true);
 
-      applyLightingForCamera({ scene: scene1, camera: camera1, headlamp: undefined, ambient: undefined, config });
-      applyLightingForCamera({ scene: scene2, camera: camera2, headlamp: undefined, ambient: undefined, config });
+      applyLightingForCamera({
+        scene: scene1,
+        camera: camera1,
+        headlamp: undefined,
+        ambient: undefined,
+        config,
+      });
+      applyLightingForCamera({
+        scene: scene2,
+        camera: camera2,
+        headlamp: undefined,
+        ambient: undefined,
+        config,
+      });
 
       // Different azimuths should produce different environment rotations
       const rot1 = scene1.environmentRotation;
@@ -675,6 +767,82 @@ describe('applyLightingForCamera', () => {
       const isIdentical =
         Math.abs(rot1.x - rot2.x) < 1e-6 && Math.abs(rot1.y - rot2.y) < 1e-6 && Math.abs(rot1.z - rot2.z) < 1e-6;
       expect(isIdentical).toBe(false);
+    });
+  });
+
+  describe('theme intensity scaling', () => {
+    it('should scale environment intensity by themeIntensityScale at reference FOV', () => {
+      const scene = createTestScene();
+      const camera = createTestCamera(54);
+      const config = createDefaultLightingConfig({
+        themeIntensityScale: darkModeIntensityScale,
+      });
+
+      applyLightingForCamera({ scene, camera, headlamp: undefined, ambient: undefined, config });
+
+      expect(scene.environmentIntensity).toBeCloseTo(environmentBaseIntensity * darkModeIntensityScale, 2);
+    });
+
+    it('should scale headlamp intensity by themeIntensityScale at reference FOV', () => {
+      const scene = createTestScene();
+      const camera = createTestCamera(54);
+      const headlamp = new THREE.DirectionalLight('white', 1);
+      scene.add(headlamp);
+      scene.add(headlamp.target);
+      const config = createDefaultLightingConfig({
+        themeIntensityScale: darkModeIntensityScale,
+      });
+
+      applyLightingForCamera({ scene, camera, headlamp, ambient: undefined, config });
+
+      expect(headlamp.intensity).toBeCloseTo(headlampBaseIntensity * darkModeIntensityScale, 2);
+    });
+
+    it('should scale ambient intensity by themeIntensityScale × themeAmbientBoost at reference FOV', () => {
+      const scene = createTestScene();
+      const camera = createTestCamera(54);
+      const ambient = new THREE.AmbientLight('white', 1);
+      scene.add(ambient);
+      const config = createDefaultLightingConfig({
+        themeIntensityScale: darkModeIntensityScale,
+        themeAmbientBoost: darkModeAmbientBoost,
+      });
+
+      applyLightingForCamera({ scene, camera, headlamp: undefined, ambient, config });
+
+      const expected = ambientBaseIntensity * darkModeIntensityScale * darkModeAmbientBoost;
+      expect(ambient.intensity).toBeCloseTo(expected, 4);
+    });
+
+    it('should default to 1.0 when theme fields are undefined (backward compatible)', () => {
+      const scene = createTestScene();
+      const camera = createTestCamera(54);
+      const headlamp = new THREE.DirectionalLight('white', 1);
+      scene.add(headlamp);
+      scene.add(headlamp.target);
+      const ambient = new THREE.AmbientLight('white', 1);
+      scene.add(ambient);
+      const config = createDefaultLightingConfig();
+
+      applyLightingForCamera({ scene, camera, headlamp, ambient, config });
+
+      expect(scene.environmentIntensity).toBeCloseTo(environmentBaseIntensity, 2);
+      expect(headlamp.intensity).toBeCloseTo(headlampBaseIntensity, 2);
+      expect(ambient.intensity).toBeCloseTo(ambientBaseIntensity, 2);
+    });
+
+    it('should compose theme scaling with FOV compensation at low FOV', () => {
+      const scene = createTestScene();
+      const camera = createTestCamera(10);
+      const config = createDefaultLightingConfig({
+        themeIntensityScale: darkModeIntensityScale,
+      });
+
+      applyLightingForCamera({ scene, camera, headlamp: undefined, ambient: undefined, config });
+
+      // At low FOV with dark mode: environment should be less than both the
+      // base value AND the dark-mode-only value (both FOV and theme dim it)
+      expect(scene.environmentIntensity).toBeLessThan(environmentBaseIntensity * darkModeIntensityScale);
     });
   });
 });

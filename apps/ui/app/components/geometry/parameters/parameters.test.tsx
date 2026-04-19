@@ -1,4 +1,5 @@
-/* eslint-disable max-lines -- test file */
+/* oxlint-disable max-lines -- test file */
+import type { Mock } from 'vitest';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -47,10 +48,10 @@ const mockJsonSchema: RJSFSchema = {
 };
 
 describe('Parameters - Core Search Functionality', () => {
-  let mockOnParametersChange: ReturnType<typeof vi.fn>;
+  let mockOnParametersChange: Mock<(parameters: Record<string, unknown>) => void>;
 
   beforeEach(() => {
-    mockOnParametersChange = vi.fn();
+    mockOnParametersChange = vi.fn<(parameters: Record<string, unknown>) => void>();
   });
 
   it('should render without crashing', () => {
@@ -203,7 +204,7 @@ describe('Parameters - Core Search Functionality', () => {
 
 describe('Parameters - Search Functionality', () => {
   let user: ReturnType<typeof userEvent.setup>;
-  let mockOnParametersChange: ReturnType<typeof vi.fn>;
+  let mockOnParametersChange: Mock<(parameters: Record<string, unknown>) => void>;
 
   // Search-specific mock data
   const searchMockDefaultParameters = {
@@ -244,7 +245,7 @@ describe('Parameters - Search Functionality', () => {
 
   beforeEach(() => {
     user = userEvent.setup();
-    mockOnParametersChange = vi.fn();
+    mockOnParametersChange = vi.fn<(parameters: Record<string, unknown>) => void>();
   });
 
   it('shows "Is Hidden" parameter when searching for "hi"', async () => {
@@ -486,10 +487,10 @@ describe('Parameters - Search Functionality', () => {
 });
 
 describe('Parameters - Reset Button Visibility', () => {
-  let mockOnParametersChange: ReturnType<typeof vi.fn>;
+  let mockOnParametersChange: Mock<(parameters: Record<string, unknown>) => void>;
 
   beforeEach(() => {
-    mockOnParametersChange = vi.fn();
+    mockOnParametersChange = vi.fn<(parameters: Record<string, unknown>) => void>();
   });
 
   // Note: Top-level "Reset all parameters" button is now rendered in ChatParameters header,
@@ -741,10 +742,10 @@ describe('Parameters - Reset Button Visibility', () => {
 });
 
 describe('Parameters - Expand/Collapse State via isAllExpanded prop', () => {
-  let mockOnParametersChange: ReturnType<typeof vi.fn>;
+  let mockOnParametersChange: Mock<(parameters: Record<string, unknown>) => void>;
 
   beforeEach(() => {
-    mockOnParametersChange = vi.fn();
+    mockOnParametersChange = vi.fn<(parameters: Record<string, unknown>) => void>();
   });
 
   it('should expand all groups when isAllExpanded is true', () => {
@@ -904,10 +905,10 @@ describe('Parameters - Expand/Collapse State via isAllExpanded prop', () => {
 });
 
 describe('Parameters - Array and Object Count Display', () => {
-  let mockOnParametersChange: ReturnType<typeof vi.fn>;
+  let mockOnParametersChange: Mock<(parameters: Record<string, unknown>) => void>;
 
   beforeEach(() => {
-    mockOnParametersChange = vi.fn();
+    mockOnParametersChange = vi.fn<(parameters: Record<string, unknown>) => void>();
   });
 
   it('should show correct count for array with multiple items', () => {
@@ -1075,11 +1076,11 @@ describe('Parameters - Array and Object Count Display', () => {
 
 describe('Parameters - Search Highlighting', () => {
   let user: ReturnType<typeof userEvent.setup>;
-  let mockOnParametersChange: ReturnType<typeof vi.fn>;
+  let mockOnParametersChange: Mock<(parameters: Record<string, unknown>) => void>;
 
   beforeEach(() => {
     user = userEvent.setup();
-    mockOnParametersChange = vi.fn();
+    mockOnParametersChange = vi.fn<(parameters: Record<string, unknown>) => void>();
   });
 
   it('should highlight search term in parameter labels', async () => {
@@ -1171,7 +1172,7 @@ describe('Parameters - Search Highlighting', () => {
 
     // Should find description text - use function matcher since text is broken up by highlight marks
     const description = screen.getByText((_content, element) => {
-      return element !== null && element.textContent === 'The hostname or IP address of the server';
+      return element?.textContent === 'The hostname or IP address of the server';
     });
     expect(description).toBeTruthy();
 
@@ -1232,11 +1233,11 @@ describe('Parameters - Search Highlighting', () => {
 
 describe('Parameters - Force Open on Search', () => {
   let user: ReturnType<typeof userEvent.setup>;
-  let mockOnParametersChange: ReturnType<typeof vi.fn>;
+  let mockOnParametersChange: Mock<(parameters: Record<string, unknown>) => void>;
 
   beforeEach(() => {
     user = userEvent.setup();
-    mockOnParametersChange = vi.fn();
+    mockOnParametersChange = vi.fn<(parameters: Record<string, unknown>) => void>();
   });
 
   it('should force open groups when searching and group matches', async () => {
@@ -1377,11 +1378,11 @@ describe('Parameters - Force Open on Search', () => {
 
 describe('Parameters - Filtered Count Display', () => {
   let user: ReturnType<typeof userEvent.setup>;
-  let mockOnParametersChange: ReturnType<typeof vi.fn>;
+  let mockOnParametersChange: Mock<(parameters: Record<string, unknown>) => void>;
 
   beforeEach(() => {
     user = userEvent.setup();
-    mockOnParametersChange = vi.fn();
+    mockOnParametersChange = vi.fn<(parameters: Record<string, unknown>) => void>();
   });
 
   it('should show filtered/total count format when searching and counts differ', async () => {
@@ -1574,11 +1575,11 @@ describe('Parameters - Filtered Count Display', () => {
 
 describe('Parameters - Reset Functionality', () => {
   let user: ReturnType<typeof userEvent.setup>;
-  let mockOnParametersChange: ReturnType<typeof vi.fn>;
+  let mockOnParametersChange: Mock<(parameters: Record<string, unknown>) => void>;
 
   beforeEach(() => {
     user = userEvent.setup();
-    mockOnParametersChange = vi.fn();
+    mockOnParametersChange = vi.fn<(parameters: Record<string, unknown>) => void>();
   });
 
   it('should reset single parameter when reset button is clicked', async () => {
@@ -1732,11 +1733,11 @@ describe('Parameters - Reset Functionality', () => {
 
 describe('Parameters - Reactive Configuration Changes', () => {
   let user: ReturnType<typeof userEvent.setup>;
-  let mockOnParametersChange: ReturnType<typeof vi.fn>;
+  let mockOnParametersChange: Mock<(parameters: Record<string, unknown>) => void>;
 
   beforeEach(() => {
     user = userEvent.setup();
-    mockOnParametersChange = vi.fn();
+    mockOnParametersChange = vi.fn<(parameters: Record<string, unknown>) => void>();
   });
 
   it('should re-render without errors when min/max props change', () => {
@@ -2107,7 +2108,7 @@ describe('Parameters - Reactive Configuration Changes', () => {
 
 describe('Parameters - Reset Single Parameter Bug', () => {
   let user: ReturnType<typeof userEvent.setup>;
-  let mockOnParametersChange: ReturnType<typeof vi.fn>;
+  let mockOnParametersChange: Mock<(parameters: Record<string, unknown>) => void>;
   let currentParameters: Record<string, unknown>;
 
   beforeEach(() => {
@@ -2256,10 +2257,10 @@ describe('Parameters - Reset Single Parameter Bug', () => {
 });
 
 describe('Parameters - Required Field Indicator', () => {
-  let mockOnParametersChange: ReturnType<typeof vi.fn>;
+  let mockOnParametersChange: Mock<(parameters: Record<string, unknown>) => void>;
 
   beforeEach(() => {
-    mockOnParametersChange = vi.fn();
+    mockOnParametersChange = vi.fn<(parameters: Record<string, unknown>) => void>();
   });
 
   it('should show asterisk for required fields', () => {
@@ -2347,10 +2348,10 @@ describe('Parameters - Required Field Indicator', () => {
 });
 
 describe('Parameters - Empty State', () => {
-  let mockOnParametersChange: ReturnType<typeof vi.fn>;
+  let mockOnParametersChange: Mock<(parameters: Record<string, unknown>) => void>;
 
   beforeEach(() => {
-    mockOnParametersChange = vi.fn();
+    mockOnParametersChange = vi.fn<(parameters: Record<string, unknown>) => void>();
   });
 
   it('should show empty state when jsonSchema is undefined', () => {
@@ -2428,7 +2429,7 @@ describe('Parameters - Empty State', () => {
           units={defaultUnits}
           defaultParameters={{}}
           jsonSchema={undefined}
-          emptyMessage="Custom empty message"
+          emptyMessage='Custom empty message'
           onParametersChange={mockOnParametersChange}
         />
       </TestWrapper>,
@@ -2446,7 +2447,7 @@ describe('Parameters - Empty State', () => {
           parameters={{}}
           defaultParameters={{}}
           jsonSchema={undefined}
-          emptyDescription="Custom description text"
+          emptyDescription='Custom description text'
           onParametersChange={mockOnParametersChange}
         />
       </TestWrapper>,
@@ -2464,8 +2465,8 @@ describe('Parameters - Empty State', () => {
           parameters={{}}
           defaultParameters={{}}
           jsonSchema={undefined}
-          emptyMessage="Custom title"
-          emptyDescription="Custom description"
+          emptyMessage='Custom title'
+          emptyDescription='Custom description'
           onParametersChange={mockOnParametersChange}
         />
       </TestWrapper>,
@@ -2477,10 +2478,10 @@ describe('Parameters - Empty State', () => {
 });
 
 describe('Parameters - Feature Flags', () => {
-  let mockOnParametersChange: ReturnType<typeof vi.fn>;
+  let mockOnParametersChange: Mock<(parameters: Record<string, unknown>) => void>;
 
   beforeEach(() => {
-    mockOnParametersChange = vi.fn();
+    mockOnParametersChange = vi.fn<(parameters: Record<string, unknown>) => void>();
   });
 
   it('should hide search input when enableSearch is false', () => {
@@ -2559,7 +2560,7 @@ describe('Parameters - Feature Flags', () => {
           parameters={{}}
           defaultParameters={defaultParameters}
           jsonSchema={schema}
-          searchPlaceholder="Custom placeholder"
+          searchPlaceholder='Custom placeholder'
           onParametersChange={mockOnParametersChange}
         />
       </TestWrapper>,
@@ -2680,10 +2681,10 @@ describe('Parameters - Feature Flags', () => {
 });
 
 describe('Parameters - Collapse/Expand Functionality via isAllExpanded prop', () => {
-  let mockOnParametersChange: ReturnType<typeof vi.fn>;
+  let mockOnParametersChange: Mock<(parameters: Record<string, unknown>) => void>;
 
   beforeEach(() => {
-    mockOnParametersChange = vi.fn();
+    mockOnParametersChange = vi.fn<(parameters: Record<string, unknown>) => void>();
   });
 
   it('should expand all groups when isAllExpanded changes from false to true', () => {
@@ -2861,10 +2862,10 @@ describe('Parameters - Collapse/Expand Functionality via isAllExpanded prop', ()
 });
 
 describe('Parameters - Edge Cases', () => {
-  let mockOnParametersChange: ReturnType<typeof vi.fn>;
+  let mockOnParametersChange: Mock<(parameters: Record<string, unknown>) => void>;
 
   beforeEach(() => {
-    mockOnParametersChange = vi.fn();
+    mockOnParametersChange = vi.fn<(parameters: Record<string, unknown>) => void>();
   });
 
   it('should handle empty parameters object with non-empty defaultParameters', () => {
@@ -2978,7 +2979,7 @@ describe('Parameters - Edge Cases', () => {
           parameters={{}}
           defaultParameters={defaultParameters}
           jsonSchema={schema}
-          className="custom-class"
+          className='custom-class'
           onParametersChange={mockOnParametersChange}
         />
       </TestWrapper>,
@@ -2992,10 +2993,10 @@ describe('Parameters - Edge Cases', () => {
 });
 
 describe('Parameters - Unit Conversion Only for Length', () => {
-  let mockOnParametersChange: ReturnType<typeof vi.fn>;
+  let mockOnParametersChange: Mock<(parameters: Record<string, unknown>) => void>;
 
   beforeEach(() => {
-    mockOnParametersChange = vi.fn();
+    mockOnParametersChange = vi.fn<(parameters: Record<string, unknown>) => void>();
   });
 
   it('should apply unit conversion for length descriptor when units change from mm to cm', () => {
@@ -3257,11 +3258,11 @@ describe('Parameters - Unit Conversion Only for Length', () => {
 
 describe('Parameters - onChange Only Modified Values', () => {
   let user: ReturnType<typeof userEvent.setup>;
-  let mockOnParametersChange: ReturnType<typeof vi.fn>;
+  let mockOnParametersChange: Mock<(parameters: Record<string, unknown>) => void>;
 
   beforeEach(() => {
     user = userEvent.setup();
-    mockOnParametersChange = vi.fn();
+    mockOnParametersChange = vi.fn<(parameters: Record<string, unknown>) => void>();
   });
 
   it('should only call onParametersChange with modified parameters, not all parameters', async () => {

@@ -73,9 +73,10 @@ function getLucideIcon(iconName: string): LucideIcon {
  * 1. lucide: Resolve from Lucide icons
  * 2. lib: Resolve from SvgIcon sprite
  *
- * @param iconString - Icon identifier in format "namespace:icon-id"
+ * @param props - The icon props
+ * @param props.iconString - Icon identifier in format "namespace:icon-id"
  *                     Examples: "lucide:ban", "lib:openscad"
- * @param className - Optional CSS class name
+ * @param props.className - Optional CSS class name
  */
 export function DocsIcon({
   iconString,

@@ -60,31 +60,31 @@ function UsageBarChartComponent({
           <CardTitle>{title}</CardTitle>
           {description ? <CardDescription>{description}</CardDescription> : undefined}
         </CardHeader>
-        <CardContent className="flex h-[300px] items-center justify-center">
-          <p className="text-sm text-muted-foreground">No data available</p>
+        <CardContent className='flex h-[300px] items-center justify-center'>
+          <p className='text-sm text-muted-foreground'>No data available</p>
         </CardContent>
       </Card>
     );
   }
 
   return (
-    <Card className="min-w-0 overflow-hidden">
+    <Card className='min-w-0 overflow-hidden'>
       <CardHeader>
         <CardTitle>{title}</CardTitle>
         {description ? <CardDescription>{description}</CardDescription> : undefined}
       </CardHeader>
-      <CardContent className="min-w-0">
-        <ChartContainer config={chartConfig} className="h-[300px] w-full min-w-0">
-          <BarChart data={chartData} layout="vertical" margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+      <CardContent className='min-w-0'>
+        <ChartContainer config={chartConfig} className='h-[300px] w-full min-w-0'>
+          <BarChart data={chartData} layout='vertical' margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
             <XAxis
-              type="number"
+              type='number'
               tickFormatter={(value: number) => formatCurrency(value, { significantFigures: 1 })}
               tickLine={false}
               axisLine={false}
             />
             <YAxis
-              dataKey="model"
-              type="category"
+              dataKey='model'
+              type='category'
               tickLine={false}
               axisLine={false}
               width={120}
@@ -93,12 +93,12 @@ function UsageBarChartComponent({
             {/* @ts-expect-error - ChartTooltipContent types don't match Recharts exactly */}
             <ChartTooltip cursor={false} content={ChartTooltipContent} />
             <Bar
-              dataKey="cost"
+              dataKey='cost'
               // Discard `radius` and `ref` props as they are not used and cause type errors
               shape={({ radius, ref, ...props }) => (
                 <rect
                   {...props}
-                  // eslint-disable-next-line react/prop-types -- Recharts typing limitation
+                  // oxlint-disable-next-line react/prop-types -- Recharts typing limitation
                   fill={(props.payload as { fill: string } | undefined)?.fill ?? 'var(--primary)'}
                   rx={8}
                   ry={8}

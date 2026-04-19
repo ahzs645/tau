@@ -2,73 +2,155 @@ packages:
   - apps/*
   - libs/*
   - packages/*
+  - scripts
+  - tools/*
 
 catalog:
+  '@ai-sdk/provider-utils': ^4.0.15
   '@arethetypeswrong/cli': ^0.18.2
+  '@eslint-community/eslint-plugin-eslint-comments': ^4.7.1
+  '@fastify/otel': ^0.17.1
   '@gltf-transform/core': ^4.3.0
   '@gltf-transform/extensions': ^4.3.0
   '@gltf-transform/functions': ^4.3.0
-  '@jscad/modeling': ^2.12.6
-  '@kittycad/lib': ^2.0.42
-  '@msgpack/msgpack': ^3.1.2
-  '@nx/devkit': 21.3.10
-  '@nx/eslint': 21.3.10
-  '@nx/eslint-plugin': 21.3.10
-  '@nx/js': 21.3.10
-  '@nx/nest': 21.3.10
-  '@nx/node': 21.3.10
-  '@nx/playwright': 21.3.10
-  '@nx/react': 21.3.10
-  '@nx/vite': 21.3.10
-  '@nx/web': 21.3.10
-  '@nx/webpack': 21.3.10
-  '@react-router/dev': ^7.9.6
-  '@react-router/fs-routes': ^7.9.6
-  '@react-router/node': ^7.9.6
-  '@react-router/serve': ^7.9.6
-  '@taucad/kcl-wasm-lib': 0.1.111
+  '@inkjs/ui': ^2.0.0
+  '@jscad/modeling': ^2.13.0
+  '@kittycad/lib': ^2.0.48
+  '@langchain/anthropic': ^1.3.26
+  '@langchain/cerebras': ^1.0.2
+  '@langchain/classic': ^1.0.20
+  '@langchain/community': ^1.1.19
+  '@langchain/core': ^1.1.37
+  '@langchain/google-vertexai': ^2.1.20
+  '@langchain/langgraph': ^1.1.5
+  '@langchain/langgraph-checkpoint': ^1.0.0
+  '@langchain/langgraph-checkpoint-postgres': ^1.0.1
+  '@langchain/ollama': ^1.2.4
+  '@langchain/openai': ^1.4.0
+  '@langchain/tavily': ^1.2.0
+  '@msgpack/msgpack': ^3.1.3
+  '@nestjs/terminus': ^11.1.1
+  '@nx/devkit': 22.5.2
+  '@nx/eslint': 22.5.2
+  '@nx/eslint-plugin': 22.5.2
+  '@nx/js': 22.5.2
+  '@nx/nest': 22.5.2
+  '@nx/node': 22.5.2
+  '@nx/playwright': 22.5.2
+  '@nx/react': 22.5.2
+  '@nx/vite': 22.5.2
+  '@nx/web': 22.5.2
+  '@nx/webpack': 22.5.2
+  '@opentelemetry/api': ^1.9.0
+  '@opentelemetry/auto-instrumentations-node': ^0.71.0
+  '@opentelemetry/exporter-logs-otlp-http': ^0.213.0
+  '@opentelemetry/exporter-prometheus': ^0.213.0
+  '@opentelemetry/exporter-trace-otlp-http': ^0.213.0
+  '@opentelemetry/instrumentation-pino': ^0.59.0
+  '@opentelemetry/instrumentation-socket.io': ^0.60.0
+  '@opentelemetry/resources': ^2.6.0
+  '@opentelemetry/sdk-logs': ^0.213.0
+  '@opentelemetry/sdk-metrics': ^2.6.0
+  '@opentelemetry/sdk-node': ^0.213.0
+  '@oxc-node/core': ^0.0.35
+  '@playwright/test': ^1.58.2
+  '@pyroscope/nodejs': ^0.4.10
+  '@react-router/dev': 7.12.0
+  '@react-router/fs-routes': 7.12.0
+  '@react-router/node': 7.12.0
+  '@react-router/serve': 7.12.0
+  '@size-limit/file': ^12.0.1
+  '@socket.io/redis-streams-adapter': ^0.3.1
+  '@taucad/kcl-wasm-lib': 0.1.130
   '@testing-library/jest-dom': 6.6.3
   '@testing-library/react': 16.2.0
+  '@tiptap/core': ^3.20.4
+  '@tiptap/extension-document': ^3.20.4
+  '@tiptap/extension-hard-break': ^3.20.4
+  '@tiptap/extension-history': ^3.20.4
+  '@tiptap/extension-mention': ^3.20.4
+  '@tiptap/extension-paragraph': ^3.20.4
+  '@tiptap/extension-placeholder': ^3.20.4
+  '@tiptap/extension-text': ^3.20.4
+  '@tiptap/pm': ^3.20.4
+  '@tiptap/react': ^3.20.4
+  '@tiptap/suggestion': ^3.20.4
+  '@traceloop/instrumentation-langchain': ^0.22.6
+  '@types/js-yaml': ^4.0.9
   '@types/json-schema': ^7.0.15
   '@types/madge': ^5.0.3
   '@types/node': ~24.0.15
   '@types/react': 19.0.12
   '@types/react-dom': 19.0.4
-  '@vitest/coverage-v8': 3.2.4
-  '@vitest/ui': 3.2.4
-  '@zenfs/core': ^2.4.4
+  '@types/turndown': ^5.0.6
+  '@typescript/native-preview': 7.0.0-dev.20260223.1
+  '@typescript/vfs': ^1.6.4
+  '@vitest/coverage-v8': 4.1.0-beta.6
+  '@vitest/ui': 4.1.0-beta.6
+  '@xyflow/react': ^12.10.1
+  '@zenfs/core': ^2.5.0
   '@zenfs/dom': ^1.2.7
   cdn-resolve: ^2.1.2
+  citty: ^0.2.2
   comlink: ^4.4.2
+  consola: ^3.4.2
   culori: ^4.0.2
+  deepagents: ^1.8.4
   deepmerge: ^4.3.1
+  dotenv: ^17.3.1
   es-module-lexer: ^2.0.0
-  esbuild-wasm: ^0.27.2
+  esbuild-wasm: ^0.27.3
   eslint: 9.32.0
-  geist: ^1.5.1
-  isbot: ^5.1.28
+  eslint-plugin-import-x: ^4.16.1
+  eslint-plugin-jsdoc: ^62.7.1
+  eslint-plugin-max-params-no-constructor: ^0.0.4
+  eslint-plugin-n: ^17.24.0
+  eslint-plugin-no-use-extend-native: ^0.7.2
+  eslint-plugin-react: ^7.37.5
+  eslint-plugin-unicorn: ^63.0.0
+  fake-indexeddb: ^6.2.5
+  geist: ^1.7.0
+  gray-matter: ^4.0.3
+  husky: ^9.1.7
+  ink: ^6.8.0
+  isbot: ^5.1.35
+  js-yaml: ^4.1.1
+  json-schema: ^0.4.0
   json-schema-default: ^1.0.2
+  katex: ^0.16.38
+  knip: ^6.0.4
+  langchain: ^1.2.27
+  lint-staged: ^16.3.2
   madge: ^8.0.0
-  nx: 21.3.10
+  manifold-3d: 3.3.2
+  mermaid: ^11.12.3
+  nx: 22.5.2
   openscad-wasm-prebuilt: ^1.2.0
-  prettier: 3.4.2
+  oxfmt: ^0.36.0
+  oxlint: ^1.51.0
+  oxlint-tsgolint: ^0.16.0
+  pdf-parse: ^2.4.5
   publint: ^0.3.17
-  react: ^19.0.0
-  react-dom: ^19.0.0
-  react-router: ^7.9.6
-  replicad: ^0.19.1
-  replicad-opencascadejs: ^0.19.0
+  react: ^19.2.4
+  react-dom: ^19.2.4
+  react-router: 7.12.0
+  remark-math: ^6.0.0
+  size-limit: ^12.0.1
+  socket.io-prometheus-metrics: ^1.0.6
   source-map-js: ^1.2.1
-  tsdown: ^0.15.7
+  tsdown: ^0.15.12
   tslib: ^2.8.1
-  type-fest: ^4.35.0
+  turndown: ^7.2.4
+  type-fest: ^4.41.0
   typescript: ~5.9.3
-  uint8array-extras: ^1.4.0
+  typescript-eslint: ^8.56.1
+  uint8array-extras: ^1.5.0
   uzip: ^0.20201231.0
-  vite: ^7.0.6
-  vitest: 3.2.4
-  ws: ^8.18.3
-  xstate: ^5.24.0
-  zod: ^4.1.13
+  vite: 8.0.0-beta.16
+  vitest: 4.1.0-beta.6
+  vitest-mock-extended: ^3.1.0
+  ws: ^8.19.0
+  xstate: ^5.28.0
+  zod: ^4.3.6
 
 catalogMode: prefer

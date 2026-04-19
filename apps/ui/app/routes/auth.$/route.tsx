@@ -12,27 +12,27 @@ export const handle: Handle = {
 export default function AuthPage(): React.JSX.Element {
   const { pathname } = useLocation();
   return (
-    <div className="grid min-h-svh lg:grid-cols-2">
-      <div className="flex flex-col gap-4 p-6 md:p-10">
-        <div className="flex justify-center gap-2 md:justify-start">
+    <div className='grid min-h-svh lg:grid-cols-2'>
+      <div className='flex flex-col gap-4 p-6 md:p-10'>
+        <div className='flex justify-center gap-2 md:justify-start'>
           <Tooltip>
-            <TooltipTrigger asChild className="flex items-center gap-2 font-medium">
-              <Link to="/">
-                <TauWordmark className="h-7 text-primary" />
+            <TooltipTrigger asChild className='flex items-center gap-2 font-medium'>
+              <Link to='/'>
+                <TauWordmark className='h-7 text-primary' />
               </Link>
             </TooltipTrigger>
-            <TooltipContent side="right">Go home</TooltipContent>
+            <TooltipContent side='right'>Go home</TooltipContent>
           </Tooltip>
         </div>
-        <div className="flex flex-1 items-center justify-center">
+        <div className='flex flex-1 items-center justify-center'>
           <AuthView
             pathname={pathname}
-            className="w-full max-w-md"
+            className='w-full max-w-md'
             classNames={{ form: { secondaryButton: 'bg-neutral/20 text-foreground hover:bg-neutral/30' } }}
           />
         </div>
       </div>
-      <div className="relative hidden lg:block">
+      <div className='relative hidden lg:block'>
         <AuthSplashback />
       </div>
     </div>

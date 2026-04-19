@@ -9,7 +9,7 @@ import {
   closeAllPanelsInGroup,
   copyPathToClipboard,
 } from '#components/panes/tab-context-menu-actions.js';
-import { useBuild } from '#hooks/use-build.js';
+import { useProject } from '#hooks/use-project.js';
 import { withTabContextMenu } from '#components/panes/with-tab-context-menu.js';
 
 type EditorPanelParameters = {
@@ -24,7 +24,7 @@ type EditorPanelParameters = {
  */
 function EditorTabContextMenu(properties: IDockviewPanelHeaderProps): React.JSX.Element {
   const { api, containerApi } = properties;
-  const { editorRef, buildRef } = useBuild();
+  const { editorRef, projectRef } = useProject();
 
   const filePath = (properties.params as EditorPanelParameters | undefined)?.filePath;
 
@@ -85,9 +85,9 @@ function EditorTabContextMenu(properties: IDockviewPanelHeaderProps): React.JSX.
   // ── Navigation actions ──
   const handleOpenInViewer = useCallback(() => {
     if (filePath) {
-      buildRef.send({ type: 'openInViewer', entryFile: filePath });
+      projectRef.send({ type: 'openInViewer', entryFile: filePath });
     }
-  }, [buildRef, filePath]);
+  }, [projectRef, filePath]);
 
   const handleRevealInFileTree = useCallback(() => {
     if (filePath) {

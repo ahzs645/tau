@@ -3,7 +3,7 @@ import type { Binary as BSONBinary } from 'bson';
 /**
  * Converts a binary buffer to a UUID string.
  *
- * @param buffer - The binary buffer containing the UUID bytes.
+ * @param binaryData - The binary buffer containing the UUID bytes.
  * @returns A string representation of the UUID in the format 'xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx'.
  */
 export function binaryToUuid(binaryData: Uint8Array<ArrayBuffer> | BSONBinary | string): string {

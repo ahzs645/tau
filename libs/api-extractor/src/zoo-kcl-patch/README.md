@@ -70,17 +70,18 @@ pnpm tsx libs/api-extractor/src/extract-kcl-api.ts
 ```
 
 This:
+
 1. Copies the JSON from Zoo repo to `libs/api-extractor/src/generated/kcl/`
 2. Generates markdown documentation files
 
 ## Output Files
 
-| File | Description |
-|------|-------------|
-| `kcl-stdlib-export.json` | Raw JSON from Zoo repo (copied) |
-| `kcl-stdlib-data.json` | Transformed JSON with Tau schema |
-| `kcl-stdlib-api.md` | Full API documentation |
-| `kcl-stdlib-compact.md` | LLM-optimized compact reference |
+| File                     | Description                      |
+| ------------------------ | -------------------------------- |
+| `kcl-stdlib-export.json` | Raw JSON from Zoo repo (copied)  |
+| `kcl-stdlib-data.json`   | Transformed JSON with Tau schema |
+| `kcl-stdlib-api.md`      | Full API documentation           |
+| `kcl-stdlib-compact.md`  | LLM-optimized compact reference  |
 
 ## Updating When KCL Changes
 

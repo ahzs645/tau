@@ -11,6 +11,8 @@ export const monacoLanguages = {
   javascript: 'javascript',
   javascriptreact: 'javascriptreact',
   json: 'json',
+  jsonl: 'jsonl',
+  jsonc: 'jsonc',
   kcl: 'kcl',
   openscad: 'openscad',
   stepfile: 'stepfile',
@@ -28,6 +30,8 @@ export const extensionToMonacoLanguage: Record<string, MonacoLanguage> = {
   mts: 'typescript',
   mjs: 'javascript',
   json: 'json',
+  jsonl: 'jsonl',
+  jsonc: 'jsonc',
   kcl: 'kcl',
   scad: 'openscad',
   step: 'stepfile',
@@ -47,6 +51,7 @@ export type JsLikeExtension = (typeof jsLikeExtensions)[number];
  * Check if a file path is a JavaScript-like file.
  */
 export function isJsLikeFile(path: string): boolean {
+  // oxlint-disable-next-line unicorn-js/prevent-abbreviations -- ext is conventional abbreviation for extension
   return jsLikeExtensions.some((ext) => path.endsWith(ext));
 }
 
@@ -54,6 +59,7 @@ export function isJsLikeFile(path: string): boolean {
  * Get Monaco language ID from file extension.
  */
 export function getMonacoLanguage(path: string): MonacoLanguage | undefined {
+  // oxlint-disable-next-line unicorn-js/prevent-abbreviations -- ext is conventional abbreviation for extension
   const ext = path.split('.').pop();
   return ext ? extensionToMonacoLanguage[ext] : undefined;
 }

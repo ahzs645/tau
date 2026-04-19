@@ -3,11 +3,11 @@ import { Theme, useTheme as useRemixTheme } from 'remix-themes';
 import { useCookie } from '#hooks/use-cookie.js';
 import { cookieName } from '#constants/cookie.constants.js';
 
-// eslint-disable-next-line no-barrel-files/no-barrel-files -- re-export Theme enum so consumers don't need to depend on remix-themes directly
+// oxlint-disable-next-line no-barrel-files/no-barrel-files -- re-export Theme enum so consumers don't need to depend on remix-themes directly
 export { Theme } from 'remix-themes';
 
 // Null is used to represent the system theme
-// eslint-disable-next-line @typescript-eslint/no-restricted-types -- null is used to represent the system theme, as it's serializable in JSON
+// oxlint-disable-next-line @typescript-eslint/no-restricted-types -- null is used to represent the system theme, as it's serializable in JSON
 export type ThemeWithSystem = Theme | null;
 
 export type ThemeOption = {

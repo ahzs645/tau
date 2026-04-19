@@ -51,7 +51,7 @@ export function registerMonacoNavigation(options: {
 
   // Subscribe to fileOpened events for position jumping after file opens
   fileOpenedSub = editorRef.on('fileOpened', (event: { path: string; lineNumber?: number; column?: number }) => {
-    if (!pendingNavigation || event.path !== pendingNavigation.path) {
+    if (event.path !== pendingNavigation?.path) {
       return;
     }
 
@@ -141,7 +141,7 @@ export function registerMonacoNavigation(options: {
       }, 5000);
 
       // Ensure the target model exists (async, fire-and-forget)
-      // eslint-disable-next-line promise/prefer-await-to-then, promise/prefer-catch -- cannot be async here
+      // oxlint-disable-next-line promise/prefer-await-to-then, promise/prefer-catch -- cannot be async here
       void modelService.getOrEnsureModel(relativePath).then(
         () => {
           // Model loaded (or already existed), now open the file

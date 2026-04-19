@@ -20,23 +20,23 @@ function buildConversionMaps() {
     offset: number;
   };
 
-  // eslint-disable-next-line @typescript-eslint/consistent-indexed-object-style -- Dynamic map from constants
+  // oxlint-disable-next-line @typescript-eslint/consistent-indexed-object-style -- Dynamic map from constants
   type ConversionMaps = {
     [K in UnitQuantity]: Record<string, ConversionInfo>;
   };
 
-  // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- Dynamically built from constants
+  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- Dynamically built from constants
   const maps = {} as ConversionMaps;
 
-  for (const [quantityKey, quantityDef] of Object.entries(standardInternationalBaseUnits)) {
+  for (const [quantityKey, quantityDefinition] of Object.entries(standardInternationalBaseUnits)) {
     const quantity = quantityKey as UnitQuantity;
     const conversionMap: Record<string, ConversionInfo> = {};
 
     // Add base unit (factor = 1, no offset)
-    conversionMap[quantityDef.symbol] = { factor: 1, offset: 0 };
+    conversionMap[quantityDefinition.symbol] = { factor: 1, offset: 0 };
 
     // Add all variants
-    for (const variant of quantityDef.variants) {
+    for (const variant of quantityDefinition.variants) {
       const offset = 'offset' in variant ? (variant.offset as number | undefined) : undefined;
 
       conversionMap[variant.symbol] = {
@@ -69,14 +69,16 @@ function getConversionInfo(quantity: UnitQuantity, unitSymbol: string): { factor
  *
  * Formula: (value * fromFactor + fromOffset - toOffset) / toFactor
  *
- * @param value - The numeric value to convert
- * @param fromSymbol - The source unit symbol
- * @param toSymbol - The target unit symbol
- * @param quantity - The quantity type (length, mass, time, etc.)
+ * @param input - The input object
+ * @param input.value - The numeric value to convert
+ * @param input.fromSymbol - The source unit symbol
+ * @param input.toSymbol - The target unit symbol
+ * @param input.quantity - The quantity type (length, mass, time, etc.)
  * @returns The converted value
  * @throws Error if units are not found in the quantity
  */
-function convertUnits(value: number, fromSymbol: string, toSymbol: string, quantity: UnitQuantity): number {
+function convertUnits(input: { value: number; fromSymbol: string; toSymbol: string; quantity: UnitQuantity }): number {
+  const { value, fromSymbol, toSymbol, quantity } = input;
   if (fromSymbol === toSymbol) {
     return value;
   }
@@ -109,7 +111,7 @@ function convertUnits(value: number, fromSymbol: string, toSymbol: string, quant
  * @returns The converted value
  */
 export function convertLength(value: number, fromSymbol: LengthSymbol, toSymbol: LengthSymbol): number {
-  return convertUnits(value, fromSymbol, toSymbol, 'length');
+  return convertUnits({ value, fromSymbol, toSymbol, quantity: 'length' });
 }
 
 /**
@@ -121,7 +123,7 @@ export function convertLength(value: number, fromSymbol: LengthSymbol, toSymbol:
  * @returns The converted value
  */
 export function convertMass(value: number, fromSymbol: MassSymbol, toSymbol: MassSymbol): number {
-  return convertUnits(value, fromSymbol, toSymbol, 'mass');
+  return convertUnits({ value, fromSymbol, toSymbol, quantity: 'mass' });
 }
 
 /**
@@ -133,7 +135,7 @@ export function convertMass(value: number, fromSymbol: MassSymbol, toSymbol: Mas
  * @returns The converted value
  */
 export function convertTime(value: number, fromSymbol: TimeSymbol, toSymbol: TimeSymbol): number {
-  return convertUnits(value, fromSymbol, toSymbol, 'time');
+  return convertUnits({ value, fromSymbol, toSymbol, quantity: 'time' });
 }
 
 /**
@@ -149,7 +151,12 @@ export function convertElectricCurrent(
   fromSymbol: ElectricCurrentSymbol,
   toSymbol: ElectricCurrentSymbol,
 ): number {
-  return convertUnits(value, fromSymbol, toSymbol, 'electricCurrent');
+  return convertUnits({
+    value,
+    fromSymbol,
+    toSymbol,
+    quantity: 'electricCurrent',
+  });
 }
 
 /**
@@ -166,7 +173,12 @@ export function convertTemperature(
   fromSymbol: ThermodynamicTemperatureSymbol,
   toSymbol: ThermodynamicTemperatureSymbol,
 ): number {
-  return convertUnits(value, fromSymbol, toSymbol, 'thermodynamicTemperature');
+  return convertUnits({
+    value,
+    fromSymbol,
+    toSymbol,
+    quantity: 'thermodynamicTemperature',
+  });
 }
 
 /**
@@ -182,7 +194,12 @@ export function convertAmountOfSubstance(
   fromSymbol: AmountOfSubstanceSymbol,
   toSymbol: AmountOfSubstanceSymbol,
 ): number {
-  return convertUnits(value, fromSymbol, toSymbol, 'amountOfSubstance');
+  return convertUnits({
+    value,
+    fromSymbol,
+    toSymbol,
+    quantity: 'amountOfSubstance',
+  });
 }
 
 /**
@@ -198,5 +215,10 @@ export function convertLuminousIntensity(
   fromSymbol: LuminousIntensitySymbol,
   toSymbol: LuminousIntensitySymbol,
 ): number {
-  return convertUnits(value, fromSymbol, toSymbol, 'luminousIntensity');
+  return convertUnits({
+    value,
+    fromSymbol,
+    toSymbol,
+    quantity: 'luminousIntensity',
+  });
 }

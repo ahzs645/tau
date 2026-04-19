@@ -108,6 +108,7 @@ export function MorphingPoints({
   targetPoints,
   targetProgress,
   animationSpeed = 2,
+  // oxlint-disable-next-line tau-lint/no-hardcoded-color -- Three.js point color
   sourceColor = '#14b8a6',
   targetColor,
   pointSize = 3,
@@ -196,8 +197,8 @@ export function MorphingPoints({
     }
 
     // Animate progress towards target
-    const currentProgress = updateMorphAnimation(
-      {
+    const currentProgress = updateMorphAnimation({
+      state: {
         progressRef: morphProgressRef,
         hasReachedTargetRef: morphHasReachedTargetRef,
         previousTargetRef: morphPreviousTargetRef,
@@ -205,11 +206,10 @@ export function MorphingPoints({
       targetProgress,
       delta,
       animationSpeed,
-      () => {
-        // Pass final rotation to callback so target mesh can sync
+      onComplete() {
         onMorphComplete?.(currentRotationYaxisRef.current);
       },
-    );
+    });
 
     // Update shader uniforms
     updateMorphProgress(material, currentProgress);

@@ -1,21 +1,28 @@
 /**
  * NX Plugin for tsgo (TypeScript Go compiler).
  *
- * Used to automatically infer tsgo typecheck targets for all projects.
- * This replaces the standard @nx/js/typescript plugin for typecheck.
+ * Replaces the @nx/js/typescript plugin's typecheck target with tsgo for
+ * dramatically faster type-checking. Uses --noEmit mode with composite/declaration
+ * disabled to avoid tsgo's stricter declaration serialization limits (TS7056)
+ * and non-portable type reference checks (TS2742) that affect complex types
+ * like XState machines.
  *
- * @see https://github.com/nicolo-ribaudo/TypeScript/tree/nicolo/nicolo/native-preview
+ * Type resolution works through pnpm workspace symlinks and package.json exports
+ * pointing to source files, so no declaration emit is needed for type-checking.
+ *
+ * Cross-project `references` are intentionally omitted from tsconfig.lib.json and
+ * tsconfig.app.json files. With `--composite false`, tsgo does not emit declarations,
+ * so referenced projects' `.d.ts` outputs would never exist, causing TS6305 errors.
+ * Instead, cross-project types resolve via package.json exports pointing to `.ts`
+ * source, which tsgo type-checks directly through pnpm workspace symlinks.
+ *
+ * @see https://github.com/microsoft/typescript-go/issues/1182 — TS6305 with project references
+ * @see https://github.com/microsoft/typescript-go/issues/506 — tsgo and composite project behavior
  */
 import { dirname, join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { readJsonFile } from '@nx/devkit';
-import type {
-  CreateNodesContext,
-  CreateNodesContextV2,
-  CreateNodesResult,
-  CreateNodesV2,
-  ProjectConfiguration,
-} from '@nx/devkit';
+import type { CreateNodesContextV2, CreateNodesResult, CreateNodesV2, ProjectConfiguration } from '@nx/devkit';
 
 type InputDefinition =
   | { input: string; projects: string | string[] }
@@ -25,7 +32,8 @@ type InputDefinition =
   | { runtime: string }
   | { externalDependencies: string[] }
   | { dependentTasksOutputFiles: string; transitive?: boolean }
-  | { env: string };
+  | { env: string }
+  | { workingDirectory: 'relative' | 'absolute' };
 
 type PackageJson = {
   nx?: {
@@ -39,20 +47,19 @@ type TsgoPluginOptions = {
    * @default 'typecheck'
    */
   targetName?: string;
-
-  /**
-   * Whether to emit declaration files only (no JS output).
-   * @default true
-   */
-  emitDeclarationOnly?: boolean;
 };
 
+const tsGoFlags = '--noEmit --composite false --declaration false --declarationMap false --incremental';
+
 /**
- * Get the named inputs available for a project.
+ * Ordered list of tsconfig files to check for each project.
+ * The first one found is used as the primary config for type-checking.
  */
+const tsConfigCandidates = ['tsconfig.app.json', 'tsconfig.lib.json'];
+
 function getNamedInputs(
   directory: string,
-  context: CreateNodesContext | CreateNodesContextV2,
+  context: CreateNodesContextV2,
 ): Record<string, Array<string | InputDefinition>> {
   const projectJsonPath = join(directory, 'project.json');
   const projectJson: ProjectConfiguration | undefined = existsSync(projectJsonPath)
@@ -60,7 +67,9 @@ function getNamedInputs(
     : undefined;
 
   const packageJsonPath = join(directory, 'package.json');
-  const packageJson: PackageJson | undefined = existsSync(packageJsonPath) ? readJsonFile(packageJsonPath) : undefined;
+  const packageJson: PackageJson | undefined = existsSync(packageJsonPath)
+    ? readJsonFile<PackageJson>(packageJsonPath)
+    : undefined;
 
   return {
     ...context.nxJsonConfiguration.namedInputs,
@@ -69,39 +78,27 @@ function getNamedInputs(
   };
 }
 
-/**
- * Check if a file exists in the project directory.
- */
 function fileExists(workspaceRoot: string, projectRoot: string, filename: string): boolean {
   return existsSync(join(workspaceRoot, projectRoot, filename));
 }
 
-/**
- * Check if a directory exists in the project directory.
- */
-function dirExists(workspaceRoot: string, projectRoot: string, dirname: string): boolean {
-  return existsSync(join(workspaceRoot, projectRoot, dirname));
+function directoryExists(workspaceRoot: string, projectRoot: string, directoryName: string): boolean {
+  return existsSync(join(workspaceRoot, projectRoot, directoryName));
 }
 
-/**
- * Get the source directories for a project based on its tsconfig files.
- */
 function getSourcePatterns(workspaceRoot: string, projectRoot: string): string[] {
   const patterns: string[] = [];
-
-  // Common source directories
   const sourceDirectories = ['src', 'lib', 'app'];
 
-  for (const dir of sourceDirectories) {
-    if (dirExists(workspaceRoot, projectRoot, dir)) {
-      patterns.push(`{projectRoot}/${dir}/**/*.ts`);
-      patterns.push(`{projectRoot}/${dir}/**/*.tsx`);
-      patterns.push(`{projectRoot}/${dir}/**/*.js`);
-      patterns.push(`{projectRoot}/${dir}/**/*.jsx`);
+  for (const directory of sourceDirectories) {
+    if (directoryExists(workspaceRoot, projectRoot, directory)) {
+      patterns.push(`{projectRoot}/${directory}/**/*.ts`);
+      patterns.push(`{projectRoot}/${directory}/**/*.tsx`);
+      patterns.push(`{projectRoot}/${directory}/**/*.js`);
+      patterns.push(`{projectRoot}/${directory}/**/*.jsx`);
     }
   }
 
-  // If no common directories found, use root patterns
   if (patterns.length === 0) {
     patterns.push('{projectRoot}/**/*.ts');
     patterns.push('{projectRoot}/**/*.tsx');
@@ -110,13 +107,9 @@ function getSourcePatterns(workspaceRoot: string, projectRoot: string): string[]
   return patterns;
 }
 
-/**
- * Get additional input patterns for common config files and generated types.
- */
 function getAdditionalInputPatterns(workspaceRoot: string, projectRoot: string): string[] {
   const patterns: string[] = [];
 
-  // Vite config files
   const viteConfigs = ['vite.config.ts', 'vite.config.js', 'vitest.config.ts', 'vitest.setup.ts'];
   for (const file of viteConfigs) {
     if (fileExists(workspaceRoot, projectRoot, file)) {
@@ -124,28 +117,23 @@ function getAdditionalInputPatterns(workspaceRoot: string, projectRoot: string):
     }
   }
 
-  // Type declaration files
   if (fileExists(workspaceRoot, projectRoot, 'vite-environment.d.ts')) {
     patterns.push('{projectRoot}/vite-environment.d.ts');
   }
 
-  // React Router types (generated by typegen)
-  if (dirExists(workspaceRoot, projectRoot, '.react-router')) {
+  if (directoryExists(workspaceRoot, projectRoot, '.react-router')) {
     patterns.push('{projectRoot}/.react-router/types/**/*');
   }
 
-  // Fumadocs/source types
-  if (dirExists(workspaceRoot, projectRoot, '.source')) {
+  if (directoryExists(workspaceRoot, projectRoot, '.source')) {
     patterns.push('{projectRoot}/.source/**/*');
   }
 
-  // React Router config
   if (fileExists(workspaceRoot, projectRoot, 'react-router.config.ts')) {
     patterns.push('{projectRoot}/react-router.config.ts');
   }
 
-  // Test files
-  if (dirExists(workspaceRoot, projectRoot, 'tests')) {
+  if (directoryExists(workspaceRoot, projectRoot, 'tests')) {
     patterns.push('{projectRoot}/tests/**/*.ts');
     patterns.push('{projectRoot}/tests/**/*.tsx');
   }
@@ -153,9 +141,6 @@ function getAdditionalInputPatterns(workspaceRoot: string, projectRoot: string):
   return patterns;
 }
 
-/**
- * Get the tsconfig files that exist in a project.
- */
 function getTsConfigInputs(workspaceRoot: string, projectRoot: string): string[] {
   const inputs: string[] = [];
   const tsConfigFiles = [
@@ -175,6 +160,28 @@ function getTsConfigInputs(workspaceRoot: string, projectRoot: string): string[]
   return inputs;
 }
 
+/**
+ * Detect the tsconfig files for a project.
+ * Returns the primary config (tsconfig.app.json or tsconfig.lib.json) and
+ * optionally tsconfig.spec.json if it exists.
+ */
+function detectTsConfigs(workspaceRoot: string, projectRoot: string): string[] {
+  const configs: string[] = [];
+
+  for (const candidate of tsConfigCandidates) {
+    if (fileExists(workspaceRoot, projectRoot, candidate)) {
+      configs.push(candidate);
+      break;
+    }
+  }
+
+  if (fileExists(workspaceRoot, projectRoot, 'tsconfig.spec.json')) {
+    configs.push('tsconfig.spec.json');
+  }
+
+  return configs;
+}
+
 const createTsgoTarget = (
   configFilePath: string,
   context: CreateNodesContextV2,
@@ -182,77 +189,39 @@ const createTsgoTarget = (
 ): CreateNodesResult | undefined => {
   const projectRoot = dirname(configFilePath);
 
-  // Skip workspace root
   if (projectRoot === '.') {
     return undefined;
   }
 
   const targetName = options.targetName ?? 'typecheck';
-  const emitDeclarationOnly = options.emitDeclarationOnly ?? true;
-  const workspaceRoot = context.workspaceRoot;
+  const { workspaceRoot } = context;
+
+  const tsConfigs = detectTsConfigs(workspaceRoot, projectRoot);
+  if (tsConfigs.length === 0) {
+    return undefined;
+  }
 
   const namedInputs = getNamedInputs(join(workspaceRoot, projectRoot), context);
   const sourcePatterns = getSourcePatterns(workspaceRoot, projectRoot);
   const tsConfigInputs = getTsConfigInputs(workspaceRoot, projectRoot);
   const additionalInputPatterns = getAdditionalInputPatterns(workspaceRoot, projectRoot);
 
-  // Build the command
-  const commandParts = ['tsgo', '--build'];
-  if (emitDeclarationOnly) {
-    commandParts.push('--emitDeclarationOnly');
-  }
-  const command = commandParts.join(' ');
+  const command = tsConfigs.map((config) => `tsgo -p ${config} ${tsGoFlags}`).join(' && ');
 
-  // Build inputs
   const inputs: Array<string | InputDefinition> = [
-    // Package configuration
     '{projectRoot}/package.json',
-    // Workspace tsconfig
     '{workspaceRoot}/tsconfig.base.json',
-    // Project tsconfig files
     ...tsConfigInputs,
-    // Source files
     ...sourcePatterns,
-    // Additional config and generated files
     ...additionalInputPatterns,
-    // Declaration files from dependencies
-    { dependentTasksOutputFiles: '**/*.d.ts' },
-    // TypeScript as external dependency
-    { externalDependencies: ['typescript'] },
+    { externalDependencies: ['@typescript/native-preview'] },
   ];
 
-  // Add production named input if available
   if ('production' in namedInputs) {
     inputs.unshift('^production');
   }
 
-  // Build outputs - declaration files and tsbuildinfo
-  const outputs: string[] = [
-    // Declaration files
-    '{projectRoot}/**/*.d.ts',
-    '{projectRoot}/**/*.d.cts',
-    '{projectRoot}/**/*.d.mts',
-    '{projectRoot}/**/*.d.ts.map',
-    '{projectRoot}/**/*.d.cts.map',
-    '{projectRoot}/**/*.d.mts.map',
-    // Build info
-    '{projectRoot}/tsconfig.tsbuildinfo',
-    // Out-tsc directories (common pattern)
-    '{projectRoot}/out-tsc/**/*.d.ts',
-    '{projectRoot}/out-tsc/**/*.tsbuildinfo',
-  ];
-
-  // If not declaration only, also output JS files
-  if (!emitDeclarationOnly) {
-    outputs.push(
-      '{projectRoot}/**/*.js',
-      '{projectRoot}/**/*.cjs',
-      '{projectRoot}/**/*.mjs',
-      '{projectRoot}/**/*.jsx',
-      '{projectRoot}/**/*.js.map',
-      '{projectRoot}/**/*.jsx.map',
-    );
-  }
+  const outputs: string[] = ['{projectRoot}/out-tsc/**/*.tsbuildinfo'];
 
   return {
     projects: {
@@ -265,6 +234,7 @@ const createTsgoTarget = (
             outputs,
             options: {
               command,
+              cwd: projectRoot,
             },
           },
         },
@@ -275,14 +245,13 @@ const createTsgoTarget = (
 
 export const createNodesV2: CreateNodesV2<TsgoPluginOptions> = [
   '**/tsconfig.json',
-  // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types -- not necessary as already has an explicit return type
+
   (configFiles, options, context) => {
     const results: Array<[string, CreateNodesResult]> = [];
     const pluginOptions = options ?? {};
 
     for (const configFile of configFiles) {
       try {
-        // Skip node_modules and other non-project directories
         if (configFile.includes('node_modules')) {
           continue;
         }
@@ -299,4 +268,3 @@ export const createNodesV2: CreateNodesV2<TsgoPluginOptions> = [
     return results;
   },
 ];
-

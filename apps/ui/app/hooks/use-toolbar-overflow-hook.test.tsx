@@ -49,6 +49,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // oxlint-disable-next-line @typescript-eslint/no-unsafe-call -- vitest spy mock type gap
   boundingRectSpy.mockRestore();
 });
 
@@ -86,10 +87,10 @@ function ToolbarHarness({
   const { containerRef, visibleIds, overflowIds, isCompact } = useToolbarOverflow(items, overflowOptions);
 
   return (
-    <div ref={containerRef} data-testid="toolbar">
-      <span data-testid="visible">{JSON.stringify([...visibleIds].sort())}</span>
-      <span data-testid="overflow">{JSON.stringify([...overflowIds].sort())}</span>
-      <span data-testid="compact">{String(isCompact)}</span>
+    <div ref={containerRef} data-testid='toolbar'>
+      <span data-testid='visible'>{JSON.stringify([...visibleIds].sort())}</span>
+      <span data-testid='overflow'>{JSON.stringify([...overflowIds].sort())}</span>
+      <span data-testid='compact'>{String(isCompact)}</span>
     </div>
   );
 }

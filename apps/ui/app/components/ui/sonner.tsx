@@ -9,7 +9,7 @@ function Toaster({ ...properties }: ToasterProperties): React.JSX.Element {
   return (
     <Sonner
       theme={theme as ToasterProperties['theme']}
-      className="toaster group"
+      className='toaster group'
       toastOptions={{
         classNames: {
           toast:
@@ -25,5 +25,5 @@ function Toaster({ ...properties }: ToasterProperties): React.JSX.Element {
 }
 
 export { Toaster };
-// eslint-disable-next-line no-barrel-files/no-barrel-files -- keeping all toast exports in one file
+// oxlint-disable-next-line no-barrel-files/no-barrel-files -- keeping all toast exports in one file
 export { toast } from 'sonner';

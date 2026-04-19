@@ -49,8 +49,8 @@ function CodePreview({ content, language = 'typescript', maxCollapsedLines = 4 }
   const lineCount = content.split('\n').length;
 
   return (
-    <CollapsibleContainer lineCount={lineCount} collapsedLineCount={maxCollapsedLines} className="border-t">
-      <CodeViewer language={language} text={content} className="overflow-x-auto px-2.5 py-1.5 text-xs" />
+    <CollapsibleContainer lineCount={lineCount} collapsedLineCount={maxCollapsedLines} className='border-t'>
+      <CodeViewer language={language} text={content} className='overflow-x-auto px-2.5 py-1.5 text-xs' />
     </CollapsibleContainer>
   );
 }
@@ -75,8 +75,8 @@ export function DiffPreview({
     <CollapsibleContainer
       lineCount={lineCount}
       collapsedLineCount={maxCollapsedLines}
-      collapsedMaxHeight="max-h-24"
-      className="border-t"
+      collapsedMaxHeight='max-h-24'
+      className='border-t'
     >
       <DiffViewer originalContent={originalContent} modifiedContent={modifiedContent} language={language} />
     </CollapsibleContainer>
@@ -130,12 +130,12 @@ export function CollapsibleFileOperationTrigger({
               asChild
               path={targetFile}
               lineNumber={firstChangedLine}
-              className="min-w-0 truncate hover:text-foreground"
+              className='min-w-0 truncate hover:text-foreground'
             >
               <span>{filenameContent}</span>
             </FileLink>
           </TooltipTrigger>
-          <TooltipContent side="top" align="start">
+          <TooltipContent side='top' align='start'>
             {targetFile}
           </TooltipContent>
         </Tooltip>
@@ -144,7 +144,7 @@ export function CollapsibleFileOperationTrigger({
           asChild
           path={targetFile}
           lineNumber={firstChangedLine}
-          className="min-w-0 truncate hover:text-foreground"
+          className='min-w-0 truncate hover:text-foreground'
         >
           <span>{filenameContent}</span>
         </FileLink>
@@ -152,14 +152,14 @@ export function CollapsibleFileOperationTrigger({
     ) : hasPath && !isStreaming ? (
       <Tooltip>
         <TooltipTrigger asChild>
-          <span className="min-w-0 truncate">{filenameContent}</span>
+          <span className='min-w-0 truncate'>{filenameContent}</span>
         </TooltipTrigger>
-        <TooltipContent side="top" align="start">
+        <TooltipContent side='top' align='start'>
           {targetFile}
         </TooltipContent>
       </Tooltip>
     ) : (
-      <span className="min-w-0 truncate">{filenameContent}</span>
+      <span className='min-w-0 truncate'>{filenameContent}</span>
     );
 
   // Show change indicator when diffStats is available and there are changes
@@ -168,15 +168,15 @@ export function CollapsibleFileOperationTrigger({
 
   // Entire header is the collapsible trigger
   return (
-    <CollapsibleTrigger className="group flex h-7 min-w-0 flex-1 cursor-pointer flex-row items-center gap-1 pl-2 text-xs text-muted-foreground transition-colors">
+    <CollapsibleTrigger className='group flex h-7 min-w-0 flex-1 cursor-pointer flex-row items-center gap-1 pl-2 text-xs text-muted-foreground transition-colors'>
       {/* Status icon - visible by default, hidden on hover */}
-      <span className="relative flex size-3 items-center justify-center">
+      <span className='relative flex size-3 items-center justify-center'>
         {isStreaming ? (
-          <LoaderCircle className="size-3 animate-spin" />
+          <LoaderCircle className='size-3 animate-spin' />
         ) : (
           <>
             <span className={cn('transition-opacity duration-150', 'group-hover:opacity-0')}>
-              <FileExtensionIcon filename={filename} className="size-3" />
+              <FileExtensionIcon filename={filename} className='size-3' />
             </span>
             {/* Caret - hidden by default, visible on hover */}
             <ChevronRight
@@ -191,7 +191,9 @@ export function CollapsibleFileOperationTrigger({
       </span>
       {filenameElement}
       {showChangeIndicator ? (
-        <ChangeIndicator linesAdded={diffStats.linesAdded} linesRemoved={diffStats.linesRemoved} />
+        <span className='shrink-0'>
+          <ChangeIndicator linesAdded={diffStats.linesAdded} linesRemoved={diffStats.linesRemoved} />
+        </span>
       ) : undefined}
     </CollapsibleTrigger>
   );
@@ -257,30 +259,32 @@ export function CollapsibleFileOperation({
     const shouldShowContent = totalLines >= 4 || lastFourLines.trim().length > 0;
 
     return (
-      <div className="@container/code overflow-hidden rounded-md border bg-neutral/10">
-        <div className="flex h-7 w-full flex-row items-center gap-1 pr-1 pl-2 text-xs text-muted-foreground">
-          <LoaderCircle className="size-3 animate-spin" />
+      <div className='@container/code my-1 overflow-hidden rounded-md border bg-neutral/10'>
+        <div className='flex h-7 w-full flex-row items-center gap-1 pr-1 pl-2 text-xs text-muted-foreground'>
+          <LoaderCircle className='size-3 animate-spin' />
           {hasPath ? (
             <Tooltip>
               <TooltipTrigger asChild>
-                <span className="min-w-0 truncate">
+                <span className='min-w-0 truncate'>
                   <AnimatedShinyText>{filename || 'file'}</AnimatedShinyText>
                 </span>
               </TooltipTrigger>
-              <TooltipContent side="top" align="start">
+              <TooltipContent side='top' align='start'>
                 {targetFile}
               </TooltipContent>
             </Tooltip>
           ) : (
-            <AnimatedShinyText>{targetFile || 'file'}</AnimatedShinyText>
+            <span className='min-w-0 truncate'>
+              <AnimatedShinyText>{targetFile || 'file'}</AnimatedShinyText>
+            </span>
           )}
         </div>
         {shouldShowContent ? (
-          <div className="h-24 overflow-hidden border-t">
+          <div className='h-24 overflow-hidden border-t'>
             <CodeViewer
               language={getLanguageFromFilename(filename)}
               text={lastFourLines}
-              className="overflow-x-auto p-3 text-xs"
+              className='overflow-x-auto p-3 text-xs'
             />
           </div>
         ) : undefined}
@@ -314,8 +318,8 @@ export function CollapsibleFileOperation({
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
-      <div className="@container/code overflow-hidden rounded-md border bg-neutral/10">
-        <div className="group/file-op flex items-center transition-colors hover:bg-foreground/5">
+      <div className='@container/code my-1 overflow-hidden rounded-md border bg-neutral/10'>
+        <div className='group/file-op flex items-center transition-colors hover:bg-foreground/5'>
           <CollapsibleFileOperationTrigger
             targetFile={targetFile}
             toolStatus={toolStatus}
@@ -325,7 +329,7 @@ export function CollapsibleFileOperation({
           />
           {actions ? (
             <div
-              className="ml-auto flex shrink-0 items-center gap-1 pr-1 text-muted-foreground opacity-0 group-hover/file-op:opacity-100"
+              className='ml-auto flex shrink-0 items-center gap-1 pr-1 text-muted-foreground opacity-0 group-hover/file-op:opacity-100'
               onClick={(event) => {
                 // Prevent triggering the collapsible when clicking actions
                 event.stopPropagation();

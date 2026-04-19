@@ -12,7 +12,7 @@ export const LabelTextGeometry = ({
   size?: number;
   depth?: number;
 }): BufferGeometry =>
-  // eslint-disable-next-line new-cap -- Three.js geometry function
+  // oxlint-disable-next-line new-cap -- Three.js geometry function
   FontGeometry({ text, size, depth });
 
 // eslint-disable-next-line @typescript-eslint/naming-convention -- Three.js naming convention
@@ -34,7 +34,7 @@ export const LabelBackgroundGeometry = ({
   // Calculate width based on character count (fixed-width mono font)
   const width = text.length * characterWidth + padding * 2;
 
-  // eslint-disable-next-line new-cap -- Three.js geometry function
+  // oxlint-disable-next-line new-cap -- Three.js geometry function
   return RoundedRectangleGeometry({
     width,
     height,

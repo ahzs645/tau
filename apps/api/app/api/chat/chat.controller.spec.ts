@@ -7,14 +7,16 @@ import { Reflector } from '@nestjs/core';
 import type { FastifyReply } from 'fastify';
 import type { StreamTextResult as StreamTextResultType, ToolSet, UIMessage, UIMessageChunk } from 'ai';
 import { toBaseMessages, toUIMessageStream } from '@ai-sdk/langchain';
-import type { ChatUsageTokens, MyUIMessage } from '@taucad/chat';
+import type { ChatUsageTokens, MyUIMessage, ChatSnapshot } from '@taucad/chat';
 import { ChatController } from '#api/chat/chat.controller.js';
 import { ChatService } from '#api/chat/chat.service.js';
 import { ChatRpcService } from '#api/chat/chat-rpc.service.js';
 import { ModelService } from '#api/models/model.service.js';
 import { FileEditService } from '#api/file-edit/file-edit.service.js';
-import { AnalysisService } from '#api/analysis/analysis.service.js';
+import { GeometryAnalysisService } from '#api/analysis/geometry-analysis.service.js';
 import { AuthGuard } from '#auth/auth.guard.js';
+import type { CreateChatDto } from '#api/chat/chat.dto.js';
+import { MetricsService } from '#telemetry/metrics.js';
 
 // Mock the @ai-sdk/langchain module
 vi.mock('@ai-sdk/langchain', () => ({
@@ -32,7 +34,7 @@ vi.mock('@ai-sdk/langchain', () => ({
 
 // Mock the ai module - use importOriginal to keep other exports
 vi.mock('ai', async (importOriginal) => {
-  // eslint-disable-next-line @typescript-eslint/consistent-type-imports -- Import original module
+  // oxlint-disable-next-line @typescript-eslint/consistent-type-imports -- Import original module
   const actual = await importOriginal<typeof import('ai')>();
   return {
     ...actual,
@@ -65,7 +67,7 @@ function createMockUserMessage(model: string): MyUIMessage {
     role: 'user',
     parts: [{ type: 'text', text: 'Hello' }],
     metadata: { model, kernel: 'openscad' },
-  } as const satisfies MyUIMessage;
+  };
 }
 
 // Helper to create mock agent with graph property
@@ -158,7 +160,7 @@ describe('ChatController', () => {
 
     const mockFileEditService = {};
 
-    const mockAnalysisService = {};
+    const mockGeometryAnalysisService = {};
 
     const moduleRef = await Test.createTestingModule({
       controllers: [ChatController],
@@ -180,8 +182,12 @@ describe('ChatController', () => {
           useValue: mockFileEditService,
         },
         {
-          provide: AnalysisService,
-          useValue: mockAnalysisService,
+          provide: GeometryAnalysisService,
+          useValue: mockGeometryAnalysisService,
+        },
+        {
+          provide: MetricsService,
+          useValue: new MetricsService(),
         },
         Reflector,
       ],
@@ -213,16 +219,22 @@ describe('ChatController', () => {
       await controller.createChat(body, mockResponse);
 
       // Assert
-      expect(chatService.createAgent).toHaveBeenCalledWith('test-model', 'auto', 'openscad');
+      expect(chatService.createAgent).toHaveBeenCalledWith({
+        chatId: 'chat_123',
+        modelId: 'test-model',
+        kernel: 'openscad',
+        mode: 'agent',
+        tools: { choice: 'auto', testingEnabled: true },
+      });
       expect(mockAgent.graph.stream).toHaveBeenCalledTimes(1);
 
       // Verify stream was called with messages and correct config
-      const [streamArgs, streamConfig] = mockAgent.graph.stream.mock.calls[0] as [
+      const [streamArguments, streamConfig] = mockAgent.graph.stream.mock.calls[0] as [
         { messages: unknown[] },
         { configurable: { thread_id: string } },
       ];
-      expect(streamArgs).toHaveProperty('messages');
-      expect(Array.isArray(streamArgs.messages)).toBe(true);
+      expect(streamArguments).toHaveProperty('messages');
+      expect(Array.isArray(streamArguments.messages)).toBe(true);
       expect(streamConfig.configurable.thread_id).toBe('chat_123');
 
       expect(mockResponse.send).toHaveBeenCalled();
@@ -237,18 +249,24 @@ describe('ChatController', () => {
         messages: [
           {
             id: 'msg_1',
-            role: 'user' as const,
-            parts: [{ type: 'text' as const, text: 'Hello' }],
-            metadata: { model: 'test-model', kernel: 'openscad' as const, toolChoice: 'none' as const },
+            role: 'user',
+            parts: [{ type: 'text', text: 'Hello' }],
+            metadata: { model: 'test-model', kernel: 'openscad', toolChoice: 'none' },
           },
         ],
-      };
+      } as const satisfies CreateChatDto;
 
       // Act
       await controller.createChat(body, mockResponse);
 
       // Assert
-      expect(chatService.createAgent).toHaveBeenCalledWith('test-model', 'none', 'openscad');
+      expect(chatService.createAgent).toHaveBeenCalledWith({
+        chatId: 'chat_tool_choice',
+        modelId: 'test-model',
+        kernel: 'openscad',
+        mode: 'agent',
+        tools: { choice: 'none', testingEnabled: true },
+      });
     });
   });
 
@@ -322,7 +340,7 @@ describe('ChatController', () => {
       const userMessageWithoutModel: MyUIMessage = {
         id: 'msg_1',
         role: 'user',
-        parts: [{ type: 'text' as const, text: 'Hello' }],
+        parts: [{ type: 'text', text: 'Hello' }],
         metadata: {}, // No model specified
       };
       const body = {
@@ -383,19 +401,19 @@ describe('ChatController', () => {
 
       const snapshot = {
         fileTree: [
-          { path: 'src', name: 'src', type: 'dir' as const, size: 0 },
-          { path: 'src/main.scad', name: 'main.scad', type: 'file' as const, size: 1024 },
+          { path: 'src', name: 'src', type: 'dir', size: 0 },
+          { path: 'src/main.scad', name: 'main.scad', type: 'file', size: 1024 },
         ],
         activeFile: { path: 'src/main.scad', name: 'main.scad' },
         openFiles: [{ path: 'src/main.scad', name: 'main.scad' }],
-      };
+      } as const satisfies ChatSnapshot;
 
-      const messageWithSnapshot: MyUIMessage = {
+      const messageWithSnapshot = {
         id: 'msg_snapshot',
         role: 'user',
         parts: [{ type: 'text', text: 'Create a cube' }],
         metadata: { model: 'test-model', kernel: 'openscad', snapshot },
-      };
+      } as const satisfies MyUIMessage;
 
       const body = {
         id: 'chat_snapshot',
@@ -407,24 +425,24 @@ describe('ChatController', () => {
 
       // Assert - Verify toBaseMessages was called with messages containing injected context
       expect(toBaseMessages).toHaveBeenCalledTimes(1);
-      const [messagesArg] = vi.mocked(toBaseMessages).mock.calls[0] as [UIMessage[]];
+      const [messagesArgument] = vi.mocked(toBaseMessages).mock.calls[0] as [UIMessage[]];
 
       // The message should have 2 parts: injected context + original text
-      expect(messagesArg).toHaveLength(1);
-      expect(messagesArg[0]?.parts).toHaveLength(2);
+      expect(messagesArgument).toHaveLength(1);
+      expect(messagesArgument[0]?.parts).toHaveLength(2);
 
       // First part should be the injected editor context
-      const contextPart = messagesArg[0]?.parts[0] as { type: 'text'; text: string };
+      const contextPart = messagesArgument[0]?.parts[0] as { type: 'text'; text: string };
       expect(contextPart.type).toBe('text');
-      expect(contextPart.text).toContain('<editor_context>');
+      expect(contextPart.text).toContain('<system-reminder>');
       expect(contextPart.text).toContain('<active_file>');
       expect(contextPart.text).toContain('src/main.scad');
       expect(contextPart.text).toContain('<project_layout>');
       expect(contextPart.text).toContain('main.scad (1KB)');
-      expect(contextPart.text).toContain('</editor_context>');
+      expect(contextPart.text).toContain('</system-reminder>');
 
       // Second part should be the original user message
-      const originalPart = messagesArg[0]?.parts[1] as { type: 'text'; text: string };
+      const originalPart = messagesArgument[0]?.parts[1] as { type: 'text'; text: string };
       expect(originalPart.type).toBe('text');
       expect(originalPart.text).toBe('Create a cube');
     });
@@ -450,17 +468,16 @@ describe('ChatController', () => {
 
       // Assert - Verify toBaseMessages was called with original messages (no context injection)
       expect(toBaseMessages).toHaveBeenCalledTimes(1);
-      const [messagesArg] = vi.mocked(toBaseMessages).mock.calls[0] as [UIMessage[]];
+      const [messagesArgument] = vi.mocked(toBaseMessages).mock.calls[0] as [UIMessage[]];
 
       // The message should have only 1 part (the original text, no injected context)
-      expect(messagesArg).toHaveLength(1);
-      expect(messagesArg[0]?.parts).toHaveLength(1);
+      expect(messagesArgument).toHaveLength(1);
+      expect(messagesArgument[0]?.parts).toHaveLength(1);
 
-      const originalPart = messagesArg[0]?.parts[0] as { type: 'text'; text: string };
+      const originalPart = messagesArgument[0]?.parts[0] as { type: 'text'; text: string };
       expect(originalPart.type).toBe('text');
       expect(originalPart.text).toBe('Create a sphere');
-      // Should NOT contain editor_context
-      expect(originalPart.text).not.toContain('<editor_context>');
+      expect(originalPart.text).not.toContain('<system-reminder>');
     });
 
     it('should inject only activeFile context when only activeFile is provided', async () => {
@@ -488,15 +505,14 @@ describe('ChatController', () => {
 
       // Assert - Verify context contains only activeFile (no fileTree, no openFiles)
       expect(toBaseMessages).toHaveBeenCalledTimes(1);
-      const [messagesArg] = vi.mocked(toBaseMessages).mock.calls[0] as [UIMessage[]];
+      const [messagesArgument] = vi.mocked(toBaseMessages).mock.calls[0] as [UIMessage[]];
 
-      expect(messagesArg[0]?.parts).toHaveLength(2);
-      const contextPart = messagesArg[0]?.parts[0] as { type: 'text'; text: string };
+      expect(messagesArgument[0]?.parts).toHaveLength(2);
+      const contextPart = messagesArgument[0]?.parts[0] as { type: 'text'; text: string };
 
-      expect(contextPart.text).toContain('<editor_context>');
+      expect(contextPart.text).toContain('<system-reminder>');
       expect(contextPart.text).toContain('<active_file>');
       expect(contextPart.text).toContain('main.scad');
-      // Should NOT have project_layout or open_files since they weren't provided
       expect(contextPart.text).not.toContain('<project_layout>');
       expect(contextPart.text).not.toContain('<open_files>');
     });
@@ -527,13 +543,13 @@ describe('ChatController', () => {
 
       // Assert - Empty arrays mean no context to inject, so messages should be unchanged
       expect(toBaseMessages).toHaveBeenCalledTimes(1);
-      const [messagesArg] = vi.mocked(toBaseMessages).mock.calls[0] as [UIMessage[]];
+      const [messagesArgument] = vi.mocked(toBaseMessages).mock.calls[0] as [UIMessage[]];
 
       // With empty arrays and no activeFile, there's nothing to inject
-      expect(messagesArg[0]?.parts).toHaveLength(1);
-      const originalPart = messagesArg[0]?.parts[0] as { type: 'text'; text: string };
+      expect(messagesArgument[0]?.parts).toHaveLength(1);
+      const originalPart = messagesArgument[0]?.parts[0] as { type: 'text'; text: string };
       expect(originalPart.text).toBe('Test');
-      expect(originalPart.text).not.toContain('<editor_context>');
+      expect(originalPart.text).not.toContain('<system-reminder>');
     });
   });
 

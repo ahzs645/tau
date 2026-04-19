@@ -9,7 +9,7 @@ import { menuItemVariants, menuSeparatorVariants, menuShortcutClass } from '#com
 function Command({ className, ...properties }: React.ComponentProps<typeof CommandPrimitive>): React.JSX.Element {
   return (
     <CommandPrimitive
-      data-slot="command"
+      data-slot='command'
       className={cn('flex size-full flex-col overflow-hidden rounded-md bg-popover text-popover-foreground', className)}
       {...properties}
     />
@@ -27,12 +27,12 @@ function CommandDialog({
 }): React.JSX.Element {
   return (
     <Dialog {...properties}>
-      <DialogHeader className="sr-only">
+      <DialogHeader className='sr-only'>
         <DialogTitle>{title}</DialogTitle>
         <DialogDescription>{description}</DialogDescription>
       </DialogHeader>
-      <DialogContent className="overflow-hidden p-0 *:data-[slot=dialog-close]:top-2.5 *:data-[slot=dialog-close]:right-2.5">
-        <Command className="**:data-[slot=command-input-wrapper]:h-9 [&_[cmdk-group]:not([hidden])_~[cmdk-group]]:pt-0 [&_[cmdk-input-wrapper]_svg]:size-4 [&_[cmdk-input]]:h-9">
+      <DialogContent className='overflow-hidden p-0 *:data-[slot=dialog-close]:top-2.5 *:data-[slot=dialog-close]:right-2.5'>
+        <Command className='**:data-[slot=command-input-wrapper]:h-9 [&_[cmdk-group]:not([hidden])_~[cmdk-group]]:pt-0 [&_[cmdk-input-wrapper]_svg]:size-4 [&_[cmdk-input]]:h-9'>
           {children}
         </Command>
       </DialogContent>
@@ -45,10 +45,10 @@ function CommandInput({
   ...properties
 }: React.ComponentProps<typeof CommandPrimitive.Input>): React.JSX.Element {
   return (
-    <div data-slot="command-input-wrapper" className="relative flex h-9 items-center gap-2 border-b">
-      <SearchIcon className="pointer-events-none absolute top-1/2 left-3 size-4 shrink-0 -translate-y-1/2 opacity-50" />
+    <div data-slot='command-input-wrapper' className='relative flex h-9 items-center gap-2 border-b'>
+      <SearchIcon className='pointer-events-none absolute top-1/2 left-3 size-4 shrink-0 -translate-y-1/2 opacity-50' />
       <CommandPrimitive.Input
-        data-slot="command-input"
+        data-slot='command-input'
         className={cn(
           'flex h-9 w-full rounded-md bg-transparent py-3 pr-3 pl-9 text-sm outline-hidden placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50',
           className,
@@ -65,7 +65,7 @@ function CommandList({
 }: React.ComponentProps<typeof CommandPrimitive.List>): React.JSX.Element {
   return (
     <CommandPrimitive.List
-      data-slot="command-list"
+      data-slot='command-list'
       className={cn('max-h-[400px] overflow-x-hidden overflow-y-auto', className)}
       {...properties}
     />
@@ -78,7 +78,7 @@ function CommandEmpty({
 }: React.ComponentProps<typeof CommandPrimitive.Empty>): React.JSX.Element {
   return (
     <CommandPrimitive.Empty
-      data-slot="command-empty"
+      data-slot='command-empty'
       className={cn(emptyItemVariants({ variant: 'default' }), className)}
       {...properties}
     />
@@ -91,7 +91,7 @@ function CommandGroup({
 }: React.ComponentProps<typeof CommandPrimitive.Group>): React.JSX.Element {
   return (
     <CommandPrimitive.Group
-      data-slot="command-group"
+      data-slot='command-group'
       className={cn(
         'overflow-hidden p-1 text-foreground [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-xs [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground',
         className,
@@ -107,7 +107,7 @@ function CommandSeparator({
 }: React.ComponentProps<typeof CommandPrimitive.Separator>): React.JSX.Element {
   return (
     <CommandPrimitive.Separator
-      data-slot="command-separator"
+      data-slot='command-separator'
       className={cn(menuSeparatorVariants(), className)}
       {...properties}
     />
@@ -120,7 +120,7 @@ function CommandItem({
 }: React.ComponentProps<typeof CommandPrimitive.Item>): React.JSX.Element {
   return (
     <CommandPrimitive.Item
-      data-slot="command-item"
+      data-slot='command-item'
       className={cn(
         menuItemVariants({ highlight: 'selected' }),
         // Cmdk sets data-disabled="false" on ALL non-disabled items, but Tailwind's data-disabled: matches bare attribute presence.
@@ -134,7 +134,7 @@ function CommandItem({
 }
 
 function CommandShortcut({ className, ...properties }: React.ComponentProps<'span'>): React.JSX.Element {
-  return <span data-slot="command-shortcut" className={cn(menuShortcutClass, className)} {...properties} />;
+  return <span data-slot='command-shortcut' className={cn(menuShortcutClass, className)} {...properties} />;
 }
 
 export {

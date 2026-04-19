@@ -1,19 +1,112 @@
-import { assign, assertEvent, setup, fromPromise, emit, fromCallback } from 'xstate';
-import type { OutputFrom, DoneActorEvent, AnyActorRef } from 'xstate';
+import { assign, assertEvent, setup, emit, fromCallback, waitFor } from 'xstate';
+import type { ActorRefFrom } from 'xstate';
 import git from 'isomorphic-git';
 import http from 'isomorphic-git/http/web';
-import { gitFs, ensureGitFsConfigured } from '#db/storage.js';
-import { assertActorDoneEvent } from '#lib/xstate.js';
+import type { FileStat } from '@taucad/types';
+import { fromSafeAsync } from '#lib/xstate.lib.js';
 import { gitAttributesTemplate } from '#constants/gitattributes-template.js';
-import { gitMountPoint } from '#filesystem/zenfs-config.js';
-import { joinPath } from '#utils/path.utils.js';
+import { joinPath } from '@taucad/utils/path';
+import type { FileManagerMachine } from '#machines/file-manager.machine.js';
+import type { FileManagerProxy } from '#machines/file-manager.machine.types.js';
+import type { FileContentService } from '#lib/file-content-service.js';
+
+/** Git mount point prefix for git operations within the filesystem. */
+const gitMountPrefix = '/git';
 
 /**
- * Get the directory path for a build in the git virtual filesystem.
- * Uses the /git mount point for isolated git storage.
+ * Get the directory path for a project in the git virtual filesystem.
+ * Uses the /git prefix for isolated git storage.
  */
-export function getBuildDirectory(buildId: string): string {
-  return joinPath(gitMountPoint, 'builds', buildId);
+export function getProjectDirectory(projectId: string): string {
+  return joinPath(gitMountPrefix, 'projects', projectId);
+}
+
+/**
+ * Wrap a simplified stat result into an isomorphic-git-compatible stat object.
+ */
+
+function wrapStat(s: FileStat): {
+  size: number;
+  mode: number;
+  mtimeMs: number;
+  isFile(): boolean;
+  isDirectory(): boolean;
+  isSymbolicLink(): boolean;
+} {
+  return {
+    isFile: () => s.type === 'file',
+    isDirectory: () => s.type === 'dir',
+    isSymbolicLink: () => false,
+    size: s.size,
+    mode: s.type === 'dir' ? 0o4_0755 : 0o10_0644,
+    mtimeMs: s.mtimeMs,
+  };
+}
+
+type GitFsAdapter = {
+  promises: {
+    readFile(path: string, options?: { encoding?: string }): Promise<unknown>;
+    writeFile(path: string, data: unknown, encoding?: string): Promise<void>;
+    stat(path: string): Promise<ReturnType<typeof wrapStat>>;
+    lstat(path: string): Promise<ReturnType<typeof wrapStat>>;
+    mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
+    readdir(path: string): Promise<string[]>;
+    unlink(path: string): Promise<void>;
+    rmdir(path: string): Promise<void>;
+  };
+};
+
+/**
+ * Create an isomorphic-git-compatible `fs` adapter from a FileManagerProxy.
+ * Wraps stat/lstat return values so they include isFile()/isDirectory()/isSymbolicLink().
+ */
+function createGitFsAdapter(proxy: FileManagerProxy): GitFsAdapter {
+  return {
+    promises: {
+      async readFile(path: string, options?: { encoding?: string }): Promise<unknown> {
+        if (options?.encoding === 'utf8') {
+          return proxy.readFile(path, 'utf8');
+        }
+
+        return proxy.readFile(path);
+      },
+      async writeFile(path: string, data: unknown): Promise<void> {
+        return proxy.writeFile(path, data as Uint8Array<ArrayBuffer> | string);
+      },
+      async stat(path: string): Promise<ReturnType<typeof wrapStat>> {
+        return wrapStat(await proxy.stat(path));
+      },
+      async lstat(path: string): Promise<ReturnType<typeof wrapStat>> {
+        return wrapStat(await proxy.lstat(path));
+      },
+      async mkdir(path: string, options?: { recursive?: boolean }): Promise<void> {
+        return proxy.mkdir(path, options);
+      },
+      async readdir(path: string): Promise<string[]> {
+        return proxy.readdir(path);
+      },
+      async unlink(path: string): Promise<void> {
+        return proxy.unlink(path);
+      },
+      async rmdir(path: string): Promise<void> {
+        return proxy.rmdir(path);
+      },
+    },
+  };
+}
+
+/**
+ * Obtain a git-compatible fs adapter from a file manager actor ref.
+ * Waits for the file manager to enter the 'ready' state, then wraps its proxy.
+ */
+async function getGitFs(fileManagerReference: ActorRefFrom<FileManagerMachine>): Promise<GitFsAdapter> {
+  const snapshot = await waitFor(fileManagerReference, (state) => state.matches('ready'));
+  const { proxy } = snapshot.context;
+  if (!proxy) {
+    throw new Error('File manager proxy not available');
+  }
+
+  return createGitFsAdapter(proxy);
 }
 
 /**
@@ -39,8 +132,7 @@ export type GitRepository = {
  * Git Machine Context
  */
 export type GitContext = {
-  parentRef: AnyActorRef | undefined;
-  buildId: string | undefined;
+  projectId: string | undefined;
   accessToken: string | undefined;
   provider: 'github' | undefined;
   repository: GitRepository | undefined;
@@ -51,68 +143,59 @@ export type GitContext = {
   isInitialized: boolean;
   username: string | undefined;
   email: string | undefined;
+  fileManagerRef: ActorRefFrom<FileManagerMachine>;
 };
 
 /**
  * Git Machine Input
  */
 type GitInput = {
-  buildId?: string;
-  parentRef?: AnyActorRef;
+  projectId?: string;
+  fileManagerRef: ActorRefFrom<FileManagerMachine>;
 };
 
-// Define the actors that the machine can invoke
-const initGitActor = fromPromise<{ buildId: string }, { buildId: string; repository: GitRepository }>(
+export type GitActorInput = {
+  fileManagerRef: ActorRefFrom<FileManagerMachine>;
+};
+
+const initGitActor = fromSafeAsync<void, GitActorInput & { projectId: string; repository: GitRepository }>(
   async ({ input }) => {
-    await ensureGitFsConfigured();
-    if (!gitFs) {
-      throw new Error('ZenFS not initialized');
-    }
+    const fs = await getGitFs(input.fileManagerRef);
+    const directory = getProjectDirectory(input.projectId);
 
-    const fs = gitFs;
-    const dir = getBuildDirectory(input.buildId);
+    await git.init({ fs, dir: directory, defaultBranch: input.repository.branch });
 
-    // Initialize git repository
-    await git.init({ fs, dir, defaultBranch: input.repository.branch });
-
-    // Add remote
     await git.addRemote({
       fs,
-      dir,
+      dir: directory,
       remote: 'origin',
       url: input.repository.url,
     });
 
-    // Create .gitattributes file for binary file handling
-    const gitAttributesPath = joinPath(dir, '.gitattributes');
+    const gitAttributesPath = joinPath(directory, '.gitattributes');
     try {
-      // Check if .gitattributes already exists
       await fs.promises.stat(gitAttributesPath);
     } catch {
-      // Doesn't exist, create it
       await fs.promises.writeFile(gitAttributesPath, gitAttributesTemplate, 'utf8');
     }
-
-    return { buildId: input.buildId };
   },
 );
 
-const cloneRepositoryActor = fromPromise<
-  { buildId: string },
-  { buildId: string; repository: GitRepository; accessToken: string; username: string }
->(async ({ input }) => {
-  await ensureGitFsConfigured();
-  if (!gitFs) {
-    throw new Error('ZenFS not initialized');
-  }
+type CloneRepositoryInput = GitActorInput & {
+  projectId: string;
+  repository: GitRepository;
+  accessToken: string;
+  username: string;
+};
 
-  const fs = gitFs;
-  const dir = getBuildDirectory(input.buildId);
+const cloneRepositoryActor = fromSafeAsync<void, CloneRepositoryInput>(async ({ input }) => {
+  const fs = await getGitFs(input.fileManagerRef);
+  const directory = getProjectDirectory(input.projectId);
 
   await git.clone({
     fs,
     http,
-    dir,
+    dir: directory,
     url: input.repository.url,
     ref: input.repository.branch,
     singleBranch: true,
@@ -122,86 +205,68 @@ const cloneRepositoryActor = fromPromise<
       password: input.accessToken,
     }),
   });
-
-  return { buildId: input.buildId };
 });
 
-const stageFileActor = fromPromise<string, { buildId: string; path: string }>(async ({ input }) => {
-  await ensureGitFsConfigured();
-  if (!gitFs) {
-    throw new Error('ZenFS not initialized');
-  }
+type StageInput = GitActorInput & { projectId: string; path: string };
 
-  const fs = gitFs;
-  const dir = getBuildDirectory(input.buildId);
+const stageFileActor = fromSafeAsync<{ type: 'fileStaged'; path: string }, StageInput>(async ({ input }) => {
+  const fs = await getGitFs(input.fileManagerRef);
+  const directory = getProjectDirectory(input.projectId);
 
   await git.add({
     fs,
-    dir,
+    dir: directory,
     filepath: input.path,
   });
 
-  return input.path;
+  return { type: 'fileStaged', path: input.path };
 });
 
-const unstageFileActor = fromPromise<string, { buildId: string; path: string }>(async ({ input }) => {
-  await ensureGitFsConfigured();
-  if (!gitFs) {
-    throw new Error('ZenFS not initialized');
-  }
-
-  const fs = gitFs;
-  const dir = getBuildDirectory(input.buildId);
+const unstageFileActor = fromSafeAsync<{ type: 'fileUnstaged'; path: string }, StageInput>(async ({ input }) => {
+  const fs = await getGitFs(input.fileManagerRef);
+  const directory = getProjectDirectory(input.projectId);
 
   await git.remove({
     fs,
-    dir,
+    dir: directory,
     filepath: input.path,
   });
 
-  return input.path;
+  return { type: 'fileUnstaged', path: input.path };
 });
 
-const commitChangesActor = fromPromise<string, { buildId: string; message: string; username: string; email: string }>(
-  async ({ input }) => {
-    await ensureGitFsConfigured();
-    if (!gitFs) {
-      throw new Error('ZenFS not initialized');
-    }
+type CommitInput = GitActorInput & {
+  projectId: string;
+  message: string;
+  username: string;
+  email: string;
+};
 
-    const fs = gitFs;
-    const dir = getBuildDirectory(input.buildId);
+const commitChangesActor = fromSafeAsync<{ type: 'commitCreated'; sha: string }, CommitInput>(async ({ input }) => {
+  const fs = await getGitFs(input.fileManagerRef);
+  const directory = getProjectDirectory(input.projectId);
 
-    const sha = await git.commit({
-      fs,
-      dir,
-      message: input.message,
-      author: {
-        name: input.username,
-        email: input.email,
-      },
-    });
+  const sha = await git.commit({
+    fs,
+    dir: directory,
+    message: input.message,
+    author: {
+      name: input.username,
+      email: input.email,
+    },
+  });
 
-    return sha;
-  },
-);
+  return { type: 'commitCreated', sha };
+});
 
-const pushChangesActor = fromPromise<
-  boolean,
-  { buildId: string; repository: GitRepository; accessToken: string; username: string }
->(async ({ input }) => {
-  await ensureGitFsConfigured();
-  if (!gitFs) {
-    throw new Error('ZenFS not initialized');
-  }
-
-  const fs = gitFs;
-  const dir = getBuildDirectory(input.buildId);
+const pushChangesActor = fromSafeAsync<void, CloneRepositoryInput>(async ({ input }) => {
+  const fs = await getGitFs(input.fileManagerRef);
+  const directory = getProjectDirectory(input.projectId);
 
   await git.push({
     fs,
     http,
-    dir,
+    dir: directory,
     remote: 'origin',
     ref: input.repository.branch,
     onAuth: () => ({
@@ -209,26 +274,16 @@ const pushChangesActor = fromPromise<
       password: input.accessToken,
     }),
   });
-
-  return true;
 });
 
-const pullChangesActor = fromPromise<
-  boolean,
-  { buildId: string; repository: GitRepository; accessToken: string; username: string }
->(async ({ input }) => {
-  await ensureGitFsConfigured();
-  if (!gitFs) {
-    throw new Error('ZenFS not initialized');
-  }
-
-  const fs = gitFs;
-  const dir = getBuildDirectory(input.buildId);
+const pullChangesActor = fromSafeAsync<void, CloneRepositoryInput>(async ({ input }) => {
+  const fs = await getGitFs(input.fileManagerRef);
+  const directory = getProjectDirectory(input.projectId);
 
   await git.pull({
     fs,
     http,
-    dir,
+    dir: directory,
     ref: input.repository.branch,
     author: {
       name: input.username,
@@ -239,30 +294,24 @@ const pullChangesActor = fromPromise<
       password: input.accessToken,
     }),
   });
-
-  return true;
 });
 
-// eslint-disable-next-line complexity -- TODO: address
-const refreshGitStatusActor = fromPromise<Map<string, GitFileStatus>, { buildId: string }>(async ({ input }) => {
-  await ensureGitFsConfigured();
-  if (!gitFs) {
-    throw new Error('ZenFS not initialized');
-  }
-
-  const fs = gitFs;
-  const dir = getBuildDirectory(input.buildId);
+// oxlint-disable-next-line complexity -- TODO: address
+const refreshGitStatusActor = fromSafeAsync<
+  { type: 'statusRefreshed'; fileStatuses: Map<string, GitFileStatus> },
+  GitActorInput & { projectId: string }
+>(async ({ input }) => {
+  const fs = await getGitFs(input.fileManagerRef);
+  const directory = getProjectDirectory(input.projectId);
 
   try {
-    // Get list of all files in the working directory
-    const statusMatrix = await git.statusMatrix({ fs, dir });
+    const statusMatrix = await git.statusMatrix({ fs, dir: directory });
     const fileStatuses = new Map<string, GitFileStatus>();
 
     for (const [filepath, headStatus, workdirStatus, stageStatus] of statusMatrix) {
       let status: 'clean' | 'modified' | 'added' | 'deleted' | 'untracked' = 'clean';
       let staged = false;
 
-      // Determine file status based on statusMatrix values
       if (headStatus === 0 && workdirStatus === 2 && stageStatus === 0) {
         status = 'untracked';
       } else if (headStatus === 1 && workdirStatus === 2 && stageStatus === 2) {
@@ -289,42 +338,28 @@ const refreshGitStatusActor = fromPromise<Map<string, GitFileStatus>, { buildId:
       });
     }
 
-    return fileStatuses;
+    return { type: 'statusRefreshed', fileStatuses };
   } catch {
-    // Git not initialized or other error
-    return new Map<string, GitFileStatus>();
+    return { type: 'statusRefreshed', fileStatuses: new Map<string, GitFileStatus>() };
   }
 });
 
-const buildListenerActor = fromCallback<{ type: 'refreshStatus' }, { parentRef: AnyActorRef | undefined }>(
-  ({ input, sendBack }) => {
-    if (!input.parentRef) {
-      return () => {
-        // No cleanup needed
-      };
-    }
-
-    const { parentRef } = input;
-
-    const fileCreatedSub = parentRef.on('fileCreated', () => {
-      sendBack({ type: 'refreshStatus' });
-    });
-
-    const fileUpdatedSub = parentRef.on('fileUpdated', () => {
-      sendBack({ type: 'refreshStatus' });
-    });
-
-    const fileDeletedSub = parentRef.on('fileDeleted', () => {
-      sendBack({ type: 'refreshStatus' });
-    });
-
+const projectListenerActor = fromCallback<
+  { type: 'refreshStatus' },
+  { contentService: FileContentService | undefined }
+>(({ input, sendBack }) => {
+  if (!input.contentService) {
     return () => {
-      fileCreatedSub.unsubscribe();
-      fileUpdatedSub.unsubscribe();
-      fileDeletedSub.unsubscribe();
+      // No cleanup needed
     };
-  },
-);
+  }
+
+  return input.contentService.onDidContentChange((event) => {
+    if (event.type !== 'read') {
+      sendBack({ type: 'refreshStatus' });
+    }
+  });
+});
 
 const gitActors = {
   initGitActor,
@@ -335,17 +370,20 @@ const gitActors = {
   pushChangesActor,
   pullChangesActor,
   refreshGitStatusActor,
-  buildListener: buildListenerActor,
+  buildListener: projectListenerActor,
 } as const;
-
-type GitActorNames = keyof typeof gitActors;
 
 /**
  * Git Machine Events
  */
-type GitEventInternal =
-  | { type: 'connect'; buildId: string }
-  | { type: 'authenticate'; accessToken: string; username: string; email: string }
+type GitEvent =
+  | { type: 'connect'; projectId: string }
+  | {
+      type: 'authenticate';
+      accessToken: string;
+      username: string;
+      email: string;
+    }
   | { type: 'selectRepository'; repository: GitRepository }
   | { type: 'createRepository'; name: string; isPrivate: boolean }
   | { type: 'clone'; repository: GitRepository }
@@ -356,12 +394,11 @@ type GitEventInternal =
   | { type: 'pull' }
   | { type: 'refreshStatus' }
   | { type: 'disconnect' }
-  | { type: 'retry' };
-
-export type GitEventExternal = OutputFrom<(typeof gitActors)[GitActorNames]>;
-type GitEventExternalDone = DoneActorEvent<GitEventExternal, GitActorNames>;
-
-type GitEvent = GitEventExternalDone | GitEventInternal;
+  | { type: 'retry' }
+  | { type: 'fileStaged'; path: string }
+  | { type: 'fileUnstaged'; path: string }
+  | { type: 'commitCreated'; sha: string }
+  | { type: 'statusRefreshed'; fileStatuses: Map<string, GitFileStatus> };
 
 /**
  * Git Machine Emitted Events
@@ -400,13 +437,13 @@ type GitEmitted =
  */
 export const gitMachine = setup({
   types: {
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     context: {} as GitContext,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     events: {} as GitEvent,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     emitted: {} as GitEmitted,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     input: {} as GitInput,
   },
   actors: gitActors,
@@ -434,10 +471,10 @@ export const gitMachine = setup({
     clearError: assign({
       error: undefined,
     }),
-    setBuildId: assign({
-      buildId({ event }) {
+    setProjectId: assign({
+      projectId({ event }) {
         assertEvent(event, 'connect');
-        return event.buildId;
+        return event.projectId;
       },
     }),
     setAuthentication: assign({
@@ -462,14 +499,13 @@ export const gitMachine = setup({
     }),
     updateFileStatuses: assign({
       fileStatuses({ event }) {
-        assertActorDoneEvent(event);
-        return event.output as Map<string, GitFileStatus>;
+        assertEvent(event, 'statusRefreshed');
+        return event.fileStatuses;
       },
       stagedFiles({ event }) {
-        assertActorDoneEvent(event);
-        const statuses = event.output as Map<string, GitFileStatus>;
+        assertEvent(event, 'statusRefreshed');
         const staged = new Set<string>();
-        for (const [path, status] of statuses) {
+        for (const [path, status] of event.fileStatuses) {
           if (status.staged) {
             staged.add(path);
           }
@@ -480,19 +516,17 @@ export const gitMachine = setup({
     }),
     addToStagedFiles: assign({
       stagedFiles({ context, event }) {
-        assertActorDoneEvent(event);
-        const path = event.output as string;
+        assertEvent(event, 'fileStaged');
         const updated = new Set(context.stagedFiles);
-        updated.add(path);
+        updated.add(event.path);
         return updated;
       },
     }),
     removeFromStagedFiles: assign({
       stagedFiles({ context, event }) {
-        assertActorDoneEvent(event);
-        const path = event.output as string;
+        assertEvent(event, 'fileUnstaged');
         const updated = new Set(context.stagedFiles);
-        updated.delete(path);
+        updated.delete(event.path);
         return updated;
       },
     }),
@@ -519,8 +553,7 @@ export const gitMachine = setup({
 }).createMachine({
   id: 'git',
   context: ({ input }) => ({
-    parentRef: input.parentRef,
-    buildId: input.buildId,
+    projectId: input.projectId,
     accessToken: undefined,
     provider: undefined,
     repository: undefined,
@@ -531,6 +564,7 @@ export const gitMachine = setup({
     isInitialized: false,
     username: undefined,
     email: undefined,
+    fileManagerRef: input.fileManagerRef,
   }),
   initial: 'disconnected',
   states: {
@@ -538,7 +572,7 @@ export const gitMachine = setup({
       on: {
         connect: {
           target: 'checkingAuthentication',
-          actions: 'setBuildId',
+          actions: 'setProjectId',
         },
       },
     },
@@ -550,7 +584,7 @@ export const gitMachine = setup({
         },
         {
           target: 'authenticating',
-          actions: emit({ type: 'authenticationRequired' as const }),
+          actions: emit({ type: 'authenticationRequired' }),
         },
       ],
     },
@@ -561,7 +595,7 @@ export const gitMachine = setup({
           actions: [
             'setAuthentication',
             emit(({ event }) => ({
-              type: 'authenticated' as const,
+              type: 'authenticated',
               username: event.username,
             })),
           ],
@@ -578,7 +612,7 @@ export const gitMachine = setup({
           actions: [
             'setRepository',
             emit(({ event }) => ({
-              type: 'repositorySelected' as const,
+              type: 'repositorySelected',
               repository: event.repository,
             })),
           ],
@@ -587,7 +621,7 @@ export const gitMachine = setup({
           // Repository creation would be handled externally via GitHub API
           // then the created repo would be selected
           actions: emit(({ event }) => ({
-            type: 'repositoryCreated' as const,
+            type: 'repositoryCreated',
             repository: {
               owner: '',
               name: event.name,
@@ -607,21 +641,22 @@ export const gitMachine = setup({
       invoke: {
         src: 'cloneRepositoryActor',
         input: ({ context }) => ({
-          buildId: context.buildId!,
+          fileManagerRef: context.fileManagerRef,
+          projectId: context.projectId!,
           repository: context.repository!,
           accessToken: context.accessToken!,
           username: context.username!,
         }),
         onDone: {
           target: 'refreshingStatus',
-          actions: ['markInitialized', emit({ type: 'cloneComplete' as const })],
+          actions: ['markInitialized', emit({ type: 'cloneComplete' })],
         },
         onError: {
           target: 'error',
           actions: [
             'setError',
             emit(({ event }) => ({
-              type: 'error' as const,
+              type: 'error',
               error: event.error as Error,
             })),
           ],
@@ -632,7 +667,9 @@ export const gitMachine = setup({
       invoke: {
         id: 'buildListener',
         src: 'buildListener',
-        input: ({ context }) => ({ parentRef: context.parentRef }),
+        input: ({ context }) => ({
+          contentService: context.fileManagerRef.getSnapshot().context.contentService,
+        }),
       },
       on: {
         stageFile: 'stagingFile',
@@ -653,28 +690,31 @@ export const gitMachine = setup({
         src: 'stageFileActor',
         input({ context, event }) {
           assertEvent(event, 'stageFile');
-          return { buildId: context.buildId!, path: event.path };
+          return {
+            fileManagerRef: context.fileManagerRef,
+            projectId: context.projectId!,
+            path: event.path,
+          };
         },
-        onDone: {
-          target: 'refreshingStatus',
-          actions: [
-            'addToStagedFiles',
-            emit(({ event }) => {
-              assertActorDoneEvent(event);
-              return {
-                type: 'fileStaged' as const,
-                path: event.output,
-              };
-            }),
-          ],
-        },
+        onDone: 'refreshingStatus',
         onError: {
           target: 'error',
           actions: [
             'setError',
             emit(({ event }) => ({
-              type: 'error' as const,
+              type: 'error',
               error: event.error as Error,
+            })),
+          ],
+        },
+      },
+      on: {
+        fileStaged: {
+          actions: [
+            'addToStagedFiles',
+            emit(({ event }) => ({
+              type: 'fileStaged',
+              path: event.path,
             })),
           ],
         },
@@ -686,28 +726,31 @@ export const gitMachine = setup({
         src: 'unstageFileActor',
         input({ context, event }) {
           assertEvent(event, 'unstageFile');
-          return { buildId: context.buildId!, path: event.path };
+          return {
+            fileManagerRef: context.fileManagerRef,
+            projectId: context.projectId!,
+            path: event.path,
+          };
         },
-        onDone: {
-          target: 'refreshingStatus',
-          actions: [
-            'removeFromStagedFiles',
-            emit(({ event }) => {
-              assertActorDoneEvent(event);
-              return {
-                type: 'fileUnstaged' as const,
-                path: event.output,
-              };
-            }),
-          ],
-        },
+        onDone: 'refreshingStatus',
         onError: {
           target: 'error',
           actions: [
             'setError',
             emit(({ event }) => ({
-              type: 'error' as const,
+              type: 'error',
               error: event.error as Error,
+            })),
+          ],
+        },
+      },
+      on: {
+        fileUnstaged: {
+          actions: [
+            'removeFromStagedFiles',
+            emit(({ event }) => ({
+              type: 'fileUnstaged',
+              path: event.path,
             })),
           ],
         },
@@ -718,33 +761,33 @@ export const gitMachine = setup({
       invoke: {
         src: 'commitChangesActor',
         input: ({ context }) => ({
-          buildId: context.buildId!,
+          fileManagerRef: context.fileManagerRef,
+          projectId: context.projectId!,
           message: context.commitMessage!,
           username: context.username!,
           email: context.email!,
         }),
         onDone: {
           target: 'refreshingStatus',
-          actions: [
-            'clearCommitMessage',
-            emit(({ event }) => {
-              assertActorDoneEvent(event);
-              return {
-                type: 'commitCreated' as const,
-                sha: event.output,
-              };
-            }),
-          ],
+          actions: 'clearCommitMessage',
         },
         onError: {
           target: 'error',
           actions: [
             'setError',
             emit(({ event }) => ({
-              type: 'error' as const,
+              type: 'error',
               error: event.error as Error,
             })),
           ],
+        },
+      },
+      on: {
+        commitCreated: {
+          actions: emit(({ event }) => ({
+            type: 'commitCreated',
+            sha: event.sha,
+          })),
         },
       },
     },
@@ -753,21 +796,22 @@ export const gitMachine = setup({
       invoke: {
         src: 'pushChangesActor',
         input: ({ context }) => ({
-          buildId: context.buildId!,
+          fileManagerRef: context.fileManagerRef,
+          projectId: context.projectId!,
           repository: context.repository!,
           accessToken: context.accessToken!,
           username: context.username!,
         }),
         onDone: {
           target: 'ready',
-          actions: emit({ type: 'pushComplete' as const }),
+          actions: emit({ type: 'pushComplete' }),
         },
         onError: {
           target: 'error',
           actions: [
             'setError',
             emit(({ event }) => ({
-              type: 'error' as const,
+              type: 'error',
               error: event.error as Error,
             })),
           ],
@@ -779,21 +823,22 @@ export const gitMachine = setup({
       invoke: {
         src: 'pullChangesActor',
         input: ({ context }) => ({
-          buildId: context.buildId!,
+          fileManagerRef: context.fileManagerRef,
+          projectId: context.projectId!,
           repository: context.repository!,
           accessToken: context.accessToken!,
           username: context.username!,
         }),
         onDone: {
           target: 'refreshingStatus',
-          actions: emit({ type: 'pullComplete' as const }),
+          actions: emit({ type: 'pullComplete' }),
         },
         onError: {
           target: 'error',
           actions: [
             'setError',
             emit(({ event }) => ({
-              type: 'error' as const,
+              type: 'error',
               error: event.error as Error,
             })),
           ],
@@ -804,24 +849,23 @@ export const gitMachine = setup({
       invoke: {
         src: 'refreshGitStatusActor',
         input: ({ context }) => ({
-          buildId: context.buildId!,
+          fileManagerRef: context.fileManagerRef,
+          projectId: context.projectId!,
         }),
-        onDone: {
+        onDone: 'ready',
+        onError: {
           target: 'ready',
+        },
+      },
+      on: {
+        statusRefreshed: {
           actions: [
             'updateFileStatuses',
-            emit(({ event }) => {
-              assertActorDoneEvent(event);
-              return {
-                type: 'statusUpdated' as const,
-                fileStatuses: event.output,
-              };
-            }),
+            emit(({ event }) => ({
+              type: 'statusUpdated',
+              fileStatuses: event.fileStatuses,
+            })),
           ],
-        },
-        onError: {
-          // If status refresh fails, just go back to ready
-          target: 'ready',
         },
       },
     },

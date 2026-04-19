@@ -24,9 +24,9 @@ isProject: false
 
 ## Context
 
-The Tau monorepo (pnpm 10.13.1, which supports catalogs since 9.5.0) currently has ~160 production deps + ~78 dev deps in the root [package.json](package.json), with minimal overlap across sub-packages today. However, as `@taucad/kernels` is extracted (carrying ~20 production deps out of root into its own `package.json`), version drift becomes a real risk. Catalogs solve this preemptively.
+The Tau monorepo (pnpm 10.13.1, which supports catalogs since 9.5.0) currently has ~160 production deps + ~78 dev deps in the root [package.json](package.json), with minimal overlap across sub-packages today. However, as `@taucad/runtime` is extracted (carrying ~20 production deps out of root into its own `package.json`), version drift becomes a real risk. Catalogs solve this preemptively.
 
-Current [pnpm-workspace.yaml](pnpm-workspace.yaml) has no catalog entries. The workspace contains 3 publishable packages (`converter`, `js`, `json-schema`) plus the soon-to-be-created `kernels`, 6 internal libs, and 2 apps.
+Current [pnpm-workspace.yaml](pnpm-workspace.yaml) has no catalog entries. The workspace contains 3 publishable packages (`converter`, `js`, `json-schema`) plus the soon-to-be-created `runtime`, 6 internal libs, and 2 apps.
 
 ---
 
@@ -48,14 +48,14 @@ Three tiers of dependencies to catalog:
 
 **Tier 2 -- Will be duplicated after kernel extraction (proactive):**
 
-These deps currently live only in root but will also appear in `packages/kernels/package.json`:
+These deps currently live only in root but will also appear in `packages/runtime/package.json`:
 
 - `replicad`, `replicad-opencascadejs`, `@jscad/modeling`, `openscad-wasm-prebuilt`
 - `@taucad/kcl-wasm-lib`, `esbuild-wasm`, `es-module-lexer`
 - `cdn-resolve` (via `@taucad/utils`), `@msgpack/msgpack`, `deepmerge`
 - `source-map-js`, `json-schema`, `json-schema-default`, `uint8array-extras`
 - `zod`, `type-fest`, `comlink`
-- `@zenfs/core`, `@zenfs/dom` (kernels devDeps)
+- `@zenfs/core`, `@zenfs/dom` (runtime devDeps)
 
 **Tier 3 -- Shared tooling/framework deps (single version enforcement):**
 
@@ -100,7 +100,7 @@ From the pnpm source code (verified at `repos/pnpm/pkg-manifest/exportable-manif
 Add a verification step to Phase 7 of the kernel migration:
 
 ```bash
-cd packages/kernels && pnpm pack --dry-run
+cd packages/runtime && pnpm pack --dry-run
 # Inspect the output manifest -- verify no "catalog:" strings remain
 tar -tzf taucad-kernels-*.tgz | xargs -I{} tar -xf taucad-kernels-*.tgz {} --to-stdout | grep -c "catalog:" 
 # Expected: 0
@@ -134,7 +134,7 @@ catalog:
   "@react-router/node": "^7.9.6"
   isbot: "^5.1.28"
 
-  # === Tier 2: Will be shared with @taucad/kernels ===
+  # === Tier 2: Will be shared with @taucad/runtime ===
   replicad: "^0.19.1"
   replicad-opencascadejs: "^0.19.0"
   "@jscad/modeling": "^2.12.6"
@@ -245,13 +245,13 @@ cd packages/json-schema && pnpm pack --dry-run
 
 ## 4. Integration with Kernel Migration Plan
 
-The catalog phases (C0-C4) should be executed **before Phase 3a** (Scaffold `packages/kernels`) of the existing kernel migration plan. This way:
+The catalog phases (C0-C4) should be executed **before Phase 3a** (Scaffold `packages/runtime`) of the existing kernel migration plan. This way:
 
-1. The catalog infrastructure is already in place when we create `packages/kernels/package.json`
-2. All of the kernels' production deps (Tier 2) can use `catalog:` from the start
+1. The catalog infrastructure is already in place when we create `packages/runtime/package.json`
+2. All of the runtime's production deps (Tier 2) can use `catalog:` from the start
 3. The root `package.json` already uses `catalog:` for these deps, guaranteeing version alignment
 
-When Phase 3a creates `packages/kernels/package.json`, its deps will look like:
+When Phase 3a creates `packages/runtime/package.json`, its deps will look like:
 
 ```json
 {
@@ -299,7 +299,7 @@ The complete ordered sequence, with catalog phases inserted:
 6. **Phase C2**: Update existing sub-package `package.json` files to use `catalog:`
 7. **Phase C3**: `pnpm install` + verify typecheck/tests
 8. **Phase C4**: Verify publish safety (`pnpm pack --dry-run`)
-9. **Phase 3a**: Scaffold `packages/kernels` (using `catalog:` for all deps)
+9. **Phase 3a**: Scaffold `packages/runtime` (using `catalog:` for all deps)
 10. **Phase 3b**: Copy kernel files
 11. **Phase 3c**: Implement `createDefaultConfig()` factory
 12. **Phase 4**: Adapt tests

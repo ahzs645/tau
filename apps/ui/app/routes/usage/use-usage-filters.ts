@@ -7,7 +7,7 @@ export type UsageFilters = {
   dateRange: DateRange | undefined;
   models: string[];
   providers: string[];
-  builds: string[];
+  projects: string[];
 };
 
 type UseUsageFiltersReturn = {
@@ -15,12 +15,12 @@ type UseUsageFiltersReturn = {
   setDateRange: (range: DateRange | undefined) => void;
   setModels: (models: string[]) => void;
   setProviders: (providers: string[]) => void;
-  setBuilds: (builds: string[]) => void;
+  setProjects: (projects: string[]) => void;
   clearFilters: () => void;
   applyFilters: (records: UsageRecord[]) => UsageRecord[];
   availableModels: string[];
   availableProviders: string[];
-  availableBuilds: Array<{ id: string; name: string }>;
+  availableProjects: Array<{ id: string; name: string }>;
 };
 
 const defaultDateRange: DateRange = {
@@ -35,7 +35,7 @@ export function useUsageFilters(records: UsageRecord[]): UseUsageFiltersReturn {
   const [dateRange, setDateRange] = useState<DateRange | undefined>(defaultDateRange);
   const [models, setModels] = useState<string[]>([]);
   const [providers, setProviders] = useState<string[]>([]);
-  const [builds, setBuilds] = useState<string[]>([]);
+  const [projects, setProjects] = useState<string[]>([]);
 
   // Extract available filter options from records
   const availableModels = useMemo(() => {
@@ -56,20 +56,20 @@ export function useUsageFilters(records: UsageRecord[]): UseUsageFiltersReturn {
     return [...providerSet].sort();
   }, [records]);
 
-  const availableBuilds = useMemo(() => {
-    const buildMap = new Map<string, string>();
+  const availableProjects = useMemo(() => {
+    const projectMap = new Map<string, string>();
     for (const record of records) {
-      buildMap.set(record.buildId, record.buildName);
+      projectMap.set(record.projectId, record.projectName);
     }
 
-    return [...buildMap.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
+    return [...projectMap.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name));
   }, [records]);
 
   const clearFilters = useCallback(() => {
     setDateRange(defaultDateRange);
     setModels([]);
     setProviders([]);
-    setBuilds([]);
+    setProjects([]);
   }, []);
 
   const applyFilters = useCallback(
@@ -97,15 +97,15 @@ export function useUsageFilters(records: UsageRecord[]): UseUsageFiltersReturn {
           return false;
         }
 
-        // Build filter
-        if (builds.length > 0 && !builds.includes(record.buildId)) {
+        // Project filter
+        if (projects.length > 0 && !projects.includes(record.projectId)) {
           return false;
         }
 
         return true;
       });
     },
-    [dateRange, models, providers, builds],
+    [dateRange, models, providers, projects],
   );
 
   const filters: UsageFilters = useMemo(
@@ -113,9 +113,9 @@ export function useUsageFilters(records: UsageRecord[]): UseUsageFiltersReturn {
       dateRange,
       models,
       providers,
-      builds,
+      projects,
     }),
-    [dateRange, models, providers, builds],
+    [dateRange, models, providers, projects],
   );
 
   return {
@@ -123,11 +123,11 @@ export function useUsageFilters(records: UsageRecord[]): UseUsageFiltersReturn {
     setDateRange,
     setModels,
     setProviders,
-    setBuilds,
+    setProjects,
     clearFilters,
     applyFilters,
     availableModels,
     availableProviders,
-    availableBuilds,
+    availableProjects,
   };
 }

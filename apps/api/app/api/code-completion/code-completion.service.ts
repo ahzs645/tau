@@ -3,6 +3,7 @@ import { cerebras } from '@ai-sdk/cerebras';
 import { generateText } from 'ai';
 import { CompletionCopilot } from 'monacopilot';
 import type { CompletionRequestBody, CompletionMetadata } from 'monacopilot';
+import { Span } from '#telemetry/tracer.service.js';
 
 const cursorMarker = '{{CURSOR}}';
 
@@ -129,6 +130,7 @@ export class CodeCompletionService {
     });
   }
 
+  @Span()
   public async complete(body: CompletionRequestBody): Promise<unknown> {
     return this.copilot.complete({
       options: {

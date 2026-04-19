@@ -78,8 +78,10 @@ type UnifiedSplashbackViewerProperties = {
 const autoRotateSpeed = 0.5;
 
 /** Gear colors - using constants */
+/* oxlint-disable tau-lint/no-hardcoded-color -- Three.js gear colors */
 const gear12Color = '#14b8a6'; // Teal
 const gear8Color = '#5B8FD9'; // Blue
+/* oxlint-enable tau-lint/no-hardcoded-color */
 
 /**
  * Gear assembly constants calculated from circularPitch = 5
@@ -164,7 +166,7 @@ type SceneContentProperties = {
   readonly onPhaseTransitionComplete?: () => void;
 };
 
-// eslint-disable-next-line complexity -- complex logic
+// oxlint-disable-next-line complexity -- complex logic
 function SceneContent({
   phase,
   gear12Points,
@@ -190,13 +192,19 @@ function SceneContent({
   const crossfadeProgressRef = useRef(0);
   const crossfadeIsActiveRef = useRef(false);
   const crossfadeHasSentCompleteRef = useRef(false);
-  const [crossfadeOpacity, setCrossfadeOpacity] = useState({ pointCloud: 1, mesh: 0 });
+  const [crossfadeOpacity, setCrossfadeOpacity] = useState({
+    pointCloud: 1,
+    mesh: 0,
+  });
 
   // Split morph crossfade state refs (gear8 -> assembly)
   const splitCrossfadeProgressRef = useRef(0);
   const splitCrossfadeIsActiveRef = useRef(false);
   const splitCrossfadeHasSentCompleteRef = useRef(false);
-  const [splitCrossfadeOpacity, setSplitCrossfadeOpacity] = useState({ pointCloud: 1, mesh: 0 });
+  const [splitCrossfadeOpacity, setSplitCrossfadeOpacity] = useState({
+    pointCloud: 1,
+    mesh: 0,
+  });
 
   // Refs for counter-rotation of assembly meshes
   const assemblyGear12RotationRef = useRef<Group>(null);
@@ -295,42 +303,48 @@ function SceneContent({
     rotatingGroupRef.current.rotation.y = currentRotationYaxisRef.current;
 
     // Crossfade animation (gear12 -> gear8)
-    const gear8Opacity = updateCrossfade(
-      {
+    const gear8Opacity = updateCrossfade({
+      state: {
         progressRef: crossfadeProgressRef,
         isActiveRef: crossfadeIsActiveRef,
         hasSentCompleteRef: crossfadeHasSentCompleteRef,
       },
       delta,
-      crossfadeDuration,
-      () => {
+      duration: crossfadeDuration,
+      onComplete() {
         onCrossfadeComplete?.(currentRotationYaxisRef.current);
       },
-    );
+    });
 
     if (gear8Opacity) {
-      setCrossfadeOpacity({ pointCloud: gear8Opacity.source, mesh: gear8Opacity.target });
+      setCrossfadeOpacity({
+        pointCloud: gear8Opacity.source,
+        mesh: gear8Opacity.target,
+      });
       if (gear8Mesh) {
         gear8Mesh.material.opacity = gear8Opacity.target;
       }
     }
 
     // Split crossfade animation (gear8 -> assembly)
-    const assemblyOpacity = updateCrossfade(
-      {
+    const assemblyOpacity = updateCrossfade({
+      state: {
         progressRef: splitCrossfadeProgressRef,
         isActiveRef: splitCrossfadeIsActiveRef,
         hasSentCompleteRef: splitCrossfadeHasSentCompleteRef,
       },
       delta,
-      crossfadeDuration,
-      () => {
+      duration: crossfadeDuration,
+      onComplete() {
         onPhaseTransitionComplete?.();
       },
-    );
+    });
 
     if (assemblyOpacity) {
-      setSplitCrossfadeOpacity({ pointCloud: assemblyOpacity.source, mesh: assemblyOpacity.target });
+      setSplitCrossfadeOpacity({
+        pointCloud: assemblyOpacity.source,
+        mesh: assemblyOpacity.target,
+      });
       if (assemblyGear12Mesh) {
         assemblyGear12Mesh.material.opacity = assemblyOpacity.target;
       }

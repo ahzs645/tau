@@ -1,7 +1,7 @@
-import { assign, assertEvent, setup, fromPromise, emit } from 'xstate';
-import type { AnyActorRef, OutputFrom, DoneActorEvent } from 'xstate';
+import { assign, assertEvent, setup, emit } from 'xstate';
+import type { AnyActorRef } from 'xstate';
 import JSZip from 'jszip';
-import { assertActorDoneEvent } from '#lib/xstate.js';
+import { fromSafeAsync } from '#lib/xstate.lib.js';
 import type { FileMap } from '#utils/file-reader.utils.js';
 import {
   readFromFileList,
@@ -22,7 +22,7 @@ export type ImportDiskContext = {
   selectedMainFile: string | undefined;
   error: Error | undefined;
   progress: { processed: number; total: number };
-  buildId: string | undefined;
+  projectId: string | undefined;
 };
 
 /**
@@ -56,12 +56,12 @@ type ImportDiskEmitted =
 
 // Actor output types
 type FilesReadResult = { type: 'filesRead'; files: FileMap; importName: string };
-type BuildCreatedResult = { type: 'buildCreated'; buildId: string };
+type ProjectCreatedResult = { type: 'projectCreated'; projectId: string };
 
 /**
  * Read files actor - reads files from FileList
  */
-const readFilesActor = fromPromise<
+const readFilesActor = fromSafeAsync<
   FilesReadResult,
   { files: FileList | File[]; onProgress: (processed: number, total: number) => void }
 >(async ({ input }) => {
@@ -74,7 +74,7 @@ const readFilesActor = fromPromise<
 /**
  * Read data transfer actor - reads files from DataTransferItemList (drag-drop)
  */
-const readDataTransferActor = fromPromise<
+const readDataTransferActor = fromSafeAsync<
   FilesReadResult,
   { items: DataTransferItemList; onProgress: (processed: number, total: number) => void }
 >(async ({ input }) => {
@@ -87,21 +87,19 @@ const readDataTransferActor = fromPromise<
 /**
  * Extract ZIP actor - extracts files from a ZIP blob with smart path normalization
  */
-const extractZipActor = fromPromise<
+const extractZipActor = fromSafeAsync<
   FilesReadResult,
   { file: File; onProgress: (processed: number, total: number) => void }
 >(async ({ input }) => {
   const zip = await JSZip.loadAsync(input.file);
   const files: FileMap = new Map();
 
-  // Get all file entries (excluding directories)
   const fileEntries = Object.entries(zip.files).filter(([, file]) => !file.dir);
   const totalFiles = fileEntries.length;
   let processedFiles = 0;
 
-  // Process each file sequentially for progress tracking
   for (const [path, file] of fileEntries) {
-    // eslint-disable-next-line no-await-in-loop -- processing files sequentially for progress tracking
+    // oxlint-disable-next-line no-await-in-loop -- processing files sequentially for progress tracking
     const content = (await file.async('uint8array')) as Uint8Array<ArrayBuffer>;
     files.set(path, {
       filename: path,
@@ -112,7 +110,6 @@ const extractZipActor = fromPromise<
     input.onProgress(processedFiles, totalFiles);
   }
 
-  // Apply smart path normalization (strips common root if present)
   const normalizedFiles = normalizeFilePaths(files);
   const importName = getImportName(normalizedFiles, input.file.name);
 
@@ -123,7 +120,7 @@ const extractZipActor = fromPromise<
  * Read directory handle actor - recursively reads files from a FileSystemDirectoryHandle.
  * Used for the File System Access API import flow.
  */
-const readDirectoryHandleActor = fromPromise<
+const readDirectoryHandleActor = fromSafeAsync<
   FilesReadResult,
   { handle: FileSystemDirectoryHandle; onProgress: (processed: number, total: number) => void }
 >(async ({ input }) => {
@@ -135,26 +132,24 @@ const readDirectoryHandleActor = fromPromise<
 });
 
 /**
- * Create build actor - placeholder that should be provided by the route
+ * Create project actor - placeholder that should be provided by the route
  */
-const createBuildActor = fromPromise<BuildCreatedResult, { importName: string; mainFile: string; files: FileMap }>(
-  async () => {
-    throw new Error('createBuildActor must be provided by the route');
-  },
-);
+const createProjectActor = fromSafeAsync<
+  ProjectCreatedResult,
+  { importName: string; mainFile: string; files: FileMap }
+>(async () => {
+  throw new Error('createProjectActor must be provided by the route');
+});
 
 const importDiskActors = {
   readFilesActor,
   readDataTransferActor,
   readDirectoryHandleActor,
   extractZipActor,
-  createBuildActor,
+  createProjectActor,
 } as const;
 
-type ImportDiskActorNames = keyof typeof importDiskActors;
-type ImportDiskEventExternal = OutputFrom<(typeof importDiskActors)[ImportDiskActorNames]>;
-type ImportDiskEventExternalDone = DoneActorEvent<ImportDiskEventExternal, ImportDiskActorNames>;
-type ImportDiskEvent = ImportDiskEventExternalDone | ImportDiskEventInternal;
+type ImportDiskEvent = ImportDiskEventInternal | FilesReadResult | ProjectCreatedResult;
 
 /**
  * Import Disk Machine
@@ -166,19 +161,19 @@ type ImportDiskEvent = ImportDiskEventExternalDone | ImportDiskEventInternal;
  * - reading: Reading files from File API
  * - extracting: Extracting files from ZIP archive
  * - selectingMainFile: User selects the main file
- * - creating: Creating the build
+ * - creating: Creating the project
  * - success: Import completed successfully
  * - error: An error occurred during import
  */
 export const importDiskMachine = setup({
   types: {
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     context: {} as ImportDiskContext,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     events: {} as ImportDiskEvent,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     input: {} as ImportDiskInput,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     emitted: {} as ImportDiskEmitted,
   },
   actors: importDiskActors,
@@ -212,14 +207,12 @@ export const importDiskMachine = setup({
     }),
     setFilesFromResult: assign({
       files({ event }) {
-        assertActorDoneEvent(event);
-        assertEvent(event.output, 'filesRead');
-        return event.output.files;
+        assertEvent(event, 'filesRead');
+        return event.files;
       },
       importName({ event }) {
-        assertActorDoneEvent(event);
-        assertEvent(event.output, 'filesRead');
-        return event.output.importName;
+        assertEvent(event, 'filesRead');
+        return event.importName;
       },
     }),
     initializeSelectedMainFile: assign({
@@ -235,11 +228,10 @@ export const importDiskMachine = setup({
         return event.file;
       },
     }),
-    setBuildId: assign({
-      buildId({ event }) {
-        assertActorDoneEvent(event);
-        assertEvent(event.output, 'buildCreated');
-        return event.output.buildId;
+    setProjectId: assign({
+      projectId({ event }) {
+        assertEvent(event, 'projectCreated');
+        return event.projectId;
       },
     }),
     reset: assign({
@@ -248,20 +240,20 @@ export const importDiskMachine = setup({
       selectedMainFile: undefined,
       error: undefined,
       progress: { processed: 0, total: 0 },
-      buildId: undefined,
+      projectId: undefined,
     }),
     emitProgress: emit(({ context }) => ({
-      type: 'progress' as const,
+      type: 'progress',
       processed: context.progress.processed,
       total: context.progress.total,
     })),
     emitFilesReady: emit(({ context }) => ({
-      type: 'filesReady' as const,
+      type: 'filesReady',
       files: context.files,
       importName: context.importName,
     })),
     emitError: emit(({ context }) => ({
-      type: 'error' as const,
+      type: 'error',
       error: context.error ?? new Error('Unknown error'),
     })),
   },
@@ -274,7 +266,7 @@ export const importDiskMachine = setup({
     selectedMainFile: undefined,
     error: undefined,
     progress: { processed: 0, total: 0 },
-    buildId: undefined,
+    projectId: undefined,
   }),
   initial: 'idle',
   states: {
@@ -313,7 +305,6 @@ export const importDiskMachine = setup({
         },
         onDone: {
           target: 'selectingMainFile',
-          actions: ['setFilesFromResult', 'initializeSelectedMainFile', 'emitFilesReady'],
         },
         onError: {
           target: 'error',
@@ -321,6 +312,9 @@ export const importDiskMachine = setup({
         },
       },
       on: {
+        filesRead: {
+          actions: ['setFilesFromResult', 'initializeSelectedMainFile', 'emitFilesReady'],
+        },
         updateProgress: {
           actions: ['setProgress', 'emitProgress'],
         },
@@ -342,7 +336,6 @@ export const importDiskMachine = setup({
         },
         onDone: {
           target: 'selectingMainFile',
-          actions: ['setFilesFromResult', 'initializeSelectedMainFile', 'emitFilesReady'],
         },
         onError: {
           target: 'error',
@@ -350,6 +343,9 @@ export const importDiskMachine = setup({
         },
       },
       on: {
+        filesRead: {
+          actions: ['setFilesFromResult', 'initializeSelectedMainFile', 'emitFilesReady'],
+        },
         updateProgress: {
           actions: ['setProgress', 'emitProgress'],
         },
@@ -371,7 +367,6 @@ export const importDiskMachine = setup({
         },
         onDone: {
           target: 'selectingMainFile',
-          actions: ['setFilesFromResult', 'initializeSelectedMainFile', 'emitFilesReady'],
         },
         onError: {
           target: 'error',
@@ -379,6 +374,9 @@ export const importDiskMachine = setup({
         },
       },
       on: {
+        filesRead: {
+          actions: ['setFilesFromResult', 'initializeSelectedMainFile', 'emitFilesReady'],
+        },
         updateProgress: {
           actions: ['setProgress', 'emitProgress'],
         },
@@ -400,7 +398,6 @@ export const importDiskMachine = setup({
         },
         onDone: {
           target: 'selectingMainFile',
-          actions: ['setFilesFromResult', 'initializeSelectedMainFile', 'emitFilesReady'],
         },
         onError: {
           target: 'error',
@@ -408,6 +405,9 @@ export const importDiskMachine = setup({
         },
       },
       on: {
+        filesRead: {
+          actions: ['setFilesFromResult', 'initializeSelectedMainFile', 'emitFilesReady'],
+        },
         updateProgress: {
           actions: ['setProgress', 'emitProgress'],
         },
@@ -430,7 +430,7 @@ export const importDiskMachine = setup({
     },
     creating: {
       invoke: {
-        src: 'createBuildActor',
+        src: 'createProjectActor',
         input: ({ context }) => ({
           importName: context.importName,
           mainFile: context.selectedMainFile!,
@@ -438,11 +438,15 @@ export const importDiskMachine = setup({
         }),
         onDone: {
           target: 'success',
-          actions: 'setBuildId',
         },
         onError: {
           target: 'error',
           actions: ['setError', 'emitError'],
+        },
+      },
+      on: {
+        projectCreated: {
+          actions: 'setProjectId',
         },
       },
     },

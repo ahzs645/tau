@@ -7,13 +7,13 @@ type PanzoomResetParameters = {
   /**
    * Reference to the panzoom instance.
    */
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- required by React
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- required by React
   panzoomRef: RefObject<PanzoomObject | null>;
   /**
    * Reference to the container element for calculating center point.
    * React useRef returns null by default, so we must use it here.
    */
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- required by React
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- required by React
   containerRef: RefObject<HTMLDivElement | null>;
 };
 

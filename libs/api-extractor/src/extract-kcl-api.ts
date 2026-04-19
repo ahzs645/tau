@@ -79,11 +79,11 @@ type RustModuleData = {
 // Internal Types
 // ============================================================================
 
-type KclDocCategory = 'functions' | 'types' | 'modules' | 'consts';
+type KclDocumentCategory = 'functions' | 'types' | 'modules' | 'consts';
 
-type KclDocEntry = {
+type KclDocumentEntry = {
   name: string;
-  category: KclDocCategory;
+  category: KclDocumentCategory;
   module: string;
   excerpt: string;
   signature: string;
@@ -105,27 +105,27 @@ type ArgumentInfo = {
 // ============================================================================
 
 /**
- * Transform Rust JSON export schema to our internal KclDocEntry format
+ * Transform Rust JSON export schema to our internal KclDocumentEntry format
  */
-function transformRustSchema(data: RustExportSchema): KclDocEntry[] {
-  const entries: KclDocEntry[] = [];
+function transformRustSchema(data: RustExportSchema): KclDocumentEntry[] {
+  const entries: KclDocumentEntry[] = [];
 
   // Transform functions
-  for (const fn of data.functions) {
+  for (const functionDefinition of data.functions) {
     entries.push({
-      name: fn.name,
+      name: functionDefinition.name,
       category: 'functions',
-      module: fn.module,
-      excerpt: fn.summary ?? '',
-      signature: fn.fn_signature,
-      description: fn.description ?? '',
-      arguments: fn.args.map((arg) => ({
-        name: arg.name,
-        type: arg.type_ ?? '',
-        description: arg.description,
-        required: arg.required,
+      module: functionDefinition.module,
+      excerpt: functionDefinition.summary ?? '',
+      signature: functionDefinition.fn_signature,
+      description: functionDefinition.description ?? '',
+      arguments: functionDefinition.args.map((argument) => ({
+        name: argument.name,
+        type: argument.type_ ?? '',
+        description: argument.description,
+        required: argument.required,
       })),
-      returns: fn.return_value?.type_ ?? '',
+      returns: functionDefinition.return_value?.type_ ?? '',
       examples: [], // Examples are not included in JSON export (used for website only)
     });
   }
@@ -161,6 +161,7 @@ function transformRustSchema(data: RustExportSchema): KclDocEntry[] {
   }
 
   // Transform modules
+  // oxlint-disable-next-line unicorn-js/prevent-abbreviations -- mod is the standard name for ES module objects
   for (const mod of data.modules) {
     entries.push({
       name: mod.name,
@@ -182,7 +183,7 @@ function transformRustSchema(data: RustExportSchema): KclDocEntry[] {
 // Structured API Data (shared schema)
 // ============================================================================
 
-const kclCategoryToKind: Record<KclDocCategory, ApiEntryKind> = {
+const kclCategoryToKind: Record<KclDocumentCategory, ApiEntryKind> = {
   functions: 'function',
   types: 'type',
   consts: 'constant',
@@ -192,7 +193,7 @@ const kclCategoryToKind: Record<KclDocCategory, ApiEntryKind> = {
 /**
  * Convert KCL doc entries to the shared ApiData format.
  */
-function kclEntryToApiEntry(entry: KclDocEntry): ApiEntry {
+function kclEntryToApiEntry(entry: KclDocumentEntry): ApiEntry {
   const apiEntry: ApiEntry = {
     name: entry.name,
     kind: kclCategoryToKind[entry.category],
@@ -221,7 +222,7 @@ function kclEntryToApiEntry(entry: KclDocEntry): ApiEntry {
  * Build the structured API data in the shared schema.
  * Exported for testing.
  */
-export function buildApiData(entries: KclDocEntry[], kclVersion: string): ApiData {
+export function buildApiData(entries: KclDocumentEntry[], kclVersion: string): ApiData {
   const apiEntries = entries.map((entry) => kclEntryToApiEntry(entry));
 
   const breakdown: Record<string, number> = {};
@@ -247,34 +248,34 @@ export function buildApiData(entries: KclDocEntry[], kclVersion: string): ApiDat
 /**
  * Format a single function entry as markdown
  */
-function formatFunctionEntry(fn: KclDocEntry): string {
-  let markdown = `#### ${fn.name}\n\n`;
+function formatFunctionEntry(entry: KclDocumentEntry): string {
+  let markdown = `#### ${entry.name}\n\n`;
 
-  if (fn.excerpt) {
-    markdown += `${fn.excerpt}\n\n`;
+  if (entry.excerpt) {
+    markdown += `${entry.excerpt}\n\n`;
   }
 
-  if (fn.signature) {
-    markdown += '```kcl\n' + fn.signature + '\n```\n\n';
+  if (entry.signature) {
+    markdown += '```kcl\n' + entry.signature + '\n```\n\n';
   }
 
-  if (fn.arguments.length > 0) {
+  if (entry.arguments.length > 0) {
     markdown += '**Arguments:**\n';
-    for (const arg of fn.arguments) {
-      const requiredText = arg.required ? '(required)' : '(optional)';
-      markdown += `- \`${arg.name}\`: ${arg.type} ${requiredText} - ${arg.description}\n`;
+    for (const argument of entry.arguments) {
+      const requiredText = argument.required ? '(required)' : '(optional)';
+      markdown += `- \`${argument.name}\`: ${argument.type} ${requiredText} - ${argument.description}\n`;
     }
 
     markdown += '\n';
   }
 
-  if (fn.returns) {
-    markdown += `**Returns:** ${fn.returns}\n\n`;
+  if (entry.returns) {
+    markdown += `**Returns:** ${entry.returns}\n\n`;
   }
 
   // Include first example if available (limit to save tokens)
-  if (fn.examples.length > 0) {
-    markdown += '**Example:**\n```kcl\n' + fn.examples[0] + '\n```\n\n';
+  if (entry.examples.length > 0) {
+    markdown += '**Example:**\n```kcl\n' + entry.examples[0] + '\n```\n\n';
   }
 
   markdown += '---\n\n';
@@ -284,13 +285,13 @@ function formatFunctionEntry(fn: KclDocEntry): string {
 /**
  * Generate consolidated markdown documentation
  */
-function generateMarkdown(entries: KclDocEntry[]): string {
+function generateMarkdown(entries: KclDocumentEntry[]): string {
   let markdown = '# KCL Standard Library API Reference\n\n';
   markdown += `Total entries: ${entries.length}\n\n`;
   markdown += '---\n\n';
 
   // Group by category
-  const categories: Record<KclDocCategory, KclDocEntry[]> = {
+  const categories: Record<KclDocumentCategory, KclDocumentEntry[]> = {
     functions: [],
     types: [],
     consts: [],
@@ -302,7 +303,7 @@ function generateMarkdown(entries: KclDocEntry[]): string {
   }
 
   // Sort entries within each category by module, then name
-  for (const category of Object.keys(categories) as KclDocCategory[]) {
+  for (const category of Object.keys(categories) as KclDocumentCategory[]) {
     categories[category].sort((a, b) => {
       if (a.module !== b.module) {
         return a.module.localeCompare(b.module);
@@ -317,17 +318,17 @@ function generateMarkdown(entries: KclDocEntry[]): string {
     markdown += '## Functions\n\n';
 
     // Group functions by module
-    const functionsByModule: Record<string, KclDocEntry[]> = {};
-    for (const fn of categories.functions) {
-      functionsByModule[fn.module] ??= [];
-      functionsByModule[fn.module]!.push(fn);
+    const functionsByModule: Record<string, KclDocumentEntry[]> = {};
+    for (const functionEntry of categories.functions) {
+      functionsByModule[functionEntry.module] ??= [];
+      functionsByModule[functionEntry.module]!.push(functionEntry);
     }
 
     for (const [moduleName, functions] of Object.entries(functionsByModule).sort((a, b) => a[0].localeCompare(b[0]))) {
       markdown += `### ${moduleName}\n\n`;
 
-      for (const fn of functions) {
-        markdown += formatFunctionEntry(fn);
+      for (const functionEntry of functions) {
+        markdown += formatFunctionEntry(functionEntry);
       }
     }
   }
@@ -382,11 +383,11 @@ function generateMarkdown(entries: KclDocEntry[]): string {
 /**
  * Generate a compact version for LLM context (signature-focused)
  */
-function generateCompactMarkdown(entries: KclDocEntry[]): string {
+function generateCompactMarkdown(entries: KclDocumentEntry[]): string {
   let markdown = '# KCL Standard Library Reference\n\n';
 
   // Group by category
-  const categories: Record<KclDocCategory, KclDocEntry[]> = {
+  const categories: Record<KclDocumentCategory, KclDocumentEntry[]> = {
     functions: [],
     types: [],
     consts: [],
@@ -398,7 +399,7 @@ function generateCompactMarkdown(entries: KclDocEntry[]): string {
   }
 
   // Sort entries within each category
-  for (const category of Object.keys(categories) as KclDocCategory[]) {
+  for (const category of Object.keys(categories) as KclDocumentCategory[]) {
     categories[category].sort((a, b) => a.name.localeCompare(b.name));
   }
 
@@ -406,14 +407,14 @@ function generateCompactMarkdown(entries: KclDocEntry[]): string {
   if (categories.functions.length > 0) {
     markdown += '## Functions\n\n';
 
-    for (const fn of categories.functions) {
-      if (fn.signature) {
+    for (const functionEntry of categories.functions) {
+      if (functionEntry.signature) {
         // Add brief description as comment
-        if (fn.excerpt) {
-          markdown += `// ${fn.excerpt}\n`;
+        if (functionEntry.excerpt) {
+          markdown += `// ${functionEntry.excerpt}\n`;
         }
 
-        markdown += fn.signature + '\n\n';
+        markdown += functionEntry.signature + '\n\n';
       }
     }
   }
@@ -461,12 +462,12 @@ function main(): void {
       import.meta.dirname,
       '../../../repos/zoo-modeling-app/docs/kcl-std/kcl-stdlib-export.json',
     );
-    const outputDir = join(import.meta.dirname, 'generated/kcl');
-    const localJsonPath = join(outputDir, 'kcl-stdlib-export.json');
+    const outputDirectory = join(import.meta.dirname, 'generated/kcl');
+    const localJsonPath = join(outputDirectory, 'kcl-stdlib-export.json');
 
     // Create output directory
-    mkdirSync(outputDir, { recursive: true });
-    console.log(`Created output directory: ${outputDir}`);
+    mkdirSync(outputDirectory, { recursive: true });
+    console.log(`Created output directory: ${outputDirectory}`);
 
     // Copy JSON from Zoo repo if it exists
     if (existsSync(zooJsonPath)) {
@@ -493,22 +494,22 @@ function main(): void {
 
     // Generate full documentation
     console.log('\nGenerating full API documentation...');
-    const fullDocs = generateMarkdown(entries);
-    const fullDocsPath = join(outputDir, 'kcl-stdlib-api.md');
-    writeFileSync(fullDocsPath, fullDocs);
-    console.log(`Full docs saved to ${fullDocsPath}`);
+    const fullDocumentation = generateMarkdown(entries);
+    const fullDocumentationPath = join(outputDirectory, 'kcl-stdlib-api.md');
+    writeFileSync(fullDocumentationPath, fullDocumentation);
+    console.log(`Full docs saved to ${fullDocumentationPath}`);
 
     // Generate compact version for LLM context
     console.log('Generating compact LLM reference...');
-    const compactDocs = generateCompactMarkdown(entries);
-    const compactDocsPath = join(outputDir, 'kcl-stdlib-compact.md');
-    writeFileSync(compactDocsPath, compactDocs);
-    console.log(`Compact reference saved to ${compactDocsPath}`);
+    const compactDocumentation = generateCompactMarkdown(entries);
+    const compactDocumentationPath = join(outputDirectory, 'kcl-stdlib-compact.md');
+    writeFileSync(compactDocumentationPath, compactDocumentation);
+    console.log(`Compact reference saved to ${compactDocumentationPath}`);
 
     // Generate structured JSON data (shared schema)
     console.log('Generating JSON data...');
     const apiData = buildApiData(entries, rawData.metadata.version);
-    const jsonPath = join(outputDir, 'kcl-stdlib-data.json');
+    const jsonPath = join(outputDirectory, 'kcl-stdlib-data.json');
     writeFileSync(jsonPath, JSON.stringify(apiData, null, 2));
     console.log(`JSON data saved to ${jsonPath}`);
 
@@ -531,4 +532,4 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 }
 
 export { generateMarkdown, generateCompactMarkdown, transformRustSchema };
-export type { KclDocEntry, RustExportSchema };
+export type { KclDocumentEntry, RustExportSchema };

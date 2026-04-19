@@ -11,7 +11,7 @@ type Size = {
 };
 
 type UseResizeObserverOptions<T extends HTMLElement = HTMLElement> = {
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- React ref requires null
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- React ref requires null
   ref: RefObject<T | null | undefined>;
   onResize?: (size: Size) => void;
   box?: 'border-box' | 'content-box' | 'device-pixel-content-box';
@@ -36,15 +36,15 @@ export function useResizeObserver<T extends HTMLElement = HTMLElement>(options: 
     }
 
     const observer = new ResizeObserver(([entry]) => {
-      const boxProp =
+      const boxProperty =
         box === 'border-box'
           ? 'borderBoxSize'
           : box === 'device-pixel-content-box'
             ? 'devicePixelContentBoxSize'
             : 'contentBoxSize';
 
-      const newWidth = extractSize(entry!, boxProp, 'inlineSize');
-      const newHeight = extractSize(entry!, boxProp, 'blockSize');
+      const newWidth = extractSize(entry!, boxProperty, 'inlineSize');
+      const newHeight = extractSize(entry!, boxProperty, 'blockSize');
 
       const hasChanged = previousSize.current.width !== newWidth || previousSize.current.height !== newHeight;
 
@@ -85,7 +85,7 @@ function extractSize(
     return entry.contentRect[sizeType === 'inlineSize' ? 'width' : 'height'];
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-return -- entry[box] is typed.
+  // oxlint-disable-next-line @typescript-eslint/no-unsafe-return -- entry[box] is typed.
   return Array.isArray(entry[box])
     ? entry[box][0][sizeType]
     : // @ts-expect-error -- Support Firefox's non-standard behavior

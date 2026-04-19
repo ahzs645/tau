@@ -52,13 +52,24 @@ describe('serializeMessage', () => {
   describe('file parts', () => {
     it('serializes file with filename', () => {
       const message = baseMessage([
-        { type: 'file', url: 'data:image/png;base64,abc', mediaType: 'image/png', filename: 'screenshot.png' },
+        {
+          type: 'file',
+          url: 'data:image/png;base64,abc',
+          mediaType: 'image/png',
+          filename: 'screenshot.png',
+        },
       ]);
       expect(serializeMessage(message)).toBe('[Attached file: screenshot.png (image/png)]');
     });
 
     it('serializes file without filename as image', () => {
-      const message = baseMessage([{ type: 'file', url: 'data:image/webp;base64,xyz', mediaType: 'image/webp' }]);
+      const message = baseMessage([
+        {
+          type: 'file',
+          url: 'data:image/webp;base64,xyz',
+          mediaType: 'image/webp',
+        },
+      ]);
       expect(serializeMessage(message)).toBe('[Attached image (image/webp)]');
     });
   });
@@ -66,7 +77,12 @@ describe('serializeMessage', () => {
   describe('source-url parts', () => {
     it('serializes as markdown link with title', () => {
       const message = baseMessage([
-        { type: 'source-url', sourceId: 's1', url: 'https://example.com', title: 'Example' },
+        {
+          type: 'source-url',
+          sourceId: 's1',
+          url: 'https://example.com',
+          title: 'Example',
+        },
       ]);
       expect(serializeMessage(message)).toBe('[Example](https://example.com)');
     });
@@ -80,7 +96,12 @@ describe('serializeMessage', () => {
   describe('source-document parts', () => {
     it('serializes document reference', () => {
       const message = baseMessage([
-        { type: 'source-document', sourceId: 's1', mediaType: 'application/pdf', title: 'Doc' },
+        {
+          type: 'source-document',
+          sourceId: 's1',
+          mediaType: 'application/pdf',
+          title: 'Doc',
+        },
       ]);
       expect(serializeMessage(message)).toBe('[Document: Doc]');
     });
@@ -97,6 +118,7 @@ describe('serializeMessage', () => {
             model: 'gpt-4',
             inputTokens: 10,
             outputTokens: 20,
+            reasoningTokens: 0,
             cacheReadTokens: 0,
             cacheWriteTokens: 0,
             inputTokensCost: 0,
@@ -120,6 +142,7 @@ describe('serializeMessage', () => {
             model: 'claude-3',
             inputTokens: 5,
             outputTokens: 15,
+            reasoningTokens: 0,
             cacheReadTokens: 0,
             cacheWriteTokens: 0,
             inputTokensCost: 0,
@@ -143,6 +166,7 @@ describe('serializeMessage', () => {
             model: 'gpt-4',
             inputTokens: 10,
             outputTokens: 20,
+            reasoningTokens: 0,
             cacheReadTokens: 0,
             cacheWriteTokens: 0,
             inputTokensCost: 0,
@@ -160,6 +184,7 @@ describe('serializeMessage', () => {
             model: 'claude-3',
             inputTokens: 5,
             outputTokens: 15,
+            reasoningTokens: 0,
             cacheReadTokens: 0,
             cacheWriteTokens: 0,
             inputTokensCost: 0,
@@ -341,7 +366,14 @@ describe('serializeMessage', () => {
             passed: 2,
             total: 3,
             passes: [{ id: 'p1', requirement: 'r1' }],
-            failures: [{ id: 'f1', requirement: 'req', reason: 'failed', suggestion: 'fix' }],
+            failures: [
+              {
+                id: 'f1',
+                requirement: 'req',
+                reason: 'failed',
+                suggestion: 'fix',
+              },
+            ],
           },
         },
       ]);
@@ -359,27 +391,12 @@ describe('serializeMessage', () => {
           input: { targetFile: 'main.kcl' },
           output: {
             status: 'error',
-            kernelIssues: [{ message: 'Syntax error', severity: 'error' as const }],
+            kernelIssues: [{ message: 'Syntax error', severity: 'error' }],
           },
         },
       ]);
       expect(serializeMessage(message)).toBe(
         '<tool_call name="get_kernel_result">\ntargetFile: main.kcl\n</tool_call>\n<tool_result>\nStatus: error\nIssues:\n  - Syntax error\n</tool_result>',
-      );
-    });
-
-    it('serializes tool-reasoning output-available', () => {
-      const message = baseMessage([
-        {
-          type: 'tool-reasoning',
-          toolCallId: 'c1',
-          state: 'output-available',
-          input: { thinking: 'Step by step...' },
-          output: 'OK',
-        },
-      ]);
-      expect(serializeMessage(message)).toBe(
-        '<tool_call name="reasoning">\nthinking: <15 chars>\n</tool_call>\n<tool_result>\nOK\n</tool_result>',
       );
     });
 

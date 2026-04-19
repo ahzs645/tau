@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-unnecessary-condition -- TODO: review these types, some are actually required */
+/* oxlint-disable @typescript-eslint/no-unnecessary-condition -- TODO: review these types, some are actually required */
 import { useThree, useFrame } from '@react-three/fiber';
 import type { GizmoAxisOptions, GizmoOptions } from 'three-viewport-gizmo';
 import { ViewportGizmo } from 'three-viewport-gizmo';
@@ -60,17 +60,21 @@ export function ViewportGizmoOnshape({
 
   // Ref to the live gizmo instance for the FOV sync effect
   const gizmoRef = useRef<ViewportGizmo | undefined>(null);
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- React ref
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- React ref
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
 
   const handleChange = useCallback((): void => {
     invalidate();
   }, [invalidate]);
 
-  // Demand-based gizmo rendering: only render when the R3F frame loop fires (on invalidation)
+  // Demand-based gizmo rendering: only render when the R3F frame loop fires (on invalidation).
+  // The gizmo uses a dedicated renderer, but three-viewport-gizmo's render() only clears
+  // the depth buffer (designed for shared-renderer overlays). We must clear the color buffer
+  // ourselves to prevent ghosting from previous frames.
   useFrame(() => {
     if (rendererRef.current && gizmoRef.current) {
       rendererRef.current.toneMapping = THREE.NoToneMapping;
+      rendererRef.current.clear();
       gizmoRef.current.render();
     }
   });
@@ -164,9 +168,11 @@ export function ViewportGizmoOnshape({
         rendererSize: size,
         xAxisColor: 'red',
         yAxisColor: 'green',
+        // oxlint-disable-next-line tau-lint/no-hardcoded-color -- Three.js axis color
         zAxisColor: 'rgb(37, 78, 136)',
         xLabelColor: 'red',
         yLabelColor: 'green',
+        // oxlint-disable-next-line tau-lint/no-hardcoded-color -- Three.js axis color
         zLabelColor: 'rgb(37, 78, 136)',
         lineWidth: 2,
       }),
@@ -181,9 +187,9 @@ export function ViewportGizmoOnshape({
       gizmoRef.current = null;
       rendererRef.current = null;
 
-      disposeGizmoResources(gizmo, renderer, canvas, handleChange);
+      disposeGizmoResources({ gizmo, renderer, canvas, handleChange });
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- dependencies array is user-provided for custom recreation triggers
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- dependencies array is user-provided for custom recreation triggers
   }, [camera, gl, controls, scene, serialized.hex, theme, size, handleChange, container, ...dependencies]);
 
   // Real-time FOV sync: update the gizmo's internal camera when the viewport FOV changes.

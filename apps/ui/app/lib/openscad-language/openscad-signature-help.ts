@@ -1,4 +1,4 @@
-/* eslint-disable max-params -- TODO: refactor */
+/* oxlint-disable max-params -- TODO: refactor */
 import type * as Monaco from 'monaco-editor';
 import { requirementDescriptor } from '#lib/openscad-language/openscad-descriptions.js';
 import { openscadSymbols, openscadFunctions } from '#lib/openscad-language/openscad-symbols.js';

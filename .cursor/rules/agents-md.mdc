@@ -1,0 +1,15 @@
+---
+description: Guidelines for editing AGENTS.md
+globs: AGENTS.md
+alwaysApply: false
+---
+# AGENTS.md Maintenance
+
+Follow `docs/policy/agents-md-policy.md` for the full policy. Key rules:
+
+- Keep total file under 150 lines, each section under 50 lines
+- Commands section first: exact invocations, not prose descriptions
+- No duplication across tiers (AGENTS.md, `.cursor/rules/`, `docs/policy/`)
+- No secrets, tokens, branch names, or transient details
+- `Learned User Preferences` and `Learned Workspace Facts` are maintained by `continual-learning` — do not hand-edit
+- Skills table must reflect current `.cursor/skills/` contents

@@ -133,4 +133,3 @@ apps/api/
 - [Better Auth Documentation](https://www.better-auth.com/)
 - [Drizzle ORM Documentation](https://orm.drizzle.team/)
 - [NestJS Documentation](https://nestjs.com/)
-

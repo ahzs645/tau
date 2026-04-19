@@ -1,0 +1,16 @@
+name: "v8-O2-handle-fix"
+description: "OCCT v8 with Handle_Law_Function + Handle_Geom2d_BSplineCurve fix"
+
+compilation:
+  optimization: "-O2"
+  lto: false
+  exceptions: "none"
+  threading: "single-threaded"
+
+linking:
+  yaml: "custom_build_single_v8.yml"
+  wasmOptLevel: "-O3"
+
+benchmark:
+  iterations: 10
+  filter: []

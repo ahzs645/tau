@@ -38,16 +38,14 @@ export class YourService {
   async findUser(id: string) {
     // Direct property access - simple and clean!
     const db = this.databaseService.database;
-    
+
     // Use Drizzle ORM queries here
     return await db.select().from(userTable).where(eq(userTable.id, id));
   }
 
   async createUser(userData: CreateUserData) {
     // No method call needed - just access the property directly
-    return await this.databaseService.database
-      .insert(userTable)
-      .values(userData);
+    return await this.databaseService.database.insert(userTable).values(userData);
   }
 }
 ```
@@ -83,7 +81,7 @@ Place your migration files in the `./migrations` directory.
 ✅ **Single responsibility**: DatabaseService handles all database concerns  
 ✅ **No duplication**: One place for connection logic  
 ✅ **Proper timing**: Migrations run during `OnModuleInit` before service is ready  
-✅ **Consistency**: Same connection setup for both app and migrations  
+✅ **Consistency**: Same connection setup for both app and migrations
 
 ## Legacy Support
 
@@ -101,4 +99,4 @@ database/
 ├── schema.ts             # Database schema
 ├── auth-schema.ts        # Authentication schema
 └── README.md             # This file
-``` 
+```

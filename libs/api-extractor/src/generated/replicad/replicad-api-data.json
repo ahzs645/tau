@@ -1,14 +1,14 @@
 {
   "metadata": {
-    "extractionDate": "2026-02-10T12:17:51.825Z",
+    "extractionDate": "2026-04-19T04:32:00.768Z",
     "source": "TypeScript Compiler API (replicad)",
-    "totalEntries": 205,
+    "totalEntries": 219,
     "breakdown": {
-      "class": 45,
-      "constant": 67,
-      "type": 30,
-      "interface": 14,
-      "function": 49
+      "class": 46,
+      "constant": 68,
+      "type": 36,
+      "interface": 16,
+      "function": 53
     }
   },
   "entries": [
@@ -16,13 +16,13 @@
       "name": "_1DShape",
       "kind": "class",
       "category": "Geometry Types",
-      "signature": "export declare abstract class _1DShape<Type extends TopoDS_Shape> extends Shape<Type> {\n    get repr(): string;\n    get curve(): Curve;\n    get startPoint(): Vector;\n    get endPoint(): Vector;\n    tangentAt(position?: number): Vector;\n    pointAt(position?: number): Vector;\n    get isClosed(): boolean;\n    get isPeriodic(): boolean;\n    get period(): number;\n    get geomType(): CurveType;\n    get length(): number;\n    get orientation(): \"forward\" | \"backward\";\n}"
+      "signature": "export declare abstract class _1DShape<Type extends TopoDS_Shape> extends Shape<Type> {\n    get repr(): string;\n    get curve(): Curve;\n    get startPoint(): Vector;\n    get endPoint(): Vector;\n    tangentAt(position?: number): Vector;\n    pointAt(position?: number): Vector;\n    get isClosed(): boolean;\n    get isPeriodic(): boolean;\n    get period(): number;\n    get geomType(): CurveType;\n    get length(): number;\n    get orientation(): 'forward' | 'backward';\n    flipOrientation(): Type;\n}"
     },
     {
       "name": "_3DShape",
       "kind": "class",
       "category": "Geometry Types",
-      "signature": "export declare class _3DShape<Type extends TopoDS_Shape> extends Shape<Type> {\n    fuse(other: Shape3D, { optimisation, }?: {\n        optimisation?: \"none\" | \"commonFace\" | \"sameFace\";\n    }): Shape3D;\n    cut(tool: Shape3D, { optimisation, }?: {\n        optimisation?: \"none\" | \"commonFace\" | \"sameFace\";\n    }): Shape3D;\n    intersect(tool: AnyShape): AnyShape;\n    shell(config: {\n        filter: FaceFinder;\n        thickness: number;\n    }, tolerance?: number): Shape3D;\n    shell(thickness: number, finderFcn: (f: FaceFinder) => FaceFinder, tolerance?: number): Shape3D;\n    fillet(radiusConfig: RadiusConfig<FilletRadius>, filter?: (e: EdgeFinder) => EdgeFinder): Shape3D;\n    chamfer(radiusConfig: RadiusConfig<ChamferRadius>, filter?: (e: EdgeFinder) => EdgeFinder): Shape3D;\n}"
+      "signature": "export declare class _3DShape<Type extends TopoDS_Shape> extends Shape<Type> implements Shape3DLike<Shape3D, ShapeMesh, AnyShape, {\n    tolerance?: number;\n    angularTolerance?: number;\n}> {\n    fuse(other: Shape3D, { optimisation }?: {\n        optimisation?: 'none' | 'commonFace' | 'sameFace';\n    }): Shape3D;\n    cut(tool: Shape3D, { optimisation }?: {\n        optimisation?: 'none' | 'commonFace' | 'sameFace';\n    }): Shape3D;\n    intersect(tool: AnyShape): Shape3D;\n    meshShape(options?: {\n        tolerance?: number;\n        angularTolerance?: number;\n    }): MeshShape;\n    shell(config: {\n        filter: FaceFinder;\n        thickness: number;\n    }, tolerance?: number): Shape3D;\n    shell(thickness: number, finderFcn: (f: FaceFinder) => FaceFinder, tolerance?: number): Shape3D;\n    fillet(radiusConfig: RadiusConfig<FilletRadius>, filter?: (e: EdgeFinder) => EdgeFinder): Shape3D;\n    chamfer(radiusConfig: RadiusConfig<ChamferRadius>, filter?: (e: EdgeFinder) => EdgeFinder): Shape3D;\n}"
     },
     {
       "name": "addHolesInFace",
@@ -92,7 +92,7 @@
       "name": "BaseSketcher2d",
       "kind": "class",
       "category": "Utilities",
-      "signature": "export declare class BaseSketcher2d {\n    constructor(origin?: Point2D);\n    movePointerTo(point: Point2D): this;\n    lineTo(point: Point2D): this;\n    line(xDist: number, yDist: number): this;\n    vLine(distance: number): this;\n    hLine(distance: number): this;\n    vLineTo(yPos: number): this;\n    hLineTo(xPos: number): this;\n    polarLineTo([r, theta]: Point2D): this;\n    polarLine(distance: number, angle: number): this;\n    tangentLine(distance: number): this;\n    threePointsArcTo(end: Point2D, midPoint: Point2D): this;\n    threePointsArc(xDist: number, yDist: number, viaXDist: number, viaYDist: number): this;\n    sagittaArcTo(end: Point2D, sagitta: number): this;\n    sagittaArc(xDist: number, yDist: number, sagitta: number): this;\n    vSagittaArc(distance: number, sagitta: number): this;\n    hSagittaArc(distance: number, sagitta: number): this;\n    bulgeArcTo(end: Point2D, bulge: number): this;\n    bulgeArc(xDist: number, yDist: number, bulge: number): this;\n    vBulgeArc(distance: number, bulge: number): this;\n    hBulgeArc(distance: number, bulge: number): this;\n    tangentArcTo(end: Point2D): this;\n    tangentArc(xDist: number, yDist: number): this;\n    ellipseTo(end: Point2D, horizontalRadius: number, verticalRadius: number, rotation?: number, longAxis?: boolean, sweep?: boolean): this;\n    ellipse(xDist: number, yDist: number, horizontalRadius: number, verticalRadius: number, rotation?: number, longAxis?: boolean, sweep?: boolean): this;\n    halfEllipseTo(end: Point2D, minorRadius: number, sweep?: boolean): this;\n    halfEllipse(xDist: number, yDist: number, minorRadius: number, sweep?: boolean): this;\n    bezierCurveTo(end: Point2D, controlPoints: Point2D | Point2D[]): this;\n    quadraticBezierCurveTo(end: Point2D, controlPoint: Point2D): this;\n    cubicBezierCurveTo(end: Point2D, startControlPoint: Point2D, endControlPoint: Point2D): this;\n    smoothSplineTo(end: Point2D, config?: SplineConfig): this;\n    smoothSpline(xDist: number, yDist: number, splineConfig?: SplineConfig): this;\n    customCorner(radius: number, mode?: \"fillet\" | \"chamfer\"): this;\n}"
+      "signature": "export declare class BaseSketcher2d {\n    constructor(origin?: Point2D);\n    get penPosition(): Point2D;\n    get penAngle(): number;\n    movePointerTo(point: Point2D): this;\n    lineTo(point: Point2D): this;\n    line(xDist: number, yDist: number): this;\n    vLine(distance: number): this;\n    hLine(distance: number): this;\n    vLineTo(yPos: number): this;\n    hLineTo(xPos: number): this;\n    polarLineTo([r, theta]: Point2D): this;\n    polarLine(distance: number, angle: number): this;\n    tangentLine(distance: number): this;\n    threePointsArcTo(end: Point2D, midPoint: Point2D): this;\n    threePointsArc(xDist: number, yDist: number, viaXDist: number, viaYDist: number): this;\n    sagittaArcTo(end: Point2D, sagitta: number): this;\n    sagittaArc(xDist: number, yDist: number, sagitta: number): this;\n    vSagittaArc(distance: number, sagitta: number): this;\n    hSagittaArc(distance: number, sagitta: number): this;\n    bulgeArcTo(end: Point2D, bulge: number): this;\n    bulgeArc(xDist: number, yDist: number, bulge: number): this;\n    vBulgeArc(distance: number, bulge: number): this;\n    hBulgeArc(distance: number, bulge: number): this;\n    tangentArcTo(end: Point2D): this;\n    tangentArc(xDist: number, yDist: number): this;\n    ellipseTo(end: Point2D, horizontalRadius: number, verticalRadius: number, rotation?: number, longAxis?: boolean, sweep?: boolean): this;\n    ellipse(xDist: number, yDist: number, horizontalRadius: number, verticalRadius: number, rotation?: number, longAxis?: boolean, sweep?: boolean): this;\n    halfEllipseTo(end: Point2D, minorRadius: number, sweep?: boolean): this;\n    halfEllipse(xDist: number, yDist: number, minorRadius: number, sweep?: boolean): this;\n    bezierCurveTo(end: Point2D, controlPoints: Point2D | Point2D[]): this;\n    quadraticBezierCurveTo(end: Point2D, controlPoint: Point2D): this;\n    cubicBezierCurveTo(end: Point2D, startControlPoint: Point2D, endControlPoint: Point2D): this;\n    smoothSplineTo(end: Point2D, config?: SplineConfig): this;\n    smoothSpline(xDist: number, yDist: number, splineConfig?: SplineConfig): this;\n    customCorner(radius: number | ((first: Curve2D, second: Curve2D) => Curve2D[]), mode?: \"fillet\" | \"chamfer\"): this;\n}"
     },
     {
       "name": "basicFaceExtrusion",
@@ -104,25 +104,25 @@
       "name": "Blueprint",
       "kind": "class",
       "category": "Drawing & Sketching",
-      "signature": "export declare class Blueprint implements DrawingInterface {\n    curves: Curve2D[];\n    constructor(curves: Curve2D[]);\n    delete(): void;\n    clone(): Blueprint;\n    get repr(): string;\n    get boundingBox(): BoundingBox2d;\n    get orientation(): \"clockwise\" | \"counterClockwise\";\n    stretch(ratio: number, direction: Point2D, origin?: Point2D): Blueprint;\n    scale(scaleFactor: number, center?: Point2D): Blueprint;\n    rotate(angle: number, center?: Point2D): Blueprint;\n    translate(xDist: number, yDist: number): Blueprint;\n    translate(translationVector: Point2D): Blueprint;\n    mirror(centerOrDirection: Point2D, origin?: Point2D, mode?: \"center\" | \"plane\"): Blueprint;\n    sketchOnPlane(inputPlane?: PlaneName | Plane, origin?: Point | number): Sketch;\n    sketchOnFace(face: Face, scaleMode?: ScaleMode): Sketch;\n    toSVGPathD(): string;\n    toSVGPath(): string;\n    toSVGViewBox(margin?: number): string;\n    toSVGPaths(): string[];\n    toSVG(margin?: number): string;\n    get firstPoint(): Point2D;\n    get lastPoint(): Point2D;\n    isInside(point: Point2D): boolean;\n    isClosed(): boolean;\n    intersects(other: Blueprint): boolean;\n}"
+      "signature": "export declare class Blueprint implements DrawingInterface {\n    curves: Curve2D[];\n    constructor(curves: Curve2D[]);\n    delete(): void;\n    clone(): Blueprint;\n    get repr(): string;\n    get boundingBox(): BoundingBox2d;\n    get orientation(): \"clockwise\" | \"counterClockwise\";\n    stretch(ratio: number, direction: Point2D, origin?: Point2D): Blueprint;\n    scale(scaleFactor: number, center?: Point2D): Blueprint;\n    rotate(angle: number, center?: Point2D): Blueprint;\n    translate(xDist: number, yDist: number): Blueprint;\n    translate(translationVector: Point2D): Blueprint;\n    mirror(centerOrDirection: Point2D, origin?: Point2D, mode?: \"center\" | \"plane\"): Blueprint;\n    sketchOnPlane(inputPlane?: PlaneName | Plane, origin?: Point | number): Sketch;\n    sketchOnFace(face: Face, scaleMode?: ScaleMode): Sketch;\n    subFace(face: Face, origin?: Point | null): Face;\n    punchHole(shape: AnyShape, face: SingleFace, { height, origin, draftAngle, }?: {\n        height?: number | null;\n        origin?: Point | null;\n        draftAngle?: number;\n    }): AnyShape;\n    toSVGPathD(): string;\n    toSVGPath(): string;\n    toSVGViewBox(margin?: number): string;\n    toSVGPaths(): string[];\n    toSVG(margin?: number): string;\n    get firstPoint(): Point2D;\n    get lastPoint(): Point2D;\n    isInside(point: Point2D): boolean;\n    isClosed(): boolean;\n    intersects(other: Blueprint): boolean;\n}"
     },
     {
       "name": "Blueprints",
       "kind": "class",
       "category": "Drawing & Sketching",
-      "signature": "export declare class Blueprints implements DrawingInterface {\n    blueprints: Array<Blueprint | CompoundBlueprint>;\n    constructor(blueprints: Array<Blueprint | CompoundBlueprint>);\n    get repr(): string;\n    clone(): Blueprints;\n    get boundingBox(): BoundingBox2d;\n    stretch(ratio: number, direction: Point2D, origin: Point2D): Blueprints;\n    rotate(angle: number, center?: Point2D): Blueprints;\n    scale(scaleFactor: number, center?: Point2D): Blueprints;\n    translate(xDist: number, yDist: number): Blueprints;\n    translate(translationVector: Point2D): Blueprints;\n    mirror(centerOrDirection: Point2D, origin?: Point2D, mode?: \"center\" | \"plane\"): Blueprints;\n    sketchOnPlane(plane?: PlaneName | Plane, origin?: Point | number): Sketches;\n    sketchOnFace(face: Face, scaleMode?: ScaleMode): Sketches;\n    toSVGViewBox(margin?: number): string;\n    toSVGPaths(): string[][];\n    toSVG(margin?: number): string;\n}"
+      "signature": "export declare class Blueprints implements DrawingInterface {\n    blueprints: Array<Blueprint | CompoundBlueprint>;\n    constructor(blueprints: Array<Blueprint | CompoundBlueprint>);\n    get repr(): string;\n    clone(): Blueprints;\n    get boundingBox(): BoundingBox2d;\n    stretch(ratio: number, direction: Point2D, origin: Point2D): Blueprints;\n    rotate(angle: number, center?: Point2D): Blueprints;\n    scale(scaleFactor: number, center?: Point2D): Blueprints;\n    translate(xDist: number, yDist: number): Blueprints;\n    translate(translationVector: Point2D): Blueprints;\n    mirror(centerOrDirection: Point2D, origin?: Point2D, mode?: \"center\" | \"plane\"): Blueprints;\n    sketchOnPlane(plane?: PlaneName | Plane, origin?: Point | number): Sketches;\n    sketchOnFace(face: Face, scaleMode?: ScaleMode): Sketches;\n    punchHole(shape: AnyShape, face: SingleFace, options?: {\n        height?: number;\n        origin?: Point;\n        draftAngle?: number;\n    }): AnyShape;\n    toSVGViewBox(margin?: number): string;\n    toSVGPaths(): string[][];\n    toSVG(margin?: number): string;\n}"
     },
     {
       "name": "BlueprintSketcher",
       "kind": "class",
       "category": "Drawing & Sketching",
-      "signature": "export declare class BlueprintSketcher extends BaseSketcher2d implements GenericSketcher<Blueprint> {\n    constructor(origin?: Point2D);\n    done(): Blueprint;\n    close(): Blueprint;\n    closeWithMirror(): Blueprint;\n    closeWithCustomCorner(radius: number, mode?: \"fillet\" | \"chamfer\"): Blueprint;\n}"
+      "signature": "export declare class BlueprintSketcher extends BaseSketcher2d implements GenericSketcher<Blueprint> {\n    constructor(origin?: Point2D);\n    done(): Blueprint;\n    close(): Blueprint;\n    closeWithMirror(): Blueprint;\n    closeWithCustomCorner(radius: number, mode?: \"fillet\" | \"chamfer\" | \"dogbone\"): Blueprint;\n}"
     },
     {
       "name": "BoundingBox",
       "kind": "class",
       "category": "Primitives & Makers",
-      "signature": "export declare class BoundingBox extends WrappingObj<Bnd_Box> {\n    constructor(wrapped?: Bnd_Box);\n    get repr(): string;\n    get bounds(): [\n        SimplePoint,\n        SimplePoint\n    ];\n    get center(): SimplePoint;\n    get width(): number;\n    get height(): number;\n    get depth(): number;\n    add(other: BoundingBox): void;\n    isOut(other: BoundingBox): boolean;\n}"
+      "signature": "export declare class BoundingBox extends WrappingObj<Bnd_Box> {\n    constructor(wrapped?: Bnd_Box);\n    static fromBounds(min: Point, max: Point): BoundingBox;\n    get repr(): string;\n    get bounds(): [\n        SimplePoint,\n        SimplePoint\n    ];\n    get center(): SimplePoint;\n    get width(): number;\n    get height(): number;\n    get depth(): number;\n    add(other: BoundingBox): void;\n    isOut(other: BoundingBox): boolean;\n}"
     },
     {
       "name": "BoundingBox2d",
@@ -240,7 +240,7 @@
       "name": "CompoundBlueprint",
       "kind": "class",
       "category": "Drawing & Sketching",
-      "signature": "export declare class CompoundBlueprint implements DrawingInterface {\n    blueprints: Blueprint[];\n    constructor(blueprints: Blueprint[]);\n    clone(): CompoundBlueprint;\n    get boundingBox(): BoundingBox2d;\n    get repr(): string;\n    stretch(ratio: number, direction: Point2D, origin: Point2D): CompoundBlueprint;\n    rotate(angle: number, center?: Point2D): CompoundBlueprint;\n    scale(scaleFactor: number, center?: Point2D): CompoundBlueprint;\n    translate(xDist: number, yDist: number): CompoundBlueprint;\n    translate(translationVector: Point2D): CompoundBlueprint;\n    mirror(centerOrDirection: Point2D, origin?: Point2D, mode?: \"center\" | \"plane\"): CompoundBlueprint;\n    sketchOnPlane(plane?: PlaneName | Plane, origin?: Point | number): CompoundSketch;\n    sketchOnFace(face: Face, scaleMode?: ScaleMode): CompoundSketch;\n    toSVGViewBox(margin?: number): string;\n    toSVGPaths(): string[];\n    toSVGGroup(): string;\n    toSVG(margin?: number): string;\n}"
+      "signature": "export declare class CompoundBlueprint implements DrawingInterface {\n    blueprints: Blueprint[];\n    constructor(blueprints: Blueprint[]);\n    clone(): CompoundBlueprint;\n    get boundingBox(): BoundingBox2d;\n    get repr(): string;\n    stretch(ratio: number, direction: Point2D, origin: Point2D): CompoundBlueprint;\n    rotate(angle: number, center?: Point2D): CompoundBlueprint;\n    scale(scaleFactor: number, center?: Point2D): CompoundBlueprint;\n    translate(xDist: number, yDist: number): CompoundBlueprint;\n    translate(translationVector: Point2D): CompoundBlueprint;\n    mirror(centerOrDirection: Point2D, origin?: Point2D, mode?: \"center\" | \"plane\"): CompoundBlueprint;\n    sketchOnPlane(plane?: PlaneName | Plane, origin?: Point | number): CompoundSketch;\n    sketchOnFace(face: Face, scaleMode?: ScaleMode): CompoundSketch;\n    punchHole(shape: AnyShape, face: SingleFace, options?: {\n        height?: number;\n        origin?: Point;\n        draftAngle?: number;\n    }): AnyShape;\n    toSVGViewBox(margin?: number): string;\n    toSVGPaths(): string[];\n    toSVGGroup(): string;\n    toSVG(margin?: number): string;\n}"
     },
     {
       "name": "compoundShapes",
@@ -314,7 +314,7 @@
       "name": "Curve2D",
       "kind": "class",
       "category": "Utilities",
-      "signature": "export declare class Curve2D extends WrappingObj<Handle_Geom2d_Curve> {\n    constructor(handle: Handle_Geom2d_Curve);\n    get boundingBox(): BoundingBox2d;\n    get repr(): string;\n    get innerCurve(): Geom2d_Curve;\n    value(parameter: number): Point2D;\n    get firstPoint(): Point2D;\n    get lastPoint(): Point2D;\n    get firstParameter(): number;\n    get lastParameter(): number;\n    adaptor(): Geom2dAdaptor_Curve;\n    get geomType(): CurveType;\n    clone(): Curve2D;\n    reverse(): void;\n    distanceFrom(element: Curve2D | Point2D): number;\n    isOnCurve(point: Point2D): boolean;\n    parameter(point: Point2D, precision?: number): number;\n    tangentAt(index: number | Point2D): Point2D;\n    splitAt(points: Point2D[] | number[], precision?: number): Curve2D[];\n}"
+      "signature": "export declare class Curve2D extends WrappingObj<Geom2d_Curve> {\n    constructor(handle: Geom2d_Curve);\n    get boundingBox(): BoundingBox2d;\n    get repr(): string;\n    get innerCurve(): Geom2d_Curve;\n    serialize(): string;\n    value(parameter: number): Point2D;\n    get firstPoint(): Point2D;\n    get lastPoint(): Point2D;\n    get firstParameter(): number;\n    get lastParameter(): number;\n    adaptor(): Geom2dAdaptor_Curve;\n    get geomType(): CurveType;\n    clone(): Curve2D;\n    reverse(): void;\n    distanceFrom(element: Curve2D | Point2D): number;\n    isOnCurve(point: Point2D): boolean;\n    parameter(point: Point2D, precision?: number): number;\n    tangentAt(index: number | Point2D): Point2D;\n    splitAt(points: Point2D[] | number[], precision?: number): Curve2D[];\n}"
     },
     {
       "name": "CurveLike",
@@ -351,6 +351,34 @@
       "kind": "interface",
       "category": "Utilities",
       "signature": "declare interface Deletable {\n    delete: () => void;\n}"
+    },
+    {
+      "name": "deserializeDrawing",
+      "kind": "function",
+      "category": "Drawing & Sketching",
+      "signature": "export declare function deserializeDrawing(data: string): Drawing;",
+      "parameters": [
+        {
+          "name": "data",
+          "type": "string",
+          "optional": false
+        }
+      ],
+      "returnType": "Drawing"
+    },
+    {
+      "name": "deserializeShape",
+      "kind": "function",
+      "category": "Geometry Types",
+      "signature": "export declare function deserializeShape(data: string): AnyShape;",
+      "parameters": [
+        {
+          "name": "data",
+          "type": "string",
+          "optional": false
+        }
+      ],
+      "returnType": "AnyShape"
     },
     {
       "name": "Direction",
@@ -455,7 +483,7 @@
       "name": "Drawing",
       "kind": "class",
       "category": "Drawing & Sketching",
-      "signature": "export declare class Drawing implements DrawingInterface {\n    constructor(innerShape?: Shape2D);\n    clone(): Drawing;\n    get boundingBox(): BoundingBox2d;\n    stretch(ratio: number, direction: Point2D, origin: Point2D): Drawing;\n    get repr(): string;\n    rotate(angle: number, center?: Point2D): Drawing;\n    translate(xDist: number, yDist: number): Drawing;\n    translate(translationVector: Point2D): Drawing;\n    scale(scaleFactor: number, center?: Point2D): Drawing;\n    mirror(centerOrDirection: Point2D, origin?: Point2D, mode?: \"center\" | \"plane\"): Drawing;\n    cut(other: Drawing): Drawing;\n    fuse(other: Drawing): Drawing;\n    intersect(other: Drawing): Drawing;\n    fillet(radius: number, filter?: (c: CornerFinder) => CornerFinder): Drawing;\n    chamfer(radius: number, filter?: (c: CornerFinder) => CornerFinder): Drawing;\n    sketchOnPlane(inputPlane: Plane): SketchInterface | Sketches;\n    sketchOnPlane(inputPlane?: PlaneName, origin?: Point | number): SketchInterface | Sketches;\n    sketchOnFace(face: Face, scaleMode: ScaleMode): SketchInterface | Sketches;\n    toSVG(margin?: number): string;\n    toSVGViewBox(margin?: number): string;\n    toSVGPaths(): string[] | string[][];\n    offset(distance: number, offsetConfig?: Offset2DConfig): Drawing;\n    approximate(target: \"svg\" | \"arcs\", options?: ApproximationOptions): Drawing;\n    get blueprint(): Blueprint;\n}"
+      "signature": "export declare class Drawing implements DrawingInterface {\n    constructor(innerShape?: Shape2D);\n    clone(): Drawing;\n    serialize(): string;\n    get boundingBox(): BoundingBox2d;\n    stretch(ratio: number, direction: Point2D, origin: Point2D): Drawing;\n    get repr(): string;\n    rotate(angle: number, center?: Point2D): Drawing;\n    translate(xDist: number, yDist: number): Drawing;\n    translate(translationVector: Point2D): Drawing;\n    scale(scaleFactor: number, center?: Point2D): Drawing;\n    mirror(centerOrDirection: Point2D, origin?: Point2D, mode?: \"center\" | \"plane\"): Drawing;\n    cut(other: Drawing): Drawing;\n    fuse(other: Drawing): Drawing;\n    intersect(other: Drawing): Drawing;\n    fillet(radius: number, filter?: (c: CornerFinder) => CornerFinder): Drawing;\n    chamfer(radius: number, filter?: (c: CornerFinder) => CornerFinder): Drawing;\n    sketchOnPlane(inputPlane: Plane): SketchInterface | Sketches;\n    sketchOnPlane(inputPlane?: PlaneName, origin?: Point | number): SketchInterface | Sketches;\n    sketchOnFace(face: Face, scaleMode: ScaleMode): SketchInterface | Sketches;\n    punchHole(shape: AnyShape, faceFinder: SingleFace, options?: {\n        height?: number;\n        origin?: Point;\n        draftAngle?: number;\n    }): AnyShape;\n    toSVG(margin?: number): string;\n    toSVGViewBox(margin?: number): string;\n    toSVGPaths(): string[] | string[][];\n    offset(distance: number, offsetConfig?: Offset2DConfig): Drawing;\n    approximate(target: \"svg\" | \"arcs\", options?: ApproximationOptions): Drawing;\n    get blueprint(): Blueprint;\n}"
     },
     {
       "name": "DrawingInterface",
@@ -647,7 +675,7 @@
       "name": "Face",
       "kind": "class",
       "category": "Finders & Filters",
-      "signature": "export declare class Face extends Shape<TopoDS_Face> {\n    get surface(): Surface;\n    get orientation(): \"forward\" | \"backward\";\n    get geomType(): SurfaceType;\n    get UVBounds(): {\n        uMin: number;\n        uMax: number;\n        vMin: number;\n        vMax: number;\n    };\n    pointOnSurface(u: number, v: number): Vector;\n    normalAt(locationVector?: Point): Vector;\n    get center(): Vector;\n    outerWire(): Wire;\n    innerWires(): Wire[];\n    triangulation(index0?: number): FaceTriangulation | null;\n}"
+      "signature": "export declare class Face extends Shape<TopoDS_Face> {\n    get surface(): Surface;\n    get orientation(): 'forward' | 'backward';\n    flipOrientation(): Face;\n    get geomType(): SurfaceType;\n    get UVBounds(): {\n        uMin: number;\n        uMax: number;\n        vMin: number;\n        vMax: number;\n    };\n    pointOnSurface(u: number, v: number): Vector;\n    uvCoordinates(point: Point): [\n        number,\n        number\n    ];\n    normalAt(locationVector?: Point): Vector;\n    get center(): Vector;\n    outerWire(): Wire;\n    innerWires(): Wire[];\n    triangulation(index0?: number): FaceTriangulation | null;\n}"
     },
     {
       "name": "FaceFinder",
@@ -665,7 +693,7 @@
       "name": "FaceSketcher",
       "kind": "class",
       "category": "Finders & Filters",
-      "signature": "export declare class FaceSketcher extends BaseSketcher2d implements GenericSketcher<Sketch> {\n    constructor(face: Face, origin?: Point2D);\n    done(): Sketch;\n    close(): Sketch;\n    closeWithMirror(): Sketch;\n    closeWithCustomCorner(radius: number, mode?: \"fillet\" | \"chamfer\"): Sketch;\n}"
+      "signature": "export declare class FaceSketcher extends BaseSketcher2d implements GenericSketcher<Sketch> {\n    constructor(face: Face, origin?: Point2D);\n    done(): Sketch;\n    close(): Sketch;\n    closeWithMirror(): Sketch;\n    closeWithCustomCorner(radius: number | ((f: Curve2D, s: Curve2D) => Curve2D[]), mode?: \"fillet\" | \"chamfer\" | \"dogbone\"): Sketch;\n}"
     },
     {
       "name": "FaceTriangulation",
@@ -804,10 +832,41 @@
       "signature": "export declare const getFont: (fontFamily?: string) => opentype_2.Font;"
     },
     {
+      "name": "getManifold",
+      "kind": "constant",
+      "category": "Utilities",
+      "signature": "export declare const getManifold: () => ManifoldToplevel;"
+    },
+    {
       "name": "getOC",
       "kind": "constant",
       "category": "Utilities",
       "signature": "export declare const getOC: () => OpenCascadeInstance;"
+    },
+    {
+      "name": "getSingleFace",
+      "kind": "function",
+      "category": "Finders & Filters",
+      "signature": "export declare function getSingleFace(f: SingleFace, shape: AnyShape): Face;",
+      "parameters": [
+        {
+          "name": "f",
+          "type": "SingleFace",
+          "optional": false
+        },
+        {
+          "name": "shape",
+          "type": "AnyShape",
+          "optional": false
+        }
+      ],
+      "returnType": "Face"
+    },
+    {
+      "name": "Handle_Law_Function",
+      "kind": "type",
+      "category": "Utilities",
+      "signature": "declare type Handle_Law_Function = ReturnType<Law_Function[\"Trim\"]>;"
     },
     {
       "name": "HASH_CODE_MAX",
@@ -938,9 +997,27 @@
     },
     {
       "name": "loadFont",
-      "kind": "constant",
+      "kind": "function",
       "category": "Utilities",
-      "signature": "export declare const loadFont: (fontPath: string, fontFamily?: string) => Promise<opentype_2.Font>;"
+      "signature": "export declare function loadFont(fontPath: string | ArrayBuffer, fontFamily?: string, force?: boolean): Promise<opentype_2.Font>;",
+      "parameters": [
+        {
+          "name": "fontPath",
+          "type": "string | ArrayBuffer",
+          "optional": false
+        },
+        {
+          "name": "fontFamily",
+          "type": "string",
+          "optional": true
+        },
+        {
+          "name": "force",
+          "type": "boolean",
+          "optional": true
+        }
+      ],
+      "returnType": "Promise<opentype_2.Font>"
     },
     {
       "name": "localGC",
@@ -1210,6 +1287,30 @@
       "signature": "export declare const makeVertex: (point: Point) => Vertex;"
     },
     {
+      "name": "ManifoldBox",
+      "kind": "type",
+      "category": "Primitives & Makers",
+      "signature": "export declare type ManifoldBox = Box;"
+    },
+    {
+      "name": "ManifoldInstance",
+      "kind": "type",
+      "category": "Utilities",
+      "signature": "export declare type ManifoldInstance = Manifold;"
+    },
+    {
+      "name": "ManifoldMesh",
+      "kind": "type",
+      "category": "Utilities",
+      "signature": "export declare type ManifoldMesh = Mesh;"
+    },
+    {
+      "name": "ManifoldVec3",
+      "kind": "type",
+      "category": "Utilities",
+      "signature": "export declare type ManifoldVec3 = Vec3;"
+    },
+    {
       "name": "measureArea",
       "kind": "function",
       "category": "Measurements",
@@ -1311,6 +1412,18 @@
         }
       ],
       "returnType": "number"
+    },
+    {
+      "name": "MeshShape",
+      "kind": "class",
+      "category": "Geometry Types",
+      "signature": "export declare class MeshShape extends WrappingObj<ManifoldInstance> implements Shape3DLike<MeshShape, MeshShapeMesh, MeshShape, number> {\n    constructor(manifoldShape: ManifoldInstance);\n    clone(): MeshShape;\n    fuse(other: MeshShape, _options?: any): MeshShape;\n    cut(other: MeshShape, _options?: any): MeshShape;\n    intersect(other: MeshShape): MeshShape;\n    translate(xDist: number, yDist: number, zDist: number): MeshShape;\n    translate(vector: Point): MeshShape;\n    translateX(distance: number): MeshShape;\n    translateY(distance: number): MeshShape;\n    translateZ(distance: number): MeshShape;\n    rotate(angle: number, position?: Point, direction?: Point): MeshShape;\n    rotate(vector: Point): MeshShape;\n    scale(scale: number, center?: Point): MeshShape;\n    mirror(inputPlane?: Plane | PlaneName | Point, origin?: Point): MeshShape;\n    simplify(tolerance?: number): MeshShape;\n    refine(n: number): MeshShape;\n    refineToLength(length: number): MeshShape;\n    refineToTolerance(tolerance: number): MeshShape;\n    hull(): MeshShape;\n    asOriginal(): MeshShape;\n    mesh(): MeshShapeMesh;\n    get boundingBox(): BoundingBox;\n    volume(): number;\n    surfaceArea(): number;\n    numTri(): number;\n    numVert(): number;\n    numEdge(): number;\n    get isEmpty(): boolean;\n}"
+    },
+    {
+      "name": "MeshShapeMesh",
+      "kind": "interface",
+      "category": "Geometry Types",
+      "signature": "export declare interface MeshShapeMesh {\n    vertices: number[];\n    triangles: number[];\n    normals: number[];\n    vertProperties: number[];\n    numProp: number;\n}"
     },
     {
       "name": "mirror",
@@ -1492,6 +1605,12 @@
       "signature": "export declare type ScaleMode = \"original\" | \"bounds\" | \"native\";"
     },
     {
+      "name": "setManifold",
+      "kind": "constant",
+      "category": "Utilities",
+      "signature": "export declare const setManifold: (manifold: ManifoldToplevel) => void;"
+    },
+    {
       "name": "setOC",
       "kind": "constant",
       "category": "Utilities",
@@ -1501,7 +1620,7 @@
       "name": "Shape",
       "kind": "class",
       "category": "Geometry Types",
-      "signature": "export declare class Shape<Type extends TopoDS_Shape> extends WrappingObj<Type> {\n    constructor(ocShape: Type);\n    clone(): this;\n    get hashCode(): number;\n    get isNull(): boolean;\n    isSame(other: AnyShape): boolean;\n    isEqual(other: AnyShape): boolean;\n    simplify(): this;\n    translate(xDist: number, yDist: number, zDist: number): this;\n    translate(vector: Point): this;\n    translateX(distance: number): this;\n    translateY(distance: number): this;\n    translateZ(distance: number): this;\n    rotate(angle: number, position?: Point, direction?: Point): this;\n    mirror(inputPlane?: Plane | PlaneName | Point, origin?: Point): this;\n    scale(scale: number, center?: Point): this;\n    get edges(): Edge[];\n    get faces(): Face[];\n    get wires(): Wire[];\n    get boundingBox(): BoundingBox;\n    mesh({ tolerance, angularTolerance }?: {\n        tolerance?: number | undefined;\n        angularTolerance?: number | undefined;\n    }): ShapeMesh;\n    meshEdges({ tolerance, angularTolerance }?: {\n        tolerance?: number | undefined;\n        angularTolerance?: number | undefined;\n    }): {\n        lines: number[];\n        edgeGroups: {\n            start: number;\n            count: number;\n            edgeId: number;\n        }[];\n    };\n    blobSTEP(): Blob;\n    blobSTL({ tolerance, angularTolerance, binary, }?: {\n        tolerance?: number | undefined;\n        angularTolerance?: number | undefined;\n        binary?: boolean | undefined;\n    }): Blob;\n}"
+      "signature": "export declare class Shape<Type extends TopoDS_Shape> extends WrappingObj<Type> {\n    constructor(ocShape: Type);\n    clone(): this;\n    serialize(): string;\n    get hashCode(): number;\n    get isNull(): boolean;\n    isSame(other: AnyShape): boolean;\n    isEqual(other: AnyShape): boolean;\n    simplify(): this;\n    translate(xDist: number, yDist: number, zDist: number): this;\n    translate(vector: Point): this;\n    translateX(distance: number): this;\n    translateY(distance: number): this;\n    translateZ(distance: number): this;\n    rotate(angle: number, position?: Point, direction?: Point): this;\n    mirror(inputPlane?: Plane | PlaneName | Point, origin?: Point): this;\n    scale(scale: number, center?: Point): this;\n    get edges(): Edge[];\n    get faces(): Face[];\n    get wires(): Wire[];\n    get boundingBox(): BoundingBox;\n    mesh({ tolerance, angularTolerance }?: {\n        tolerance?: number | undefined;\n        angularTolerance?: number | undefined;\n    }): ShapeMesh;\n    meshEdges({ tolerance, angularTolerance }?: {\n        tolerance?: number | undefined;\n        angularTolerance?: number | undefined;\n    }): {\n        lines: number[];\n        edgeGroups: {\n            start: number;\n            count: number;\n            edgeId: number;\n        }[];\n    };\n    blobSTEP(): Blob;\n    blobSTL({ tolerance, angularTolerance, binary }?: {\n        tolerance?: number | undefined;\n        angularTolerance?: number | undefined;\n        binary?: boolean | undefined;\n    }): Blob;\n}"
     },
     {
       "name": "Shape2D",
@@ -1516,10 +1635,16 @@
       "signature": "export declare type Shape3D = Shell | Solid | CompSolid | Compound;"
     },
     {
+      "name": "Shape3DLike",
+      "kind": "interface",
+      "category": "Geometry Types",
+      "signature": "export declare interface Shape3DLike<ShapeT, MeshT, OtherT = ShapeT, MeshOptionsT = any> {\n    fuse(other: ShapeT, options?: any): ShapeT;\n    cut(other: ShapeT, options?: any): ShapeT;\n    intersect(other: OtherT): ShapeT;\n    translate(xDist: number, yDist: number, zDist: number): ShapeT;\n    translate(vector: Point): ShapeT;\n    translateX(distance: number): ShapeT;\n    translateY(distance: number): ShapeT;\n    translateZ(distance: number): ShapeT;\n    rotate(angle: number, position?: Point, direction?: Point): ShapeT;\n    scale(scale: number, center?: Point): ShapeT;\n    mirror(inputPlane?: Plane | PlaneName | Point, origin?: Point): ShapeT;\n    mesh(options?: MeshOptionsT): MeshT;\n    readonly boundingBox: BoundingBox;\n}"
+    },
+    {
       "name": "ShapeConfig",
       "kind": "type",
       "category": "Geometry Types",
-      "signature": "declare type ShapeConfig = {\n    shape: AnyShape;\n    color?: string;\n    alpha?: number;\n    name?: string;\n};"
+      "signature": "export declare type ShapeConfig = {\n    shape: AnyShape;\n    color?: string;\n    alpha?: number;\n    name?: string;\n    metallic?: number;\n    roughness?: number;\n    density?: number;\n};"
     },
     {
       "name": "ShapeMesh",
@@ -1544,6 +1669,12 @@
       "kind": "type",
       "category": "Geometry Types",
       "signature": "export declare type SimplePoint = [\n    number,\n    number,\n    number\n];"
+    },
+    {
+      "name": "SingleFace",
+      "kind": "type",
+      "category": "Finders & Filters",
+      "signature": "export declare type SingleFace = Face | FaceFinder | ((f: FaceFinder) => FaceFinder);"
     },
     {
       "name": "Sketch",
@@ -1675,7 +1806,7 @@
       "name": "SupportedUnit",
       "kind": "type",
       "category": "Utilities",
-      "signature": "export declare type SupportedUnit = \"M\" | \"CM\" | \"MM\" | \"INCH\" | \"FT\" | \"m\" | \"mm\" | \"cm\" | \"inch\" | \"ft\";"
+      "signature": "export declare type SupportedUnit = 'M' | 'CM' | 'MM' | 'INCH' | 'FT' | 'm' | 'mm' | 'cm' | 'inch' | 'ft';"
     },
     {
       "name": "supportExtrude",
@@ -1699,7 +1830,7 @@
       "name": "SurfaceType",
       "kind": "type",
       "category": "Utilities",
-      "signature": "export declare type SurfaceType = \"PLANE\" | \"CYLINDRE\" | \"CONE\" | \"SPHERE\" | \"TORUS\" | \"BEZIER_SURFACE\" | \"BSPLINE_SURFACE\" | \"REVOLUTION_SURFACE\" | \"EXTRUSION_SURFACE\" | \"OFFSET_SURFACE\" | \"OTHER_SURFACE\";"
+      "signature": "export declare type SurfaceType = 'PLANE' | 'CYLINDRE' | 'CONE' | 'SPHERE' | 'TORUS' | 'BEZIER_SURFACE' | 'BSPLINE_SURFACE' | 'REVOLUTION_SURFACE' | 'EXTRUSION_SURFACE' | 'OFFSET_SURFACE' | 'OTHER_SURFACE';"
     },
     {
       "name": "textBlueprints",
@@ -1724,7 +1855,7 @@
       "name": "TopoEntity",
       "kind": "type",
       "category": "Utilities",
-      "signature": "declare type TopoEntity = \"vertex\" | \"edge\" | \"wire\" | \"face\" | \"shell\" | \"solid\" | \"solidCompound\" | \"compound\" | \"shape\";"
+      "signature": "declare type TopoEntity = 'vertex' | 'edge' | 'wire' | 'face' | 'shell' | 'solid' | 'solidCompound' | 'compound' | 'shape';"
     },
     {
       "name": "Transformation",
@@ -1876,7 +2007,7 @@
       "name": "Wire",
       "kind": "class",
       "category": "Finders & Filters",
-      "signature": "export declare class Wire extends _1DShape<TopoDS_Wire> {\n    offset2D(offset: number, kind?: \"arc\" | \"intersection\" | \"tangent\"): Wire;\n}"
+      "signature": "export declare class Wire extends _1DShape<TopoDS_Wire> {\n    offset2D(offset: number, kind?: 'arc' | 'intersection' | 'tangent'): Wire;\n}"
     },
     {
       "name": "WrappingObj",

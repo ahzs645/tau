@@ -9,8 +9,11 @@ import { z } from 'zod';
  * Used for both default sizes and minimum constraints on panes
  */
 
-/** Minimum width for standard side panels (Chat History, Explorer, Parameters, Converter, Git, Details) */
+/** Minimum width for standard side panels (Explorer, Parameters, Converter, Details) */
 export const panelMinSizeStandard = 200;
+
+/** Minimum width for the Chat History panel */
+export const panelMinSizeChat = 240;
 
 /** Minimum width for the Editor panel (code editing area) */
 export const panelMinSizeEditor = 400;
@@ -18,7 +21,7 @@ export const panelMinSizeEditor = 400;
 /** Minimum width for the Viewer/center panel (main 3D CAD visualization area) */
 export const panelMinSizeViewer = 416;
 
-/** Mobile drawer snap points for the builds interface */
+/** Mobile drawer snap points for the projects interface */
 export const mobileDrawerSnapPoints: Array<number | string> = [0.7, 1];
 
 /**
@@ -34,7 +37,6 @@ export const panelIds = [
   'parameters',
   'editor',
   'converter',
-  'git',
   'details',
 ] as const;
 
@@ -50,13 +52,16 @@ export const desktopPanelIds = [
   'parameters',
   'editor',
   'converter',
-  'git',
   'details',
 ] as const;
 
 /**
  * Panel order for Allotment layout - single source of truth for visual ordering.
  * This determines the left-to-right order of panels in the desktop interface.
+ *
+ * INVARIANT: Every entry here MUST correspond to exactly one `<Allotment.Pane>`
+ * rendered in `chat-interface-desktop.tsx` (in the same order). A mismatch
+ * causes `allotment.resize(sizes)` to assign sizes to the wrong panes.
  */
 export const allotmentPanelOrder = [
   'chat',
@@ -165,7 +170,7 @@ export const defaultGraphicsSettings: GraphicsViewSettings = {
   enablePostProcessing: true,
   upDirection: 'z',
   cameraFovAngle: 60,
-  renderTimeout: 60,
+  renderTimeout: 30,
   environmentPreset: 'studio',
 };
 
@@ -180,7 +185,7 @@ export type PanelId = (typeof panelIds)[number];
 export type DesktopPanelId = (typeof desktopPanelIds)[number];
 
 /**
- * Default panel state for new builds or when no stored state exists.
+ * Default panel state for new projects or when no stored state exists.
  */
 export const defaultPanelState = {
   openPanels: {
@@ -191,7 +196,6 @@ export const defaultPanelState = {
     parameters: true,
     editor: false,
     converter: false,
-    git: false,
     details: false,
   },
   panelSizes: {
@@ -203,12 +207,15 @@ export const defaultPanelState = {
     parameters: 300,
     editor: 300,
     converter: 300,
-    git: 300,
     details: 300,
   },
   mobileActiveTab: 'chat',
+  kernelPaneview: {},
+  parametersPaneview: {},
 } as const satisfies {
   openPanels: Record<DesktopPanelId, boolean>;
   panelSizes: Record<PanelId, number>;
   mobileActiveTab: PanelId;
+  kernelPaneview: Record<string, never>;
+  parametersPaneview: Record<string, never>;
 };

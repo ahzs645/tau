@@ -1,0 +1,62 @@
+import { describe, it, expect } from 'vitest';
+import { mock } from 'vitest-mock-extended';
+import type { RpcFileSystem } from '#rpc/rpc-dependencies.js';
+import { handleAppendFile } from '#rpc/handlers/handle-append-file.js';
+
+describe('handleAppendFile', () => {
+  it('should append content and return bytes written', async () => {
+    const fileSystem = mock<RpcFileSystem>();
+    fileSystem.appendFile.mockResolvedValue(undefined);
+
+    const result = await handleAppendFile({ targetFile: 'log.jsonl', content: '{"event":"test"}\n' }, fileSystem);
+
+    expect(result).toEqual({
+      success: true,
+      // oxlint-disable-next-line typescript/no-unsafe-assignment -- expected string containing log.jsonl
+      message: expect.stringContaining('log.jsonl'),
+      // oxlint-disable-next-line typescript/no-unsafe-assignment -- expected any number
+      bytesWritten: expect.any(Number),
+    });
+    expect(fileSystem.appendFile).toHaveBeenCalledWith('log.jsonl', '{"event":"test"}\n');
+  });
+
+  it('should calculate correct byte count for multi-byte characters', async () => {
+    const fileSystem = mock<RpcFileSystem>();
+    fileSystem.appendFile.mockResolvedValue(undefined);
+
+    const content = '日本語テスト';
+    const result = await handleAppendFile({ targetFile: 'test.txt', content }, fileSystem);
+
+    expect(result).toMatchObject({ success: true });
+    if (result.success) {
+      expect(result.bytesWritten).toBe(new TextEncoder().encode(content).byteLength);
+    }
+  });
+
+  it('should return FILE_NOT_FOUND error when path does not exist', async () => {
+    const fileSystem = mock<RpcFileSystem>();
+    const error = new Error('File not found');
+    (error as NodeJS.ErrnoException).code = 'ENOENT';
+    fileSystem.appendFile.mockRejectedValue(error);
+
+    const result = await handleAppendFile({ targetFile: 'missing/file.txt', content: 'data' }, fileSystem);
+
+    expect(result).toMatchObject({
+      success: false,
+      errorCode: 'FILE_NOT_FOUND',
+    });
+  });
+
+  it('should return IO_ERROR for generic filesystem errors', async () => {
+    const fileSystem = mock<RpcFileSystem>();
+    fileSystem.appendFile.mockRejectedValue(new Error('Disk full'));
+
+    const result = await handleAppendFile({ targetFile: 'test.txt', content: 'data' }, fileSystem);
+
+    expect(result).toMatchObject({
+      success: false,
+      errorCode: 'IO_ERROR',
+      message: 'Disk full',
+    });
+  });
+});

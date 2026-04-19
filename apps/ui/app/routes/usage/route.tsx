@@ -35,8 +35,8 @@ const timeBucketOptions: Array<{ value: TimeBucket; label: string }> = [
 export const handle: Handle = {
   breadcrumb() {
     return (
-      <Button asChild variant="ghost">
-        <Link to="/usage">Usage</Link>
+      <Button asChild variant='ghost'>
+        <Link to='/usage'>Usage</Link>
       </Button>
     );
   },
@@ -51,12 +51,12 @@ export default function UsageDashboard(): React.JSX.Element {
     setDateRange,
     setModels,
     setProviders,
-    setBuilds,
+    setProjects,
     clearFilters,
     applyFilters,
     availableModels,
     availableProviders,
-    availableBuilds,
+    availableProjects,
   } = useUsageFilters(allRecords);
 
   // Apply filters to get filtered records
@@ -64,8 +64,8 @@ export default function UsageDashboard(): React.JSX.Element {
 
   // Check if any dropdown filters are active (excludes date range which is always set)
   const hasActiveFilters = useMemo(
-    () => filters.models.length > 0 || filters.providers.length > 0 || filters.builds.length > 0,
-    [filters.models, filters.providers, filters.builds],
+    () => filters.models.length > 0 || filters.providers.length > 0 || filters.projects.length > 0,
+    [filters.models, filters.providers, filters.projects],
   );
 
   const handleModelToggle = (model: string): void => {
@@ -82,59 +82,59 @@ export default function UsageDashboard(): React.JSX.Element {
     setProviders(newProviders);
   };
 
-  const handleBuildToggle = (buildId: string): void => {
-    const newBuilds = filters.builds.includes(buildId)
-      ? filters.builds.filter((b) => b !== buildId)
-      : [...filters.builds, buildId];
-    setBuilds(newBuilds);
+  const handleProjectToggle = (projectId: string): void => {
+    const newProjects = filters.projects.includes(projectId)
+      ? filters.projects.filter((p) => p !== projectId)
+      : [...filters.projects, projectId];
+    setProjects(newProjects);
   };
 
   if (isLoading) {
     return (
-      <div className="container flex h-full flex-col items-center justify-center gap-4 px-4 py-8">
-        <Loader className="size-8" />
-        <p className="text-muted-foreground">Loading usage data...</p>
+      <div className='container flex h-full flex-col items-center justify-center gap-4 px-4 py-8'>
+        <Loader className='size-8' />
+        <p className='text-muted-foreground'>Loading usage data...</p>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="container flex h-full flex-col items-center justify-center gap-4 px-4 py-8">
-        <p className="text-destructive">Error loading usage data: {error.message}</p>
+      <div className='container flex h-full flex-col items-center justify-center gap-4 px-4 py-8'>
+        <p className='text-destructive'>Error loading usage data: {error.message}</p>
       </div>
     );
   }
 
   return (
-    <div className="container mx-auto space-y-6 px-4 py-8">
+    <div className='container mx-auto space-y-6 px-4 py-8'>
       {/* Header */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className='flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between'>
         <div>
-          <h1 className="text-3xl font-bold">Usage Dashboard</h1>
-          <p className="mt-1 text-muted-foreground">Track AI model usage and costs across all your builds.</p>
+          <h1 className='text-3xl font-bold'>Usage Dashboard</h1>
+          <p className='mt-1 text-muted-foreground'>Track AI model usage and costs across all your projects.</p>
         </div>
       </div>
 
       {/* Filters */}
-      <div className="flex flex-wrap items-center gap-2">
+      <div className='flex flex-wrap items-center gap-2'>
         <DateRangePicker withPresets value={filters.dateRange} onChange={setDateRange} />
 
         {/* Model Filter */}
         {availableModels.length > 0 ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" className="gap-2">
-                <Filter className="size-4" />
+              <Button variant='outline' className='gap-2'>
+                <Filter className='size-4' />
                 Models
                 {filters.models.length > 0 ? (
-                  <Badge variant="secondary" className="ml-1 rounded-full px-1.5 py-0.5 text-xs">
+                  <Badge variant='secondary' className='ml-1 rounded-full px-1.5 py-0.5 text-xs'>
                     {filters.models.length}
                   </Badge>
                 ) : undefined}
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="max-h-[300px] w-56 overflow-y-auto">
+            <DropdownMenuContent align='start' className='max-h-[300px] w-56 overflow-y-auto'>
               <DropdownMenuLabel>Filter by Model</DropdownMenuLabel>
               <DropdownMenuSeparator />
               {availableModels.map((model) => (
@@ -159,17 +159,17 @@ export default function UsageDashboard(): React.JSX.Element {
         {availableProviders.length > 0 ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" className="gap-2">
-                <Filter className="size-4" />
+              <Button variant='outline' className='gap-2'>
+                <Filter className='size-4' />
                 Providers
                 {filters.providers.length > 0 ? (
-                  <Badge variant="secondary" className="ml-1 rounded-full px-1.5 py-0.5 text-xs">
+                  <Badge variant='secondary' className='ml-1 rounded-full px-1.5 py-0.5 text-xs'>
                     {filters.providers.length}
                   </Badge>
                 ) : undefined}
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-56">
+            <DropdownMenuContent align='start' className='w-56'>
               <DropdownMenuLabel>Filter by Provider</DropdownMenuLabel>
               <DropdownMenuSeparator />
               {availableProviders.map((provider) => (
@@ -190,35 +190,35 @@ export default function UsageDashboard(): React.JSX.Element {
           </DropdownMenu>
         ) : undefined}
 
-        {/* Build Filter */}
-        {availableBuilds.length > 0 ? (
+        {/* Project Filter */}
+        {availableProjects.length > 0 ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" className="gap-2">
-                <Filter className="size-4" />
-                Builds
-                {filters.builds.length > 0 ? (
-                  <Badge variant="secondary" className="ml-1 rounded-full px-1.5 py-0.5 text-xs">
-                    {filters.builds.length}
+              <Button variant='outline' className='gap-2'>
+                <Filter className='size-4' />
+                Projects
+                {filters.projects.length > 0 ? (
+                  <Badge variant='secondary' className='ml-1 rounded-full px-1.5 py-0.5 text-xs'>
+                    {filters.projects.length}
                   </Badge>
                 ) : undefined}
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="max-h-[300px] w-56 overflow-y-auto">
-              <DropdownMenuLabel>Filter by Build</DropdownMenuLabel>
+            <DropdownMenuContent align='start' className='max-h-[300px] w-56 overflow-y-auto'>
+              <DropdownMenuLabel>Filter by Project</DropdownMenuLabel>
               <DropdownMenuSeparator />
-              {availableBuilds.map((build) => (
+              {availableProjects.map((project) => (
                 <DropdownMenuCheckboxItem
-                  key={build.id}
-                  checked={filters.builds.includes(build.id)}
+                  key={project.id}
+                  checked={filters.projects.includes(project.id)}
                   onSelect={(event) => {
                     event.preventDefault();
                   }}
                   onCheckedChange={() => {
-                    handleBuildToggle(build.id);
+                    handleProjectToggle(project.id);
                   }}
                 >
-                  <span className="max-w-[180px] truncate">{build.name}</span>
+                  <span className='max-w-[180px] truncate'>{project.name}</span>
                 </DropdownMenuCheckboxItem>
               ))}
             </DropdownMenuContent>
@@ -227,20 +227,20 @@ export default function UsageDashboard(): React.JSX.Element {
 
         {/* Clear Filters */}
         {hasActiveFilters ? (
-          <Button variant="ghost" size="sm" className="gap-2" onClick={clearFilters}>
-            <X className="size-4" />
+          <Button variant='ghost' size='sm' className='gap-2' onClick={clearFilters}>
+            <X className='size-4' />
             Clear filters
           </Button>
         ) : undefined}
 
         {/* Time Bucket Toggle */}
-        <div className="ml-auto flex items-center gap-2">
-          <Clock className="size-4 text-muted-foreground" />
+        <div className='ml-auto flex items-center gap-2'>
+          <Clock className='size-4 text-muted-foreground' />
           <ToggleGroup
-            type="single"
-            variant="outline"
+            type='single'
+            variant='outline'
             value={timeBucket}
-            size="sm"
+            size='sm'
             onValueChange={(value) => {
               if (value) {
                 setTimeBucket(value as TimeBucket);
@@ -255,8 +255,8 @@ export default function UsageDashboard(): React.JSX.Element {
           </ToggleGroup>
 
           {/* Refresh Button */}
-          <Button variant="outline" size="sm" className="gap-2" onClick={refetch}>
-            <RefreshCw className="size-4" />
+          <Button variant='outline' size='sm' className='gap-2' onClick={refetch}>
+            <RefreshCw className='size-4' />
             Refresh
           </Button>
         </div>
@@ -266,15 +266,15 @@ export default function UsageDashboard(): React.JSX.Element {
       <UsageSummaryCards records={filteredRecords} />
 
       {/* Charts Grid */}
-      <div className="grid gap-4 lg:grid-cols-2">
-        <UsageLineChart records={filteredRecords} timeBucket={timeBucket} description="Cost trend" />
-        <UsageBarChart records={filteredRecords} description="Top models by cost" />
-        <UsageStackedChart records={filteredRecords} timeBucket={timeBucket} description="Token composition" />
-        <UsagePieChart records={filteredRecords} description="Cost distribution by provider" />
+      <div className='grid gap-4 lg:grid-cols-2'>
+        <UsageLineChart records={filteredRecords} timeBucket={timeBucket} description='Cost trend' />
+        <UsageBarChart records={filteredRecords} description='Top models by cost' />
+        <UsageStackedChart records={filteredRecords} timeBucket={timeBucket} description='Token composition' />
+        <UsagePieChart records={filteredRecords} description='Cost distribution by provider' />
       </div>
 
       {/* Data Table */}
-      <UsageTable records={filteredRecords} description="Detailed usage records" height={500} />
+      <UsageTable records={filteredRecords} description='Detailed usage records' height={500} />
     </div>
   );
 }

@@ -36,8 +36,8 @@ type SymbolLookupContext = {
  * Find symbol definition using the symbol service.
  * Extracted to reduce complexity of provideDefinition.
  */
-async function findSymbolDefinition(ctx: SymbolLookupContext): Promise<Monaco.languages.Definition | undefined> {
-  const { monaco, symbolService, uri, word } = ctx;
+async function findSymbolDefinition(context: SymbolLookupContext): Promise<Monaco.languages.Definition | undefined> {
+  const { monaco, symbolService, uri, word } = context;
 
   try {
     log.debug('Looking up symbol by name:', word, 'in', uri);
@@ -50,9 +50,9 @@ async function findSymbolDefinition(ctx: SymbolLookupContext): Promise<Monaco.la
 
     // For imports, resolve to the actual definition in the imported file
     if (symbol.kind === 'import') {
-      const importDef = await resolveImportDefinition(ctx);
-      if (importDef) {
-        return importDef;
+      const importDefinition = await resolveImportDefinition(context);
+      if (importDefinition) {
+        return importDefinition;
       }
       // If we can't resolve, fall through to return the import location
     }
@@ -80,8 +80,8 @@ async function findSymbolDefinition(ctx: SymbolLookupContext): Promise<Monaco.la
 /**
  * Resolve an import symbol to its definition in the imported file.
  */
-async function resolveImportDefinition(ctx: SymbolLookupContext): Promise<Monaco.languages.Definition | undefined> {
-  const { monaco, symbolService, client, uri, word } = ctx;
+async function resolveImportDefinition(context: SymbolLookupContext): Promise<Monaco.languages.Definition | undefined> {
+  const { monaco, symbolService, client, uri, word } = context;
 
   log.debug('Symbol is an import, resolving to actual definition in imported file');
   const fileManager = client.getFileManager();
@@ -126,6 +126,7 @@ export type GetOrEnsureModel = (path: string) => Promise<Monaco.editor.ITextMode
  * Create a Monaco definition provider that uses the LSP client.
  * Falls back to symbol service when LSP returns null.
  */
+// oxlint-disable-next-line max-params -- Factory function with optional provider dependencies
 export function createDefinitionProvider(
   monaco: typeof Monaco,
   client: KclLspClient,
@@ -304,11 +305,12 @@ function extractFilePathFromUri(uri: string): string {
  *
  * This is required for Monaco to show Cmd+hover link underlines.
  */
+// oxlint-disable-next-line max-params -- Distinct required dependencies for model resolution
 async function ensureModelForUri(
   monaco: typeof Monaco,
   targetUri: string,
   fileManager: LspFileManager | undefined,
-  getOrEnsureModelFn?: GetOrEnsureModel,
+  getOrEnsureModelFunction?: GetOrEnsureModel,
 ): Promise<void> {
   // Fast path: model already exists
   const monacoUri = monaco.Uri.parse(targetUri);
@@ -317,9 +319,9 @@ async function ensureModelForUri(
   }
 
   // Use centralized model service if available
-  if (getOrEnsureModelFn) {
+  if (getOrEnsureModelFunction) {
     const filePath = extractFilePathFromUri(targetUri);
-    await getOrEnsureModelFn(filePath);
+    await getOrEnsureModelFunction(filePath);
     return;
   }
 

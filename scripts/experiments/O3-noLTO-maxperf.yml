@@ -1,0 +1,24 @@
+name: 'v8-O3-noLTO-wasmOptO3-maxperf'
+description: 'Max-performance build: -O3/-O3, all OCCT/Emscripten optimizations, DumpJson stubbed'
+
+compilation:
+  optimization: '-O3'
+  lto: false
+  exceptions: 'none'
+  threading: 'single-threaded'
+  defines: ['No_Exception', 'OCCT_NO_DUMP']
+  undefines: ['OCC_CONVERT_SIGNALS']
+
+linking:
+  yaml: 'custom_build_single_v8.yml'
+  wasmOptLevel: '-O3'
+
+optimizations:
+  closure: true
+  evalCtors: true
+  converge: true
+  patchDump: true
+
+benchmark:
+  iterations: 10
+  filter: ['primitives', 'booleans', 'fillets', 'extrusions', 'complex', 'examples', 'stress']

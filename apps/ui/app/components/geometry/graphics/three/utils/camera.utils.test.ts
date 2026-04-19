@@ -23,6 +23,7 @@ function createTestCamera(fov = 54, distance = 10): THREE.PerspectiveCamera {
 }
 
 /** Creates an axis-aligned bounding box centred at `center` with given half-extents. */
+// oxlint-disable-next-line max-params -- test helper, simple positional args are clearer here
 function makeBox(center: THREE.Vector3, hx: number, hy: number, hz: number): THREE.Box3 {
   return new THREE.Box3(
     new THREE.Vector3(center.x - hx, center.y - hy, center.z - hz),
@@ -242,8 +243,14 @@ describe('computeViewFittingZoom', () => {
         aspectRatio: squareAspect,
       };
 
-      const zoomFull = computeViewFittingZoom({ ...baseParameters, paddingFactor: 1 });
-      const zoomPadded = computeViewFittingZoom({ ...baseParameters, paddingFactor: 0.8 });
+      const zoomFull = computeViewFittingZoom({
+        ...baseParameters,
+        paddingFactor: 1,
+      });
+      const zoomPadded = computeViewFittingZoom({
+        ...baseParameters,
+        paddingFactor: 0.8,
+      });
 
       expect(zoomPadded / zoomFull).toBeCloseTo(0.8, 5);
     });
@@ -258,7 +265,10 @@ describe('computeViewFittingZoom', () => {
       };
 
       const zoomDefault = computeViewFittingZoom(baseParameters);
-      const zoomExplicit = computeViewFittingZoom({ ...baseParameters, paddingFactor: 0.9 });
+      const zoomExplicit = computeViewFittingZoom({
+        ...baseParameters,
+        paddingFactor: 0.9,
+      });
 
       expect(zoomDefault).toBeCloseTo(zoomExplicit, 10);
     });
@@ -422,8 +432,8 @@ describe('resetCamera', () => {
     });
 
     // Camera should be at some offset from the center, not at the origin
-    const distFromCenter = camera.position.distanceTo(center);
-    expect(distFromCenter).toBeGreaterThan(0);
+    const distanceFromCenter = camera.position.distanceTo(center);
+    expect(distanceFromCenter).toBeGreaterThan(0);
   });
 
   it('should set FOV from the cameraFovAngle', () => {
@@ -548,9 +558,9 @@ describe('resetCamera', () => {
       viewportAspect: 9 / 16,
     });
 
-    const distLandscape = camera1.position.distanceTo(origin);
-    const distPortrait = camera2.position.distanceTo(origin);
-    expect(distPortrait).toBeGreaterThan(distLandscape);
+    const distanceLandscape = camera1.position.distanceTo(origin);
+    const distancePortrait = camera2.position.distanceTo(origin);
+    expect(distancePortrait).toBeGreaterThan(distanceLandscape);
   });
 
   it('should maintain current direction when enableConfiguredAngles is false', () => {
@@ -596,8 +606,8 @@ describe('resetCamera', () => {
     });
 
     // Camera should be positioned far out (distance proportional to 1000)
-    const dist = camera.position.distanceTo(origin);
-    expect(dist).toBeGreaterThan(500);
+    const distance = camera.position.distanceTo(origin);
+    expect(distance).toBeGreaterThan(500);
   });
 
   it('should not modify a non-PerspectiveCamera', () => {

@@ -3,7 +3,6 @@ import type { ClassValue } from 'clsx';
 import { Axis3D, Box, Grid3X3, Layers, Rotate3D, Settings, PenLine, Sparkles, ArrowUp, Timer } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import { Button } from '#components/ui/button.js';
-import { useCad, useCadSelector } from '#hooks/use-cad.js';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -18,6 +17,7 @@ import { cn } from '#utils/ui.utils.js';
 import { InfoTooltip } from '#components/ui/info-tooltip.js';
 import { axesColors } from '#constants/color.constants.js';
 import { useGraphics, useGraphicsSelector } from '#hooks/use-graphics.js';
+import { useCad, useCadSelector } from '#hooks/use-cad.js';
 
 // Up direction options
 type UpDirection = 'x' | 'y' | 'z';
@@ -64,7 +64,6 @@ type ViewerSettingsProps = {
  */
 export function ViewerSettings({ className, overflowControls }: ViewerSettingsProps): React.ReactNode {
   const graphicsRef = useGraphics();
-  const cadActor = useCad();
 
   const [isOpen, setIsOpen] = useState(false);
 
@@ -81,9 +80,8 @@ export function ViewerSettings({ className, overflowControls }: ViewerSettingsPr
     state.context.geometries.some((geometry) => geometry.format === 'svg'),
   );
 
-  // Read render timeout from cadActor (in ms), convert to seconds for display
-  const renderTimeoutMs = useCadSelector((state) => state.context.renderTimeout, 30_000);
-  const renderTimeout = Math.round(renderTimeoutMs / 1000);
+  const cadRef = useCad();
+  const renderTimeout = useCadSelector((state) => state.context.renderTimeout, 30);
 
   const handleMeshToggle = useCallback(
     (checked: boolean) => {
@@ -143,12 +141,9 @@ export function ViewerSettings({ className, overflowControls }: ViewerSettingsPr
 
   const handleRenderTimeoutChange = useCallback(
     (value: string) => {
-      const seconds = Number.parseInt(value, 10);
-      if (!Number.isNaN(seconds) && cadActor) {
-        cadActor.send({ type: 'setRenderTimeout', timeout: seconds * 1000 }); // Convert seconds to ms
-      }
+      cadRef?.send({ type: 'setRenderTimeout', seconds: Number(value) });
     },
-    [cadActor],
+    [cadRef],
   );
 
   // Get current timeout option for display (default to 30s if not found)
@@ -165,17 +160,17 @@ export function ViewerSettings({ className, overflowControls }: ViewerSettingsPr
       <Tooltip>
         <TooltipTrigger asChild>
           <DropdownMenuTrigger asChild>
-            <Button variant="overlay" size="icon" className={cn(className)}>
+            <Button variant='overlay' size='icon' className={cn(className)}>
               <Settings />
             </Button>
           </DropdownMenuTrigger>
         </TooltipTrigger>
-        <TooltipContent side="top">Viewer settings</TooltipContent>
+        <TooltipContent side='top'>Viewer settings</TooltipContent>
       </Tooltip>
       <DropdownMenuContent
-        align="end"
-        side="right"
-        className="w-72"
+        align='end'
+        side='right'
+        className='w-72'
         onCloseAutoFocus={(event) => {
           event.preventDefault();
         }}
@@ -191,35 +186,35 @@ export function ViewerSettings({ className, overflowControls }: ViewerSettingsPr
               <PenLine />
               Lines
             </DropdownMenuSwitchItem>
-            <DropdownMenuSwitchItem className="h-10" isChecked={enableMatcap} onIsCheckedChange={handleMatcapToggle}>
+            <DropdownMenuSwitchItem className='h-10' isChecked={enableMatcap} onIsCheckedChange={handleMatcapToggle}>
               <Sparkles />
-              <div className="flex flex-col">
-                <span className="flex items-center gap-1">
+              <div className='flex flex-col'>
+                <span className='flex items-center gap-1'>
                   Matcap{' '}
                   <InfoTooltip>
                     A material that gives models a consistent appearance independent of scene lighting.
                     <br /> Rendering performance is improved with this enabled.
                   </InfoTooltip>
                 </span>
-                <span className="text-xs font-medium text-muted-foreground/80">
+                <span className='text-xs font-medium text-muted-foreground/80'>
                   Lighting effects are {enableMatcap ? 'inactive' : 'active'}
                 </span>
               </div>
             </DropdownMenuSwitchItem>
             <DropdownMenuSwitchItem
-              className="h-10"
+              className='h-10'
               isChecked={enablePostProcessing}
               onIsCheckedChange={handlePostProcessingToggle}
             >
               <Layers />
-              <div className="flex flex-col">
-                <span className="flex items-center gap-1">
+              <div className='flex flex-col'>
+                <span className='flex items-center gap-1'>
                   Post-processing{' '}
                   <InfoTooltip>
                     Enables screen-space ambient occlusion for more realistic depth and contact shadows.
                   </InfoTooltip>
                 </span>
-                <span className="text-xs font-medium text-muted-foreground/80">
+                <span className='text-xs font-medium text-muted-foreground/80'>
                   Ambient occlusion is {enablePostProcessing ? 'active' : 'inactive'}
                 </span>
               </div>

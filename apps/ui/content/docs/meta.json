@@ -1,38 +1,4 @@
 {
   "title": "Tau",
-  "pages": [
-    "---Getting Started---",
-    "index",
-
-    "---Kernels---",
-    "kernels/index",
-    "kernels/replicad",
-    "kernels/openscad",
-    "kernels/zoo",
-
-    "---Components---",
-    "packages/index",
-    "packages/react",
-    "packages/js",
-
-    "--Graphics---",
-    "graphics/index",
-    "graphics/three",
-    "graphics/three/index",
-    "graphics/three/viewer",
-    "graphics/three/infinite-grid",
-    "graphics/three/lights",
-
-    "---Units---",
-    "units/index",
-
-    "---Architecture---",
-    "architecture/index",
-    "architecture/rag",
-    "architecture/evaluation",
-
-    "---Contributing---",
-    "contributing/index",
-    "contributing/kernels"
-  ]
+  "pages": ["(runtime)", "(editor)"]
 }

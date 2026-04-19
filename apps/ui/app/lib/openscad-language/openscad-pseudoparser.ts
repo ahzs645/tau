@@ -1,8 +1,8 @@
 // Portions of this file are Copyright 2021 Google LLC, and licensed under GPL2+. See COPYING.
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment -- TODO: fix these types
+// oxlint-disable-next-line @typescript-eslint/ban-ts-comment -- TODO: fix these types
 // @ts-nocheck
 
-export type ParsedFunctionoidDef = {
+export type ParsedFunctionoidDefinition = {
   path: string;
   name: string;
   params?: Array<{
@@ -12,35 +12,35 @@ export type ParsedFunctionoidDef = {
   signature: string;
   referencesChildren: boolean | undefined;
 };
-export type ParsedFunctionoidDefs = Record<string, ParsedFunctionoidDef>;
+export type ParsedFunctionoidDefinitions = Record<string, ParsedFunctionoidDefinition>;
 
 export type ParsedFile = {
-  functions: ParsedFunctionoidDefs;
-  modules: ParsedFunctionoidDefs;
+  functions: ParsedFunctionoidDefinitions;
+  modules: ParsedFunctionoidDefinitions;
   vars: string[];
   includes: string[];
   uses: string[];
 };
 
-export const stripComments = (src: string): string => src.replaceAll(/\/\*(.|[\s\S])*?\*\/|\/\/.*?$/gm, '');
+export const stripComments = (source: string): string => source.replaceAll(/\/\*(.|[\S\s])*?\*\/|\/\/.*?$/gm, '');
 
-export function parseOpenScad(path: string, src: string, skipPrivates: boolean): ParsedFile {
-  const withoutComments = stripComments(src);
-  const vars = [];
-  const functions: ParsedFunctionoidDefs = {};
-  const modules: ParsedFunctionoidDefs = {};
+export function parseOpenScad(path: string, source: string, skipPrivates: boolean): ParsedFile {
+  const withoutComments = stripComments(source);
+  const variables = [];
+  const functions: ParsedFunctionoidDefinitions = {};
+  const modules: ParsedFunctionoidDefinitions = {};
   const includes: string[] = [];
   const uses: string[] = [];
   for (const m of withoutComments.matchAll(/(use|include)\s*<([^>]+)>/g)) {
     (m[1] === 'use' ? uses : includes).push(m[2]);
   }
 
-  for (const m of withoutComments.matchAll(/(?:^|[{};])\s*([$\w]+)\s*=/g)) {
-    vars.push(m[1]);
+  for (const m of withoutComments.matchAll(/(?:^|[;{}])\s*([\w$]+)\s*=/g)) {
+    variables.push(m[1]);
   }
 
   for (const m of withoutComments.matchAll(
-    /(function|module)\s+([$\w]+)\s*\(([^)]*)\)(?:\s*(?:=\s*)?({}|[^{}]+?;))?/gm,
+    /(function|module)\s+([\w$]+)\s*\(([^)]*)\)(?:\s*(?:=\s*)?({}|[^{}]+?;))?/gm,
   )) {
     const type = m[1];
     const name = m[2];
@@ -51,9 +51,9 @@ export function parseOpenScad(path: string, src: string, skipPrivates: boolean):
     const parametersString = m[3];
     const optBody = m[4];
     const parameters = [];
-    if (/^(\s*([$\w]+(\s*=[^,()[]+)?(\s*,\s*[$\w]+(\s*=[^,()[]+)?)*)?\s*)$/m.test(parametersString)) {
+    if (/^(\s*([\w$]+(\s*=[^(),[]+)?(\s*,\s*[\w$]+(\s*=[^(),[]+)?)*)?\s*)$/m.test(parametersString)) {
       for (const parameterString of parametersString.split(',')) {
-        const am = /^\s*([$\w]+)(?:\s*=([^,()[]+))?\s*$/.exec(parameterString);
+        const am = /^\s*([\w$]+)(?:\s*=([^(),[]+))?\s*$/.exec(parameterString);
         if (am) {
           const parameterName = am[1];
           const defaultValue = am[2];
@@ -74,5 +74,5 @@ export function parseOpenScad(path: string, src: string, skipPrivates: boolean):
     };
   }
 
-  return { vars, functions, modules, includes, uses };
+  return { vars: variables, functions, modules, includes, uses };
 }

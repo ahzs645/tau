@@ -30,9 +30,9 @@ export const timing = {
 
 export const authSplashbackMachine = setup({
   types: {
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     context: {} as AuthSplashbackContext,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     events: {} as AuthSplashbackEvent,
   },
 }).createMachine({

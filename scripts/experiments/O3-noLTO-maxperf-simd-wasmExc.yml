@@ -1,0 +1,27 @@
+name: 'v8-O3-noLTO-wasmOptO4-maxperf-simd-wasmExc'
+description: 'Max-perf + SIMD + WASM_BIGINT + EVAL_CTORS=2 + wasm-opt O4, wasm exceptions'
+
+compilation:
+  optimization: '-O3'
+  lto: false
+  exceptions: 'wasm-native'
+  threading: 'single-threaded'
+  defines: ['OCCT_NO_DUMP']
+  undefines: ['OCC_CONVERT_SIGNALS']
+
+linking:
+  yaml: 'custom_build_with_exceptions_v8.yml'
+  wasmOptLevel: '-O4'
+
+optimizations:
+  closure: true
+  evalCtors: true
+  evalCtorsLevel: 2
+  converge: true
+  patchDump: true
+  simd: true
+  bigint: true
+
+benchmark:
+  iterations: 10
+  filter: ['primitives', 'booleans', 'fillets', 'extrusions', 'complex', 'examples', 'stress']

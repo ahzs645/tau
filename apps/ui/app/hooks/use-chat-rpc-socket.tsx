@@ -12,14 +12,14 @@
  */
 import type { ReactNode } from 'react';
 import { createContext, useContext, useEffect, useMemo, useState, useCallback, useRef } from 'react';
-import { useSelector } from '@xstate/react';
+
 import type { RpcRequest, RpcResponse } from '@taucad/chat';
 import { rpcNames } from '@taucad/chat/constants';
 import { ChatRpcSocketService } from '#services/chat-rpc-socket.service.js';
 import type { ConnectionStatus, RpcRequestHandler } from '#services/chat-rpc-socket.service.js';
 import { createRpcHandlers } from '#hooks/rpc-handlers.js';
 import type { RpcHandlerDependencies, RpcCallInput } from '#hooks/rpc-handlers.js';
-import { useBuild, useMainGraphics } from '#hooks/use-build.js';
+import { useProject, useMainGraphics } from '#hooks/use-project.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import { useImageQuality } from '#hooks/use-image-quality.js';
 
@@ -121,7 +121,7 @@ type UseChatRpcConnectionReturn = {
  *
  * This hook:
  * 1. Joins the chat room when enabled and chatId is provided
- * 2. Sets up RPC request handling using the current build context
+ * 2. Sets up RPC request handling using the current project context
  * 3. Leaves the chat room on cleanup or when disabled
  * 4. Provides reactive connection status updates
  */
@@ -132,11 +132,10 @@ export function useChatRpcConnection(options: UseChatRpcConnectionOptions): UseC
   const { status, error } = useChatRpcStatus();
 
   // Get dependencies for RPC handlers
-  const { buildRef } = useBuild();
+  const { projectRef } = useProject();
   const mainGraphicsRef = useMainGraphics();
   const fileManager = useFileManager();
-  const { fileManagerRef } = fileManager;
-  const fileTree = useSelector(fileManagerRef, (state) => state.context.fileTree);
+  const { treeService } = fileManager;
   const { quality: screenshotQuality } = useImageQuality();
 
   // Store dependencies in a ref so handler always uses current values
@@ -145,8 +144,8 @@ export function useChatRpcConnection(options: UseChatRpcConnectionOptions): UseC
   depsRef.current = {
     fileManager,
     graphicsRef: mainGraphicsRef,
-    buildRef,
-    fileTree,
+    projectRef,
+    treeService,
     screenshotQuality,
   };
 
@@ -180,7 +179,7 @@ export function useChatRpcConnection(options: UseChatRpcConnectionOptions): UseC
 
     // After validation, we can safely construct the typed RPC call.
     // The server has validated the args against the schema before sending.
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- Boundary assertion after runtime validation
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- Boundary assertion after runtime validation
     const rpcCall = {
       toolCallId,
       rpcName: currentRpcName,

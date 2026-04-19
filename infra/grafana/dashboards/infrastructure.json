@@ -1,0 +1,247 @@
+{
+  "uid": "tau-infrastructure",
+  "title": "Infrastructure",
+  "tags": ["tau", "infra", "redis", "postgres"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "service",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(up, service_name)",
+        "current": { "text": "tau-api", "value": "tau-api" },
+        "includeAll": false,
+        "refresh": 1
+      },
+      {
+        "name": "instance",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(up{service_name=\"$service\"}, instance)",
+        "current": { "text": "All", "value": "$__all" },
+        "includeAll": true,
+        "allValue": ".*",
+        "refresh": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "title": "Redis Connection State",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [{ "expr": "redis_connection_state{service_name=~\"$service\"}" }],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "options": {
+                "0": { "text": "Disconnected", "color": "red" },
+                "1": { "text": "Connected", "color": "green" }
+              },
+              "type": "value"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "title": "Active SSE Connections",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "targets": [{ "expr": "sse_connections_active{service_name=~\"$service\"}" }]
+    },
+    {
+      "title": "Node.js Heap Used",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(v8js_memory_heap_used{service_name=~\"$service\"})",
+          "legendFormat": "heap used"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes" } }
+    },
+    {
+      "title": "DB Query Duration (p95)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(db_client_operation_duration_bucket{service_name=~\"$service\"}[5m])) by (le, db_operation_name))",
+          "legendFormat": "{{db_operation_name}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "title": "Redis Command Duration (p95)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(db_client_operation_duration_bucket{service_name=~\"$service\",db_system=\"redis\"}[5m])) by (le, db_operation_name))",
+          "legendFormat": "{{db_operation_name}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "title": "SSE Events Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "targets": [
+        {
+          "expr": "sum(rate(sse_events_total{service_name=~\"$service\"}[5m]))",
+          "legendFormat": "events/s"
+        }
+      ]
+    },
+    {
+      "title": "Event Loop Delay (p50 / p99)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "targets": [
+        {
+          "expr": "nodejs_eventloop_delay_p50{service_name=~\"$service\"}",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "nodejs_eventloop_delay_p99{service_name=~\"$service\"}",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "title": "V8 GC Duration (p95)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(v8js_gc_duration_bucket{service_name=~\"$service\"}[5m])) by (le, v8js_gc_type))",
+          "legendFormat": "{{v8js_gc_type}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "title": "V8 Heap Space Breakdown",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 28 },
+      "targets": [
+        {
+          "expr": "v8js_memory_heap_space_physical_size{service_name=~\"$service\"}",
+          "legendFormat": "{{v8js_heap_space_name}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": { "stacking": { "mode": "normal" } }
+        }
+      }
+    },
+    {
+      "title": "DB Connection Pool",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 28 },
+      "targets": [
+        {
+          "expr": "db_client_connection_count{service_name=~\"$service\"}",
+          "legendFormat": "{{db_client_connection_state}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "title": "DB Pending Requests",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 28 },
+      "targets": [
+        {
+          "expr": "db_client_connection_pending_requests{service_name=~\"$service\"}",
+          "legendFormat": "pending"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "title": "Fly.io Machine Metrics",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 36 },
+      "collapsed": true,
+      "panels": [
+        {
+          "title": "CPU Usage (Fly.io)",
+          "description": "Available in production via Fly.io Prometheus federation",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 21 },
+          "targets": [{ "expr": "fly_instance_cpu{app=\"tau-api\"}", "legendFormat": "{{instance}}", "refId": "A" }],
+          "fieldConfig": { "defaults": { "unit": "percentunit" } }
+        },
+        {
+          "title": "Memory Usage (Fly.io)",
+          "description": "Available in production via Fly.io Prometheus federation",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 21 },
+          "targets": [
+            {
+              "expr": "fly_instance_memory_mem_total{app=\"tau-api\"} - fly_instance_memory_mem_available{app=\"tau-api\"}",
+              "legendFormat": "{{instance}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "decbytes" } }
+        },
+        {
+          "title": "Network I/O (Fly.io)",
+          "description": "Available in production via Fly.io Prometheus federation",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 29 },
+          "targets": [
+            {
+              "expr": "rate(fly_instance_net_sent_bytes{app=\"tau-api\"}[5m])",
+              "legendFormat": "sent {{instance}}",
+              "refId": "A"
+            },
+            {
+              "expr": "rate(fly_instance_net_recv_bytes{app=\"tau-api\"}[5m])",
+              "legendFormat": "recv {{instance}}",
+              "refId": "B"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "Bps" } }
+        }
+      ]
+    },
+    {
+      "title": "Error Logs",
+      "type": "logs",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 100 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [{ "expr": "{service_name=~\"$service\"} |= \"level\" | json | level = \"error\"", "refId": "A" }],
+      "options": {
+        "showTime": true,
+        "showLabels": true,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "sortOrder": "Descending"
+      }
+    },
+    {
+      "title": "Recent Traces",
+      "type": "traces",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 108 },
+      "datasource": { "type": "tempo", "uid": "tempo" },
+      "targets": [{ "query": "{resource.service.name=~\"$service\"}", "refId": "A", "queryType": "traceqlSearch" }]
+    }
+  ],
+  "schemaVersion": 39
+}

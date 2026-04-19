@@ -2,20 +2,7 @@ import { HumanMessage, AIMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { messageContentSanitizerMiddleware } from '#api/chat/middleware/message-content-sanitizer.middleware.js';
-
-// Helper type for the request shape we're testing
-type TestRequest = { messages: BaseMessage[] };
-
-// Helper to call wrapModelCall with proper typing
-async function callWrapModelCall(request: TestRequest, handler: ReturnType<typeof vi.fn>): Promise<void> {
-  const { wrapModelCall } = messageContentSanitizerMiddleware;
-  if (!wrapModelCall) {
-    throw new Error('wrapModelCall is not defined on middleware');
-  }
-
-  // Cast to the expected types - in tests we only care about messages
-  await wrapModelCall(request as Parameters<typeof wrapModelCall>[0], handler);
-}
+import { invokeWrapModelCall } from '#testing/middleware-testing.utils.js';
 
 /**
  * Type for a content block used in tests.
@@ -41,10 +28,10 @@ describe('messageContentSanitizerMiddleware', () => {
 
       const messages: BaseMessage[] = [new HumanMessage('Hello'), aiMessage];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(messageContentSanitizerMiddleware, { messages }, handler);
 
       expect(handler).toHaveBeenCalledTimes(1);
-      const [request] = handler.mock.calls[0] as [TestRequest];
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
 
       const sanitizedAiMessage = request.messages[1] as AIMessage;
       const contentBlocks = sanitizedAiMessage.content as TestContentBlock[];
@@ -71,9 +58,9 @@ describe('messageContentSanitizerMiddleware', () => {
 
       const messages: BaseMessage[] = [aiMessage];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(messageContentSanitizerMiddleware, { messages }, handler);
 
-      const [request] = handler.mock.calls[0] as [TestRequest];
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
       const sanitizedAiMessage = request.messages[0] as AIMessage;
       const contentBlocks = sanitizedAiMessage.content as TestContentBlock[];
 
@@ -93,9 +80,9 @@ describe('messageContentSanitizerMiddleware', () => {
         new HumanMessage('not a slice, the whole thing'),
       ];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(messageContentSanitizerMiddleware, { messages }, handler);
 
-      const [request] = handler.mock.calls[0] as [TestRequest];
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
 
       // Human messages should be unchanged
       expect((request.messages[0] as HumanMessage).content).toBe('Build a gear');
@@ -123,9 +110,9 @@ describe('messageContentSanitizerMiddleware', () => {
       });
       const messages: BaseMessage[] = [aiMessage];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(messageContentSanitizerMiddleware, { messages }, handler);
 
-      const [request] = handler.mock.calls[0] as [TestRequest];
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
       const sanitizedAiMessage = request.messages[0] as AIMessage;
       const contentBlocks = sanitizedAiMessage.content as TestContentBlock[];
 
@@ -142,9 +129,9 @@ describe('messageContentSanitizerMiddleware', () => {
       const aiMessage = new AIMessage({ content: '' });
       const messages: BaseMessage[] = [aiMessage];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(messageContentSanitizerMiddleware, { messages }, handler);
 
-      const [request] = handler.mock.calls[0] as [TestRequest];
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
       const sanitizedAiMessage = request.messages[0] as AIMessage;
       const contentBlocks = sanitizedAiMessage.content as TestContentBlock[];
 
@@ -156,9 +143,9 @@ describe('messageContentSanitizerMiddleware', () => {
       const aiMessage = new AIMessage({ content: [] });
       const messages: BaseMessage[] = [aiMessage];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(messageContentSanitizerMiddleware, { messages }, handler);
 
-      const [request] = handler.mock.calls[0] as [TestRequest];
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
       const sanitizedAiMessage = request.messages[0] as AIMessage;
       const contentBlocks = sanitizedAiMessage.content as TestContentBlock[];
 
@@ -172,9 +159,9 @@ describe('messageContentSanitizerMiddleware', () => {
       const aiMessage = new AIMessage('Hello! I can help with that.');
       const messages: BaseMessage[] = [aiMessage];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(messageContentSanitizerMiddleware, { messages }, handler);
 
-      const [request] = handler.mock.calls[0] as [TestRequest];
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
       const result = request.messages[0] as AIMessage;
       expect(result.content).toBe('Hello! I can help with that.');
     });
@@ -185,9 +172,9 @@ describe('messageContentSanitizerMiddleware', () => {
       });
       const messages: BaseMessage[] = [aiMessage];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(messageContentSanitizerMiddleware, { messages }, handler);
 
-      const [request] = handler.mock.calls[0] as [TestRequest];
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
       const result = request.messages[0] as AIMessage;
       const contentBlocks = result.content as TestContentBlock[];
 
@@ -204,9 +191,9 @@ describe('messageContentSanitizerMiddleware', () => {
       });
       const messages: BaseMessage[] = [aiMessage];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(messageContentSanitizerMiddleware, { messages }, handler);
 
-      const [request] = handler.mock.calls[0] as [TestRequest];
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
       const result = request.messages[0] as AIMessage;
       const contentBlocks = result.content as TestContentBlock[];
 
@@ -227,9 +214,9 @@ describe('messageContentSanitizerMiddleware', () => {
       });
       const messages: BaseMessage[] = [aiMessage];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(messageContentSanitizerMiddleware, { messages }, handler);
 
-      const [request] = handler.mock.calls[0] as [TestRequest];
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
       const result = request.messages[0] as AIMessage;
 
       // Content should remain unchanged
@@ -248,9 +235,9 @@ describe('messageContentSanitizerMiddleware', () => {
       });
       const messages: BaseMessage[] = [aiMessage];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(messageContentSanitizerMiddleware, { messages }, handler);
 
-      const [request] = handler.mock.calls[0] as [TestRequest];
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
       const result = request.messages[0] as AIMessage;
       const contentBlocks = result.content as TestContentBlock[];
 
@@ -268,9 +255,9 @@ describe('messageContentSanitizerMiddleware', () => {
     it('should not modify HumanMessage', async () => {
       const messages: BaseMessage[] = [new HumanMessage('Hello')];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(messageContentSanitizerMiddleware, { messages }, handler);
 
-      const [request] = handler.mock.calls[0] as [TestRequest];
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
       expect((request.messages[0] as HumanMessage).content).toBe('Hello');
     });
 
@@ -284,9 +271,9 @@ describe('messageContentSanitizerMiddleware', () => {
         }),
       ];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(messageContentSanitizerMiddleware, { messages }, handler);
 
-      const [request] = handler.mock.calls[0] as [TestRequest];
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
       expect((request.messages[0] as ToolMessage).content).toBe('{"result": "success"}');
     });
   });
@@ -299,9 +286,9 @@ describe('messageContentSanitizerMiddleware', () => {
       });
       const messages: BaseMessage[] = [aiMessage];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(messageContentSanitizerMiddleware, { messages }, handler);
 
-      const [request] = handler.mock.calls[0] as [TestRequest];
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
       expect(request.messages[0]?.id).toBe('msg_abc123');
     });
 
@@ -313,9 +300,9 @@ describe('messageContentSanitizerMiddleware', () => {
       });
       const messages: BaseMessage[] = [aiMessage];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(messageContentSanitizerMiddleware, { messages }, handler);
 
-      const [request] = handler.mock.calls[0] as [TestRequest];
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
       const result = request.messages[0] as AIMessage;
 
       // Message should be entirely unchanged (skipped by middleware)
@@ -334,10 +321,123 @@ describe('messageContentSanitizerMiddleware', () => {
       });
       const messages: BaseMessage[] = [aiMessage];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(messageContentSanitizerMiddleware, { messages }, handler);
 
-      const [request] = handler.mock.calls[0] as [TestRequest];
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
       expect(request.messages[0]?.additional_kwargs).toEqual({ custom: 'value' });
+    });
+
+    it('should preserve response_metadata when adding placeholder to array content', async () => {
+      /* eslint-disable @typescript-eslint/naming-convention -- LangChain API uses snake_case */
+      const responseMetadata = { model: 'claude-3-5-sonnet-20241022', stop_reason: 'end_turn' };
+      const aiMessage = new AIMessage({
+        content: [{ type: 'reasoning', reasoning: 'Thinking...' }],
+        response_metadata: responseMetadata,
+      });
+      /* eslint-enable @typescript-eslint/naming-convention -- Re-enable naming convention after LangChain metadata */
+      const messages: BaseMessage[] = [aiMessage];
+
+      await invokeWrapModelCall(messageContentSanitizerMiddleware, { messages }, handler);
+
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
+      const result = request.messages[0] as AIMessage;
+      expect(result.response_metadata).toEqual(responseMetadata);
+    });
+
+    it('should preserve usage_metadata when adding placeholder to array content', async () => {
+      /* eslint-disable @typescript-eslint/naming-convention -- LangChain API uses snake_case */
+      const usageMetadata = {
+        input_tokens: 100,
+        output_tokens: 50,
+        total_tokens: 150,
+        input_token_details: { cache_read: 80, cache_creation: 20 },
+      };
+      const aiMessage = new AIMessage({
+        content: [{ type: 'reasoning', reasoning: 'Thinking...' }],
+        usage_metadata: usageMetadata,
+      });
+      /* eslint-enable @typescript-eslint/naming-convention -- Re-enable naming convention after LangChain metadata */
+      const messages: BaseMessage[] = [aiMessage];
+
+      await invokeWrapModelCall(messageContentSanitizerMiddleware, { messages }, handler);
+
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
+      const result = request.messages[0] as AIMessage;
+      expect(result.usage_metadata).toEqual(usageMetadata);
+    });
+
+    it('should preserve response_metadata when adding placeholder to empty content', async () => {
+      /* eslint-disable @typescript-eslint/naming-convention -- LangChain API uses snake_case */
+      const responseMetadata = { model: 'claude-3-5-sonnet-20241022' };
+      const aiMessage = new AIMessage({
+        content: '',
+        response_metadata: responseMetadata,
+      });
+      /* eslint-enable @typescript-eslint/naming-convention -- Re-enable naming convention after LangChain metadata */
+      const messages: BaseMessage[] = [aiMessage];
+
+      await invokeWrapModelCall(messageContentSanitizerMiddleware, { messages }, handler);
+
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
+      const result = request.messages[0] as AIMessage;
+      expect(result.response_metadata).toEqual(responseMetadata);
+    });
+
+    it('should preserve usage_metadata when adding placeholder to empty content', async () => {
+      /* eslint-disable @typescript-eslint/naming-convention -- LangChain API uses snake_case */
+      const usageMetadata = {
+        input_tokens: 50,
+        output_tokens: 10,
+        total_tokens: 60,
+        input_token_details: { cache_read: 0, cache_creation: 0 },
+      };
+      const aiMessage = new AIMessage({
+        content: '',
+        usage_metadata: usageMetadata,
+      });
+      /* eslint-enable @typescript-eslint/naming-convention -- Re-enable naming convention after LangChain metadata */
+      const messages: BaseMessage[] = [aiMessage];
+
+      await invokeWrapModelCall(messageContentSanitizerMiddleware, { messages }, handler);
+
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
+      const result = request.messages[0] as AIMessage;
+      expect(result.usage_metadata).toEqual(usageMetadata);
+    });
+
+    it('should preserve all metadata properties together when sanitizing', async () => {
+      /* eslint-disable @typescript-eslint/naming-convention -- LangChain API uses snake_case */
+      const responseMetadata = { model: 'claude-3-5-sonnet-20241022', stop_reason: 'end_turn' };
+      const usageMetadata = {
+        input_tokens: 200,
+        output_tokens: 100,
+        total_tokens: 300,
+        input_token_details: { cache_read: 150, cache_creation: 50 },
+      };
+      const additionalKwargs = { custom: 'data' };
+      const aiMessage = new AIMessage({
+        content: [{ type: 'reasoning', reasoning: 'Interrupted thinking...' }],
+        id: 'msg_full_metadata',
+        additional_kwargs: additionalKwargs,
+        response_metadata: responseMetadata,
+        usage_metadata: usageMetadata,
+      });
+      /* eslint-enable @typescript-eslint/naming-convention -- Re-enable naming convention after LangChain metadata */
+      const messages: BaseMessage[] = [aiMessage];
+
+      await invokeWrapModelCall(messageContentSanitizerMiddleware, { messages }, handler);
+
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
+      const result = request.messages[0] as AIMessage;
+
+      const contentBlocks = result.content as TestContentBlock[];
+      expect(contentBlocks).toHaveLength(2);
+      expect(contentBlocks[1]).toEqual({ type: 'text', text: '[interrupted]' });
+
+      expect(result.id).toBe('msg_full_metadata');
+      expect(result.additional_kwargs).toEqual(additionalKwargs);
+      expect(result.response_metadata).toEqual(responseMetadata);
+      expect(result.usage_metadata).toEqual(usageMetadata);
     });
   });
 
@@ -348,7 +448,7 @@ describe('messageContentSanitizerMiddleware', () => {
       });
       const messages: BaseMessage[] = [originalMessage];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(messageContentSanitizerMiddleware, { messages }, handler);
 
       // Original message content should still be unchanged
       const contentBlocks = originalMessage.content as TestContentBlock[];
@@ -363,9 +463,9 @@ describe('messageContentSanitizerMiddleware', () => {
         }),
       ];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(messageContentSanitizerMiddleware, { messages }, handler);
 
-      const [request] = handler.mock.calls[0] as [TestRequest];
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
       expect(request.messages).not.toBe(messages);
     });
   });
@@ -384,9 +484,9 @@ describe('messageContentSanitizerMiddleware', () => {
         new HumanMessage('Actually, make it a cylinder'),
       ];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(messageContentSanitizerMiddleware, { messages }, handler);
 
-      const [request] = handler.mock.calls[0] as [TestRequest];
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
 
       // Should have 4 messages: Human, AI, synthetic ToolMessage, Human
       expect(request.messages).toHaveLength(4);
@@ -419,9 +519,9 @@ describe('messageContentSanitizerMiddleware', () => {
         }),
       ];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(messageContentSanitizerMiddleware, { messages }, handler);
 
-      const [request] = handler.mock.calls[0] as [TestRequest];
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
 
       expect(request.messages).toHaveLength(3);
       const syntheticTool = request.messages[2] as ToolMessage;
@@ -452,9 +552,9 @@ describe('messageContentSanitizerMiddleware', () => {
         new HumanMessage('Looks good'),
       ];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(messageContentSanitizerMiddleware, { messages }, handler);
 
-      const [request] = handler.mock.calls[0] as [TestRequest];
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
 
       // No synthetic messages should be inserted
       expect(request.messages).toHaveLength(4);
@@ -481,9 +581,9 @@ describe('messageContentSanitizerMiddleware', () => {
         new HumanMessage('Continue'),
       ];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(messageContentSanitizerMiddleware, { messages }, handler);
 
-      const [request] = handler.mock.calls[0] as [TestRequest];
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
 
       // Should have 4 messages: AI, synthetic ToolMessage, existing ToolMessage, Human
       // (synthetic is inserted right after the AIMessage, before existing ToolMessages)
@@ -527,9 +627,9 @@ describe('messageContentSanitizerMiddleware', () => {
         new HumanMessage('Third task'),
       ];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(messageContentSanitizerMiddleware, { messages }, handler);
 
-      const [request] = handler.mock.calls[0] as [TestRequest];
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
 
       // Should insert 2 synthetic ToolMessages: 7 total
       expect(request.messages).toHaveLength(7);
@@ -573,9 +673,9 @@ describe('messageContentSanitizerMiddleware', () => {
         new HumanMessage('Try again'),
       ];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(messageContentSanitizerMiddleware, { messages }, handler);
 
-      const [request] = handler.mock.calls[0] as [TestRequest];
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
 
       // Should NOT insert any additional synthetic messages — already matched
       expect(request.messages).toHaveLength(3);
@@ -586,9 +686,9 @@ describe('messageContentSanitizerMiddleware', () => {
     it('should handle empty messages array', async () => {
       const messages: BaseMessage[] = [];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(messageContentSanitizerMiddleware, { messages }, handler);
 
-      const [request] = handler.mock.calls[0] as [TestRequest];
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
       expect(request.messages).toHaveLength(0);
     });
 
@@ -615,9 +715,9 @@ describe('messageContentSanitizerMiddleware', () => {
         }),
       ];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(messageContentSanitizerMiddleware, { messages }, handler);
 
-      const [request] = handler.mock.calls[0] as [TestRequest];
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
 
       // First AI message (interrupted) should have text block added
       const firstAi = request.messages[1] as AIMessage;

@@ -1,5 +1,7 @@
-import { Streamdown } from 'streamdown';
+import 'katex/dist/katex.min.css';
+import { defaultRehypePlugins, defaultRemarkPlugins as streamdownRemarkPlugins, Streamdown } from 'streamdown';
 import type { ControlsConfig, StreamdownProps } from 'streamdown';
+import remarkMath from 'remark-math';
 import { memo, useMemo } from 'react';
 import { cn } from '#utils/ui.utils.js';
 import { MarkdownHyperlink } from '#components/markdown/markdown-hyperlink.js';
@@ -29,20 +31,33 @@ export const defaultMarkdownControls = {
   table: false,
 } as const satisfies ControlsConfig;
 
+const tauRemarkPlugins: StreamdownProps['remarkPlugins'] = Object.values({
+  ...streamdownRemarkPlugins,
+  math: [remarkMath, { singleDollarTextMath: true }],
+});
+
+const { sanitize: _sanitize, ...unsanitizedRehypePlugins } = defaultRehypePlugins;
+const tauRehypePlugins: StreamdownProps['rehypePlugins'] = Object.values(unsanitizedRehypePlugins);
+
 export const MarkdownViewer = memo(function ({
   children,
   isStreaming = false,
   controls = defaultMarkdownControls,
   components,
+  rehypePlugins: additionalRehypePlugins,
   className,
 }: MarkdownViewerProps): React.JSX.Element {
-  // Memoize components object to prevent unnecessary re-renders
   const memoizedComponents = useMemo(
     () => ({
       ...defaultMarkdownComponents,
       ...components,
     }),
     [components],
+  );
+
+  const mergedRehypePlugins = useMemo(
+    () => (additionalRehypePlugins ? [...tauRehypePlugins, ...additionalRehypePlugins] : tauRehypePlugins),
+    [additionalRehypePlugins],
   );
 
   return (
@@ -58,6 +73,8 @@ export const MarkdownViewer = memo(function ({
         mode={isStreaming ? 'streaming' : 'static'}
         components={memoizedComponents}
         controls={controls}
+        remarkPlugins={tauRemarkPlugins}
+        rehypePlugins={mergedRehypePlugins}
         shikiTheme={['github-light', 'github-dark']}
       >
         {children}

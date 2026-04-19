@@ -82,8 +82,11 @@ describe('useCameraFraming', () => {
     it('calls resetCamera when geometryRadius is 0 but does not mark initial reset done', () => {
       renderHook(() => useCameraFraming(0, origin));
 
-      // Still called because sceneRadius starts as undefined (always significant)
-      expect(mockResetCamera).toHaveBeenCalledTimes(1);
+      // Called twice: once because sceneRadius starts as undefined (always
+      // significant), and a second time because sceneRadius === 0 is also
+      // treated as significant to ensure the camera is positioned after
+      // PerspectiveCamera makeDefault swaps the active camera.
+      expect(mockResetCamera).toHaveBeenCalledTimes(2);
       expect(mockResetCamera).toHaveBeenCalledWith();
     });
 

@@ -36,7 +36,7 @@ function Tabs({ className, ...props }: TabsProps): React.JSX.Element {
   return (
     <TabsValueContext.Provider value={currentValue}>
       <TabsPrimitive.Root
-        data-slot="tabs"
+        data-slot='tabs'
         className={cn('flex flex-col gap-2', className)}
         value={value}
         defaultValue={defaultValue}
@@ -57,7 +57,7 @@ const defaultTabsListTransition = {
   type: 'spring',
   stiffness: 200,
   damping: 25,
-};
+} satisfies Transition;
 
 function TabsList({
   ref,
@@ -68,7 +68,7 @@ function TabsList({
   enableAnimation = true,
   ...props
 }: TabsListProps): React.JSX.Element {
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- radix requires `null` ref
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- radix requires `null` ref
   const localRef = React.useRef<HTMLDivElement | null>(null);
   React.useImperativeHandle(ref, () => localRef.current!);
   const contextValue = React.useContext(TabsValueContext);
@@ -77,7 +77,7 @@ function TabsList({
     return (
       <TabsPrimitive.List
         ref={localRef}
-        data-slot="tabs-list"
+        data-slot='tabs-list'
         className={cn(
           'w-fit items-center justify-center rounded-md bg-sidebar p-0.75 text-sidebar-foreground',
           'data-[orientation=vertical]:h-fit',
@@ -101,7 +101,7 @@ function TabsList({
     >
       <TabsPrimitive.List
         ref={localRef}
-        data-slot="tabs-list"
+        data-slot='tabs-list'
         className={cn(
           'w-fit items-center justify-center rounded-md border bg-sidebar p-0.75 text-sidebar-foreground',
           'data-[orientation=vertical]:h-fit',
@@ -125,7 +125,7 @@ function TabsTrigger({ className, value, enableAnimation = true, ...props }: Tab
   if (!enableAnimation) {
     return (
       <TabsPrimitive.Trigger
-        data-slot="tabs-trigger"
+        data-slot='tabs-trigger'
         className={cn(
           "z-10 flex size-full cursor-pointer items-center justify-center gap-1.5 rounded-md px-2 py-1 text-sm font-medium whitespace-nowrap text-foreground transition-[box-shadow] select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-1 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50 dark:text-sidebar-foreground dark:data-[state=active]:text-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
           className,
@@ -137,9 +137,9 @@ function TabsTrigger({ className, value, enableAnimation = true, ...props }: Tab
   }
 
   return (
-    <MotionHighlightItem value={value} className="size-full">
+    <MotionHighlightItem value={value} className='size-full'>
       <TabsPrimitive.Trigger
-        data-slot="tabs-trigger"
+        data-slot='tabs-trigger'
         className={cn(
           "z-10 flex size-full cursor-pointer items-center justify-center gap-1.5 rounded-md px-2 py-1 text-sm font-medium whitespace-nowrap text-foreground transition-[box-shadow] select-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-1 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50 dark:text-sidebar-foreground dark:data-[state=active]:text-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
           className,
@@ -160,7 +160,7 @@ type TabsContentProps = React.ComponentProps<typeof TabsPrimitive.Content> &
 const defaultTabsContentTransition = {
   duration: 0.5,
   ease: 'easeInOut',
-};
+} satisfies Transition;
 
 function TabsContent({
   className,
@@ -171,7 +171,7 @@ function TabsContent({
 }: TabsContentProps): React.JSX.Element {
   if (!enableAnimation) {
     return (
-      <TabsPrimitive.Content data-slot="tabs-content" className={cn('flex-1 outline-none', className)} {...props}>
+      <TabsPrimitive.Content data-slot='tabs-content' className={cn('flex-1 outline-none', className)} {...props}>
         {children}
       </TabsPrimitive.Content>
     );
@@ -181,7 +181,7 @@ function TabsContent({
     <TabsPrimitive.Content asChild {...props}>
       <motion.div
         layout
-        data-slot="tabs-content"
+        data-slot='tabs-content'
         className={cn('flex-1 outline-none', className)}
         initial={{ opacity: 0, y: -10, filter: 'blur(4px)' }}
         animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
@@ -206,7 +206,7 @@ const defaultTabsContentsTransition = {
   type: 'spring',
   stiffness: 200,
   damping: 25,
-};
+} satisfies Transition;
 
 function TabsContents({
   children,
@@ -251,7 +251,7 @@ function TabsContents({
 
   if (!enableAnimation) {
     return (
-      <div data-slot="tabs-contents" className={className}>
+      <div data-slot='tabs-contents' className={className}>
         {children}
       </div>
     );
@@ -260,13 +260,13 @@ function TabsContents({
   return (
     <motion.div
       layout
-      data-slot="tabs-contents"
+      data-slot='tabs-contents'
       animate={{ height }}
       transition={transition}
       className={className}
       {...props}
     >
-      <div ref={containerRef} className="size-full">
+      <div ref={containerRef} className='size-full'>
         {children}
       </div>
     </motion.div>

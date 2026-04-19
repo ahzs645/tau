@@ -3,13 +3,13 @@ import { ParametersBoolean } from '#components/geometry/parameters/parameters-bo
 import { ParametersNumber } from '#components/geometry/parameters/parameters-number.js';
 import { ParametersString } from '#components/geometry/parameters/parameters-string.js';
 import { toTitleCase } from '#utils/string.utils.js';
-import { getDescriptor } from '#constants/build-parameters.js';
+import { getDescriptor } from '#constants/project-parameters.js';
 import type { RJSFContext } from '#components/geometry/parameters/rjsf-context.js';
 
 export function ParametersWidget(
   props: WidgetProps<Record<string, unknown>, RJSFSchema, RJSFContext>,
 ): React.JSX.Element {
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- RJSF is untyped
+  // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- RJSF is untyped
   const { value, onChange, name, schema, registry } = props;
 
   const { formContext } = registry;
@@ -36,7 +36,6 @@ export function ParametersWidget(
 
       return (
         <ParametersNumber
-          className="w-26"
           value={numericValue}
           defaultValue={defaultNumericValue}
           descriptor={descriptor}

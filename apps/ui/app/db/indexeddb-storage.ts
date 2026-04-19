@@ -1,6 +1,6 @@
 import type { PartialDeep } from 'type-fest';
 import deepmerge from 'deepmerge';
-import type { Build } from '@taucad/types';
+import type { Project } from '@taucad/types';
 import type { Chat } from '@taucad/chat';
 import { idPrefix } from '@taucad/types/constants';
 import { generatePrefixedId } from '@taucad/utils/id';
@@ -13,8 +13,8 @@ export class IndexedDbStorageProvider implements StorageProvider {
     return `${metaConfig.databasePrefix}db`;
   }
 
-  private get buildsStoreName(): string {
-    return 'builds';
+  private get projectsStoreName(): string {
+    return 'projects';
   }
 
   private get chatsStoreName(): string {
@@ -29,11 +29,11 @@ export class IndexedDbStorageProvider implements StorageProvider {
     return 4;
   }
 
-  public async createBuild(build: Omit<Build, 'id' | 'createdAt' | 'updatedAt'>): Promise<Build> {
-    const id = generatePrefixedId(idPrefix.build);
+  public async createProject(project: Omit<Project, 'id' | 'createdAt' | 'updatedAt'>): Promise<Project> {
+    const id = generatePrefixedId(idPrefix.project);
     const timestamp = Date.now();
-    const buildWithId = {
-      ...build,
+    const projectWithId = {
+      ...project,
       id,
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -42,19 +42,19 @@ export class IndexedDbStorageProvider implements StorageProvider {
     const db = await this.getDb();
 
     return new Promise((resolve, reject) => {
-      const transaction = db.transaction(this.buildsStoreName, 'readwrite');
-      const store = transaction.objectStore(this.buildsStoreName);
+      const transaction = db.transaction(this.projectsStoreName, 'readwrite');
+      const store = transaction.objectStore(this.projectsStoreName);
 
-      const request = store.add(buildWithId);
+      const request = store.add(projectWithId);
 
-      // eslint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
       request.onerror = () => {
-        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
+        // oxlint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
         reject(request.error);
       };
 
       request.onsuccess = () => {
-        resolve(buildWithId);
+        resolve(projectWithId);
       };
 
       transaction.oncomplete = () => {
@@ -63,9 +63,9 @@ export class IndexedDbStorageProvider implements StorageProvider {
     });
   }
 
-  public async updateBuild(
-    buildId: string,
-    update: PartialDeep<Build>,
+  public async updateProject(
+    projectId: string,
+    update: PartialDeep<Project>,
     options?: {
       ignoreKeys?: string[];
       /**
@@ -76,32 +76,30 @@ export class IndexedDbStorageProvider implements StorageProvider {
        */
       noUpdatedAt?: boolean;
     },
-  ): Promise<Build | undefined> {
+  ): Promise<Project | undefined> {
     const db = await this.getDb();
-    const existingBuild = await this.getBuild(buildId);
+    const existingProject = await this.getProject(projectId);
 
-    if (!existingBuild) {
+    if (!existingProject) {
       return undefined;
     }
 
-    // If update contains an 'id' field matching buildId, treat it as a full build replacement
+    // If update contains an 'id' field matching projectId, treat it as a full project replacement
     // This is the new pattern from the parallel state machine refactor
-    const isBuild = 'id' in update && update.id === buildId;
+    const isProject = 'id' in update && update.id === projectId;
 
-    let updatedBuild: Build;
+    let updatedProject: Project;
 
-    if (isBuild) {
-      // Full build replacement - no merging needed
-      updatedBuild = update as Build;
+    if (isProject) {
+      // Full project replacement - no merging needed
+      updatedProject = update as Project;
     } else {
       // Partial update - use deepmerge for backward compatibility
       const mergeIgnoreKeys = new Set(options?.ignoreKeys ?? []);
-      const optionalParameters = {
-        ...(options?.noUpdatedAt ? {} : { updatedAt: Date.now() }),
-      };
+      const optionalParameters = options?.noUpdatedAt ? {} : { updatedAt: Date.now() };
 
-      updatedBuild = deepmerge(
-        existingBuild,
+      updatedProject = deepmerge(
+        existingProject,
         { ...update, ...optionalParameters },
         {
           customMerge(key) {
@@ -112,23 +110,23 @@ export class IndexedDbStorageProvider implements StorageProvider {
             return undefined;
           },
         },
-      ) as Build;
+      ) as Project;
     }
 
     return new Promise((resolve, reject) => {
-      const transaction = db.transaction(this.buildsStoreName, 'readwrite');
-      const store = transaction.objectStore(this.buildsStoreName);
+      const transaction = db.transaction(this.projectsStoreName, 'readwrite');
+      const store = transaction.objectStore(this.projectsStoreName);
 
-      const request = store.put(updatedBuild);
+      const request = store.put(updatedProject);
 
-      // eslint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
       request.onerror = () => {
-        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
+        // oxlint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
         reject(request.error);
       };
 
       request.onsuccess = () => {
-        resolve(updatedBuild);
+        resolve(updatedProject);
       };
 
       transaction.oncomplete = () => {
@@ -137,25 +135,25 @@ export class IndexedDbStorageProvider implements StorageProvider {
     });
   }
 
-  public async getBuilds(options?: { includeDeleted?: boolean }): Promise<Build[]> {
+  public async getProjects(options?: { includeDeleted?: boolean }): Promise<Project[]> {
     const db = await this.getDb();
 
     return new Promise((resolve, reject) => {
-      const transaction = db.transaction(this.buildsStoreName, 'readonly');
-      const store = transaction.objectStore(this.buildsStoreName);
+      const transaction = db.transaction(this.projectsStoreName, 'readonly');
+      const store = transaction.objectStore(this.projectsStoreName);
       const request = store.getAll();
 
-      // eslint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
       request.onerror = () => {
-        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
+        // oxlint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
         reject(request.error);
       };
 
       request.onsuccess = () => {
-        const builds = request.result as Build[];
-        // Filter out deleted builds unless explicitly requested
-        const filteredBuilds = options?.includeDeleted ? builds : builds.filter((build) => !build.deletedAt);
-        resolve(filteredBuilds);
+        const projects = request.result as Project[];
+        // Filter out deleted projects unless explicitly requested
+        const filteredProjects = options?.includeDeleted ? projects : projects.filter((project) => !project.deletedAt);
+        resolve(filteredProjects);
       };
 
       transaction.oncomplete = () => {
@@ -164,22 +162,22 @@ export class IndexedDbStorageProvider implements StorageProvider {
     });
   }
 
-  public async getBuild(buildId: string): Promise<Build | undefined> {
+  public async getProject(projectId: string): Promise<Project | undefined> {
     const db = await this.getDb();
 
     return new Promise((resolve, reject) => {
-      const transaction = db.transaction(this.buildsStoreName, 'readonly');
-      const store = transaction.objectStore(this.buildsStoreName);
-      const request = store.get(buildId);
+      const transaction = db.transaction(this.projectsStoreName, 'readonly');
+      const store = transaction.objectStore(this.projectsStoreName);
+      const request = store.get(projectId);
 
-      // eslint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
       request.onerror = () => {
-        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
+        // oxlint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
         reject(request.error);
       };
 
       request.onsuccess = () => {
-        resolve(request.result as Build | undefined);
+        resolve(request.result as Project | undefined);
       };
 
       transaction.oncomplete = () => {
@@ -188,15 +186,15 @@ export class IndexedDbStorageProvider implements StorageProvider {
     });
   }
 
-  public async deleteBuild(buildId: string): Promise<void> {
-    // Get the build to make sure it exists
-    const build = await this.getBuild(buildId);
-    if (!build) {
+  public async deleteProject(projectId: string): Promise<void> {
+    // Get the project to make sure it exists
+    const project = await this.getProject(projectId);
+    if (!project) {
       return;
     }
 
     // Perform soft delete by updating deletedAt timestamp
-    await this.updateBuild(buildId, { deletedAt: Date.now() });
+    await this.updateProject(projectId, { deletedAt: Date.now() });
   }
 
   // ============================================================================
@@ -225,9 +223,9 @@ export class IndexedDbStorageProvider implements StorageProvider {
 
       const request = store.add(chatWithId);
 
-      // eslint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
       request.onerror = () => {
-        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
+        // oxlint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
         reject(request.error);
       };
 
@@ -267,9 +265,7 @@ export class IndexedDbStorageProvider implements StorageProvider {
     } else {
       // Partial update - use deepmerge
       const mergeIgnoreKeys = new Set(options?.ignoreKeys ?? []);
-      const optionalParameters = {
-        ...(options?.noUpdatedAt ? {} : { updatedAt: Date.now() }),
-      };
+      const optionalParameters = options?.noUpdatedAt ? {} : { updatedAt: Date.now() };
 
       updatedChat = deepmerge(
         existingChat,
@@ -292,9 +288,9 @@ export class IndexedDbStorageProvider implements StorageProvider {
 
       const request = store.put(updatedChat);
 
-      // eslint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
       request.onerror = () => {
-        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
+        // oxlint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
         reject(request.error);
       };
 
@@ -316,9 +312,9 @@ export class IndexedDbStorageProvider implements StorageProvider {
       const store = transaction.objectStore(this.chatsStoreName);
       const request = store.get(chatId);
 
-      // eslint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
       request.onerror = () => {
-        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
+        // oxlint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
         reject(request.error);
       };
 
@@ -341,9 +337,9 @@ export class IndexedDbStorageProvider implements StorageProvider {
       const index = store.index('resourceId');
       const request = index.getAll(resourceId);
 
-      // eslint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
       request.onerror = () => {
-        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
+        // oxlint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
         reject(request.error);
       };
 
@@ -410,17 +406,17 @@ export class IndexedDbStorageProvider implements StorageProvider {
   // Editor State Methods
   // ============================================================================
 
-  public async getEditorState(buildId: string): Promise<EditorState | undefined> {
+  public async getEditorState(projectId: string): Promise<EditorState | undefined> {
     const db = await this.getDb();
 
     return new Promise((resolve, reject) => {
       const transaction = db.transaction(this.editorStoreName, 'readonly');
       const store = transaction.objectStore(this.editorStoreName);
-      const request = store.get(buildId);
+      const request = store.get(projectId);
 
-      // eslint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
       request.onerror = () => {
-        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
+        // oxlint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
         reject(request.error);
       };
 
@@ -443,9 +439,9 @@ export class IndexedDbStorageProvider implements StorageProvider {
       const store = transaction.objectStore(this.editorStoreName);
       const request = store.put(stateWithTimestamp);
 
-      // eslint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
       request.onerror = () => {
-        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
+        // oxlint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
         reject(request.error);
       };
 
@@ -459,17 +455,17 @@ export class IndexedDbStorageProvider implements StorageProvider {
     });
   }
 
-  public async deleteEditorState(buildId: string): Promise<void> {
+  public async deleteEditorState(projectId: string): Promise<void> {
     const db = await this.getDb();
 
     return new Promise((resolve, reject) => {
       const transaction = db.transaction(this.editorStoreName, 'readwrite');
       const store = transaction.objectStore(this.editorStoreName);
-      const request = store.delete(buildId);
+      const request = store.delete(projectId);
 
-      // eslint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
       request.onerror = () => {
-        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
+        // oxlint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
         reject(request.error);
       };
 
@@ -491,9 +487,9 @@ export class IndexedDbStorageProvider implements StorageProvider {
     return new Promise((resolve, reject) => {
       const request = indexedDB.open(this.dbName, this.version);
 
-      // eslint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
       request.onerror = () => {
-        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
+        // oxlint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
         reject(request.error);
       };
 
@@ -505,9 +501,9 @@ export class IndexedDbStorageProvider implements StorageProvider {
         const db = request.result;
         const { oldVersion } = event;
 
-        // Version 1: Create builds store
-        if (oldVersion < 1 && !db.objectStoreNames.contains(this.buildsStoreName)) {
-          db.createObjectStore(this.buildsStoreName, { keyPath: 'id' });
+        // Version 1: Create projects store
+        if (oldVersion < 1 && !db.objectStoreNames.contains(this.projectsStoreName)) {
+          db.createObjectStore(this.projectsStoreName, { keyPath: 'id' });
         }
 
         // Version 2+: Create chats store with resourceId index
@@ -520,7 +516,7 @@ export class IndexedDbStorageProvider implements StorageProvider {
 
         // Version 4+: Create editor store for transient Editor state
         if (oldVersion < 4 && !db.objectStoreNames.contains(this.editorStoreName)) {
-          db.createObjectStore(this.editorStoreName, { keyPath: 'buildId' });
+          db.createObjectStore(this.editorStoreName, { keyPath: 'projectId' });
         }
       };
     });

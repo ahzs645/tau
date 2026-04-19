@@ -1,0 +1,37 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "singleQuote": true,
+  "jsxSingleQuote": true,
+  "trailingComma": "all",
+  "semi": true,
+  "printWidth": 120,
+  "tabWidth": 2,
+  "sortTailwindcss": {
+    "stylesheet": "./apps/ui/app/styles/global.css"
+  },
+  "sortPackageJson": false,
+  "ignorePatterns": [
+    "/dist",
+    "/coverage",
+    "/.nx/cache",
+    "/.nx/workspace-data",
+    ".cursor/plans/**",
+    "/tarballs/**",
+    "/experiments/**",
+    "/packages/runtime/occt-reports/**",
+    "/packages/converter/src/assets/**",
+    "**/generated/**",
+    "**/assets/**",
+    "**/public/*.js",
+    "**/*.typeface.json"
+  ],
+  "overrides": [
+    {
+      "files": ["libs/tau-examples/src/kernels/**"],
+      "options": {
+        // Better readability for examples that can be imported into the Editor.
+        "printWidth": 80
+      }
+    }
+  ]
+}

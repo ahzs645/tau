@@ -1,9 +1,12 @@
 import type { modelFamilies, modelProviders } from '#constants/model.constants.js';
 
+/** @public */
 export type ModelProvider = (typeof modelProviders)[number];
 
+/** @public */
 export type ModelFamily = (typeof modelFamilies)[number];
 
+/** @public */
 export type Model = {
   id: string;
   model: string;

@@ -3,11 +3,14 @@
  *
  * XState machine for managing draft and edit state with debounced persistence.
  * Actors are provided via machine.provide() in the consumer (use-chat.tsx)
- * following the pattern from use-build.tsx.
+ * following the pattern from use-project.tsx.
  */
 
-import { setup, assign, fromPromise } from 'xstate';
+import { setup, assign } from 'xstate';
+import { fromSafeAsync } from '#lib/xstate.lib.js';
 import type { Chat, MyUIMessage } from '@taucad/chat';
+import type { ChatMode } from '@taucad/chat/constants';
+import { extractMimeTypeFromDataUrl } from '#utils/chat.utils.js';
 
 // Context for draft state
 export type DraftMachineContext = {
@@ -16,6 +19,7 @@ export type DraftMachineContext = {
   draftText: string;
   draftImages: string[];
   draftToolChoice: string | string[];
+  draftMode: ChatMode;
   // Edit draft state
   messageEdits: Record<string, MyUIMessage>;
   activeEditMessageId?: string;
@@ -42,7 +46,7 @@ function buildDraftMessage(text: string, images: string[]): MyUIMessage {
     parts.push({
       type: 'file',
       url: image,
-      mediaType: 'image/png',
+      mediaType: extractMimeTypeFromDataUrl(image),
     });
   }
 
@@ -78,13 +82,18 @@ type DraftMachineEvents =
   | { type: 'addDraftImage'; image: string }
   | { type: 'removeDraftImage'; index: number }
   | { type: 'setDraftToolChoice'; toolChoice: string | string[] }
+  | { type: 'setDraftMode'; mode: ChatMode }
   | { type: 'clearDraft' }
   | { type: 'loadDraftFromMessage'; draft: MyUIMessage }
   | { type: 'setEditDraftText'; text: string }
   | { type: 'addEditDraftImage'; image: string }
   | { type: 'removeEditDraftImage'; index: number }
   | { type: 'loadAllMessageEdits'; edits: Record<string, MyUIMessage> }
-  | { type: 'startEditingMessage'; messageId: string; originalMessage?: MyUIMessage }
+  | {
+      type: 'startEditingMessage';
+      messageId: string;
+      originalMessage?: MyUIMessage;
+    }
   | { type: 'exitEditMode' }
   | { type: 'clearEditDraft' }
   | { type: 'clearMessageEdit'; messageId: string }
@@ -92,25 +101,27 @@ type DraftMachineEvents =
   | { type: 'flushNow' };
 
 // Placeholder actors - actual implementations provided via machine.provide()
-const persistDraftActor = fromPromise<void, { chatId: string; draft: MyUIMessage }>(async () => {
+const persistDraftActor = fromSafeAsync<void, { chatId: string; draft: MyUIMessage }>(async () => {
   throw new Error('persistDraftActor not provided');
 });
 
-const persistEditDraftActor = fromPromise<void, { chatId: string; messageId: string; draft: MyUIMessage }>(async () => {
-  throw new Error('persistEditDraftActor not provided');
-});
+const persistEditDraftActor = fromSafeAsync<void, { chatId: string; messageId: string; draft: MyUIMessage }>(
+  async () => {
+    throw new Error('persistEditDraftActor not provided');
+  },
+);
 
-const clearMessageEditActor = fromPromise<void, { chatId: string; messageId: string }>(async () => {
+const clearMessageEditActor = fromSafeAsync<void, { chatId: string; messageId: string }>(async () => {
   throw new Error('clearMessageEditActor not provided');
 });
 
 export const draftMachine = setup({
   types: {
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate types
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate types
     context: {} as DraftMachineContext,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate types
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate types
     events: {} as DraftMachineEvents,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate types
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate types
     input: {} as DraftMachineInput,
   },
   actors: {
@@ -133,6 +144,7 @@ export const draftMachine = setup({
       draftText: '',
       draftImages: [],
       draftToolChoice: 'auto',
+      draftMode: 'agent' as ChatMode,
       messageEdits: {},
       activeEditMessageId: undefined,
       editDraftText: '',
@@ -193,6 +205,11 @@ export const draftMachine = setup({
         setDraftToolChoice: {
           actions: assign({
             draftToolChoice: ({ event }) => event.toolChoice,
+          }),
+        },
+        setDraftMode: {
+          actions: assign({
+            draftMode: ({ event }) => event.mode,
           }),
         },
         clearDraft: {
@@ -301,7 +318,7 @@ export const draftMachine = setup({
         clearMessageEdit: {
           actions: assign(({ context, event }) => {
             const newEdits = { ...context.messageEdits };
-            // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- need to remove message edit
+            // oxlint-disable-next-line @typescript-eslint/no-dynamic-delete -- need to remove message edit
             delete newEdits[event.messageId];
 
             return { messageEdits: newEdits };
@@ -355,6 +372,11 @@ export const draftMachine = setup({
               target: 'persisting',
               guard: 'canPersist',
             },
+            // Bypass debounce — persist the (now-empty) draft immediately
+            clearDraft: {
+              target: 'persisting',
+              guard: 'canPersist',
+            },
           },
         },
         persisting: {
@@ -372,6 +394,11 @@ export const draftMachine = setup({
             setDraftText: 'pending',
             addDraftImage: 'pending',
             removeDraftImage: 'pending',
+            // Cancel stale in-flight persist and re-persist with empty draft
+            clearDraft: {
+              target: 'persisting',
+              reenter: true,
+            },
           },
         },
       },
@@ -455,7 +482,10 @@ export const draftMachine = setup({
           invoke: {
             src: 'clearMessageEditActor',
             input({ context, event }) {
-              const { messageId } = event as { type: 'clearMessageEdit'; messageId: string };
+              const { messageId } = event as {
+                type: 'clearMessageEdit';
+                messageId: string;
+              };
 
               return {
                 chatId: context.chatId!,

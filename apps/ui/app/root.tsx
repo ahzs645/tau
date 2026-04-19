@@ -24,10 +24,9 @@ import { AuthConfigProvider } from '#providers/auth-provider.js';
 import { globalStylesLinks } from '#styles/global.styles.js';
 import type { Handle } from '#types/matches.types.js';
 import { RootCommandPaletteItems } from '#root-command-items.js';
-import { BuildManagerProvider } from '#hooks/use-build-manager.js';
+import { ProjectManagerProvider } from '#hooks/use-project-manager.js';
 import { FileManagerProvider } from '#hooks/use-file-manager.js';
 import { AnalyticsProvider } from '#hooks/use-analytics.js';
-import { ChatRpcSocketProvider } from '#hooks/use-chat-rpc-socket.js';
 import { KeyboardProvider } from '#hooks/use-keyboard.js';
 import { UnloadProvider } from '#hooks/use-flush-on-close.js';
 
@@ -36,6 +35,7 @@ export const links: LinksFunction = () => [...globalStylesLinks, ...webManifestL
 export const meta: MetaFunction = () => [
   { title: metaConfig.name },
   { name: 'description', content: metaConfig.description },
+  // oxlint-disable-next-line tau-lint/no-hardcoded-color -- browser meta tag
   { name: 'theme-color', content: '#ffffff' },
   { name: 'apple-mobile-web-app-title', content: metaConfig.name },
   { name: 'apple-mobile-web-app-status-bar-style', content: 'black-translucent' },
@@ -52,7 +52,7 @@ export const handle: Handle = {
   },
 };
 
-// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types -- loaders require type inference
+// oxlint-disable-next-line @typescript-eslint/explicit-module-boundary-types -- loaders require type inference
 export async function loader({ request }: LoaderFunctionArgs) {
   // Redirect www to apex domain (e.g., www.example.new -> example.new)
   throwRedirectIfSubdomain(request, 'www');
@@ -95,24 +95,22 @@ export function Layout({ children }: { readonly children: ReactNode }): React.JS
     <AuthConfigProvider>
       <QueryClientProvider client={queryClient}>
         <AnalyticsProvider>
-          <FileManagerProvider rootDirectory="/">
-            <BuildManagerProvider>
-              <ChatRpcSocketProvider>
-                <ThemeProvider specifiedTheme={ssrTheme} themeAction="/action/set-theme">
-                  <ColorProvider>
-                    <TooltipProvider>
-                      <KeyboardProvider>
-                        <UnloadProvider>
-                          <LayoutDocument env={data?.env ?? {}} ssrTheme={ssrTheme}>
-                            {children}
-                          </LayoutDocument>
-                        </UnloadProvider>
-                      </KeyboardProvider>
-                    </TooltipProvider>
-                  </ColorProvider>
-                </ThemeProvider>
-              </ChatRpcSocketProvider>
-            </BuildManagerProvider>
+          <FileManagerProvider rootDirectory='/'>
+            <ProjectManagerProvider>
+              <ThemeProvider specifiedTheme={ssrTheme} themeAction='/action/set-theme'>
+                <ColorProvider>
+                  <TooltipProvider>
+                    <KeyboardProvider>
+                      <UnloadProvider>
+                        <LayoutDocument env={data?.env ?? {}} ssrTheme={ssrTheme}>
+                          {children}
+                        </LayoutDocument>
+                      </UnloadProvider>
+                    </KeyboardProvider>
+                  </TooltipProvider>
+                </ColorProvider>
+              </ThemeProvider>
+            </ProjectManagerProvider>
           </FileManagerProvider>
         </AnalyticsProvider>
       </QueryClientProvider>
@@ -143,7 +141,7 @@ function LayoutDocument({
 
   return (
     <html
-      lang="en"
+      lang='en'
       className={cn(
         '[--spacing:0.275rem] md:[--spacing:0.25rem]',
         // Leave this class last as the `PreventFlashOnWrongTheme` script will
@@ -153,15 +151,15 @@ function LayoutDocument({
       style={color.rootStyles}
     >
       <head>
-        <meta charSet="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta charSet='utf-8' />
+        <meta name='viewport' content='width=device-width, initial-scale=1' />
         <Meta />
         <PreventFlashOnWrongTheme ssrTheme={ssrTheme !== null} />
         <Links />
       </head>
       <body>
         <script
-          // eslint-disable-next-line react/no-danger -- safe for environment injection as recommended by Remix
+          // oxlint-disable-next-line react/no-danger -- safe for environment injection as recommended by Remix
           dangerouslySetInnerHTML={{
             __html: `window.ENV = ${JSON.stringify(env)}`,
           }}

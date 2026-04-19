@@ -14,7 +14,7 @@ type BuildNested<Path extends readonly string[], Value> = Path extends readonly 
   infer First extends string,
   ...infer Rest extends string[],
 ]
-  ? // eslint-disable-next-line @typescript-eslint/no-restricted-types -- we only want to match an empty array here.
+  ? // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- we only want to match an empty array here.
     Rest extends []
     ? IsNumericString<First> extends true
       ? Value[]
@@ -40,7 +40,7 @@ type PathArrayToString<Path extends readonly string[]> = Path extends readonly [
   infer First extends string,
   ...infer Rest extends string[],
 ]
-  ? // eslint-disable-next-line @typescript-eslint/no-restricted-types -- we only want to match an empty array here.
+  ? // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- we only want to match an empty array here.
     Rest extends []
     ? First
     : `${First}.${PathArrayToString<Rest>}`
@@ -67,7 +67,7 @@ export function setValueAtPath<T extends Record<string, unknown>, const Path ext
   value: Value,
 ): SetNestedValue<T, Path, Value> {
   if (path.length === 0) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-return -- Generic type constraint requires cast
+    // oxlint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-return -- Generic type constraint requires cast
     return object as any;
   }
 
@@ -99,7 +99,7 @@ export function setValueAtPath<T extends Record<string, unknown>, const Path ext
     current[finalKey] = value;
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-return -- Generic type constraint requires cast
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-return -- Generic type constraint requires cast
   return result as any;
 }
 
@@ -137,7 +137,7 @@ export function deleteValueAtPath<T extends Record<string, unknown>, const Path 
   path: Path,
 ): DeleteNestedValue<T, Path> {
   if (path.length === 0) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-return -- Generic type constraint requires cast
+    // oxlint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-return -- Generic type constraint requires cast
     return object as any;
   }
 
@@ -150,11 +150,11 @@ export function deleteValueAtPath<T extends Record<string, unknown>, const Path 
     if (key !== undefined) {
       // Create a new object without the specified key
       const { [key]: _, ...rest } = result;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-return -- Generic type constraint requires cast
+      // oxlint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-return -- Generic type constraint requires cast
       return rest as any;
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-return -- Generic type constraint requires cast
+    // oxlint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-return -- Generic type constraint requires cast
     return result as any;
   }
 
@@ -171,7 +171,7 @@ export function deleteValueAtPath<T extends Record<string, unknown>, const Path 
       current = current[key] as Record<string, unknown>;
     } else {
       // Path doesn't exist, nothing to delete
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-return -- Generic type constraint requires cast
+      // oxlint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-return -- Generic type constraint requires cast
       return result as any;
     }
   }
@@ -184,7 +184,7 @@ export function deleteValueAtPath<T extends Record<string, unknown>, const Path 
     Object.assign(current, rest);
     // Clear all properties first
     for (const key of Object.keys(current)) {
-      // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- this is a valid use case
+      // oxlint-disable-next-line @typescript-eslint/no-dynamic-delete -- this is a valid use case
       delete current[key];
     }
 
@@ -198,13 +198,13 @@ export function deleteValueAtPath<T extends Record<string, unknown>, const Path 
       if (parentKey !== undefined && parentPath.length === 1) {
         // Parent is at root level, delete it
         const { [parentKey]: _, ...rootRest } = result;
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-return -- Generic type constraint requires cast
+        // oxlint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-return -- Generic type constraint requires cast
         return rootRest as any;
       }
     }
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-return -- Generic type constraint requires cast
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-return -- Generic type constraint requires cast
   return result as any;
 }
 
@@ -213,7 +213,7 @@ export function deleteValueAtPath<T extends Record<string, unknown>, const Path 
  * Performs deep comparison for objects and arrays.
  * @param formData - The current form data for this field
  * @param defaultValue - The default value from the schema (for array items, this is the default item value)
- * @param fieldPath - Optional field path array (used for debugging/logging)
+ * @param _fieldPath - Optional field path array (used for debugging/logging)
  * @returns true if the field has been modified from its default
  */
 export function hasCustomValue(formData: unknown, defaultValue: unknown, _fieldPath?: readonly string[]): boolean {
@@ -241,7 +241,7 @@ export function hasCustomValue(formData: unknown, defaultValue: unknown, _fieldP
 
     // For nested values, we need to compare undefined/null normally
     return formData.some((item, index) => {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- array index access
+      // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- array index access
       const defaultItem = defaultValue[index];
 
       // Handle nested undefined/null comparison

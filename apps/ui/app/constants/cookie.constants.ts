@@ -40,10 +40,13 @@ export const cookieName = {
 
   /* Chat Context - what editor context to include in messages */
   // Whether to include filesystem snapshot in chat context.
+  // oxlint-disable-next-line unicorn-js/prevent-abbreviations -- ctx is conventional for context
   chatCtxFs: 'chat-ctx-fs',
   // Whether to include active file in chat context.
+  // oxlint-disable-next-line unicorn-js/prevent-abbreviations -- ctx is conventional for context
   chatCtxActive: 'chat-ctx-active',
   // Whether to include open files in chat context.
+  // oxlint-disable-next-line unicorn-js/prevent-abbreviations -- ctx is conventional for context
   chatCtxOpen: 'chat-ctx-open',
 
   /* Chat Tool Sections - collapse state (true = open, false = collapsed) */
@@ -53,10 +56,12 @@ export const cookieName = {
   chatToolAnalysisImages: 'chat-tool-analysis-images',
   // The quality of the screenshots in the chat.
   chatScreenshotQuality: 'chat-screenshot-quality',
+  // Whether testing tools (test_model, edit_tests) are enabled.
+  chatTestingEnabled: 'chat-testing-enabled',
 
-  /* Builds */
-  // The last selected build view mode.
-  buildViewMode: 'build-view-mode',
+  /* Projects */
+  // The last selected project view mode.
+  projectViewMode: 'project-view-mode',
 
   /* Graphics */
   // Whether the section view status is open.

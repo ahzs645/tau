@@ -8,11 +8,11 @@ import type { CodeLanguage } from '@taucad/types';
  * Map of kernel language to file extension.
  * Derived by inverting languageFromExtension.
  */
-// eslint-disable-next-line unicorn/no-array-reduce -- inverting a mapping
+// oxlint-disable-next-line unicorn/no-array-reduce -- inverting a mapping
 const extensionFromLanguage = Object.entries(languageFromExtension).reduce(
-  (acc, [extension, language]) => {
-    acc[language] = `.${extension}`;
-    return acc;
+  (accumulator, [extension, language]) => {
+    accumulator[language] = `.${extension}`;
+    return accumulator;
   },
   {} as Record<CodeLanguage, string>,
 );

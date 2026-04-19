@@ -4,11 +4,18 @@
   "type": "module",
   "private": true,
   "dependencies": {
+    "@pyroscope/nodejs": "catalog:",
     "@taucad/api-extractor": "workspace:*",
-    "@taucad/tau-examples": "workspace:*",
-    "@taucad/types": "workspace:*",
     "@taucad/chat": "workspace:*",
+    "@taucad/runtime": "workspace:*",
+    "@taucad/tau-examples": "workspace:*",
+    "@taucad/telemetry": "workspace:*",
+    "@taucad/testing": "workspace:*",
+    "@taucad/types": "workspace:*",
     "@taucad/utils": "workspace:*"
+  },
+  "devDependencies": {
+    "@taucad/vite": "workspace:*"
   },
   "imports": {
     "#*": "./app/*"

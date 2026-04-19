@@ -7,69 +7,69 @@ import { KernelSelector } from '#components/chat/kernel-selector.js';
 import { Button } from '#components/ui/button.js';
 import { ChatProvider } from '#hooks/use-chat.js';
 import { toast } from '#components/ui/sonner.js';
-import { useBuildManager } from '#hooks/use-build-manager.js';
+import { useProjectManager } from '#hooks/use-project-manager.js';
 import { useKernel } from '#hooks/use-kernel.js';
 
 export function CtaSection(): React.JSX.Element {
   const navigate = useNavigate();
   const { kernel, setKernel } = useKernel();
-  const buildManager = useBuildManager();
+  const projectManager = useProjectManager();
 
   const onSubmit: ChatTextareaProperties['onSubmit'] = useCallback(
     async ({ content, model, metadata, imageUrls }) => {
       try {
-        const createdBuild = await buildManager.createBuild({
+        const createProject = await projectManager.createProject({
           kernel,
           initialMessage: { content, model, metadata, imageUrls },
           // Set initial panel state: chat open
           editorState: { panelState: { openPanels: { chat: true } } },
         });
 
-        await navigate(`/builds/${createdBuild.id}`);
+        await navigate(`/projects/${createProject.id}`);
       } catch (error) {
-        console.error('Failed to create build:', error);
-        toast.error('Failed to create build');
+        console.error('Failed to create project:', error);
+        toast.error('Failed to create project');
       }
     },
-    [kernel, buildManager, navigate],
+    [kernel, projectManager, navigate],
   );
 
   return (
-    <div className="border-t bg-gradient-to-b from-muted/50 to-background">
-      <div className="container mx-auto px-4 py-20">
-        <div className="mx-auto max-w-3xl">
+    <div className='border-t bg-gradient-to-b from-muted/50 to-background'>
+      <div className='container mx-auto px-4 py-20'>
+        <div className='mx-auto max-w-3xl'>
           {/* Heading */}
-          <div className="mb-10 text-center">
-            <h2 className="text-3xl font-semibold tracking-tight md:text-4xl">
+          <div className='mb-10 text-center'>
+            <h2 className='text-3xl font-semibold tracking-tight md:text-4xl'>
               We can&apos;t wait to see what you build
             </h2>
-            <p className="mx-auto mt-4 max-w-xl text-muted-foreground">
+            <p className='mx-auto mt-4 max-w-xl text-muted-foreground'>
               Start designing with AI assistance, or dive straight into code.
             </p>
           </div>
 
           {/* Chat Input */}
           <ChatProvider>
-            <div className="space-y-4">
-              <div className="flex justify-center">
+            <div className='space-y-4'>
+              <div className='flex justify-center'>
                 <KernelSelector selectedKernel={kernel} onKernelChange={setKernel} />
               </div>
               <ChatTextarea
                 enableAutoFocus={false}
                 enableContextActions={false}
                 enableKernelSelector={false}
-                className="pt-1"
+                className='pt-1'
                 onSubmit={onSubmit}
               />
             </div>
           </ChatProvider>
 
           {/* CTA Button */}
-          <div className="mt-8 flex justify-center">
-            <Button asChild size="lg" className="gap-2">
-              <Link to="/builds/new">
-                Create New Build
-                <ArrowRight className="size-4" />
+          <div className='mt-8 flex justify-center'>
+            <Button asChild size='lg' className='gap-2'>
+              <Link to='/projects/new'>
+                Create New Project
+                <ArrowRight className='size-4' />
               </Link>
             </Button>
           </div>

@@ -23,13 +23,13 @@ export function DocsCodeBlock({ title, text, children, className, ...rest }: Doc
   const variant = hasTitle ? 'standard' : 'floating';
   return (
     <CodeBlock variant={variant} className={className} {...rest}>
-      <CodeBlockHeader className="bg-transparent" variant={variant}>
-        {title ? <CodeBlockTitle className="text-sm">{title}</CodeBlockTitle> : null}
+      <CodeBlockHeader className='bg-transparent' variant={variant}>
+        {title ? <CodeBlockTitle className='text-sm'>{title}</CodeBlockTitle> : null}
         <CodeBlockAction variant={variant}>
-          <CopyButton size="xs" variant="ghost" className="h-8 [&_[data-slot=label]]:hidden" getText={() => text} />
+          <CopyButton size='xs' variant='ghost' className='h-8 [&_[data-slot=label]]:hidden' getText={() => text} />
         </CodeBlockAction>
       </CodeBlockHeader>
-      <CodeBlockContent className="px-0">{children}</CodeBlockContent>
+      <CodeBlockContent className='px-0'>{children}</CodeBlockContent>
     </CodeBlock>
   );
 }

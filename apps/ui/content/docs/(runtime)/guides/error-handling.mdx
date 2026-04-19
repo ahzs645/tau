@@ -1,0 +1,216 @@
+---
+title: Handle Errors
+description: Handle KernelResult, KernelIssue, render cancellation errors, and type guards.
+icon: lucide:triangle-alert
+---
+
+# Handle Errors
+
+Kernel operations return a discriminated union `KernelResult<T>`. Check the `success` field to narrow results, and inspect `KernelIssue` for messages, severity, location, and stack frames. Render cancellation errors (`RenderAbortedError`, `RenderSupersededError`) signal when renders are interrupted.
+
+## Prerequisites
+
+- [Install @taucad/runtime](../getting-started/installation)
+- Completed the [Quick Start](../getting-started/quick-start)
+
+## Goal
+
+Handle success and error results from `render`, `export`, and `getParameters` using the `success` discriminant and the `KernelIssue` structure. Handle render cancellation scenarios in autonomous rendering mode.
+
+## Steps
+
+### 1. Understand the KernelResult Discriminated Union
+
+`KernelResult<T>` is a union of two shapes:
+
+```typescript @ts-nocheck
+type KernelSuccessResult<T> = {
+  success: true;
+  data: T;
+  issues: KernelIssue[];
+};
+
+type KernelErrorResult = {
+  success: false;
+  issues: KernelIssue[];
+};
+
+type KernelResult<T> = KernelSuccessResult<T> | KernelErrorResult;
+```
+
+The `success` field is the discriminant. When `success` is `true`, `data` is present. When `success` is `false`, only `issues` is present.
+
+### 2. Narrow Results with the `success` Field
+
+Check `result.success` to narrow the discriminated union. TypeScript automatically infers the correct type in each branch:
+
+```typescript
+import { createRuntimeClient, fromMemoryFS } from '@taucad/runtime';
+import { replicad } from '@taucad/runtime/kernels';
+import { esbuild } from '@taucad/runtime/bundler';
+
+const client = createRuntimeClient({
+  kernels: [replicad()],
+  bundlers: [esbuild()],
+  fileSystem: fromMemoryFS(),
+});
+
+const result = await client.render({
+  code: { 'main.ts': `export default function main() { return null; }` },
+});
+
+if (result.success) {
+  console.log(`Rendered ${result.data.length} geometries`);
+} else {
+  console.error('Render failed:', result.issues.map((i) => i.message).join('; '));
+}
+```
+
+### 3. Inspect KernelIssue Structure
+
+Each `KernelIssue` has a message, severity, optional location, and optional stack information:
+
+```typescript
+import type { KernelIssue } from '@taucad/runtime';
+
+const issue: KernelIssue = {
+  message: 'Cannot read property "extrude" of undefined',
+  severity: 'error',
+  type: 'runtime',
+  location: {
+    fileName: 'main.ts',
+    startLineNumber: 5,
+    startColumn: 10,
+    endLineNumber: 5,
+    endColumn: 20,
+  },
+  stackFrames: [
+    {
+      fileName: 'main.ts',
+      functionName: 'main',
+      lineNumber: 5,
+      columnNumber: 10,
+      context: 'user',
+    },
+  ],
+};
+```
+
+| Field         | Type                                                                  | Purpose                                                          |
+| ------------- | --------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `message`     | `string`                                                              | Human-readable error message                                     |
+| `severity`    | `'error' \| 'warning' \| 'info'`                                      | Issue severity                                                   |
+| `type`        | `'compilation' \| 'runtime' \| 'kernel' \| 'connection' \| 'unknown'` | Error origin                                                     |
+| `location`    | `ErrorLocation?`                                                      | File and range for editor integration                            |
+| `stack`       | `string?`                                                             | Raw stack trace                                                  |
+| `stackFrames` | `KernelStackFrame[]?`                                                 | Parsed frames with `context` (user, library, framework, runtime) |
+
+### 4. Handle Errors in Render Calls
+
+Pattern for `client.render`:
+
+```typescript @ts-nocheck
+const result = await client.render({ code: { 'main.ts': userCode } });
+
+if (result.success) {
+  for (const geom of result.data) {
+    // Use geom.blob, geom.format
+  }
+  if (result.issues.length > 0) {
+    console.warn('Warnings:', result.issues);
+  }
+} else {
+  for (const issue of result.issues) {
+    console.error(`[${issue.severity}] ${issue.message}`);
+    if (issue.location) {
+      console.error(`  at ${issue.location.fileName}:${issue.location.startLineNumber}`);
+    }
+  }
+}
+```
+
+### 5. Handle Errors in Export Calls
+
+The same pattern applies to `client.export`:
+
+```typescript @ts-nocheck
+const result = await client.export('glb');
+
+if (result.success) {
+  const { bytes, name, mimeType } = result.data;
+  const blob = new Blob([bytes], { type: mimeType });
+  console.log(`Exported: ${name} (${blob.size} bytes)`);
+} else {
+  console.error('Export failed:', result.issues);
+}
+```
+
+### 6. Handle Render Cancellation Errors
+
+When using `client.render()`, a render can be cancelled if a newer render is requested before the current one completes. Two error types signal cancellation:
+
+**RenderSupersededError** -- Thrown when a newer `render()` call supersedes the current one. The client rejected the in-flight render in favor of the latest request:
+
+```typescript @ts-nocheck
+import { isRenderSupersededError } from '@taucad/runtime';
+
+try {
+  const result = await client.render({ code: { 'main.ts': code } });
+} catch (error) {
+  if (isRenderSupersededError(error)) {
+    console.log('Render was superseded by a newer render call');
+  } else {
+    throw error;
+  }
+}
+```
+
+**RenderAbortedError** -- Thrown when a render is aborted via the SharedArrayBuffer abort channel. This occurs during autonomous rendering when the worker aborts an in-progress render due to a file change or parameter update:
+
+```typescript @ts-nocheck
+import { isRenderAbortedError } from '@taucad/runtime';
+
+try {
+  const result = await client.render({ code: { 'main.ts': code } });
+} catch (error) {
+  if (isRenderAbortedError(error)) {
+    console.log('Render was aborted (file or parameter changed)');
+  } else {
+    throw error;
+  }
+}
+```
+
+Both errors are normal control flow, not bugs. Use the realm-safe type guards (`isRenderSupersededError`, `isRenderAbortedError`) rather than `instanceof` for reliable cross-realm checks.
+
+### 7. Error Enrichment (Kernel Authors)
+
+Kernels enrich raw errors into `KernelIssue` with location and stack. Replicad maps OpenCASCADE exceptions; JSCAD and Zoo map their engine errors. When building custom kernels, use `createKernelError`:
+
+```typescript @ts-nocheck
+import { createKernelError } from '@taucad/runtime';
+
+return createKernelError([
+  {
+    message: 'Invalid parameter: width must be positive',
+    severity: 'error',
+    type: 'runtime',
+    location: { fileName: 'main.ts', startLineNumber: 3, startColumn: 5 },
+  },
+]);
+```
+
+## Variations
+
+- **Display in UI**: Use `issue.location` to highlight errors in a code editor (e.g., Monaco markers).
+- **Filter by severity**: Iterate `result.issues` and handle `error` vs `warning` differently.
+- **Success with warnings**: `KernelSuccessResult` can have non-empty `issues` (e.g., deprecation warnings). Check `result.issues` after confirming success.
+- **Connection errors**: `type: 'connection'` indicates transport/worker failures rather than kernel logic.
+- **Autonomous mode errors**: Subscribe to `client.on('state', (state, detail) => ...)` to receive error state transitions in autonomous rendering mode.
+
+## Related
+
+- [Create a Custom Kernel](./custom-kernel) -- Return createKernelError from kernel methods
+- [Render Lifecycle](../concepts/render-lifecycle) -- How render cancellation works
+- [API Reference: Types](../api/types) -- KernelResult, KernelIssue, ErrorLocation
+- [API Reference: Client](../api/client) -- render and export return types

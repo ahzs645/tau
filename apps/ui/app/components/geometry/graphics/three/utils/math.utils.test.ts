@@ -224,8 +224,8 @@ describe('calculateFovDistanceCompensation', () => {
       const baseProduct = (baseDistance - offset) * Math.tan((baseFov / 2) * degToRad);
 
       for (const newFov of [0.1, 10, 26, 45, 60, 90]) {
-        const newDist = calculateFovDistanceCompensation(baseFov, newFov, baseDistance, offset);
-        const newProduct = (newDist - offset) * Math.tan((newFov / 2) * degToRad);
+        const newDistance = calculateFovDistanceCompensation(baseFov, newFov, baseDistance, offset);
+        const newProduct = (newDistance - offset) * Math.tan((newFov / 2) * degToRad);
         expect(newProduct).toBeCloseTo(baseProduct, 6);
       }
     });

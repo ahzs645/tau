@@ -34,19 +34,19 @@ export function DockviewSplitAction({ containerApi, group }: IDockviewHeaderActi
     <Tooltip>
       <TooltipTrigger asChild>
         <DockviewPaneAction aria-label={label} onClick={handleSplit}>
-          <Icon className="size-3.5" />
+          <Icon className='size-3.5' />
         </DockviewPaneAction>
       </TooltipTrigger>
-      <TooltipContent side="top" sideOffset={4} className="flex flex-col gap-1">
+      <TooltipContent side='top' sideOffset={4} className='flex flex-col gap-1'>
         <span>{label}</span>
-        <span className="flex items-center gap-1 text-xs opacity-70">
+        <span className='flex items-center gap-1 text-xs opacity-70'>
           {isShiftHeld ? (
             <>
-              Release <KeyShortcut variant="tooltip">{shiftKey}</KeyShortcut> to split right
+              Release <KeyShortcut variant='tooltip'>{shiftKey}</KeyShortcut> to split right
             </>
           ) : (
             <>
-              Hold <KeyShortcut variant="tooltip">{shiftKey}</KeyShortcut> to split down
+              Hold <KeyShortcut variant='tooltip'>{shiftKey}</KeyShortcut> to split down
             </>
           )}
         </span>

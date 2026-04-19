@@ -4,6 +4,7 @@ import type { ErrorCategory } from '@taucad/types';
 /**
  * Maps HTTP status codes to error categories.
  * Used by both the API (to normalize errors) and chat exception filter.
+ * @public
  */
 export function httpStatusToCategory(status: number): ErrorCategory {
   switch (status) {
@@ -45,6 +46,7 @@ export function httpStatusToCategory(status: number): ErrorCategory {
 /**
  * Default titles for each error category.
  * Used to provide user-friendly titles for error messages.
+ * @public
  */
 export const errorCategoryTitles: Record<ErrorCategory, string> = {
   [errorCategory.credits]: 'Credit Limit Reached',

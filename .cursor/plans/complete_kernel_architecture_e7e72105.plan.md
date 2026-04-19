@@ -24,7 +24,7 @@ todos:
     content: "Phase 7: Cache and runtime fixes — guard setBasePath, dependency-aware invalidation, avoid clearing bundleResultCache at render start"
     status: completed
   - id: p8-docs-ci
-    content: "Phase 8: Update kernel-architecture-policy.md, run CI, fix all failures"
+    content: "Phase 8: Update runtime-architecture-policy.md, run CI, fix all failures"
     status: completed
 isProject: false
 ---
@@ -74,11 +74,11 @@ flowchart LR
 
 ### 1A. `BundlerDefinition` and `defineBundler` API
 
-New types in [kernel-worker.types.ts](libs/types/src/types/kernel-worker.types.ts):
+New types in [runtime-kernel.types.ts](libs/types/src/types/runtime-kernel.types.ts):
 
 ```typescript
 export type BundlerInitOptions = {
-  filesystem: KernelFilesystem;
+  filesystem: RuntimeFileSystem;
   projectPath: string;
 };
 
@@ -147,7 +147,7 @@ export function defineBundler<Ctx>(
 
 ### 1B. `BundlerConfig` type
 
-New type in [kernel.types.ts](libs/types/src/types/kernel.types.ts), parallel to `KernelConfig` and `MiddlewareConfig`:
+New type in [kernel.types.ts](libs/types/src/types/runtime.types.ts), parallel to `KernelConfig` and `MiddlewareConfig`:
 
 ```typescript
 export type BundlerEntry = {
@@ -160,11 +160,11 @@ export type BundlerConfig = BundlerEntry[];
 
 ### 1C. `BundleResult` (no changes)
 
-`BundleResult` in [kernel-worker.types.ts](libs/types/src/types/kernel-worker.types.ts) stays as-is — `builtinImports` is NOT needed on `BundleResult` because kernel detection uses the dedicated `detectImports()` method. The `bundle()` method is only called after kernel selection, when modules are already registered.
+`BundleResult` in [runtime-kernel.types.ts](libs/types/src/types/runtime-kernel.types.ts) stays as-is — `builtinImports` is NOT needed on `BundleResult` because kernel detection uses the dedicated `detectImports()` method. The `bundle()` method is only called after kernel selection, when modules are already registered.
 
 ### 1D. `builtinModuleNames` on `KernelWorkerEntry`
 
-Extend in [kernel.types.ts](libs/types/src/types/kernel.types.ts):
+Extend in [kernel.types.ts](libs/types/src/types/runtime.types.ts):
 
 ```typescript
 export type KernelWorkerEntry = {
@@ -175,10 +175,10 @@ export type KernelWorkerEntry = {
 
 ### 1E. Request-scoped protocol types
 
-Update [kernel-protocol.types.ts](libs/types/src/types/kernel-protocol.types.ts):
+Update [runtime-protocol.types.ts](libs/types/src/types/runtime-protocol.types.ts):
 
 ```typescript
-export type KernelCommand =
+export type RuntimeCommand =
   | { type: 'initialize'; requestId: string; /* ... existing fields */ }
   | { type: 'render'; requestId: string; file: GeometryFile; params: Record<string, unknown> }
   | { type: 'canHandle'; requestId: string; file: GeometryFile }
@@ -188,7 +188,7 @@ export type KernelCommand =
   | { type: 'configureMiddleware'; config: MiddlewareConfig }  // fire-and-forget
   | { type: 'cleanup' };
 
-export type KernelResponse =
+export type RuntimeResponse =
   | { type: 'initialized'; requestId: string }
   | { type: 'canHandleResult'; requestId: string; result: boolean }
   | { type: 'parametersResolved'; requestId: string; result: GetParametersResult }
@@ -480,7 +480,7 @@ Use the full project-relative file path as the selection cache key (not just the
 
 ### 5A. Request ID generation
 
-In [kernel-worker-client.ts](apps/ui/app/components/geometry/kernel/utils/kernel-worker-client.ts):
+In [runtime-worker-client.ts](apps/ui/app/components/geometry/kernel/utils/runtime-worker-client.ts):
 
 ```typescript
 private nextRequestId = 0;
@@ -517,7 +517,7 @@ When a new `render()` call is made while a previous one is in flight:
 
 ### 5D. Dispatcher cancellation support
 
-In [kernel-worker-dispatcher.ts](apps/ui/app/components/geometry/kernel/utils/kernel-worker-dispatcher.ts):
+In [runtime-worker-dispatcher.ts](apps/ui/app/components/geometry/kernel/utils/runtime-worker-dispatcher.ts):
 
 - Maintain a `Set<string>` of cancelled request IDs
 - On `cancel` command, add the ID to the set
@@ -551,7 +551,7 @@ const detail = {
 
 From `KernelContext`:
 
-- `workerClients: Map<string, KernelWorkerClient>` — remove
+- `workerClients: Map<string, RuntimeWorkerClient>` — remove
 - `workerSelectionCache: Map<string, string>` — remove
 - `selectedWorker?: string` — remove
 
@@ -622,7 +622,7 @@ And remove the blanket `this.bundleResultCache.clear()` from `renderEntry()`.
 
 ### 8A. Update architecture policy
 
-Rewrite [docs/kernel-architecture-policy.md](docs/kernel-architecture-policy.md) to reflect:
+Rewrite [docs/policy/runtime-architecture-policy.md](docs/policy/runtime-architecture-policy.md) to reflect:
 
 - Single worker per CU with `defineKernel` API
 - `defineBundler` plugin model (no hardcoded esbuild)

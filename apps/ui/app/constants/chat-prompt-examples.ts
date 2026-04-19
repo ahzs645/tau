@@ -1,4 +1,4 @@
-import type { KernelProvider } from '@taucad/types';
+import type { KernelProvider } from '@taucad/runtime';
 
 export type ChatExample = {
   title: string;

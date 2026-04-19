@@ -1,13 +1,16 @@
 import { Body, Controller, Logger, Post, Res, UseFilters, UseGuards } from '@nestjs/common';
 import { toBaseMessages, toUIMessageStream } from '@ai-sdk/langchain';
 import { convertToModelMessages, createUIMessageStreamResponse } from 'ai';
+import type { UIMessageChunk } from 'ai';
 import type { FastifyReply } from 'fastify';
-import type { ToolSelection } from '@taucad/chat';
+import type { ReactAgent } from 'langchain';
+import type { ToolSelection, ChatSnapshot, ContextPayload } from '@taucad/chat';
+import type { KernelProvider } from '@taucad/runtime';
 import { ChatService } from '#api/chat/chat.service.js';
 import { ChatRpcService } from '#api/chat/chat-rpc.service.js';
 import { ModelService } from '#api/models/model.service.js';
 import { FileEditService } from '#api/file-edit/file-edit.service.js';
-import { AnalysisService } from '#api/analysis/analysis.service.js';
+import { GeometryAnalysisService } from '#api/analysis/geometry-analysis.service.js';
 import { AuthGuard } from '#auth/auth.guard.js';
 import { CreateChatDto } from '#api/chat/chat.dto.js';
 import { sendSimpleModelStream } from '#api/chat/utils/simple-model-stream.js';
@@ -15,7 +18,29 @@ import { injectSnapshotContext } from '#api/chat/utils/inject-snapshot-context.j
 import { createStaticToolTransform } from '#api/chat/utils/static-tool-transform.js';
 import { createErrorTransform } from '#api/chat/utils/error-transform.js';
 import { createToolOutputTransform } from '#api/chat/utils/tool-output-transform.js';
+import { createNewlineTrimTransform } from '#api/chat/utils/newline-trim-transform.js';
+import { createLatexDelimiterTransform } from '#api/chat/utils/latex-delimiter-transform.js';
 import { ChatExceptionFilter } from '#api/chat/chat-exception.filter.js';
+import { ChatAbortError, isChatAbortError, registerChatAbort } from '#api/chat/utils/chat-abort.js';
+import { MetricsService } from '#telemetry/metrics.js';
+import { Span } from '#telemetry/tracer.service.js';
+import { AttributeKey } from '@taucad/telemetry';
+import { TtftCallbackHandler } from '#api/chat/middleware/ttft-callback.handler.js';
+import { validateImageParts } from '#api/chat/utils/validate-image-parts.js';
+
+type LangChainMessages = Awaited<ReturnType<typeof toBaseMessages>>;
+
+type ChatRequestConfig = {
+  modelId: string;
+  kernel: KernelProvider;
+  snapshot: ChatSnapshot | undefined;
+  contextPayload: ContextPayload | undefined;
+  mode: 'agent' | 'plan';
+  tools: {
+    choice: ToolSelection;
+    testingEnabled: boolean;
+  };
+};
 
 @UseFilters(ChatExceptionFilter)
 @UseGuards(AuthGuard)
@@ -28,37 +53,19 @@ export class ChatController {
     private readonly chatRpcService: ChatRpcService,
     private readonly modelService: ModelService,
     private readonly fileEditService: FileEditService,
-    private readonly analysisService: AnalysisService,
+    private readonly geometryAnalysisService: GeometryAnalysisService,
+    private readonly metricsService: MetricsService,
   ) {}
 
   @Post()
+  @Span()
   public async createChat(@Body() body: CreateChatDto, @Res() response: FastifyReply): Promise<void> {
     this.logger.debug(`Creating chat: ${body.id}`);
 
-    const lastHumanMessage = body.messages.findLast((message) => message.role === 'user');
-    let modelId: string;
-    let selectedToolChoice: ToolSelection = 'auto';
+    const { modelId, kernel, snapshot, contextPayload, mode, tools } = this.extractRequestConfig(body);
 
-    if (lastHumanMessage?.role === 'user') {
-      const messageModel = lastHumanMessage.metadata?.model;
-
-      if (!messageModel) {
-        throw new Error('Message model is required');
-      }
-
-      modelId = messageModel;
-
-      const messageToolChoice = lastHumanMessage.metadata?.toolChoice;
-
-      if (messageToolChoice) {
-        selectedToolChoice = messageToolChoice;
-      }
-    } else {
-      throw new Error('Last message is not a user message');
-    }
-
-    // Handle simple model streams (name generator, commit generator)
-    // These use AI SDK's streamText, so they need ModelMessage[] from convertToModelMessages
+    // Handle simple model streams (name generator, commit generator).
+    // These use AI SDK's streamText, so they need ModelMessage[] from convertToModelMessages.
     if (modelId === 'name-generator') {
       const modelMessages = await convertToModelMessages(body.messages);
       const result = this.chatService.getBuildNameGenerator(modelMessages);
@@ -71,14 +78,159 @@ export class ChatController {
       return sendSimpleModelStream(response, result);
     }
 
-    // Extract kernel from request body (default to openscad if not provided)
-    const selectedKernel = lastHumanMessage.metadata?.kernel ?? 'openscad';
+    const langchainMessages = await this.prepareMessages(body.messages, snapshot);
+    const agent = await this.chatService.createAgent({ chatId: body.id, modelId, kernel, mode, tools, contextPayload });
 
-    // Extract snapshot from metadata and inject into last message content
-    const snapshot = lastHumanMessage.metadata?.snapshot;
+    return this.streamAgentResponse({
+      chatId: body.id,
+      agent,
+      messages: langchainMessages,
+      modelId,
+      response,
+    });
+  }
 
-    // Inject snapshot context into messages if available
-    const messagesWithContext = snapshot ? injectSnapshotContext(body.messages, snapshot) : body.messages;
+  /**
+   * Sets up client-disconnect abort handling, runs the LangGraph agent stream,
+   * and pipes the result as an SSE response.
+   */
+  @Span()
+  private async streamAgentResponse(options: {
+    chatId: string;
+    agent: ReactAgent;
+    messages: LangChainMessages;
+    modelId: string;
+    response: FastifyReply;
+  }): Promise<void> {
+    const { chatId, agent, messages, modelId, response } = options;
+
+    // Abort the request if the client disconnects.
+    // Listen on response.raw (ServerResponse) — for SSE, the response stream
+    // stays open and its 'close' event fires when the client disconnects.
+    // request.raw (IncomingMessage) fires 'close' when the POST body is consumed,
+    // which is too early to detect SSE disconnects.
+    const abortController = new AbortController();
+
+    response.raw.on('close', () => {
+      if (!response.raw.writableFinished) {
+        registerChatAbort(chatId);
+        abortController.abort(new ChatAbortError(chatId));
+      }
+    });
+
+    // Register the abort signal on the RPC service so in-flight RPC calls
+    // are rejected immediately when the client aborts, rather than waiting
+    // for the 60s timeout
+    this.chatRpcService.registerAbortSignal(chatId, abortController.signal);
+
+    this.logger.debug(`Starting execution for thread: ${chatId}`);
+
+    this.metricsService.sseActiveConnections.add(1);
+
+    try {
+      const ttftHandler = new TtftCallbackHandler(this.metricsService, this.modelService, modelId);
+
+      const stream = await agent.graph.stream(
+        { messages },
+        {
+          configurable: {
+            // eslint-disable-next-line @typescript-eslint/naming-convention -- LangGraph API requires snake_case
+            thread_id: chatId,
+            chatRpcService: this.chatRpcService,
+            fileEditService: this.fileEditService,
+            geometryAnalysisService: this.geometryAnalysisService,
+          },
+          signal: abortController.signal,
+          streamMode: ['values', 'messages', 'custom'],
+          callbacks: [ttftHandler],
+          context: {
+            chatId,
+            modelId,
+            modelService: this.modelService,
+            logger: this.logger,
+          },
+          recursionLimit: 2000,
+        },
+      );
+
+      void response.header('content-type', 'text/event-stream');
+      void response.header('cache-control', 'no-cache, no-store');
+      void response.header('connection', 'keep-alive');
+      void response.header('x-vercel-ai-ui-message-stream', 'v1');
+      void response.header('x-accel-buffering', 'no');
+
+      const uiMessageStream = toUIMessageStream(stream)
+        .pipeThrough(createStaticToolTransform())
+        .pipeThrough(createToolOutputTransform())
+        .pipeThrough(createNewlineTrimTransform())
+        .pipeThrough(createLatexDelimiterTransform())
+        .pipeThrough(createErrorTransform())
+        .pipeThrough(this.createSseEventCountTransform());
+
+      const uiMessageStreamResponse = createUIMessageStreamResponse({
+        stream: uiMessageStream,
+      });
+
+      const responseBody = uiMessageStreamResponse.body;
+      if (responseBody) {
+        return await response.send(responseBody);
+      }
+
+      throw new Error('Failed to create UI message stream response');
+    } catch (error) {
+      // When the client disconnects, we abort with a branded ChatAbortError
+      // reason. Check signal.reason for our brand — this is a definitive match
+      // regardless of what error LangGraph/node-fetch actually throws.
+      if (abortController.signal.aborted && isChatAbortError(abortController.signal.reason)) {
+        this.logger.debug(`Chat ${chatId} was cancelled by client`);
+        return;
+      }
+
+      throw error;
+    } finally {
+      this.metricsService.sseActiveConnections.add(-1);
+    }
+  }
+
+  /**
+   * Parses and validates the last user message to extract model configuration.
+   */
+  private extractRequestConfig(body: CreateChatDto): ChatRequestConfig {
+    const lastHumanMessage = body.messages.findLast((message) => message.role === 'user');
+
+    if (lastHumanMessage?.role !== 'user') {
+      throw new Error('Last message is not a user message');
+    }
+
+    const messageModel = lastHumanMessage.metadata?.model;
+
+    if (!messageModel) {
+      throw new Error('Message model is required');
+    }
+
+    return {
+      modelId: messageModel,
+      kernel: lastHumanMessage.metadata?.kernel ?? 'openscad',
+      snapshot: lastHumanMessage.metadata?.snapshot,
+      contextPayload: lastHumanMessage.metadata?.contextPayload,
+      mode: lastHumanMessage.metadata?.mode ?? 'agent',
+      tools: {
+        choice: lastHumanMessage.metadata?.toolChoice ?? 'auto',
+        testingEnabled: lastHumanMessage.metadata?.testingEnabled ?? true,
+      },
+    };
+  }
+
+  /**
+   * Injects snapshot context into messages and converts to LangChain format.
+   */
+  private async prepareMessages(
+    messages: CreateChatDto['messages'],
+    snapshot: ChatSnapshot | undefined,
+  ): Promise<LangChainMessages> {
+    validateImageParts(messages);
+
+    const messagesWithContext = snapshot ? injectSnapshotContext(messages, snapshot) : messages;
 
     if (snapshot) {
       const contextTypes = [
@@ -91,83 +243,15 @@ export class ChatController {
       this.logger.debug(`Injecting snapshot context into last message: ${contextTypes}`);
     }
 
-    // Convert UI messages to LangChain messages using the built-in adapter
-    const langchainMessages = await toBaseMessages(messagesWithContext);
+    return toBaseMessages(messagesWithContext);
+  }
 
-    // Get the agent from the service
-    const agent = await this.chatService.createAgent(modelId, selectedToolChoice, selectedKernel);
-
-    // Abort the request if the client disconnects.
-    // Listen on response.raw (ServerResponse) — for SSE, the response stream
-    // stays open and its 'close' event fires when the client disconnects.
-    // request.raw (IncomingMessage) fires 'close' when the POST body is consumed,
-    // which is too early to detect SSE disconnects.
-    const abortController = new AbortController();
-
-    response.raw.on('close', () => {
-      // WritableFinished is true when the stream completed normally.
-      // If false, the client disconnected before the stream finished.
-      if (!response.raw.writableFinished) {
-        abortController.abort();
-      }
-    });
-
-    // Register the abort signal on the RPC service so in-flight RPC calls
-    // are rejected immediately when the client aborts, rather than waiting
-    // for the 60s timeout
-    this.chatRpcService.registerAbortSignal(body.id, abortController.signal);
-
-    this.logger.debug(`Starting execution for thread: ${body.id}`);
-    const stream = await agent.graph.stream(
-      { messages: langchainMessages },
-      {
-        configurable: {
-          // eslint-disable-next-line @typescript-eslint/naming-convention -- LangGraph API requires snake_case
-          thread_id: body.id,
-          // Pass services for tools to use
-          chatRpcService: this.chatRpcService,
-          fileEditService: this.fileEditService,
-          analysisService: this.analysisService,
-        },
-        signal: abortController.signal,
-        // Include 'custom' to receive usage data from usageTrackingMiddleware
-        streamMode: ['values', 'messages', 'custom'],
-        // Pass context for middleware (usage tracking, tool error handling)
-        context: {
-          modelId,
-          modelService: this.modelService,
-          logger: this.logger,
-        },
-        recursionLimit: 200,
+  private createSseEventCountTransform(): TransformStream<UIMessageChunk, UIMessageChunk> {
+    return new TransformStream({
+      transform: (chunk, controller) => {
+        this.metricsService.sseEvents.add(1, { [AttributeKey.SSE_EVENT_TYPE]: 'message' });
+        controller.enqueue(chunk);
       },
-    );
-
-    // Set SSE headers
-    void response.header('content-type', 'text/event-stream');
-    void response.header('x-vercel-ai-ui-message-stream', 'v1');
-    void response.header('x-accel-buffering', 'no');
-
-    // Convert the LangGraph stream to UI message stream
-    // The toUIMessageStream adapter marks all tools as dynamic and stringifies tool outputs,
-    // so we pipe through transforms to:
-    // 1) mark known tools as static
-    // 2) parse tool output JSON strings into objects
-    // 3) normalize error chunks
-    const uiMessageStream = toUIMessageStream(stream)
-      .pipeThrough(createStaticToolTransform())
-      .pipeThrough(createToolOutputTransform())
-      .pipeThrough(createErrorTransform());
-
-    const uiMessageStreamResponse = createUIMessageStreamResponse({
-      stream: uiMessageStream,
     });
-
-    // Get the body from the response and pipe it
-    const responseBody = uiMessageStreamResponse.body;
-    if (responseBody) {
-      return response.send(responseBody);
-    }
-
-    throw new Error('Failed to create UI message stream response');
   }
 }

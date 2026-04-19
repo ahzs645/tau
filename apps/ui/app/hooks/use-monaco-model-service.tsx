@@ -8,18 +8,17 @@
  * - MonacoNavigationService: Global editor opener for cross-model navigation
  *
  * Services are initialized when Monaco becomes available and disposed on unmount.
- * Build session changes are forwarded to all services for clean state transitions.
+ * Project session changes are forwarded to all services for clean state transitions.
  */
 
 import type { ReactNode } from 'react';
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { useMonaco } from '@monaco-editor/react';
-import type { FileManagerApi } from '#machines/file-manager.machine.types.js';
 import { MonacoMarkerService } from '#lib/monaco-marker-service.js';
 import { MonacoModelService } from '#lib/monaco-model-service.js';
 import { registry } from '#lib/monaco-language-registry.js';
 import { registerMonacoNavigation } from '#lib/monaco-navigation-service.js';
-import { useBuild } from '#hooks/use-build.js';
+import { useProject } from '#hooks/use-project.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 
 type MonacoServicesContextType = {
@@ -33,21 +32,18 @@ const MonacoServicesContext = createContext<MonacoServicesContextType>(defaultCo
 
 export function MonacoModelServiceProvider({ children }: { readonly children: ReactNode }): React.JSX.Element {
   const monaco = useMonaco();
-  const { buildId, editorRef } = useBuild();
-  const { fileManagerRef, readFile, exists, readdir, getDirectoryStat } = useFileManager();
+  const { projectId, editorRef } = useProject();
+  const { fileManagerRef, contentService, treeService, readFile, exists, readdir, getDirectoryStat } = useFileManager();
 
-  // Stable file manager API reference (methods are already useCallback-wrapped)
-  const fileManagerApi = useMemo<FileManagerApi>(
+  const fileManagerApi = useMemo(
     () => ({ readFile, exists, readdir, getDirectoryStat }),
     [readFile, exists, readdir, getDirectoryStat],
   );
 
-  // State-driven so context consumers re-render when services become available
   const [services, setServices] = useState<MonacoServicesContextType>(defaultContextValue);
 
-  // Initialize services when Monaco becomes available
   useEffect(() => {
-    if (!monaco) {
+    if (!monaco || !contentService || !treeService) {
       return;
     }
 
@@ -57,12 +53,11 @@ export function MonacoModelServiceProvider({ children }: { readonly children: Re
     const modelService = new MonacoModelService();
     modelService.initialize({
       monaco,
-      fileManagerRef,
-      fileManager: fileManagerApi,
+      contentService,
+      treeService,
       markerService,
     });
 
-    // Phase 2: Activate all language contributions
     const handlers = registry.activate({
       monaco,
       modelService,
@@ -71,7 +66,6 @@ export function MonacoModelServiceProvider({ children }: { readonly children: Re
       fileManagerRef,
     });
 
-    // Register GLOBAL editor opener (public API, not per-editor)
     const openerDisposable = registerMonacoNavigation({
       monaco,
       editorRef,
@@ -89,13 +83,13 @@ export function MonacoModelServiceProvider({ children }: { readonly children: Re
 
       setServices(defaultContextValue);
     };
-  }, [monaco, fileManagerApi, fileManagerRef, editorRef]);
+  }, [monaco, contentService, treeService, fileManagerApi, fileManagerRef, editorRef]);
 
-  // Forward build session changes to services
+  // Forward project session changes to services
   useEffect(() => {
-    services.modelService?.setBuildSession(buildId);
-    registry.onBuildSessionChange(buildId);
-  }, [buildId, services.modelService]);
+    services.modelService?.setProjectSession();
+    registry.onProjectSessionChange(projectId);
+  }, [projectId, services.modelService]);
 
   return <MonacoServicesContext.Provider value={services}>{children}</MonacoServicesContext.Provider>;
 }

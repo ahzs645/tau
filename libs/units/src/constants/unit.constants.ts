@@ -6,94 +6,48 @@ import { siMagnitudes } from '#constants/magnitude.constants.js';
 type UnitSystem = 'si' | 'imperial';
 
 type UnitVariant = {
-  /**
-   * The unit of the variant.
-   *
-   * @example 'inch' - Inch variant of the meter unit
-   */
+  /** The unit of the variant (e.g., 'inch'). */
   unit: string;
-  /**
-   * The symbol of the variant.
-   *
-   * @example 'in' - Inch symbol
-   */
+  /** The symbol of the variant (e.g., 'in'). */
   symbol: string;
   /**
    * The conversion factor of the variant.
    *
-   * This is the factor by which the Standard International base unit is multiplied to get the variant unit.
-   *
-   * @example 0.0254 - Inch to meter conversion factor
+   * This is the factor by which the Standard International base unit is multiplied to get the variant unit (e.g., 0.0254 for inches to meters).
    */
   factor: number;
   /**
    * The offset of the variant.
    *
-   * This is the offset by which the Standard International base unit is added to get the variant unit.
-   *
-   * @example `273.15` - Celsius to Kelvin offset
+   * This is the offset by which the Standard International base unit is added to get the variant unit (e.g., `273.15` for Celsius to Kelvin).
    */
   offset?: number;
-  /**
-   * The system of the variant.
-   *
-   * @example 'si'
-   * @example 'imperial'
-   */
+  /** The system of the variant (e.g., 'si', 'imperial'). */
   system: UnitSystem;
   /**
    * The aliases of the variant.
    *
    * These are commonly used aliases for the unit, and may be punctuation marks such as quotes or apostrophes.
-   * Plural forms of the unit or symbol that do not end with an 's' should be listed here.
-   *
-   * @example ['"', 'inches'] - Inch aliases
-   * @example ["'", 'feet'] - Foot aliases
+   * Plural forms of the unit or symbol that do not end with an 's' should be listed here (e.g., ['"', 'inches'], ["'", 'feet']).
    */
   aliases?: string[];
 };
 
 type BaseUnit = {
-  /**
-   * The base unit of the quantity.
-   *
-   * @example 'meter' - Meter base unit
-   * @example 'kilogram' - Kilogram base unit
-   */
+  /** The base unit of the quantity (e.g., 'meter', 'kilogram'). */
   unit: string;
-  /**
-   * The symbol of the unit.
-   *
-   * @example 'm' - Meter symbol
-   * @example 'kg' - Kilogram symbol
-   */
+  /** The symbol of the unit (e.g., 'm', 'kg'). */
   symbol: string;
-  /**
-   * The dimension of the unit.
-   *
-   * @example 'L' - Length dimension
-   * @example 'M' - Mass dimension
-   */
+  /** The dimension of the unit (e.g., 'L', 'M'). */
   dimension: string;
-  /**
-   * The name of the quantity.
-   *
-   * @example 'length'
-   * @example 'mass'
-   */
+  /** The name of the quantity (e.g., 'length', 'mass'). */
   quantity: string;
-  /**
-   * The variants of the unit.
-   *
-   * @example [{ unit: 'meter', symbol: 'm', factor: 1, system: 'si' }]
-   */
+  /** The variants of the unit (e.g., [{ unit: 'meter', symbol: 'm', factor: 1, system: 'si' }]). */
   variants: UnitVariant[];
   /**
    * The aliases of the unit.
    *
-   * Plural forms of the unit or symbol that do not end with an 's' should be listed here.
-   *
-   * @example ["rads"]
+   * Plural forms of the unit or symbol that do not end with an 's' should be listed here (e.g., ['rads']).
    */
   aliases?: string[];
 };
@@ -111,12 +65,15 @@ function generateSiMagnitudeVariants<BaseUnit extends string, BaseSymbol extends
   baseSymbol: BaseSymbol,
   baseConversionFactor = 1,
 ) {
-  return siMagnitudes.map((magnitude) => ({
-    unit: `${magnitude.name}${baseUnit}` as const,
-    symbol: `${magnitude.symbol}${baseSymbol}` as const,
-    factor: magnitude.factor * baseConversionFactor,
-    system: 'si' as const,
-  }));
+  return siMagnitudes.map(
+    (magnitude) =>
+      ({
+        unit: `${magnitude.name}${baseUnit}`,
+        symbol: `${magnitude.symbol}${baseSymbol}`,
+        factor: magnitude.factor * baseConversionFactor,
+        system: 'si',
+      }) as const,
+  );
 }
 
 export const standardInternationalBaseUnits = {

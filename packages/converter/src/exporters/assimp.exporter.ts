@@ -1,11 +1,28 @@
-/* eslint-disable new-cap -- External library uses PascalCase method names */
+/* oxlint-disable new-cap -- External library uses PascalCase method names */
 import assimpjsExporter from 'assimpjs/exporter';
+import { lookupMimeType } from '@taucad/types/constants';
+import type { ExportFile } from '@taucad/types';
 import { BaseExporter } from '#exporters/base.exporter.js';
-import type { File } from '#types.js';
 
-// Supported assimp export formats based on the test file
-export const assimpExportFormats = ['obj', 'ply', 'stl', 'fbx', 'dae', 'x', 'x3d', '3ds', 'stp'] as const;
+/** Tuple of all export format identifiers supported by the Assimp backend. */
+export const assimpExportFormats = [
+  '3mf',
+  'obj',
+  'ply',
+  'stl',
+  'fbx',
+  'dae',
+  'x',
+  'x3d',
+  '3ds',
+  'stp',
+  'usda',
+  'usdz',
+] as const;
 
+/**
+ * Export format identifier supported by the Assimp backend (obj, stl, fbx, dae, etc.).
+ */
 export type AssimpExportFormat = (typeof assimpExportFormats)[number];
 
 type AssimpExporterOptions = {
@@ -16,6 +33,11 @@ type AssimpExporterOptions = {
    * For example, 'step' when format is 'stp'.
    */
   targetExtension?: string;
+  /**
+   * Optional Assimp export properties forwarded as the third argument to
+   * `ConvertFileList`. Keys are Assimp property strings (e.g. `3MF_EXPORT_UNIT`).
+   */
+  exportProperties?: Record<string, boolean | number | string>;
 };
 
 /**
@@ -23,7 +45,18 @@ type AssimpExporterOptions = {
  * Uses assimpjs exporter which takes GLTF/GLB as input and exports to the target format.
  */
 export class AssimpExporter extends BaseExporter<AssimpExporterOptions> {
-  public async parseAsync(glbData: Uint8Array<ArrayBuffer>, options?: Partial<AssimpExporterOptions>): Promise<File[]> {
+  /**
+   * Converts GLB data to the target format via Assimp.
+   *
+   * @param glbData - the raw GLB buffer to convert
+   * @param options - optional overrides for format and target extension
+   * @returns An array of exported files in the target format.
+   * @throws Error if the GLB data is empty or Assimp conversion fails
+   */
+  public async parseAsync(
+    glbData: Uint8Array<ArrayBuffer>,
+    options?: Partial<AssimpExporterOptions>,
+  ): Promise<ExportFile[]> {
     if (glbData.length === 0) {
       throw new Error('GLB data cannot be empty');
     }
@@ -47,8 +80,9 @@ export class AssimpExporter extends BaseExporter<AssimpExporterOptions> {
       const fileList = new ajs.FileList();
       fileList.AddFile('input.glb', glbData);
 
-      // Convert GLB to target format using assimpjs
-      const result = ajs.ConvertFileList(fileList, format);
+      const result = mergedOptions.exportProperties
+        ? ajs.ConvertFileList(fileList, format, mergedOptions.exportProperties)
+        : ajs.ConvertFileList(fileList, format);
 
       // Check if conversion succeeded
       if (!result.IsSuccess()) {
@@ -56,7 +90,7 @@ export class AssimpExporter extends BaseExporter<AssimpExporterOptions> {
       }
 
       // Extract all exported files
-      const outputFiles: File[] = [];
+      const outputFiles: ExportFile[] = [];
       const fileCount = result.FileCount();
 
       for (let i = 0; i < fileCount; i++) {
@@ -73,9 +107,11 @@ export class AssimpExporter extends BaseExporter<AssimpExporterOptions> {
           }
         }
 
+        const extension = fileName.split('.').pop() ?? '';
         outputFiles.push({
           name: fileName,
-          data: content,
+          bytes: content,
+          mimeType: lookupMimeType(extension),
         });
       }
 

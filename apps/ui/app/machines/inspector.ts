@@ -17,9 +17,9 @@ const getBrowserInspector = async () => {
   return m.createBrowserInspector({ url: 'https://stately.ai/registry/inspect?rightPanel=sequence' }).inspect;
 };
 
-// eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- enables easy debugging
+// oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- enables easy debugging
 export const inspect = inspectEnabled
-  ? // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- enables easy debugging
+  ? // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- enables easy debugging
     isConsoleInspectorEnabled
     ? consoleInspector
     : await getBrowserInspector()

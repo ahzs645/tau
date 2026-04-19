@@ -1,4 +1,4 @@
-/* eslint-disable no-use-extend-native/no-use-extend-native -- Reflect.Metadata is required */
+/* oxlint-disable no-use-extend-native/no-use-extend-native -- Reflect.Metadata is required */
 import type { DynamicModule, NestModule, OnModuleInit } from '@nestjs/common';
 import { Global, Inject, Logger, Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -17,9 +17,9 @@ import type { Environment } from '#config/environment.config.js';
 type AuthInstance = ReturnType<typeof betterAuth>;
 
 const hooks = [
-  { metadataKey: beforeHookKey, hookType: 'before' as const },
-  { metadataKey: afterHookKey, hookType: 'after' as const },
-];
+  { metadataKey: beforeHookKey, hookType: 'before' },
+  { metadataKey: afterHookKey, hookType: 'after' },
+] as const;
 
 @Global()
 @Module({
@@ -75,15 +75,15 @@ export class AuthModule implements NestModule, OnModuleInit {
       .filter(({ metatype }) => metatype && Reflect.getMetadata(hookKey, metatype));
 
     for (const provider of providers) {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- providerPrototype is not typed
+      // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- providerPrototype is not typed
       const providerPrototype = Object.getPrototypeOf(provider.instance);
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- providerPrototype is not typed
+      // oxlint-disable-next-line @typescript-eslint/no-unsafe-argument -- providerPrototype is not typed
       const methods = this.metadataScanner.getAllMethodNames(providerPrototype);
 
       for (const method of methods) {
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- providerPrototype is not typed
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- providerPrototype is not typed
         const providerMethod = providerPrototype[method];
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- providerPrototype is not typed
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-argument -- providerPrototype is not typed
         this.setupHooks(providerMethod);
       }
     }
@@ -127,7 +127,7 @@ export class AuthModule implements NestModule, OnModuleInit {
         const response = await this.auth.handler(request_);
 
         void reply.status(response.status);
-        // eslint-disable-next-line unicorn/no-array-for-each -- headers are not iterable
+        // oxlint-disable-next-line unicorn/no-array-for-each -- headers are not iterable
         response.headers.forEach((value, key) => reply.header(key, value));
 
         const responseText = response.body ? await response.text() : null;

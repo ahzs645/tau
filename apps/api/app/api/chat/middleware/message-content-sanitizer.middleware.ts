@@ -67,10 +67,7 @@ function ensureTextContent(message: AIMessage): AIMessage {
 
   const { content } = message;
 
-  // Access additional_kwargs defensively (consistent with prompt-caching middleware)
-  const additionalKwargs = (message as unknown as Record<string, unknown>)['additional_kwargs'] as
-    | Record<string, unknown>
-    | undefined;
+  const { additional_kwargs: additionalKwargs } = message;
 
   // Array content with no text blocks (e.g., only reasoning/thinking blocks)
   // → append a placeholder text block to satisfy the API
@@ -82,6 +79,10 @@ function ensureTextContent(message: AIMessage): AIMessage {
       tool_calls: message.tool_calls,
       // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
       additional_kwargs: additionalKwargs,
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
+      response_metadata: message.response_metadata,
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
+      usage_metadata: message.usage_metadata,
     });
   }
 
@@ -93,6 +94,10 @@ function ensureTextContent(message: AIMessage): AIMessage {
     tool_calls: message.tool_calls,
     // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
     additional_kwargs: additionalKwargs,
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
+    response_metadata: message.response_metadata,
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
+    usage_metadata: message.usage_metadata,
   });
 }
 
@@ -102,7 +107,11 @@ function ensureTextContent(message: AIMessage): AIMessage {
  * from LangGraph checkpoints.
  */
 function getToolCallId(message: BaseMessage): string | undefined {
-  return (message as unknown as { tool_call_id?: string }).tool_call_id;
+  if ('tool_call_id' in message && typeof message.tool_call_id === 'string') {
+    return message.tool_call_id;
+  }
+
+  return undefined;
 }
 
 /**

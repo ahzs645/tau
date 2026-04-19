@@ -1,7 +1,5 @@
 {
-  "fileTypes": [
-    "scad"
-  ],
+  "fileTypes": ["scad"],
   "foldingStartMarker": "/\\*\\*|\\{\\s*$",
   "foldingStopMarker": "\\*\\*/|^\\s*\\}",
   "keyEquivalent": "^~S",

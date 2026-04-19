@@ -95,6 +95,7 @@ describe('isSchemaMatchingSearch', () => {
     });
 
     it('should handle non-string title gracefully', () => {
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- intentionally invalid schema for edge-case test
       const schema = {
         type: 'string',
         title: 123,
@@ -139,6 +140,7 @@ describe('isSchemaMatchingSearch', () => {
     });
 
     it('should handle non-string description gracefully', () => {
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- intentionally invalid schema for edge-case test
       const schema = {
         type: 'string',
         description: 123,
@@ -283,6 +285,7 @@ describe('isSchemaMatchingSearch', () => {
     });
 
     it('should handle non-object nested properties', () => {
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- intentionally invalid schema for edge-case test
       const schema = {
         type: 'object',
         properties: {
@@ -293,6 +296,7 @@ describe('isSchemaMatchingSearch', () => {
     });
 
     it('should handle array in properties', () => {
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- intentionally invalid schema for edge-case test
       const schema = {
         type: 'object',
         properties: {
@@ -405,6 +409,7 @@ describe('isSchemaMatchingSearch', () => {
     });
 
     it('should handle array with invalid items schema', () => {
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- intentionally invalid schema for edge-case test
       const schema = {
         type: 'array',
         items: 'invalid',
@@ -413,6 +418,7 @@ describe('isSchemaMatchingSearch', () => {
     });
 
     it('should handle array with array items', () => {
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- intentionally invalid schema for edge-case test
       const schema = {
         type: 'array',
         items: ['item1', 'item2'],
@@ -445,6 +451,7 @@ describe('isSchemaMatchingSearch', () => {
     });
 
     it('should handle schema with null nested property', () => {
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- intentionally invalid schema for edge-case test
       const schema = {
         type: 'object',
         properties: {
@@ -455,6 +462,7 @@ describe('isSchemaMatchingSearch', () => {
     });
 
     it('should handle schema with undefined nested property', () => {
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- intentionally invalid schema for edge-case test
       const schema = {
         type: 'object',
         properties: {
@@ -492,6 +500,7 @@ describe('isSchemaMatchingSearch', () => {
     });
 
     it('should handle non-object properties value', () => {
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- intentionally invalid schema for edge-case test
       const schema = {
         type: 'object',
         properties: 'not an object',

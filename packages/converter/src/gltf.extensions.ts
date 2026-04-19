@@ -15,4 +15,5 @@ class FbNgonEncodingExtension extends Extension {
   }
 }
 
+/** Combined set of all Khronos extensions plus vendor stubs required for lossless round-tripping. */
 export const allExtensions = [...KHRONOS_EXTENSIONS, FbNgonEncodingExtension];

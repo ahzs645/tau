@@ -6,8 +6,8 @@ import type { Handle } from '#types/matches.types.js';
 export const handle: Handle = {
   breadcrumb() {
     return (
-      <Button asChild variant="ghost">
-        <Link to="/workflows">Workflows</Link>
+      <Button asChild variant='ghost'>
+        <Link to='/workflows'>Workflows</Link>
       </Button>
     );
   },
@@ -15,9 +15,9 @@ export const handle: Handle = {
 
 export default function Workflows(): React.JSX.Element {
   return (
-    <div className="container flex h-full flex-col items-center justify-center gap-4 px-4 py-8">
-      <h1 className="text-6xl font-medium tracking-tight">Workflows</h1>
-      <ComingSoon size="landing" />
+    <div className='container flex h-full flex-col items-center justify-center gap-4 px-4 py-8'>
+      <h1 className='text-6xl font-medium tracking-tight'>Workflows</h1>
+      <ComingSoon size='landing' />
     </div>
   );
 }

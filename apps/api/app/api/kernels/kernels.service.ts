@@ -1,3 +1,4 @@
+// oxlint-disable-next-line node-js/prefer-global/buffer -- Buffer is required for the Zoo API
 import { Buffer } from 'node:buffer';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -50,7 +51,7 @@ function isWebSocketResponse(data: unknown): data is WebSocketResponse {
  * Used to intercept client authentication attempts.
  */
 function isHeadersRequest(data: unknown): data is Extract<WebSocketRequest, { type: 'headers' }> {
-  return typeof data === 'object' && data !== null && (data as Record<string, unknown>)['type'] === 'headers';
+  return typeof data === 'object' && (data as Record<string, unknown>)['type'] === 'headers';
 }
 
 /**

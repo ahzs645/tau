@@ -3,7 +3,7 @@ import { createMiddleware } from 'langchain';
 const isLoggingEnabled = false;
 
 const logMessage = (message: string) => {
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Logging is disabled by default
+  // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Logging is disabled by default
   if (!isLoggingEnabled) {
     return;
   }

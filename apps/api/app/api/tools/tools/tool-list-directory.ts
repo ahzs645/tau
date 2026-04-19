@@ -28,10 +28,19 @@ export const listDirectoryTool: ChatTool<
   const { chatRpcService, thread_id: chatId } = runtime.configurable as ChatRpcConfigurable;
   const { toolCallId } = runtime;
 
-  const result = await chatRpcService.sendRpcRequest(chatId, toolCallId, rpcName.listDirectory, args);
+  const result = await chatRpcService.sendRpcRequest({
+    chatId,
+    toolCallId,
+    rpcName: rpcName.listDirectory,
+    args,
+  });
 
   // Assert RPC success - throws ToolError for any infrastructure or client error
-  assertRpcSuccess(result, toolName.listDirectory, toolCallId, `Cannot list directory "${args.path}"`);
+  assertRpcSuccess(result, {
+    toolName: toolName.listDirectory,
+    toolCallId,
+    clientErrorMessage: `Cannot list directory "${args.path}"`,
+  });
 
   // Return success output
   return {

@@ -8,7 +8,7 @@ import { lspWorkerEventType } from '#lib/kcl-language/lsp/kcl-lsp-types.js';
 
 export class IntoServer
   extends Queue<Uint8Array<ArrayBuffer>>
-  implements AsyncGenerator<Uint8Array<ArrayBuffer>, never, void>
+  implements AsyncGenerator<Uint8Array<ArrayBuffer>, void, void>
 {
   private readonly worker: Worker | undefined;
   private readonly workerType: string | undefined;
@@ -34,15 +34,14 @@ export class IntoServer
     }
   }
 
-  public async return(): Promise<IteratorResult<Uint8Array<ArrayBuffer>, never>> {
+  public async return(): Promise<IteratorResult<Uint8Array<ArrayBuffer>, void>> {
     this.close();
-    // Return a "done" result - the never type means this won't actually be called in practice
-    return { done: true, value: undefined as never };
+    return { done: true, value: undefined };
   }
 
-  public async throw(): Promise<IteratorResult<Uint8Array<ArrayBuffer>, never>> {
+  public async throw(): Promise<IteratorResult<Uint8Array<ArrayBuffer>, void>> {
     this.close();
-    return { done: true, value: undefined as never };
+    return { done: true, value: undefined };
   }
 
   public async [Symbol.asyncDispose](): Promise<void> {

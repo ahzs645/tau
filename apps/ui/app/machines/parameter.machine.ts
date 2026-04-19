@@ -4,7 +4,7 @@ import type { LengthSymbol } from '@taucad/units';
 import { convertLength } from '@taucad/units/converter';
 import { parseLengthInput } from '@taucad/units/parser';
 import { roundToSignificantFigures, formatUnitDisplay } from '#utils/number.utils.js';
-import type { MeasurementDescriptor } from '#constants/build-parameters.js';
+import type { MeasurementDescriptor } from '#constants/project-parameters.js';
 import { keydownListener } from '#machines/keydown.actor.js';
 import { focusListener } from '#machines/focus.actor.js';
 import { arrowKeyListener } from '#machines/arrow-key.actor.js';
@@ -152,7 +152,7 @@ export type ParameterContext = {
   /** Last emitted value (to prevent duplicate emissions) */
   lastEmittedValue: number | undefined;
   /** Ref to the input element for focus/arrow key listeners */
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- ref can be null
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- ref can be null
   inputRef: React.RefObject<HTMLInputElement | null>;
 };
 
@@ -173,7 +173,7 @@ export type ParameterInput = {
   /** Initial unit symbol */
   initialUnitSymbol: LengthSymbol;
   /** Ref to the input element for focus/arrow key listeners */
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- ref can be null
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- ref can be null
   inputRef: React.RefObject<HTMLInputElement | null>;
   /** Optional minimum value in baseline units */
   min?: number;
@@ -225,12 +225,17 @@ function calculateParameterRange(parameters: {
 /**
  * Calculate formatted value and approximation status
  */
-function calculateFormatting(
-  committedValue: number,
-  unitFactor: number,
-  isLength: boolean,
-  isInteracting: boolean,
-): {
+function calculateFormatting({
+  committedValue,
+  unitFactor,
+  isLength,
+  isInteracting,
+}: {
+  committedValue: number;
+  unitFactor: number;
+  isLength: boolean;
+  isInteracting: boolean;
+}): {
   formattedValue: string | undefined;
   isApproximation: boolean;
 } {
@@ -295,13 +300,13 @@ export type ParameterEmitted = {
  */
 export const parameterMachine = setup({
   types: {
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     context: {} as ParameterContext,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     input: {} as ParameterInput,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     events: {} as ParameterEventInternal,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     emitted: {} as ParameterEmitted,
   },
   actors: {
@@ -339,7 +344,12 @@ export const parameterMachine = setup({
 
       // Recalculate formatting (preserve precision if actively editing)
       const isEditing = context.isFocused || context.isDragging;
-      const formatting = calculateFormatting(event.value, unitFactor, isLength, isEditing);
+      const formatting = calculateFormatting({
+        committedValue: event.value,
+        unitFactor,
+        isLength,
+        isInteracting: isEditing,
+      });
 
       return {
         committedValue: event.value,
@@ -349,9 +359,9 @@ export const parameterMachine = setup({
     }),
 
     updateLocalValue: assign({
-      localValue({ event }) {
+      localValue({ context, event }) {
         if (event.type !== 'sliderChanged' && event.type !== 'inputChanged') {
-          return undefined as never;
+          return context.localValue;
         }
 
         return event.value;
@@ -372,7 +382,12 @@ export const parameterMachine = setup({
       if (context.lastEmittedValue !== undefined && Math.abs(baselineValue - context.lastEmittedValue) < 1e-10) {
         // Value hasn't changed, don't emit (but still update local state for UI)
         const isEditing = context.isFocused || context.isDragging;
-        const formatting = calculateFormatting(baselineValue, unitFactor, isLength, isEditing);
+        const formatting = calculateFormatting({
+          committedValue: baselineValue,
+          unitFactor,
+          isLength,
+          isInteracting: isEditing,
+        });
         enqueue.assign({
           committedValue: baselineValue,
           ...formatting,
@@ -382,7 +397,12 @@ export const parameterMachine = setup({
 
       // Recalculate formatting with new committed value
       const isEditing = context.isFocused || context.isDragging;
-      const formatting = calculateFormatting(baselineValue, unitFactor, isLength, isEditing);
+      const formatting = calculateFormatting({
+        committedValue: baselineValue,
+        unitFactor,
+        isLength,
+        isInteracting: isEditing,
+      });
 
       enqueue.assign({
         committedValue: baselineValue,
@@ -391,7 +411,7 @@ export const parameterMachine = setup({
       });
 
       enqueue.emit({
-        type: 'valueCommit' as const,
+        type: 'valueCommit',
         value: baselineValue,
       });
     }),
@@ -432,7 +452,12 @@ export const parameterMachine = setup({
 
       // Recalculate formatting with new unit factor (preserve precision if actively editing)
       const isEditing = context.isFocused || context.isDragging;
-      const formatting = calculateFormatting(context.committedValue, newUnitFactor, isLength, isEditing);
+      const formatting = calculateFormatting({
+        committedValue: context.committedValue,
+        unitFactor: newUnitFactor,
+        isLength,
+        isInteracting: isEditing,
+      });
 
       return {
         localValue,
@@ -483,7 +508,12 @@ export const parameterMachine = setup({
 
       // Recalculate formatting (preserve precision if actively editing)
       const isEditing = context.isFocused || context.isDragging;
-      const formatting = calculateFormatting(context.committedValue, unitFactor, isLength, isEditing);
+      const formatting = calculateFormatting({
+        committedValue: context.committedValue,
+        unitFactor,
+        isLength,
+        isInteracting: isEditing,
+      });
 
       return {
         defaultValue: newDefaultValue,
@@ -552,7 +582,12 @@ export const parameterMachine = setup({
       if (context.lastEmittedValue !== undefined && Math.abs(baselineValue - context.lastEmittedValue) < 1e-10) {
         // Value hasn't changed, don't emit (but still update local state for UI)
         // Use editing mode for formatting to preserve precision during arrow key interaction
-        const formatting = calculateFormatting(baselineValue, unitFactor, isLength, true);
+        const formatting = calculateFormatting({
+          committedValue: baselineValue,
+          unitFactor,
+          isLength,
+          isInteracting: true,
+        });
         enqueue.assign({
           localValue: clampedValue,
           committedValue: baselineValue,
@@ -563,7 +598,12 @@ export const parameterMachine = setup({
 
       // Recalculate formatting with new committed value
       // Use editing mode for formatting to preserve precision during arrow key interaction
-      const formatting = calculateFormatting(baselineValue, unitFactor, isLength, true);
+      const formatting = calculateFormatting({
+        committedValue: baselineValue,
+        unitFactor,
+        isLength,
+        isInteracting: true,
+      });
 
       enqueue.assign({
         localValue: clampedValue,
@@ -573,7 +613,7 @@ export const parameterMachine = setup({
       });
 
       enqueue.emit({
-        type: 'valueCommit' as const,
+        type: 'valueCommit',
         value: baselineValue,
       });
     }),
@@ -598,7 +638,7 @@ export const parameterMachine = setup({
         const parsed = parseLengthInput(text);
         if (parsed) {
           // If a unit was specified and differs from current unit, convert
-          // eslint-disable-next-line unicorn/prefer-ternary -- ternary is not as readable as if/else
+          // oxlint-disable-next-line unicorn/prefer-ternary -- ternary is not as readable as if/else
           if (parsed.symbol && parsed.symbol !== context.currentUnitSymbol) {
             // Convert from parsed unit to current display unit
             valueInDisplayUnit = convertLength(parsed.value, parsed.symbol, context.currentUnitSymbol);
@@ -634,7 +674,12 @@ export const parameterMachine = setup({
 
       // Recalculate formatting with new committed value (preserve precision if actively editing)
       const isEditing = context.isFocused || context.isDragging;
-      const formatting = calculateFormatting(baselineValue, unitFactor, isLength, isEditing);
+      const formatting = calculateFormatting({
+        committedValue: baselineValue,
+        unitFactor,
+        isLength,
+        isInteracting: isEditing,
+      });
 
       enqueue.assign({
         committedValue: baselineValue,
@@ -644,7 +689,7 @@ export const parameterMachine = setup({
       });
 
       enqueue.emit({
-        type: 'valueCommit' as const,
+        type: 'valueCommit',
         value: baselineValue,
       });
     }),
@@ -672,7 +717,12 @@ export const parameterMachine = setup({
     });
 
     // Calculate formatting
-    const formatting = calculateFormatting(input.initialValue, unitFactor, isLength, false);
+    const formatting = calculateFormatting({
+      committedValue: input.initialValue,
+      unitFactor,
+      isLength,
+      isInteracting: false,
+    });
 
     return {
       committedValue: input.initialValue,

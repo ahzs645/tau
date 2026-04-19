@@ -1,0 +1,220 @@
+/**
+ * Kernel Bundler Types
+ *
+ * Types for the bundler subsystem: esbuild-wasm integration, module resolution,
+ * and the defineBundler() plugin API for kernel framework extensibility.
+ */
+
+import type { z } from 'zod';
+import type { KernelIssue } from '#types/runtime.types.js';
+import type { RuntimeFileSystem, GetDependenciesResult } from '#types/runtime-kernel.types.js';
+
+// =============================================================================
+// Bundler Result Types
+// =============================================================================
+
+/**
+ * Result of bundling a file and its dependencies via esbuild.
+ * Used by JS/TS kernels through runtime.bundler.
+ * @public
+ */
+export type BundleResult = {
+  /** The bundled code as a string */
+  code: string;
+  /** Source map (if enabled) */
+  sourceMap?: string;
+  /** Compilation issues (errors, warnings) */
+  issues: KernelIssue[];
+  /** Whether bundling succeeded */
+  success: boolean;
+  /** Absolute paths of all project files that were resolved during bundling (transitive dependencies). */
+  dependencies: string[];
+  /** Absolute paths of imports that could not be resolved during bundling — used for watch-set expansion. */
+  unresolvedPaths: string[];
+};
+
+/**
+ * Result of executing bundled code via dynamic import.
+ * Used by JS/TS kernels through runtime.execute().
+ * @public
+ */
+export type ExecuteResult<T = unknown> =
+  | { success: true; value: T; entryUrl?: string }
+  | { success: false; issues: KernelIssue[] };
+
+/**
+ * A built-in module registered on the bundler for pre-loaded libraries.
+ * These modules are served directly from memory without filesystem I/O.
+ * @public
+ */
+export type BuiltinModule = {
+  /** Pre-bundled ESM code string */
+  code: string;
+  /** Package version */
+  version: string;
+  /** Optional CommonJS global variable name for banner injection */
+  globalName?: string;
+};
+
+/**
+ * Bundler service provided to kernel modules via KernelRuntime.
+ * Wraps esbuild-wasm with virtual filesystem integration and CDN module resolution.
+ * Created lazily on first access -- non-JS kernels incur zero cost.
+ * @public
+ */
+export type KernelBundler = {
+  /** Bundle a file and all its transitive dependencies. */
+  bundle(entryPath: string): Promise<BundleResult>;
+  /**
+   * Resolve all transitive dependencies without generating output code.
+   * Returns both resolved dependencies and unresolved import paths.
+   */
+  resolveDependencies(entryPath: string): Promise<GetDependenciesResult>;
+  /**
+   * Register a built-in module that will be served from memory during bundling.
+   * Used by JS/TS kernels to register WASM-loaded libraries (replicad, @jscad/modeling).
+   * Must be called before the first bundle() call.
+   */
+  registerModule(name: string, entry: BuiltinModule): void;
+};
+
+// =============================================================================
+// defineBundler API Types
+// =============================================================================
+
+/**
+ * Filesystem and project path context for bundler initialization.
+ * @public
+ */
+export type BundlerInitOptions = {
+  /** Filesystem interface for reading project files */
+  filesystem: RuntimeFileSystem;
+  /** Base path for the project (e.g., /projects/project) */
+  projectPath: string;
+};
+
+/**
+ * Entry file path for bundler operations (detectImports, bundle, resolveDependencies).
+ * @public
+ */
+export type BundleInput = {
+  /** Absolute path to the entry file */
+  entryPath: string;
+};
+
+/**
+ * Result of detectImports() -- a lightweight pass that discovers which
+ * external modules are imported transitively without resolving them.
+ * @public
+ */
+export type DetectImportsResult = {
+  /** Bare specifiers imported transitively (e.g., 'replicad', '@jscad/modeling') */
+  detectedModules: string[];
+  /** Project file dependencies discovered during detection (reusable by getDependencies) */
+  dependencies: string[];
+};
+
+/**
+ * Definition for a bundler module loaded via defineBundler().
+ * Bundler modules are ES modules dynamically imported by the worker runtime.
+ * The bundler owns both bundling AND execution because the execution model
+ * is inherently tied to the bundler's output format.
+ *
+ * Detection (detectImports) and production (bundle) are separate operations:
+ * - detectImports: discovers what bare specifiers are used (no modules needed)
+ * - bundle: produces runnable code (modules must be registered first)
+ *
+ * This separation eliminates the chicken-and-egg problem: detection runs
+ * without modules registered, then the framework selects and initializes
+ * the kernel (which registers real modules), then bundle() produces code.
+ *
+ * Type parameters are inferred automatically:
+ * - Context from initialize() return type
+ * - Options from optionsSchema (when provided)
+ *
+ * @template Context - Bundler-specific context type, inferred from initialize() return
+ * @template Options - Validated options type, inferred from optionsSchema when provided
+ * @public
+ */
+export type BundlerDefinition<Context = unknown, Options extends Record<string, unknown> = Record<string, unknown>> = {
+  /** Human-readable bundler name, used in logs and error messages */
+  name: string;
+  /** Semantic version string for cache-key computation and diagnostics */
+  version: string;
+  /** File extensions this bundler handles (e.g., ['ts', 'js', 'tsx', 'jsx']). */
+  extensions: string[];
+
+  /** Zod schema for validating and typing bundler options. Options type is inferred from this schema. */
+  optionsSchema?: z.ZodType<Options>;
+
+  /** Initialize the bundler. Receives framework init options plus user-provided options. */
+  initialize(initOptions: BundlerInitOptions, options: Options): Promise<Context>;
+
+  /**
+   * Detect which bare-specifier modules are imported transitively.
+   * Resolves relative imports normally but marks bare specifiers as external.
+   * Returns detected modules and project dependencies without producing runnable code.
+   * This is the primary mechanism for kernel selection -- no module stubs required.
+   */
+  detectImports(input: BundleInput, context: Context): Promise<DetectImportsResult>;
+
+  /**
+   * Produce runnable code with all registered modules resolved.
+   * Called AFTER kernel selection and initialization (modules are registered).
+   */
+  bundle(input: BundleInput, context: Context): Promise<BundleResult>;
+
+  /** Execute bundled code (tied to this bundler's output format). */
+  execute(code: string, context: Context): Promise<ExecuteResult>;
+
+  /** Register a builtin module for resolution during bundle(). */
+  registerModule(name: string, builtinModule: BuiltinModule, context: Context): void;
+
+  /**
+   * Optional fast-path dependency resolution without full bundling.
+   * Falls back to bundle().dependencies when not implemented.
+   */
+  resolveDependencies?(input: BundleInput, context: Context): Promise<GetDependenciesResult>;
+
+  /** Clean up bundler resources (e.g., esbuild.stop()). */
+  cleanup?(context: Context): Promise<void>;
+};
+
+/**
+ * Define a bundler module with full type inference.
+ * Context is inferred from initialize() return type; Options from optionsSchema.
+ *
+ * @param definition - The bundler definition object implementing all required lifecycle methods
+ * @returns The same definition, typed as {@link BundlerDefinition}
+ *
+ * @public
+ *
+ * @example <caption>Custom bundler with import detection</caption>
+ * ```typescript
+ * import { defineBundler } from '@taucad/runtime/bundler';
+ *
+ * export default defineBundler({
+ *   name: 'MyBundler',
+ *   version: '1.0.0',
+ *   extensions: ['ts', 'js'],
+ *   async initialize({ filesystem, projectPath }) {
+ *     return { projectPath };
+ *   },
+ *   async detectImports({ entryPath }, context) {
+ *     return { detectedModules: [], dependencies: [entryPath] };
+ *   },
+ *   async bundle({ entryPath }, context) {
+ *     return { code: '', sourceMap: undefined, issues: [], success: true, dependencies: [], unresolvedPaths: [] };
+ *   },
+ *   async execute(code, context) {
+ *     return { success: true, value: undefined };
+ *   },
+ *   registerModule(name, builtinModule, context) {},
+ * });
+ * ```
+ */
+export function defineBundler<Context, Options extends Record<string, unknown> = Record<string, unknown>>(
+  definition: BundlerDefinition<Context, Options>,
+): BundlerDefinition<Context, Options> {
+  return definition;
+}

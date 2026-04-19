@@ -23,6 +23,7 @@ import { observationSchema } from '#schemas/tools/test-model.tool.schema.js';
  * Error codes for business-level RPC failures.
  * These are distinct from infrastructure errors (timeout, disconnect) which
  * are handled by ToolExecutionError.
+ * @public
  */
 export const rpcClientErrorCodeSchema = zod.enum([
   'FILE_NOT_FOUND',
@@ -35,6 +36,7 @@ export const rpcClientErrorCodeSchema = zod.enum([
 /**
  * Base error schema for all RPC failures.
  * Used as the error variant in discriminated unions.
+ * @public
  */
 export const rpcClientErrorSchema = zod.object({
   success: zod.literal(false),
@@ -54,15 +56,20 @@ export const rpcClientErrorSchema = zod.object({
  * - Adds `success: true` to create the full success schema
  * - Creates a discriminated union result schema with error handling
  *
- * @example
- * ```typescript
- * const readFileRpc = defineRpc({
- *   input: zod.object({ targetFile: zod.string() }),
- *   success: zod.object({ content: zod.string(), totalLines: zod.number() }),
- * });
+ * @public
  *
- * // Use: readFileRpc.inputSchema, readFileRpc.successSchema, readFileRpc.resultSchema
- * // Types: z.infer<typeof readFileRpc.inputSchema>, etc.
+ * @example <caption>Defining a typed RPC schema</caption>
+ * ```typescript
+ * import { z } from 'zod';
+ *
+ * function defineRpc(config: { input: z.ZodObject<z.ZodRawShape>; success: z.ZodObject<z.ZodRawShape> }) {
+ *   return { inputSchema: config.input, successSchema: config.success.extend({ success: z.literal(true) }) };
+ * }
+ *
+ * const rpc = defineRpc({
+ *   input: z.object({ targetFile: z.string() }),
+ *   success: z.object({ content: z.string(), totalLines: z.number() }),
+ * });
  * ```
  */
 function defineRpc<Input extends zod.ZodRawShape, Success extends zod.ZodRawShape>(config: {
@@ -93,6 +100,8 @@ const readFileRpc = defineRpc({
     content: zod.string(),
     totalLines: zod.number(),
     startLine: zod.number().optional(),
+    createdAt: zod.string().optional(),
+    modifiedAt: zod.string().optional(),
   }),
 });
 
@@ -120,6 +129,7 @@ const directoryEntrySchema = zod.object({
   name: zod.string(),
   type: zod.enum(['file', 'dir']),
   size: zod.number(),
+  modifiedAt: zod.string().optional(),
 });
 
 const listDirectoryRpc = defineRpc({
@@ -152,6 +162,13 @@ const grepRpc = defineRpc({
   }),
 });
 
+const globFileEntrySchema = zod.object({
+  path: zod.string(),
+  isDirectory: zod.boolean().optional(),
+  size: zod.number().optional(),
+  modifiedAt: zod.string().optional(),
+});
+
 const globSearchRpc = defineRpc({
   input: zod.object({
     pattern: zod.string(),
@@ -159,6 +176,7 @@ const globSearchRpc = defineRpc({
   }),
   success: zod.object({
     files: zod.array(zod.string()),
+    entries: zod.array(globFileEntrySchema).optional(),
     totalFiles: zod.number(),
   }),
 });
@@ -180,6 +198,52 @@ const captureObservationsRpc = defineRpc({
   }),
 });
 
+const fetchGeometryRpc = defineRpc({
+  input: zod.object({
+    artifactId: zod.string().optional(),
+  }),
+  success: zod.object({
+    glb: zod.instanceof(Uint8Array),
+    artifactPath: zod.string().optional(),
+  }),
+});
+
+const captureScreenshotRpc = defineRpc({
+  input: zod.object({}),
+  success: zod.object({
+    images: zod.array(
+      zod.object({
+        view: zod.string(),
+        dataUrl: zod.string(),
+      }),
+    ),
+  }),
+});
+
+const appendFileRpc = defineRpc({
+  input: zod.object({
+    targetFile: zod.string(),
+    content: zod.string(),
+  }),
+  success: zod.object({
+    message: zod.string().optional(),
+    bytesWritten: zod.number(),
+  }),
+});
+
+const editFileRpc = defineRpc({
+  input: zod.object({
+    targetFile: zod.string(),
+    oldString: zod.string(),
+    newString: zod.string(),
+    replaceAll: zod.boolean().optional(),
+  }),
+  success: zod.object({
+    message: zod.string().optional(),
+    occurrences: zod.number(),
+  }),
+});
+
 // =============================================================================
 // RPC Schemas Registry
 // =============================================================================
@@ -192,6 +256,7 @@ type RpcSchemaEntry<Input = unknown, Result = unknown> = {
 /**
  * Type representing the RPC schemas registry.
  * Used for type inference in sendRpcRequest.
+ * @public
  */
 export type RpcSchemasRegistry = {
   [rpcName.readFile]: RpcSchemaEntry<ReadFileRpcInput, ReadFileRpcResult>;
@@ -202,11 +267,16 @@ export type RpcSchemasRegistry = {
   [rpcName.globSearch]: RpcSchemaEntry<GlobSearchRpcInput, GlobSearchRpcResult>;
   [rpcName.getKernelResult]: RpcSchemaEntry<GetKernelResultRpcInput, GetKernelResultRpcResult>;
   [rpcName.captureObservations]: RpcSchemaEntry<CaptureObservationsRpcInput, CaptureObservationsRpcResult>;
+  [rpcName.fetchGeometry]: RpcSchemaEntry<FetchGeometryRpcInput, FetchGeometryRpcResult>;
+  [rpcName.captureScreenshot]: RpcSchemaEntry<CaptureScreenshotRpcInput, CaptureScreenshotRpcResult>;
+  [rpcName.appendFile]: RpcSchemaEntry<AppendFileRpcInput, AppendFileRpcResult>;
+  [rpcName.editFile]: RpcSchemaEntry<EditFileRpcInput, EditFileRpcResult>;
 };
 
 /**
  * Runtime registry mapping RPC names to their Zod schemas.
  * Used by ChatRpcService for validating WebSocket RPC inputs/results.
+ * @public
  */
 export const rpcSchemasRegistry: RpcSchemasRegistry = {
   [rpcName.readFile]: {
@@ -241,6 +311,22 @@ export const rpcSchemasRegistry: RpcSchemasRegistry = {
     inputSchema: captureObservationsRpc.inputSchema,
     resultSchema: captureObservationsRpc.resultSchema,
   },
+  [rpcName.fetchGeometry]: {
+    inputSchema: fetchGeometryRpc.inputSchema,
+    resultSchema: fetchGeometryRpc.resultSchema,
+  },
+  [rpcName.captureScreenshot]: {
+    inputSchema: captureScreenshotRpc.inputSchema,
+    resultSchema: captureScreenshotRpc.resultSchema,
+  },
+  [rpcName.appendFile]: {
+    inputSchema: appendFileRpc.inputSchema,
+    resultSchema: appendFileRpc.resultSchema,
+  },
+  [rpcName.editFile]: {
+    inputSchema: editFileRpc.inputSchema,
+    resultSchema: editFileRpc.resultSchema,
+  },
 };
 
 // =============================================================================
@@ -249,11 +335,13 @@ export const rpcSchemasRegistry: RpcSchemasRegistry = {
 
 /**
  * Extract input type for a given RPC name.
+ * @public
  */
 export type RpcInput<T extends keyof RpcSchemasRegistry> = z.infer<RpcSchemasRegistry[T]['inputSchema']>;
 
 /**
  * Extract result type for a given RPC name.
+ * @public
  */
 export type RpcResult<T extends keyof RpcSchemasRegistry> = z.infer<RpcSchemasRegistry[T]['resultSchema']>;
 
@@ -262,14 +350,16 @@ export type RpcResult<T extends keyof RpcSchemasRegistry> = z.infer<RpcSchemasRe
  * Each variant links the RPC name to its corresponding input type,
  * enabling TypeScript to narrow the `args` type when switching on `rpcName`.
  *
- * @example
+ * @public
+ *
+ * @example <caption>Switching on RPC call type</caption>
  * ```typescript
- * function handleRpc(call: RpcCall): Promise<unknown> {
+ * import type { RpcCall } from '@taucad/chat';
+ *
+ * function handleRpc(call: RpcCall) {
  *   switch (call.rpcName) {
  *     case 'read_file':
- *       // call.args is automatically narrowed to ReadFileRpcInput
- *       return handleReadFile(call.args);
- *     // ...
+ *       return call.args.targetFile; // args narrowed to ReadFileRpcInput
  *   }
  * }
  * ```
@@ -285,37 +375,91 @@ export type RpcCall = {
 // Inferred Types
 // =============================================================================
 
+/** @public */
 export type RpcClientErrorCode = z.infer<typeof rpcClientErrorCodeSchema>;
+/** @public */
 export type RpcClientError = z.infer<typeof rpcClientErrorSchema>;
 
+/** @public */
 export type ReadFileRpcInput = z.infer<typeof readFileRpc.inputSchema>;
+/** @public */
 export type ReadFileRpcSuccess = z.infer<typeof readFileRpc.successSchema>;
+/** @public */
 export type ReadFileRpcResult = z.infer<typeof readFileRpc.resultSchema>;
 
+/** @public */
 export type CreateFileRpcInput = z.infer<typeof createFileRpc.inputSchema>;
+/** @public */
 export type CreateFileRpcSuccess = z.infer<typeof createFileRpc.successSchema>;
+/** @public */
 export type CreateFileRpcResult = z.infer<typeof createFileRpc.resultSchema>;
 
+/** @public */
 export type DeleteFileRpcInput = z.infer<typeof deleteFileRpc.inputSchema>;
+/** @public */
 export type DeleteFileRpcSuccess = z.infer<typeof deleteFileRpc.successSchema>;
+/** @public */
 export type DeleteFileRpcResult = z.infer<typeof deleteFileRpc.resultSchema>;
 
+/** @public */
 export type ListDirectoryRpcInput = z.infer<typeof listDirectoryRpc.inputSchema>;
+/** @public */
 export type ListDirectoryRpcSuccess = z.infer<typeof listDirectoryRpc.successSchema>;
+/** @public */
 export type ListDirectoryRpcResult = z.infer<typeof listDirectoryRpc.resultSchema>;
 
+/** @public */
 export type GrepRpcInput = z.infer<typeof grepRpc.inputSchema>;
+/** @public */
 export type GrepRpcSuccess = z.infer<typeof grepRpc.successSchema>;
+/** @public */
 export type GrepRpcResult = z.infer<typeof grepRpc.resultSchema>;
 
+/** @public */
 export type GlobSearchRpcInput = z.infer<typeof globSearchRpc.inputSchema>;
+/** @public */
 export type GlobSearchRpcSuccess = z.infer<typeof globSearchRpc.successSchema>;
+/** @public */
 export type GlobSearchRpcResult = z.infer<typeof globSearchRpc.resultSchema>;
 
+/** @public */
 export type GetKernelResultRpcInput = z.infer<typeof getKernelResultRpc.inputSchema>;
+/** @public */
 export type GetKernelResultRpcSuccess = z.infer<typeof getKernelResultRpc.successSchema>;
+/** @public */
 export type GetKernelResultRpcResult = z.infer<typeof getKernelResultRpc.resultSchema>;
 
+/** @public */
 export type CaptureObservationsRpcInput = z.infer<typeof captureObservationsRpc.inputSchema>;
+/** @public */
 export type CaptureObservationsRpcSuccess = z.infer<typeof captureObservationsRpc.successSchema>;
+/** @public */
 export type CaptureObservationsRpcResult = z.infer<typeof captureObservationsRpc.resultSchema>;
+
+/** @public */
+export type FetchGeometryRpcInput = z.infer<typeof fetchGeometryRpc.inputSchema>;
+/** @public */
+export type FetchGeometryRpcSuccess = z.infer<typeof fetchGeometryRpc.successSchema>;
+/** @public */
+export type FetchGeometryRpcResult = z.infer<typeof fetchGeometryRpc.resultSchema>;
+
+/** @public */
+export type CaptureScreenshotRpcInput = z.infer<typeof captureScreenshotRpc.inputSchema>;
+/** @public */
+export type CaptureScreenshotRpcSuccess = z.infer<typeof captureScreenshotRpc.successSchema>;
+/** @public */
+export type CaptureScreenshotRpcResult = z.infer<typeof captureScreenshotRpc.resultSchema>;
+
+/** @public */
+export type AppendFileRpcInput = z.infer<typeof appendFileRpc.inputSchema>;
+/** @public */
+export type AppendFileRpcSuccess = z.infer<typeof appendFileRpc.successSchema>;
+/** @public */
+export type AppendFileRpcResult = z.infer<typeof appendFileRpc.resultSchema>;
+
+/** @public */
+export type EditFileRpcInput = z.infer<typeof editFileRpc.inputSchema>;
+/** @public */
+export type EditFileRpcSuccess = z.infer<typeof editFileRpc.successSchema>;
+/** @public */
+export type EditFileRpcResult = z.infer<typeof editFileRpc.resultSchema>;

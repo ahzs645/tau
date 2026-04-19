@@ -7,24 +7,24 @@ app = 'tau-ui-staging'
 primary_region = 'syd'
 
 [build]
-  dockerfile = 'Dockerfile'
+dockerfile = 'Dockerfile'
 
 [env]
-  NODE_ENV = 'production'
-  TAU_API_URL = 'https://api.taucad.dev'
-  TAU_WEBSOCKET_URL = 'wss://api.taucad.dev'
-  TAU_FRONTEND_URL = 'https://taucad.dev'
+NODE_ENV = 'production'
+TAU_API_URL = 'https://api.taucad.dev'
+TAU_WEBSOCKET_URL = 'wss://api.taucad.dev'
+TAU_FRONTEND_URL = 'https://taucad.dev'
 
 [http_service]
-  internal_port = 3000
-  force_https = true
-  auto_stop_machines = 'stop'
-  auto_start_machines = true
-  min_machines_running = 1
-  processes = ['app']
+internal_port = 3000
+force_https = true
+auto_stop_machines = 'stop'
+auto_start_machines = true
+min_machines_running = 1
+processes = ['app']
 
 [[vm]]
-  memory = '1gb'
-  cpu_kind = 'shared'
-  cpus = 1
+memory = '1gb'
+cpu_kind = 'shared'
+cpus = 1
 

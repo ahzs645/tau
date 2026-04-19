@@ -1,6 +1,7 @@
 import safeRegex from 'safe-regex';
 import { z } from 'zod';
 
+/** @public */
 export const grepInputSchema = z.object({
   pattern: z
     .string()
@@ -23,12 +24,16 @@ const grepMatchSchema = z.object({
   content: z.string().describe('The content of the matching line.'),
 });
 
+/** @public */
 export const grepOutputSchema = z.object({
   matches: z.array(grepMatchSchema).describe('The list of matches found.'),
   totalMatches: z.number().describe('The total number of matches found.'),
   truncated: z.boolean().optional().describe('Whether results were truncated due to too many matches.'),
 });
 
+/** @public */
 export type GrepInput = z.infer<typeof grepInputSchema>;
+/** @public */
 export type GrepOutput = z.infer<typeof grepOutputSchema>;
+/** @public */
 export type GrepMatch = z.infer<typeof grepMatchSchema>;

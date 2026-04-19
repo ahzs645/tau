@@ -1,4 +1,3 @@
-/* eslint-disable no-barrel-files/no-barrel-files -- package entry point. */
 export * from '#schemas/tools/diff.schema.js';
 export * from '#schemas/tools/web-search.tool.schema.js';
 export * from '#schemas/tools/web-browser.tool.schema.js';
@@ -11,11 +10,12 @@ export * from '#schemas/tools/delete-file.tool.schema.js';
 export * from '#schemas/tools/grep.tool.schema.js';
 export * from '#schemas/tools/glob-search.tool.schema.js';
 export * from '#schemas/tools/get-kernel-result.tool.schema.js';
-export * from '#schemas/tools/reasoning.tool.schema.js';
+export * from '#schemas/tools/screenshot.tool.schema.js';
 export * from '#schemas/tools/transfer-tool.schema.js';
 export * from '#schemas/tools/transfer-to-cad-expert.tool.schema.js';
 export * from '#schemas/tools/transfer-to-research-expert.tool.schema.js';
 export * from '#schemas/tools/transfer-back-to-supervisor.tool.schema.js';
+export * from '#schemas/context-payload.schema.js';
 export * from '#schemas/metadata.schema.js';
 export * from '#schemas/message.schema.js';
 export * from '#schemas/message-data.schema.js';

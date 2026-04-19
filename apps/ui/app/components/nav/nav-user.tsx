@@ -25,17 +25,17 @@ export function NavUser(): React.JSX.Element {
   return (
     <ClientOnly>
       <SignedOut>
-        <Button asChild variant="overlay" className="hidden select-none lg:flex">
+        <Button asChild variant='overlay' className='hidden select-none lg:flex'>
           <NavLink to={signIn} tabIndex={-1}>
             {({ isPending }) => (isPending ? <Loader /> : 'Sign In')}
           </NavLink>
         </Button>
-        <Button asChild className="hidden select-none">
+        <Button asChild className='hidden select-none'>
           <NavLink to={signUp} tabIndex={-1}>
             {({ isPending }) => (isPending ? <Loader /> : 'Sign Up')}
           </NavLink>
         </Button>
-        <Button asChild size="icon" variant="overlay" className="text-primary select-none lg:hidden">
+        <Button asChild size='icon' variant='overlay' className='text-primary select-none lg:hidden'>
           <NavLink to={signIn} tabIndex={-1}>
             {({ isPending }) => (isPending ? <Loader /> : <LogIn />)}
           </NavLink>
@@ -46,17 +46,17 @@ export function NavUser(): React.JSX.Element {
           <Tooltip>
             <TooltipTrigger asChild>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" className="select-none">
-                  <UserAvatar className="size-8 rounded-md" user={session?.user} />
+                <Button variant='ghost' size='icon' className='select-none'>
+                  <UserAvatar className='size-8 rounded-md' user={session?.user} />
                 </Button>
               </DropdownMenuTrigger>
             </TooltipTrigger>
             <TooltipContent>Profile</TooltipContent>
           </Tooltip>
-          <DropdownMenuContent align="end" sideOffset={8} className="w-48">
+          <DropdownMenuContent align='end' sideOffset={8} className='w-48'>
             <DropdownMenuGroup>
               <DropdownMenuItem
-                className="cursor-pointer"
+                className='cursor-pointer'
                 onSelect={() => {
                   openSettingsDialog('billing');
                 }}
@@ -65,7 +65,7 @@ export function NavUser(): React.JSX.Element {
                 Upgrade to Pro
               </DropdownMenuItem>
               <DropdownMenuItem
-                className="cursor-pointer"
+                className='cursor-pointer'
                 onSelect={() => {
                   openSettingsDialog('billing');
                 }}
@@ -74,7 +74,7 @@ export function NavUser(): React.JSX.Element {
                 Billing
               </DropdownMenuItem>
               <DropdownMenuItem
-                className="cursor-pointer"
+                className='cursor-pointer'
                 onSelect={() => {
                   openSettingsDialog('general');
                 }}
@@ -85,7 +85,7 @@ export function NavUser(): React.JSX.Element {
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
-              <DropdownMenuItem asChild className="cursor-pointer">
+              <DropdownMenuItem asChild className='cursor-pointer'>
                 <NavLink to={signOut}>
                   <LogOut />
                   Sign Out

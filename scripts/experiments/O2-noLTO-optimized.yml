@@ -1,0 +1,21 @@
+name: 'v8-O2-noLTO-optimized'
+description: 'Fully optimized production build: -O2 compile, -O3 wasm-opt, no exceptions, all optimizations'
+
+compilation:
+  optimization: '-O2'
+  lto: false
+  exceptions: 'none'
+  threading: 'single-threaded'
+
+linking:
+  yaml: 'custom_build_single_v8.yml'
+  wasmOptLevel: '-O3'
+
+optimizations:
+  closure: true
+  evalCtors: true
+  converge: true
+
+benchmark:
+  iterations: 10
+  filter: ['primitives', 'booleans', 'fillets', 'extrusions', 'complex', 'examples', 'stress']

@@ -3,7 +3,7 @@
  * These should be associated with the feature they describe
  */
 import * as pluralize from 'pluralize';
-import { descriptorTerms, commonGeneralTerms } from '#constants/build-parameters.js';
+import { descriptorTerms, commonGeneralTerms } from '#constants/project-parameters.js';
 
 /**
  * Normalize a plural word to its singular form using the pluralize library
@@ -23,7 +23,7 @@ export const normalizePlural = (word: string): string => {
  */
 export const extractTerms = (parameterName: string): string[] => {
   // Convert camelCase/PascalCase to space-separated words
-  const spaceSeparated = parameterName.replaceAll(/([a-z\d])([A-Z])/g, '$1 $2').toLowerCase();
+  const spaceSeparated = parameterName.replaceAll(/([\da-z])([A-Z])/g, '$1 $2').toLowerCase();
 
   // Split into words and filter out common words and single characters
   const words = spaceSeparated

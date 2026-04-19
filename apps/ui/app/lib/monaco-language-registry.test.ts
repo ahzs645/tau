@@ -8,7 +8,7 @@ import type {
 import { LanguageContributionRegistry } from '#lib/monaco-language-registry.js';
 
 function createMockContext(): ActivationContext {
-  // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- Minimal mock for testing
+  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- Minimal mock for testing
   return {} as ActivationContext;
 }
 
@@ -151,7 +151,7 @@ describe('LanguageContributionRegistry', () => {
       errorSpy.mockRestore();
     });
 
-    it('should re-activate after build session change even if previous activation had errors', () => {
+    it('should re-activate after project session change even if previous activation had errors', () => {
       const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
       let shouldThrow = true;
@@ -176,9 +176,9 @@ describe('LanguageContributionRegistry', () => {
       const firstResult = registry.activate(context);
       expect(firstResult).toHaveLength(1); // Only stable's handler
 
-      // Build session change increments epoch
+      // Project session change increments epoch
       shouldThrow = false;
-      registry.onBuildSessionChange('build-2');
+      registry.onProjectSessionChange('project-2');
 
       // Second activation: flaky now succeeds
       const secondResult = registry.activate(context);

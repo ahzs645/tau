@@ -22,6 +22,7 @@ export function appendBytes<T extends { length: number; set(array: T, offset: nu
     totalLength += array.length;
   }
 
+  // oxlint-disable-next-line new-cap -- constructor is a runtime-resolved typed array class
   const result = new constructor(totalLength);
   let offset = 0;
   for (const array of arrays) {

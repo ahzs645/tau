@@ -48,24 +48,24 @@ export function DocsPageActions(): React.JSX.Element {
   ];
 
   return (
-    <div className="sticky bottom-0 mt-5 -mr-4 space-y-1 bg-sidebar pb-2">
+    <div className='sticky bottom-0 mt-5 -mr-4 space-y-1 bg-sidebar pb-2'>
       <CopyButton
         getText={getMarkdownContent}
-        variant="ghost"
-        size="sm"
-        tooltip="Copy page as markdown"
-        readyToCopyText="Copy page as markdown"
-        className="flex h-auto w-full flex-row-reverse items-center justify-end gap-2 rounded-md px-3 py-1 text-left text-sm text-muted-foreground transition-colors hover:text-foreground"
+        variant='ghost'
+        size='sm'
+        tooltip='Copy page as markdown'
+        readyToCopyText='Copy page as markdown'
+        className='flex h-auto w-full flex-row-reverse items-center justify-end gap-2 rounded-md px-3 py-1 text-left text-sm text-muted-foreground transition-colors hover:text-foreground'
       />
 
       <Button
         asChild
-        variant="ghost"
-        size="sm"
-        className="flex w-full items-center justify-start gap-2 rounded-md px-3 py-1 text-left text-sm text-muted-foreground transition-colors hover:text-foreground"
+        variant='ghost'
+        size='sm'
+        className='flex w-full items-center justify-start gap-2 rounded-md px-3 py-1 text-left text-sm text-muted-foreground transition-colors hover:text-foreground'
       >
-        <ExternalLink href={markdownUrl} arrowSize="xs" className="no-underline hover:no-underline">
-          <MarkdownIcon className="size-4" />
+        <ExternalLink href={markdownUrl} arrowSize='xs' className='no-underline hover:no-underline'>
+          <MarkdownIcon className='size-4' />
           View as Markdown
         </ExternalLink>
       </Button>
@@ -74,12 +74,12 @@ export function DocsPageActions(): React.JSX.Element {
         <Button
           key={link.label}
           asChild
-          variant="ghost"
-          size="sm"
-          className="flex w-full items-center justify-start gap-2 rounded-md px-3 py-1 text-left text-sm text-muted-foreground transition-colors hover:text-foreground"
+          variant='ghost'
+          size='sm'
+          className='flex w-full items-center justify-start gap-2 rounded-md px-3 py-1 text-left text-sm text-muted-foreground transition-colors hover:text-foreground'
         >
-          <ExternalLink href={link.url} arrowSize="xs" className="no-underline hover:no-underline">
-            <SvgIcon id={link.iconId} className="size-4" />
+          <ExternalLink href={link.url} arrowSize='xs' className='no-underline hover:no-underline'>
+            <SvgIcon id={link.iconId} className='size-4' />
             {link.label}
           </ExternalLink>
         </Button>

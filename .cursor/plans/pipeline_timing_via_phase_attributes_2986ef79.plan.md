@@ -29,7 +29,7 @@ The pipeline bars and the telemetry tree are two views of the same data. Rather 
 ```mermaid
 flowchart LR
     subgraph worker [Worker Thread]
-        Tracer["KernelTracer.startSpan()<br/>includes phase attribute"]
+        Tracer["RuntimeTracer.startSpan()<br/>includes phase attribute"]
         Progress["onProgress(phase)<br/>live status only"]
     end
 

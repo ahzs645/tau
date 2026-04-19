@@ -94,7 +94,7 @@ const createTsupTarget = (configFilePath: string, context: CreateNodesContextV2)
 
 export const createNodesV2: CreateNodesV2 = [
   '**/tsdown.config.ts',
-  // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types -- not necessary as already has an explicit return type
+  // oxlint-disable-next-line @typescript-eslint/explicit-module-boundary-types -- not necessary as already has an explicit return type
   (configFiles, _options, context) => {
     const results: Array<[string, CreateNodesResult]> = [];
 

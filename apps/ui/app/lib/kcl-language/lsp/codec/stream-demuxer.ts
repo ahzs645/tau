@@ -74,7 +74,7 @@ export class StreamDemuxer implements WritableStream<Uint8Array<ArrayBuffer>> {
         const message = JSON.parse(jsonString) as Message;
         log.debug('Decoded message:', message);
         this.routeMessage(message);
-      } catch (error: unknown) {
+      } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
         log.error('Failed to parse JSON:', errorMessage);
         log.error('JSON string (first 200):', jsonString.slice(0, 200));

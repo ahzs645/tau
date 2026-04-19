@@ -35,7 +35,7 @@
       "path": "./packages/js"
     },
     {
-      "path": "./packages/kernels"
+      "path": "./packages/runtime"
     },
     {
       "path": "./libs/units"
@@ -45,9 +45,12 @@
     },
     {
       "path": "./libs/utils"
+    },
+    {
+      "path": "./libs/vite"
     }
   ],
   "files": [],
-  "include": ["vitest.workspace.ts", "scripts/**/*", "tools/**/*"],
+  "include": ["vitest.workspace.ts", "eslint.config.mjs", "scripts/**/*", "tools/**/*"],
   "exclude": ["node_modules", "tmp"]
 }

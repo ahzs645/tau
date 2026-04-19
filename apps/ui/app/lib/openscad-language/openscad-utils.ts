@@ -1,5 +1,5 @@
-/* eslint-disable max-depth -- TODO: refactor */
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment -- TODO: fix these types
+/* oxlint-disable max-depth -- TODO: refactor */
+// oxlint-disable-next-line @typescript-eslint/ban-ts-comment -- TODO: fix these types
 // @ts-nocheck
 import type * as Monaco from 'monaco-editor';
 import { openscadFunctions, openscadSymbols } from '#lib/openscad-language/openscad-symbols.js';
@@ -41,21 +41,21 @@ export function findCurrentModuleFunctionScope(
     const line = lines[i];
 
     // Look for module declarations: module name(...) [optional modifiers like union()] {
-    const moduleMatch = /^\s*module\s+([a-zA-Z_]\w*)\s*\(([^)]*)\).*?{?\s*$/.exec(line);
+    const moduleMatch = /^\s*module\s+([A-Z_a-z]\w*)\s*\(([^)]*)\).*?{?\s*$/.exec(line);
     if (moduleMatch) {
       const moduleName = moduleMatch[1];
       const moduleInfo = findModuleDeclaration(model, moduleName);
-      if (moduleInfo && moduleInfo.lineNumber === i + 1) {
+      if (moduleInfo?.lineNumber === i + 1) {
         return { type: 'module', info: moduleInfo };
       }
     }
 
     // Look for function declarations: function name(...) = ...;
-    const functionMatch = /^\s*function\s+([a-zA-Z_]\w*)\s*\(([^)]*)\)\s*=/.exec(line);
+    const functionMatch = /^\s*function\s+([A-Z_a-z]\w*)\s*\(([^)]*)\)\s*=/.exec(line);
     if (functionMatch) {
       const functionName = functionMatch[1];
       const functionInfo = findFunctionDeclaration(model, functionName);
-      if (functionInfo && functionInfo.lineNumber === i + 1) {
+      if (functionInfo?.lineNumber === i + 1) {
         return { type: 'function', info: functionInfo };
       }
     }
@@ -92,7 +92,7 @@ export function findGroupName(
   return undefined;
 }
 
-// eslint-disable-next-line complexity -- this is a complex function that needs to be refactored
+// oxlint-disable-next-line complexity -- this is a complex function that needs to be refactored
 export function isPositionInComment(model: Monaco.editor.ITextModel, position: Monaco.Position): boolean {
   const line = model.getLineContent(position.lineNumber);
   const column = position.column - 1; // Convert to 0-based
@@ -464,7 +464,7 @@ function inferType(value: string): string {
 }
 
 export function escapeRegExp(string: string): string {
-  return string.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
+  return string.replaceAll(/[$()*+.?[\\\]^{|}]/g, String.raw`\$&`);
 }
 
 export function findModuleDeclaration(model: Monaco.editor.ITextModel, moduleName: string): ModuleInfo | undefined {
@@ -497,35 +497,57 @@ export function findModuleDeclaration(model: Monaco.editor.ITextModel, moduleNam
 }
 
 export function findUserDefinedItems(model: Monaco.editor.ITextModel): {
-  variables: Array<{ name: string; value: string; type?: string; description?: string }>;
+  variables: Array<{
+    name: string;
+    value: string;
+    type?: string;
+    description?: string;
+  }>;
   modules: Array<{ name: string; parameters: string[]; description?: string }>;
-  functions: Array<{ name: string; parameters: string[]; description?: string }>;
+  functions: Array<{
+    name: string;
+    parameters: string[];
+    description?: string;
+  }>;
 } {
   const lines = model.getLinesContent();
-  const variables: Array<{ name: string; value: string; type?: string; description?: string }> = [];
-  const modules: Array<{ name: string; parameters: string[]; description?: string }> = [];
-  const functions: Array<{ name: string; parameters: string[]; description?: string }> = [];
+  const variables: Array<{
+    name: string;
+    value: string;
+    type?: string;
+    description?: string;
+  }> = [];
+  const modules: Array<{
+    name: string;
+    parameters: string[];
+    description?: string;
+  }> = [];
+  const functions: Array<{
+    name: string;
+    parameters: string[];
+    description?: string;
+  }> = [];
 
   // Patterns for different declarations
-  const variablePattern = /^\s*([a-zA-Z_]\w*)\s*=\s*(.+)$/;
-  const modulePattern = /^\s*module\s+([a-zA-Z_]\w*)\s*\(([^)]*)\)/;
-  const functionPattern = /^\s*function\s+([a-zA-Z_]\w*)\s*\(([^)]*)\)\s*=/;
+  const variablePattern = /^\s*([A-Z_a-z]\w*)\s*=\s*(.+)$/;
+  const modulePattern = /^\s*module\s+([A-Z_a-z]\w*)\s*\(([^)]*)\)/;
+  const functionPattern = /^\s*function\s+([A-Z_a-z]\w*)\s*\(([^)]*)\)\s*=/;
 
   for (const line of lines) {
     // Check for variable declarations
-    const varMatch = variablePattern.exec(line);
-    if (varMatch) {
-      const name = varMatch[1];
-      const value = varMatch[2].trim();
+    const variableMatch = variablePattern.exec(line);
+    if (variableMatch) {
+      const name = variableMatch[1];
+      const value = variableMatch[2].trim();
 
       // Don't duplicate if we already found this variable
       if (!variables.some((v) => v.name === name)) {
-        const varInfo = findVariableDeclaration(model, name);
+        const variableInfo = findVariableDeclaration(model, name);
         variables.push({
           name,
           value,
-          type: varInfo?.type,
-          description: varInfo?.description,
+          type: variableInfo?.type,
+          description: variableInfo?.description,
         });
       }
     }
@@ -605,7 +627,11 @@ export function findFunctionCall(
   model: Monaco.editor.ITextModel,
   position: Monaco.Position,
 ):
-  | { functionName: string; parameterIndex: number; startPosition: Pick<Monaco.Position, 'lineNumber' | 'column'> }
+  | {
+      functionName: string;
+      parameterIndex: number;
+      startPosition: Pick<Monaco.Position, 'lineNumber' | 'column'>;
+    }
   | undefined {
   const lines = model.getLinesContent();
   const currentLineIndex = position.lineNumber - 1;
@@ -636,9 +662,9 @@ export function findFunctionCall(
             const searchStart = nameLineIndex === currentLine ? nameEnd : nameLine.length - 1;
 
             let found = false;
-            for (let j = searchStart; j >= 0; j--) {
-              if (!/\s/.test(nameLine[j])) {
-                nameEnd = j;
+            for (let charIndex = searchStart; charIndex >= 0; charIndex--) {
+              if (!/\s/.test(nameLine[charIndex])) {
+                nameEnd = charIndex;
                 found = true;
                 break;
               }
@@ -752,7 +778,7 @@ function countParametersFromParenToCursor(
   return parameterIndex;
 }
 
-// eslint-disable-next-line complexity -- TODO: refactor
+// oxlint-disable-next-line complexity -- TODO: refactor
 export function findParameterCompletions(model: Monaco.editor.ITextModel, position: Monaco.Position): string[] {
   const lines = model.getLinesContent();
   const currentLineIndex = position.lineNumber - 1;
@@ -783,9 +809,9 @@ export function findParameterCompletions(model: Monaco.editor.ITextModel, positi
             const searchStart = nameLineIndex === currentLine ? nameEnd : nameLine.length - 1;
 
             let found = false;
-            for (let j = searchStart; j >= 0; j--) {
-              if (!/\s/.test(nameLine[j])) {
-                nameEnd = j;
+            for (let charIndex = searchStart; charIndex >= 0; charIndex--) {
+              if (!/\s/.test(nameLine[charIndex])) {
+                nameEnd = charIndex;
                 found = true;
                 break;
               }

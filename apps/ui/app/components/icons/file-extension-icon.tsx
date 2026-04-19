@@ -1,7 +1,6 @@
 import { File as FileIcon } from 'lucide-react';
-import type { Format } from '@taucad/converter';
-import { supportedImportFormats, supportedExportFormats } from '@taucad/converter';
-import { kernelConfigurations } from '@taucad/types/constants';
+import type { FileExtension } from '@taucad/types';
+import { fileExtensionSet, kernelConfigurations } from '@taucad/types/constants';
 import { Format3D } from '#components/icons/format-3d.js';
 import { SvgIcon } from '#components/icons/svg-icon.js';
 import type { SvgIcons } from '#components/icons/generated/svg-icons.js';
@@ -14,7 +13,7 @@ type IconConfig =
     }
   | {
       type: 'format-3d';
-      id: Format;
+      id: FileExtension;
     };
 
 // Only lib types and renamed format-3d types (where extension doesn't match format name)
@@ -63,6 +62,20 @@ const iconConfigMap: Partial<Record<string, IconConfig>> = {
     id: 'collada',
   },
 
+  // USD formats
+  usda: {
+    type: 'lib',
+    id: 'usd',
+  },
+  usdc: {
+    type: 'lib',
+    id: 'usd',
+  },
+  usdz: {
+    type: 'lib',
+    id: 'usd',
+  },
+
   // Renamed format-3d types (extension doesn't match format name)
   stp: {
     type: 'format-3d',
@@ -86,12 +99,6 @@ const iconConfigMap: Partial<Record<string, IconConfig>> = {
 
 // Export for backward compatibility
 export const iconFromExtension = iconConfigMap;
-
-// Create sets for fast lookup
-const supportedFormatsSet = new Set<string>([
-  ...(supportedImportFormats as readonly string[]),
-  ...(supportedExportFormats as readonly string[]),
-]);
 
 // Map kernel mainFile extensions to kernel configs
 const kernelExtensionMap = new Map<string, string>();
@@ -117,6 +124,7 @@ function getIconConfig(extension: string): IconConfig | undefined {
       openscad: 'openscad',
       zoo: 'zoo',
       replicad: 'typescript',
+      manifold: 'typescript',
       jscad: 'typescript',
     };
 
@@ -129,11 +137,10 @@ function getIconConfig(extension: string): IconConfig | undefined {
     }
   }
 
-  // Priority 2: Check supported formats
-  if (supportedFormatsSet.has(extension)) {
+  if (fileExtensionSet.has(extension as FileExtension)) {
     return {
       type: 'format-3d',
-      id: extension as Format,
+      id: extension as FileExtension,
     };
   }
 
@@ -141,6 +148,10 @@ function getIconConfig(extension: string): IconConfig | undefined {
   return undefined;
 }
 
+/**
+ * Renders an icon based on a file's extension, using branded SVG icons for known
+ * languages and 3D format badges for CAD file types, with a generic file icon fallback.
+ */
 export function FileExtensionIcon({
   filename,
   className,
@@ -159,8 +170,7 @@ export function FileExtensionIcon({
     return <SvgIcon id={config.id} className={className} />;
   }
 
-  // Config.type === 'format-3d'
-  return <Format3D extension={config.id as never} className={className} />;
+  return <Format3D extension={config.id} className={className} />;
 }
 
 /**

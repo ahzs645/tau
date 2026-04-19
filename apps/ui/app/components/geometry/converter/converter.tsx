@@ -1,13 +1,13 @@
 import { useCallback, useState } from 'react';
 import { useActorRef } from '@xstate/react';
 import { exportFromGlb } from '@taucad/converter';
-import type { InputFormat, OutputFormat } from '@taucad/converter';
+import type { SupportedImportFormat, SupportedExportFormat } from '@taucad/converter';
 import { Download } from 'lucide-react';
 import { Button } from '#components/ui/button.js';
 import { toast } from '#components/ui/sonner.js';
 import { Checkbox } from '#components/ui/checkbox.js';
 import { Label } from '#components/ui/label.js';
-import { asBuffer, downloadBlob } from '#utils/file.utils.js';
+import { asBuffer, downloadBlob } from '@taucad/utils/file';
 import { FormatSelector } from '#components/geometry/converter/format-selector.js';
 import { ConverterFileTree } from '#components/geometry/converter/converter-file-tree.js';
 import { formatDisplayName, getExtensionForFormat } from '#components/geometry/converter/converter-utils.js';
@@ -16,22 +16,22 @@ import { cn } from '#utils/ui.utils.js';
 
 type UploadedFileInfo = {
   readonly name: string;
-  readonly format: InputFormat;
+  readonly format: SupportedImportFormat;
   readonly size: number;
 };
 
 export type ExportedFile = {
   readonly filename: string;
   readonly content: Uint8Array<ArrayBuffer>;
-  readonly format: OutputFormat;
+  readonly format: SupportedExportFormat;
 };
 
 type ConverterProperties = {
   readonly getGlbData: () => Promise<Uint8Array<ArrayBuffer>>;
-  readonly selectedFormats: OutputFormat[];
+  readonly selectedFormats: SupportedExportFormat[];
   readonly shouldUseZipForMultiple: boolean;
   readonly uploadedFile?: UploadedFileInfo;
-  readonly onFormatToggle: (format: OutputFormat) => void;
+  readonly onFormatToggle: (format: SupportedExportFormat) => void;
   readonly onClearSelection: () => void;
   readonly onZipToggle: (useZip: boolean) => void;
   readonly onExport?: (files: ExportedFile[]) => void;
@@ -70,7 +70,7 @@ export function Converter({
 
   const saveFileWithPicker = useCallback(async (blob: Blob, filename: string): Promise<void> => {
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-call -- File System Access API is not yet in TypeScript lib
+      // oxlint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-call -- File System Access API is not yet in TypeScript lib
       const handle = (await (globalThis as any).showSaveFilePicker({
         suggestedName: filename,
       })) as FileSystemFileHandle;
@@ -78,7 +78,7 @@ export function Converter({
       const writable = await handle.createWritable();
       await writable.write(blob);
       await writable.close();
-    } catch (error: unknown) {
+    } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
         // User cancelled, rethrow to stop the export
         throw error;
@@ -129,7 +129,7 @@ export function Converter({
               ? uploadedFile.name.replace(/\.[^.]+$/, `.${extension}`)
               : `model.${extension}`;
 
-            const blob = new Blob([asBuffer(file.data.buffer)]);
+            const blob = new Blob([asBuffer(file.bytes.buffer)]);
 
             if (shouldChooseLocation) {
               await saveFileWithPicker(blob, filename);
@@ -139,7 +139,7 @@ export function Converter({
 
             // Call onExport callback if provided and enabled
             if (onExport && shouldSaveToProject) {
-              onExport([{ filename, content: file.data, format }]);
+              onExport([{ filename, content: file.bytes, format }]);
             }
           })(),
           {
@@ -178,7 +178,10 @@ export function Converter({
             );
 
             // Add all files to zip machine
-            const filesToZip: Array<{ filename: string; content: Uint8Array<ArrayBuffer> }> = [];
+            const filesToZip: Array<{
+              filename: string;
+              content: Uint8Array<ArrayBuffer>;
+            }> = [];
             const exportedFiles: ExportedFile[] = [];
             for (const { format, files } of results) {
               for (const file of files) {
@@ -188,11 +191,11 @@ export function Converter({
                   : `model.${extension}`;
                 filesToZip.push({
                   filename,
-                  content: file.data,
+                  content: file.bytes,
                 });
                 exportedFiles.push({
                   filename,
-                  content: file.data,
+                  content: file.bytes,
                   format,
                 });
               }
@@ -269,10 +272,10 @@ export function Converter({
                 const filename = uploadedFile
                   ? uploadedFile.name.replace(/\.[^.]+$/, `.${extension}`)
                   : `model.${extension}`;
-                const blob = new Blob([asBuffer(file.data.buffer)]);
+                const blob = new Blob([asBuffer(file.bytes.buffer)]);
 
                 if (shouldChooseLocation) {
-                  // eslint-disable-next-line no-await-in-loop -- Sequential file picker dialogs are intentional
+                  // oxlint-disable-next-line no-await-in-loop -- Sequential file picker dialogs are intentional
                   await saveFileWithPicker(blob, filename);
                 } else {
                   downloadBlob(blob, filename);
@@ -280,7 +283,7 @@ export function Converter({
 
                 exportedFiles.push({
                   filename,
-                  content: file.data,
+                  content: file.bytes,
                   format,
                 });
               }
@@ -329,7 +332,7 @@ export function Converter({
   ]);
 
   return (
-    <div data-slot="converter" className={cn('@container/converter flex flex-col gap-6', className)}>
+    <div data-slot='converter' className={cn('@container/converter flex flex-col gap-6', className)}>
       <FormatSelector
         selectedFormats={selectedFormats}
         onFormatToggle={onFormatToggle}
@@ -337,14 +340,14 @@ export function Converter({
         {...formatSelectorProperties}
       />
 
-      <div className="flex flex-col gap-2">
+      <div className='flex flex-col gap-2'>
         <Button
           disabled={selectedFormats.length === 0 || isExporting}
-          className="h-auto w-full whitespace-normal"
+          className='h-auto w-full whitespace-normal'
           onClick={handleDownload}
         >
-          <Download className="size-4 shrink-0" />
-          <span className="min-w-0 wrap-break-word">
+          <Download className='size-4 shrink-0' />
+          <span className='min-w-0 wrap-break-word'>
             {selectedFormats.length === 0
               ? 'Select formats to download'
               : selectedFormats.length === 1
@@ -357,35 +360,35 @@ export function Converter({
 
         {/* Save to project toggle */}
         {onExport ? (
-          <div className="flex items-center space-x-2">
+          <div className='flex items-center space-x-2'>
             <Checkbox
-              id="save-to-project"
+              id='save-to-project'
               checked={shouldSaveToProject}
               onCheckedChange={(checked) => {
                 setShouldSaveToProject(checked === true);
               }}
             />
             <Label
-              htmlFor="save-to-project"
-              className="cursor-pointer text-sm leading-none font-normal peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+              htmlFor='save-to-project'
+              className='cursor-pointer text-sm leading-none font-normal peer-disabled:cursor-not-allowed peer-disabled:opacity-70'
             >
-              Save exported files to build
+              Save exported files to project
             </Label>
           </div>
         ) : undefined}
 
         {selectedFormats.length > 1 ? (
-          <div className="flex items-center space-x-2">
+          <div className='flex items-center space-x-2'>
             <Checkbox
-              id="use-zip"
+              id='use-zip'
               checked={shouldUseZipForMultiple}
               onCheckedChange={(checked) => {
                 onZipToggle(checked === true);
               }}
             />
             <Label
-              htmlFor="use-zip"
-              className="cursor-pointer text-sm leading-none font-normal peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+              htmlFor='use-zip'
+              className='cursor-pointer text-sm leading-none font-normal peer-disabled:cursor-not-allowed peer-disabled:opacity-70'
             >
               Download as ZIP file
             </Label>
@@ -394,23 +397,23 @@ export function Converter({
 
         {/* Custom download location toggle */}
         {isFileSystemAccessSupported ? (
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center space-x-2">
+          <div className='flex flex-col gap-2'>
+            <div className='flex items-center space-x-2'>
               <Checkbox
-                id="choose-location"
+                id='choose-location'
                 checked={shouldChooseLocation}
                 onCheckedChange={(checked) => {
                   setShouldChooseLocation(checked === true);
                 }}
               />
               <Label
-                htmlFor="choose-location"
-                className="cursor-pointer text-sm leading-none font-normal peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
+                htmlFor='choose-location'
+                className='cursor-pointer text-sm leading-none font-normal peer-disabled:cursor-not-allowed peer-disabled:opacity-70'
               >
                 Choose download location
               </Label>
             </div>
-            <p className="pl-6 text-xs text-muted-foreground">
+            <p className='pl-6 text-xs text-muted-foreground'>
               {shouldChooseLocation
                 ? 'You will be prompted to choose where to save each file'
                 : 'Downloads to your default downloads folder'}

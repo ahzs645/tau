@@ -1,0 +1,157 @@
+---
+title: Client API
+description: createRuntimeClient, RuntimeClient, presets, filesystem constructors, and event subscription.
+icon: lucide:monitor
+---
+
+# Client API
+
+Use the client API when you need to create a kernel runtime, configure filesystem access, or manage worker connections. The factory and constructors are the primary entry points for integrating `@taucad/runtime` into an application.
+
+## createRuntimeClient
+
+<auto-type-table path='./props/client.ts' name='RuntimeClientOptions' />
+
+<auto-type-table path='./props/client.ts' name='ConnectOptions' />
+
+<auto-type-table path='./props/client.ts' name='RuntimeClient' />
+
+## createRuntimeClientOptions
+
+A helper that provides full intellisense when declaring options -- without importing the `RuntimeClientOptions` type -- and smart-merges a base configuration with partial overrides.
+
+### Identity overload
+
+Provides type inference for the options object:
+
+```typescript
+import { createRuntimeClientOptions } from '@taucad/runtime';
+import { replicad } from '@taucad/runtime/kernels';
+import { esbuild } from '@taucad/runtime/bundler';
+
+const options = createRuntimeClientOptions({
+  kernels: [replicad()],
+  bundlers: [esbuild()],
+});
+```
+
+### Merge overload
+
+Smart-merges a base with overrides using three strategies based on field type:
+
+| Field type    | Examples                            | Strategy                                                                                                                   |
+| ------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Plugin arrays | `kernels`, `middleware`, `bundlers` | **ID-based merge** -- plugins with a matching `id` are replaced in-place (preserving priority order); new IDs are appended |
+| Opaque fields | `transport`, `fileSystem`           | **Full replacement** -- the override replaces the base value entirely                                                      |
+
+```typescript
+import { createRuntimeClientOptions } from '@taucad/runtime';
+import { openscad, replicad, jscad } from '@taucad/runtime/kernels';
+import { parameterCache, geometryCache } from '@taucad/runtime/middleware';
+import { esbuild } from '@taucad/runtime/bundler';
+
+const defaults = createRuntimeClientOptions({
+  kernels: [openscad(), replicad(), jscad()],
+  middleware: [parameterCache(), geometryCache()],
+  bundlers: [esbuild()],
+});
+
+// Replace replicad with a debug-enabled version (matched by id)
+const debug = createRuntimeClientOptions(defaults, {
+  kernels: [replicad({ withSourceMapping: true })],
+});
+```
+
+## Methods
+
+| Method              | Signature                                                          | Description                                                   |
+| ------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------- |
+| `connect`           | `(options: ConnectOptions) => Promise<void>`                       | Initialize the worker and establish the transport connection. |
+| `render`            | `(input: CodeInput \| FileInput) => Promise<HashedGeometryResult>` | Render geometry from code or a file (request/response).       |
+| `export`            | `(format, input?) => Promise<ExportResult>`                        | Export geometry to STEP, STL, GLB, etc.                       |
+| `setFile`           | `(file, parameters?, options?) => void`                            | Set the active file for autonomous rendering.                 |
+| `setParameters`     | `(parameters) => void`                                             | Update parameters for autonomous re-render (50ms debounce).   |
+| `notifyFileChanged` | `(paths: string[]) => void`                                        | Notify the worker that files changed (for inline code mode).  |
+| `on`                | `(event, handler) => () => void`                                   | Subscribe to worker events. Returns an unsubscribe function.  |
+| `terminate`         | `() => void`                                                       | Shut down the worker and release resources.                   |
+
+## Render Input Types
+
+<auto-type-table path='./props/client.ts' name='CodeInput' />
+
+<auto-type-table path='./props/client.ts' name='FileInput' />
+
+<auto-type-table path='./props/client.ts' name='ExportResult' />
+
+## Presets
+
+`presets.all()` returns a `PresetOptions` object containing all built-in kernels, middleware, and bundlers. The type is `{ kernels: KernelPlugin[]; middleware: MiddlewarePlugin[]; bundlers: BundlerPlugin[] }`. See [`KernelPlugin`](./kernels), [`MiddlewarePlugin`](./middleware), and [`BundlerPlugin`](./bundler) for details:
+
+```typescript
+import { createRuntimeClient, presets } from '@taucad/runtime';
+
+const client = createRuntimeClient(presets.all());
+```
+
+Merge with additional options:
+
+```typescript
+import { createRuntimeClient, presets } from '@taucad/runtime';
+import { fromNodeFS } from '@taucad/runtime/filesystem/node';
+
+const client = createRuntimeClient({
+  ...presets.all(),
+  fileSystem: fromNodeFS('/path/to/project'),
+});
+```
+
+## Filesystem
+
+<auto-type-table path='./props/client.ts' name='RuntimeFileSystem' />
+
+`fromMemoryFS`, `fromNodeFS`, and `fromFsLike` implement `RuntimeFileSystemBase` for in-memory, Node.js, and any fs-compatible backends respectively.
+
+## Error Types
+
+**`RenderSupersededError`** -- Thrown when a newer `render()` call supersedes the current one. Use `isRenderSupersededError(error)` for realm-safe detection.
+
+**`RenderAbortedError`** -- Thrown when a render is aborted via the SharedArrayBuffer abort channel. Use `isRenderAbortedError(error)` for realm-safe detection.
+
+## Event Subscription
+
+Subscribe to client events with `client.on(event, handler)`. Returns an unsubscribe function.
+
+| Event                | Handler Signature                                                | When                           |
+| -------------------- | ---------------------------------------------------------------- | ------------------------------ |
+| `geometry`           | `(result: HashedGeometryResult) => void`                         | Render completes (autonomous)  |
+| `state`              | `(state: WorkerState, detail?: string) => void`                  | Worker state changes           |
+| `log`                | `(entry: { level, message, origin?, data? }) => void`            | Kernel/middleware log messages |
+| `progress`           | `(phase: RenderPhase, detail?: Record<string, unknown>) => void` | Render phase transitions       |
+| `telemetry`          | `(entries: PerformanceEntryData[]) => void`                      | Performance entries            |
+| `parametersResolved` | `(result: GetParametersResult) => void`                          | Parameters extracted           |
+
+## Usage
+
+```typescript
+import { createRuntimeClient, fromMemoryFS } from '@taucad/runtime';
+import { replicad } from '@taucad/runtime/kernels';
+import { esbuild } from '@taucad/runtime/bundler';
+
+const client = createRuntimeClient({
+  kernels: [replicad()],
+  bundlers: [esbuild()],
+  fileSystem: fromMemoryFS(),
+});
+
+const result = await client.render({
+  code: { 'main.ts': 'export default () => {}' },
+});
+client.terminate();
+```
+
+## Related
+
+- [Quick Start](../getting-started/quick-start)
+- [Set Up the Filesystem](../guides/filesystem-setup)
+- [Handle Errors](../guides/error-handling)
+- [Render Lifecycle](../concepts/render-lifecycle)

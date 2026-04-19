@@ -5,7 +5,7 @@ Type = "T"; // [T:Text,W:Wi-Fi,P:Phone,V:vCard]
 /* [Text] */
 
 // Any text, URL, email, or message
-Text = "https://tau.tools"; // 128
+Text = "https://tau.new"; // 128
 
 
 /* [Wi-Fi] */

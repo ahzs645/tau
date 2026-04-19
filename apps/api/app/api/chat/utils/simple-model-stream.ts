@@ -13,7 +13,7 @@ import type { FastifyReply } from 'fastify';
  */
 export async function sendSimpleModelStream(
   response: FastifyReply,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- StreamTextResult has complex generics that are not needed here
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any -- StreamTextResult has complex generics that are not needed here
   streamResult: StreamTextResult<any, any>,
 ): Promise<void> {
   // Mark the response as a v1 data stream

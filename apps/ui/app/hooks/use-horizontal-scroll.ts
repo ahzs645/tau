@@ -7,7 +7,7 @@ import { useEffect } from 'react';
  *
  * @param ref - Ref to the scroll container element
  */
-// eslint-disable-next-line @typescript-eslint/no-restricted-types -- React ref object
+// oxlint-disable-next-line @typescript-eslint/no-restricted-types -- React ref object
 export function useHorizontalScroll<T extends HTMLElement>(ref: RefObject<T | null>): void {
   useEffect(() => {
     const scrollContainer = ref.current;

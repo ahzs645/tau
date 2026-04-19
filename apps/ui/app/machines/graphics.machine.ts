@@ -1,4 +1,4 @@
-import { assign, assertEvent, setup, sendTo, emit, enqueueActions } from 'xstate';
+import { assign, assertEvent, setup, emit, enqueueActions } from 'xstate';
 import type { AnyActorRef } from 'xstate';
 import type { GridSizes, ScreenshotOptions, Geometry } from '@taucad/types';
 import { idPrefix } from '@taucad/types/constants';
@@ -155,7 +155,10 @@ export type GraphicsEvent =
   | { type: 'setSectionViewDirection'; payload: 1 | -1 }
   | { type: 'setSectionViewPivot'; payload: [number, number, number] }
   | { type: 'setPlaneName'; payload: 'cartesian' | 'face' }
-  | { type: 'setHoveredSectionView'; payload: 'xy' | 'xz' | 'yz' | 'yx' | 'zx' | 'zy' | undefined }
+  | {
+      type: 'setHoveredSectionView';
+      payload: 'xy' | 'xz' | 'yz' | 'yx' | 'zx' | 'zy' | undefined;
+    }
   | {
       type: 'setSectionViewVisualization';
       payload: Partial<GraphicsContext['sectionViewVisualization']>;
@@ -200,7 +203,11 @@ export type GraphicsEvent =
   | { type: 'unregisterScreenshotCapability' }
   | { type: 'unregisterCameraCapability' }
   // Geometry updates from CAD
-  | { type: 'updateGeometries'; geometries: Geometry[]; units: { length: LengthSymbol } }
+  | {
+      type: 'updateGeometries';
+      geometries: Geometry[];
+      units: { length: LengthSymbol };
+    }
   // Scene radius update from Three.js bounding sphere (sent by Stage)
   | { type: 'sceneRadiusUpdated'; radius: number };
 
@@ -238,7 +245,7 @@ type LengthUnitData = {
 };
 
 const lengthUnitCache = new Map<LengthSymbol, LengthUnitData>();
-const lengthDef = standardInternationalBaseUnits.length;
+const lengthDefinition = standardInternationalBaseUnits.length;
 
 function getLengthUnitData(symbol: LengthSymbol): LengthUnitData {
   const cached = lengthUnitCache.get(symbol);
@@ -247,10 +254,10 @@ function getLengthUnitData(symbol: LengthSymbol): LengthUnitData {
   }
 
   // Check base unit
-  if (symbol === lengthDef.symbol) {
+  if (symbol === lengthDefinition.symbol) {
     const data: LengthUnitData = {
-      unit: lengthDef.unit,
-      symbol: lengthDef.symbol as LengthSymbol,
+      unit: lengthDefinition.unit,
+      symbol: lengthDefinition.symbol as LengthSymbol,
       factor: 1,
       system: 'si',
     };
@@ -259,7 +266,7 @@ function getLengthUnitData(symbol: LengthSymbol): LengthUnitData {
   }
 
   // Search variants
-  const variant = lengthDef.variants.find((v) => v.symbol === symbol);
+  const variant = lengthDefinition.variants.find((v) => v.symbol === symbol);
   if (!variant) {
     throw new Error(`Unknown length symbol: ${symbol}`);
   }
@@ -291,12 +298,17 @@ function getLengthUnitData(symbol: LengthSymbol): LengthUnitData {
  * - Returned GridSizes values include all conversions and factors applied
  */
 // Grid size calculation logic (ported from React)
-function calculateGridSizes(
-  cameraPosition: number,
-  cameraFov: number,
-  gridUnitSystem: 'si' | 'imperial',
-  unitFactor: number,
-): GridSizes {
+function calculateGridSizes({
+  cameraPosition,
+  cameraFov,
+  gridUnitSystem,
+  unitFactor,
+}: {
+  cameraPosition: number;
+  cameraFov: number;
+  gridUnitSystem: 'si' | 'imperial';
+  unitFactor: number;
+}): GridSizes {
   const visibleWidthAtDistance = 2 * cameraPosition * Math.tan((cameraFov * Math.PI) / 360);
   let baseGridSize = visibleWidthAtDistance / 5; // BaseGridSizeCoefficient
 
@@ -442,13 +454,13 @@ function roundTranslationToUnitDecimals(valueInBase: number, unitFactor: number,
  */
 export const graphicsMachine = setup({
   types: {
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     context: {} as GraphicsContext,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     events: {} as GraphicsEvent,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     input: {} as GraphicsInput,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     emitted: {} as GraphicsEmitted,
   },
   actions: {
@@ -465,7 +477,7 @@ export const graphicsMachine = setup({
           gridSizesComputed: event.payload,
         });
         enqueue.emit({
-          type: 'gridUpdated' as const,
+          type: 'gridUpdated',
           sizes: event.payload,
         });
       }
@@ -516,12 +528,12 @@ export const graphicsMachine = setup({
       if (isSystemChange || isImperialFactorChange) {
         // Use relative factor × 1000 for grid calculations
         const gridUnitFactor = relativeFactor * 1000;
-        const newGridSizes = calculateGridSizes(
-          context.cameraPosition,
-          context.cameraFovAngleComputed,
-          unitData.system,
-          gridUnitFactor,
-        );
+        const newGridSizes = calculateGridSizes({
+          cameraPosition: context.cameraPosition,
+          cameraFov: context.cameraFovAngleComputed,
+          gridUnitSystem: unitData.system,
+          unitFactor: gridUnitFactor,
+        });
 
         enqueue.sendTo(({ self }) => self, {
           type: 'updateGridSize',
@@ -549,7 +561,12 @@ export const graphicsMachine = setup({
       // Recalculate grid sizes based on new controls state
       // Use relative factor × 1000 for grid calculations
       const gridUnitFactor = context.units.length.factor * 1000;
-      const newGridSizes = calculateGridSizes(event.position, event.fov, context.units.length.system, gridUnitFactor);
+      const newGridSizes = calculateGridSizes({
+        cameraPosition: event.position,
+        cameraFov: event.fov,
+        gridUnitSystem: context.units.length.system,
+        unitFactor: gridUnitFactor,
+      });
 
       enqueue.sendTo(({ self }) => self, {
         type: 'updateGridSize',
@@ -599,7 +616,7 @@ export const graphicsMachine = setup({
       assertEvent(event, 'sceneRadiusUpdated');
       enqueue.assign({ geometryRadius: event.radius });
       enqueue.emit({
-        type: 'geometryRadiusCalculated' as const,
+        type: 'geometryRadiusCalculated',
         radius: event.radius,
       });
     }),
@@ -690,7 +707,7 @@ export const graphicsMachine = setup({
       });
 
       enqueue.emit({
-        type: 'screenshotCompleted' as const,
+        type: 'screenshotCompleted',
         dataUrls: event.dataUrls,
         requestId: event.requestId,
       });
@@ -704,25 +721,24 @@ export const graphicsMachine = setup({
       });
 
       enqueue.emit({
-        type: 'screenshotFailed' as const,
+        type: 'screenshotFailed',
         error: event.error,
         requestId: event.requestId,
       });
     }),
 
-    requestCameraReset: sendTo(
-      ({ context }) => context.cameraCapability!,
-      ({ event }) => {
-        assertEvent(event, 'resetCamera');
-        return {
+    requestCameraReset: enqueueActions(({ enqueue, context, event }) => {
+      assertEvent(event, 'resetCamera');
+      if (context.cameraCapability) {
+        enqueue.sendTo(context.cameraCapability, {
           type: 'reset',
           options: event.options,
-        };
-      },
-    ),
+        });
+      }
+    }),
 
     completeCameraReset: emit({
-      type: 'cameraResetCompleted' as const,
+      type: 'cameraResetCompleted',
     }),
 
     setSurfaceVisibility: assign({
@@ -1072,14 +1088,14 @@ export const graphicsMachine = setup({
     isGridSizeLocked: false,
     graphicsUnits: {
       length: {
-        symbol: 'mm' as const,
+        symbol: 'mm',
         factor: 1e-3,
         system: 'si',
       },
     },
     cadUnits: {
       length: {
-        symbol: 'mm' as const, // Default to mm
+        symbol: 'mm', // Default to mm
         factor: 1e-3,
       },
     },
@@ -1087,7 +1103,7 @@ export const graphicsMachine = setup({
     // When both are mm: 1 / 1 = 1
     units: {
       length: {
-        symbol: 'mm' as const,
+        symbol: 'mm',
         factor: 1, // 1 / 1 = 1
         system: 'si',
       },

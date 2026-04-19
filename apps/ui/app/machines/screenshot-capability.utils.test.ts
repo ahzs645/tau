@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
-import { calculateOptimalGrid } from '#machines/screenshot-capability.machine.js';
+import { calculateOptimalGrid, removeCloneUnsafeObjects } from '#machines/screenshot-capability.machine.js';
 import {
   applyMatcapToClonedScene,
   disposeClonedSceneMaterials,
@@ -149,7 +149,11 @@ function createColoredMesh(
   opacity = 1,
 ): THREE.Mesh<THREE.BufferGeometry, THREE.MeshStandardMaterial> {
   const geometry = new THREE.BoxGeometry(1, 1, 1);
-  const material = new THREE.MeshStandardMaterial({ color, opacity, transparent: opacity < 1 });
+  const material = new THREE.MeshStandardMaterial({
+    color,
+    opacity,
+    transparent: opacity < 1,
+  });
   return new THREE.Mesh(geometry, material);
 }
 
@@ -189,6 +193,7 @@ describe('applyMatcapToClonedScene', () => {
 
     applyMatcapToClonedScene(scene, texture);
 
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- TS2352: mesh.material type narrow needed for test assertion
     const matcapMat = mesh.material as unknown as THREE.MeshMatcapMaterial;
     expect(matcapMat.matcap).toBe(texture);
   });
@@ -201,6 +206,7 @@ describe('applyMatcapToClonedScene', () => {
 
     applyMatcapToClonedScene(scene, texture);
 
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- TS2352: mesh.material type narrow needed for test assertion
     const matcapMat = mesh.material as unknown as THREE.MeshMatcapMaterial;
     expect(matcapMat.side).toBe(THREE.DoubleSide);
   });
@@ -213,6 +219,7 @@ describe('applyMatcapToClonedScene', () => {
 
     applyMatcapToClonedScene(scene, texture);
 
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- TS2352: mesh.material type narrow needed for test assertion
     const matcapMat = mesh.material as unknown as THREE.MeshMatcapMaterial;
     expect(matcapMat.color.getHex()).toBe(0x00_ff_00);
   });
@@ -225,6 +232,7 @@ describe('applyMatcapToClonedScene', () => {
 
     applyMatcapToClonedScene(scene, texture);
 
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- TS2352: mesh.material type narrow needed for test assertion
     const matcapMat = mesh.material as unknown as THREE.MeshMatcapMaterial;
     expect(matcapMat.opacity).toBe(0.5);
     expect(matcapMat.transparent).toBe(true);
@@ -238,6 +246,7 @@ describe('applyMatcapToClonedScene', () => {
 
     applyMatcapToClonedScene(scene, texture);
 
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- TS2352: mesh.material type narrow needed for test assertion
     const matcapMat = mesh.material as unknown as THREE.MeshMatcapMaterial;
     expect(matcapMat.opacity).toBe(1);
     expect(matcapMat.transparent).toBe(false);
@@ -251,6 +260,7 @@ describe('applyMatcapToClonedScene', () => {
 
     applyMatcapToClonedScene(scene, texture);
 
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- TS2352: mesh.material type narrow needed for test assertion
     const matcapMat = mesh.material as unknown as THREE.MeshMatcapMaterial;
     expect(matcapMat.vertexColors).toBe(true);
   });
@@ -263,6 +273,7 @@ describe('applyMatcapToClonedScene', () => {
 
     applyMatcapToClonedScene(scene, texture);
 
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- TS2352: mesh.material type narrow needed for test assertion
     const matcapMat = mesh.material as unknown as THREE.MeshMatcapMaterial;
     expect(matcapMat.vertexColors).toBe(false);
   });
@@ -313,6 +324,7 @@ describe('applyMatcapToClonedScene', () => {
 
     applyMatcapToClonedScene(scene, texture);
 
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- TS2352: mesh.material type narrow needed for test assertion
     const matRed = meshRed.material as unknown as THREE.MeshMatcapMaterial;
     const matBlue = meshBlue.material as unknown as THREE.MeshMatcapMaterial;
     expect(matRed.color.getHex()).toBe(0xff_00_00);
@@ -334,8 +346,9 @@ describe('disposeClonedSceneMaterials', () => {
     // Apply matcap first (mimics screenshot pipeline)
     applyMatcapToClonedScene(scene, texture);
 
-    const disposeSpy1 = vi.spyOn(mesh1.material as THREE.Material, 'dispose');
-    const disposeSpy2 = vi.spyOn(mesh2.material as THREE.Material, 'dispose');
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- mesh.material type narrow needed for dispose spy
+    const disposeSpy1 = vi.spyOn(mesh1.material as unknown as THREE.Material, 'dispose');
+    const disposeSpy2 = vi.spyOn(mesh2.material as unknown as THREE.Material, 'dispose');
 
     disposeClonedSceneMaterials(scene);
 
@@ -360,7 +373,8 @@ describe('disposeClonedSceneMaterials', () => {
     const texture = createStubTexture();
 
     applyMatcapToClonedScene(scene, texture);
-    const disposeSpy = vi.spyOn(mesh.material as THREE.Material, 'dispose');
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- mesh.material type narrow needed for dispose spy
+    const disposeSpy = vi.spyOn(mesh.material as unknown as THREE.Material, 'dispose');
 
     disposeClonedSceneMaterials(scene);
 
@@ -641,8 +655,8 @@ describe('screenshot camera centering', () => {
       const cameraPosition = new THREE.Vector3(geometryCenter.x + ox, geometryCenter.y + oy, geometryCenter.z + oz);
 
       // Distance from origin is NOT the intended camera distance
-      const distFromOrigin = cameraPosition.length();
-      expect(distFromOrigin).not.toBeCloseTo(distance, 0);
+      const distanceFromOrigin = cameraPosition.length();
+      expect(distanceFromOrigin).not.toBeCloseTo(distance, 0);
 
       // But distance from geometry center IS correct
       expect(cameraPosition.distanceTo(geometryCenter)).toBeCloseTo(distance, 6);
@@ -699,6 +713,7 @@ describe('screenshot camera centering', () => {
 
 describe('computeViewFittingZoom', () => {
   // Helper: axis-aligned bounding box centred at `center` with given half-extents
+  // oxlint-disable-next-line max-params -- test helper, simple positional args are clearer here
   function makeBox(center: THREE.Vector3, hx: number, hy: number, hz: number): THREE.Box3 {
     return new THREE.Box3(
       new THREE.Vector3(center.x - hx, center.y - hy, center.z - hz),
@@ -729,8 +744,8 @@ describe('computeViewFittingZoom', () => {
       // With perspective-correct projection, the closest bbox corners (at z = +halfExtent)
       // are at forward distance (d - halfExtent), which makes them subtend a larger angle.
       // zoom = (d - halfExtent) * tan(fov/2) / halfExtent
-      const closestForwardDist = distance - halfExtent;
-      const expectedZoom = (closestForwardDist * tanHalf) / halfExtent;
+      const closestForwardDistance = distance - halfExtent;
+      const expectedZoom = (closestForwardDistance * tanHalf) / halfExtent;
 
       const zoom = computeViewFittingZoom({
         cameraPosition: new THREE.Vector3(0, 0, distance),
@@ -790,8 +805,8 @@ describe('computeViewFittingZoom', () => {
       const tanHalf = Math.tan((fov / 2) * (Math.PI / 180));
       // Closest corners at z=+1 have forward distance 9.
       // Horizontal constrains: aspect * tanHalf / (4/9) = 9 * aspect * tanHalf / 4
-      const closestForwardDist = 9;
-      const zoomH = (squareAspect * closestForwardDist * tanHalf) / 4;
+      const closestForwardDistance = 9;
+      const zoomH = (squareAspect * closestForwardDistance * tanHalf) / 4;
       expect(zoom).toBeCloseTo(zoomH, 5);
     });
   });
@@ -885,8 +900,14 @@ describe('computeViewFittingZoom', () => {
         aspectRatio: squareAspect,
       };
 
-      const zoomFull = computeViewFittingZoom({ ...baseParameters, paddingFactor: 1 });
-      const zoomPadded = computeViewFittingZoom({ ...baseParameters, paddingFactor: 0.8 });
+      const zoomFull = computeViewFittingZoom({
+        ...baseParameters,
+        paddingFactor: 1,
+      });
+      const zoomPadded = computeViewFittingZoom({
+        ...baseParameters,
+        paddingFactor: 0.8,
+      });
 
       expect(zoomPadded / zoomFull).toBeCloseTo(0.8, 5);
     });
@@ -901,7 +922,10 @@ describe('computeViewFittingZoom', () => {
       };
 
       const zoomDefault = computeViewFittingZoom(baseParameters);
-      const zoomExplicit = computeViewFittingZoom({ ...baseParameters, paddingFactor: 0.9 });
+      const zoomExplicit = computeViewFittingZoom({
+        ...baseParameters,
+        paddingFactor: 0.9,
+      });
 
       expect(zoomDefault).toBeCloseTo(zoomExplicit, 10);
     });
@@ -973,8 +997,8 @@ describe('computeViewFittingZoom', () => {
       // Perspective-correct: closest corners at z = -halfZ are at forward distance
       // (distance - halfZ) = 12 from camera. Their tangent = halfXY / 12, which is
       // larger than halfXY / 20, so the required zoom is lower (less zoomed in).
-      const perspectiveForwardDist = distance - halfZ;
-      const perspectiveZoom = (perspectiveForwardDist * tanHalf) / halfXy;
+      const perspectiveForwardDistance = distance - halfZ;
+      const perspectiveZoom = (perspectiveForwardDistance * tanHalf) / halfXy;
 
       expect(zoom).toBeCloseTo(perspectiveZoom, 5);
       expect(zoom).toBeLessThan(orthographicZoom);
@@ -1000,5 +1024,95 @@ describe('computeViewFittingZoom', () => {
       const orthographicZoom = (distance * tanHalf) / halfExtent;
       expect(zoom).toBeCloseTo(orthographicZoom, 1);
     });
+  });
+});
+
+// ── removeCloneUnsafeObjects ────────────────────────────────────────────────
+
+describe('removeCloneUnsafeObjects', () => {
+  /**
+   * Minimal stand-in for TransformControls. The real class's updateMatrixWorld
+   * unconditionally accesses `this.camera.updateMatrixWorld()`. When cloned via
+   * `scene.clone()`, the new instance's constructor receives no arguments, leaving
+   * `this.camera` as `undefined` and causing a runtime crash during scene traversal.
+   */
+  class MockTransformControls extends THREE.Object3D {
+    public get isTransformControls(): boolean {
+      return true;
+    }
+    private readonly camera: THREE.Camera | undefined;
+
+    public constructor(camera?: THREE.Camera) {
+      super();
+      this.camera = camera;
+    }
+
+    public override updateMatrixWorld(force?: boolean): void {
+      this.camera!.updateMatrixWorld();
+      super.updateMatrixWorld(force);
+    }
+  }
+
+  it('should remove TransformControls from a cloned scene so updateMatrixWorld does not crash', () => {
+    const scene = new THREE.Scene();
+    scene.add(createColoredMesh());
+    scene.add(new MockTransformControls(new THREE.PerspectiveCamera()));
+
+    const clonedScene = scene.clone();
+
+    removeCloneUnsafeObjects(clonedScene);
+
+    expect(() => {
+      clonedScene.updateMatrixWorld();
+    }).not.toThrow();
+  });
+
+  it('should leave the cloned scene with no TransformControls descendants', () => {
+    const scene = new THREE.Scene();
+    scene.add(createColoredMesh());
+    scene.add(new MockTransformControls(new THREE.PerspectiveCamera()));
+
+    const clonedScene = scene.clone();
+
+    removeCloneUnsafeObjects(clonedScene);
+
+    let foundTransformControls = false;
+    clonedScene.traverse((object) => {
+      if ('isTransformControls' in object) {
+        foundTransformControls = true;
+      }
+    });
+    expect(foundTransformControls).toBe(false);
+  });
+
+  it('should preserve regular meshes in the cloned scene', () => {
+    const scene = new THREE.Scene();
+    scene.add(createColoredMesh());
+    scene.add(new MockTransformControls(new THREE.PerspectiveCamera()));
+
+    const clonedScene = scene.clone();
+
+    removeCloneUnsafeObjects(clonedScene);
+
+    let meshCount = 0;
+    clonedScene.traverse((object) => {
+      if ('isMesh' in object && object.isMesh) {
+        meshCount++;
+      }
+    });
+    expect(meshCount).toBe(1);
+  });
+
+  it('should be a no-op when the scene has no TransformControls', () => {
+    const scene = new THREE.Scene();
+    scene.add(createColoredMesh());
+    scene.add(new THREE.Group());
+
+    const clonedScene = scene.clone();
+    const childCountBefore = clonedScene.children.length;
+
+    removeCloneUnsafeObjects(clonedScene);
+
+    expect(clonedScene.children.length).toBe(childCountBefore);
   });
 });

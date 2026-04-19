@@ -96,22 +96,22 @@ function ConditionRow({
   );
 
   return (
-    <div className="flex items-center gap-1">
+    <div className='flex items-center gap-1'>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <button
-            type="button"
+            type='button'
             className={cn(
               'flex h-7 items-center gap-1.5 rounded-md border border-border bg-background px-2 text-xs',
               'transition-colors hover:bg-muted',
             )}
           >
-            <config.icon className="size-3 text-muted-foreground" />
+            <config.icon className='size-3 text-muted-foreground' />
             <span>{config.label}</span>
-            <ChevronDown className="size-3 text-muted-foreground" />
+            <ChevronDown className='size-3 text-muted-foreground' />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="min-w-36">
+        <DropdownMenuContent align='start' className='min-w-36'>
           {(Object.entries(fieldConfigs) as Array<[FilterField, FieldConfig]>).map(([key, fc]) => (
             <DropdownMenuItem
               key={key}
@@ -119,7 +119,7 @@ function ConditionRow({
                 handleFieldChange(key);
               }}
             >
-              <fc.icon className="size-3.5" />
+              <fc.icon className='size-3.5' />
               {fc.label}
             </DropdownMenuItem>
           ))}
@@ -129,17 +129,17 @@ function ConditionRow({
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <button
-            type="button"
+            type='button'
             className={cn(
               'flex h-7 items-center gap-1 rounded-md border border-border bg-background px-2 text-xs',
               'transition-colors hover:bg-muted',
             )}
           >
             <span>{condition.operator}</span>
-            <ChevronDown className="size-3 text-muted-foreground" />
+            <ChevronDown className='size-3 text-muted-foreground' />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="min-w-16">
+        <DropdownMenuContent align='start' className='min-w-16'>
           {config.operators.map((op) => (
             <DropdownMenuItem
               key={op}
@@ -157,17 +157,17 @@ function ConditionRow({
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
-              type="button"
+              type='button'
               className={cn(
                 'flex h-7 min-w-20 items-center gap-1 rounded-md border border-border bg-background px-2 text-xs',
                 'transition-colors hover:bg-muted',
               )}
             >
-              <span className="flex-1 text-left">{condition.value || 'Select...'}</span>
-              <ChevronDown className="size-3 text-muted-foreground" />
+              <span className='flex-1 text-left'>{condition.value || 'Select...'}</span>
+              <ChevronDown className='size-3 text-muted-foreground' />
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="min-w-28">
+          <DropdownMenuContent align='start' className='min-w-28'>
             {config.enumValues.map((v) => (
               <DropdownMenuItem
                 key={v}
@@ -181,7 +181,7 @@ function ConditionRow({
           </DropdownMenuContent>
         </DropdownMenu>
       ) : (
-        <div className="flex items-center gap-0">
+        <div className='flex items-center gap-0'>
           <input
             type={config.unit ? 'number' : 'text'}
             className={cn(
@@ -195,16 +195,16 @@ function ConditionRow({
               handleValueChange(event.target.value);
             }}
           />
-          {config.unit ? <span className="ml-1 text-xs text-muted-foreground">{config.unit}</span> : undefined}
+          {config.unit ? <span className='ml-1 text-xs text-muted-foreground'>{config.unit}</span> : undefined}
         </div>
       )}
 
       <button
-        type="button"
-        className="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+        type='button'
+        className='flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground'
         onClick={onRemove}
       >
-        <X className="size-3" />
+        <X className='size-3' />
       </button>
     </div>
   );
@@ -252,17 +252,17 @@ export function TraceConditionPicker({
   }, [conditions]);
 
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-center justify-between">
-        <span className="text-sm font-medium">Filters</span>
-        <div className="flex items-center gap-1">
+    <div className='flex flex-col gap-2'>
+      <div className='flex items-center justify-between'>
+        <span className='text-sm font-medium'>Filters</span>
+        <div className='flex items-center gap-1'>
           {conditions.length > 0 && (
             <>
-              <Button variant="ghost" size="xs" onClick={handleCopy}>
-                <Copy className="size-3" />
+              <Button variant='ghost' size='xs' onClick={handleCopy}>
+                <Copy className='size-3' />
               </Button>
-              <Button variant="ghost" size="xs" onClick={handleClear}>
-                <Trash2 className="size-3" />
+              <Button variant='ghost' size='xs' onClick={handleClear}>
+                <Trash2 className='size-3' />
               </Button>
             </>
           )}
@@ -270,8 +270,8 @@ export function TraceConditionPicker({
       </div>
 
       {conditions.length > 0 && (
-        <div className="flex flex-col gap-1.5">
-          <span className="text-xs text-muted-foreground">Where</span>
+        <div className='flex flex-col gap-1.5'>
+          <span className='text-xs text-muted-foreground'>Where</span>
           {conditions.map((condition, index) => (
             <ConditionRow
               key={condition.id}
@@ -287,8 +287,8 @@ export function TraceConditionPicker({
         </div>
       )}
 
-      <Button variant="ghost" size="xs" className="w-fit" onClick={handleAdd}>
-        <Plus className="size-3" />
+      <Button variant='ghost' size='xs' className='w-fit' onClick={handleAdd}>
+        <Plus className='size-3' />
         And
       </Button>
     </div>

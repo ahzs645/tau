@@ -45,8 +45,8 @@ export type LanguageContribution = {
   /** Phase 2: Called when services are available. Register providers, start LSP, etc. */
   activate(context: ActivationContext): ActivationResult;
 
-  /** Called on build session change. Reset caches, document tracking, etc. */
-  onBuildSessionChange?(buildId: string): void;
+  /** Called on project session change. Reset caches, document tracking, etc. */
+  onProjectSessionChange?(projectId: string): void;
 
   /** Dispose all resources. Called on unmount or before re-activation. */
   dispose(): void;
@@ -125,13 +125,13 @@ export class LanguageContributionRegistry {
   }
 
   /**
-   * Forward build session change to all contributions. Increments activation epoch.
+   * Forward project session change to all contributions. Increments activation epoch.
    */
-  public onBuildSessionChange(buildId: string): void {
+  public onProjectSessionChange(projectId: string): void {
     this.activationEpoch++;
 
     for (const contribution of this.contributions.values()) {
-      contribution.onBuildSessionChange?.(buildId);
+      contribution.onProjectSessionChange?.(projectId);
     }
   }
 

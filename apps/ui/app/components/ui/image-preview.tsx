@@ -65,8 +65,8 @@ function ImagePreview({ src, alt, label, onError, children, dialogProps }: Image
             {/* Backdrop via portal to ensure it's above all other content */}
             {createPortal(
               <div
-                aria-hidden="true"
-                className="fixed inset-0 z-100 animate-in bg-black/60 fade-in-0"
+                aria-hidden='true'
+                className='fixed inset-0 z-100 animate-in bg-black/60 fade-in-0'
                 {...dialogProps}
                 onClick={() => {
                   setOpen(false);
@@ -76,19 +76,19 @@ function ImagePreview({ src, alt, label, onError, children, dialogProps }: Image
             )}
             <DialogContent
               {...dialogProps}
-              className="shadow-lg z-101! flex h-[80vh]! max-h-none! w-auto! max-w-none! items-center justify-center overflow-visible rounded-lg border bg-background p-4"
+              className='shadow-lg z-101! flex h-[80vh]! max-h-none! w-auto! max-w-none! items-center justify-center overflow-visible rounded-lg border bg-background p-2 *:data-[slot=dialog-close]:bg-background'
             >
-              <div className="relative h-full">
+              <div className='relative h-full'>
                 <img
                   alt={alt}
-                  className="h-full w-auto rounded-lg object-contain"
-                  loading="lazy"
+                  className='h-full w-auto rounded-lg object-contain'
+                  loading='lazy'
                   src={src}
                   onError={onError}
                 />
                 {/* Label overlay on top-left */}
                 {label ? (
-                  <div className="absolute top-1 left-1 rounded bg-black/60 px-2 py-1 text-xs font-medium tracking-wide text-white uppercase">
+                  <div className='absolute top-1 left-1 rounded bg-black/60 px-2 py-1 text-xs font-medium tracking-wide text-white uppercase'>
                     {label}
                   </div>
                 ) : undefined}
@@ -111,7 +111,7 @@ function ImagePreviewTrigger({ children }: ImagePreviewTriggerProps): React.JSX.
 
   return (
     <div
-      role="button"
+      role='button'
       tabIndex={0}
       onMouseDown={(event) => {
         // Prevent blur events from firing on parent elements (e.g., textarea losing focus)
@@ -142,7 +142,7 @@ type ImagePreviewImageProps = {
 function ImagePreviewImage({ className }: ImagePreviewImageProps): React.JSX.Element {
   const { src, alt, onError } = useImagePreviewContext();
 
-  return <img src={src} alt={alt} className={cn('cursor-pointer', className)} loading="lazy" onError={onError} />;
+  return <img src={src} alt={alt} className={cn('cursor-pointer', className)} loading='lazy' onError={onError} />;
 }
 
 export { ImagePreview, ImagePreviewTrigger, ImagePreviewImage };

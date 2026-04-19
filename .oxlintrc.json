@@ -1,0 +1,1262 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "options": {
+    "typeAware": true
+  },
+  "ignorePatterns": [
+    "repos/**",
+    "**/assets/**",
+    "**/dist/**",
+    "**/generated/**",
+    "**/out-tsc/**",
+    "**/coverage/**",
+    "**/.nx/**",
+    "**/.cache/**",
+    "**/.react-router/**",
+    "**/.source/**",
+    "**/.netlify/**",
+    "**/*.prompt.example.*",
+    "**/public/**",
+    "**/content/docs/**",
+    "tarballs/**",
+    "experiments/**",
+    "**/*.jscad.js"
+  ],
+  "plugins": [
+    "unicorn",
+    "promise",
+    "import",
+    "node",
+    "typescript",
+    "react",
+    "vitest",
+    "jsx-a11y",
+    "react-perf",
+    "jsdoc"
+  ],
+  "jsPlugins": [
+    "./libs/oxlint/src/tau-lint.js",
+    { "name": "unicorn-js", "specifier": "eslint-plugin-unicorn" },
+    { "name": "node-js", "specifier": "eslint-plugin-n" },
+    "eslint-plugin-no-use-extend-native",
+    {
+      "name": "eslint-comments-js",
+      "specifier": "@eslint-community/eslint-plugin-eslint-comments"
+    },
+    { "name": "jsdoc-js", "specifier": "eslint-plugin-jsdoc" },
+    "eslint-plugin-no-barrel-files",
+    {
+      "name": "enforce-uint8array-arraybuffer",
+      "specifier": "@protontech/eslint-plugin-enforce-uint8array-arraybuffer"
+    },
+    { "name": "react-js", "specifier": "eslint-plugin-react" }
+  ],
+  // Disable all category defaults so only explicitly listed rules in "rules" are active.
+  // This ensures full control over which rules run, matching the migrated ESLint config exactly.
+  "categories": {
+    "correctness": "off"
+  },
+  "env": {
+    "builtin": true
+  },
+  "rules": {
+    // Superseded by `unicorn/no-nested-ternary` which provides the same check with better messaging.
+    "no-nested-ternary": "off",
+    "unicorn/catch-error-name": "error",
+    "unicorn/consistent-assert": "error",
+    "unicorn/consistent-date-clone": "error",
+    "unicorn/consistent-empty-array-spread": "error",
+    "unicorn/consistent-existence-index-check": "error",
+    // Disabled: too restrictive for React codebases where helper functions inside components are idiomatic.
+    "unicorn/consistent-function-scoping": "off",
+    "unicorn/error-message": "error",
+    "unicorn/escape-case": "error",
+    "unicorn/explicit-length-check": "error",
+    "unicorn/filename-case": "error",
+    "unicorn/new-for-builtins": "error",
+    /*
+     * Disabled: oxlint doesn't recognize external plugin prefixes (e.g. `n/`, `import-x/`) in eslint-disable
+     * comments, so it incorrectly flags valid disable comments like `eslint-disable n/prefer-global/process`
+     * as "abusive". Replaced by `tau-lint/no-abusive-eslint-disable` which handles this correctly.
+     */
+    "unicorn/no-abusive-eslint-disable": "off",
+    "tau-lint/no-abusive-eslint-disable": "error",
+    // Require a description for each eslint-disable/oxlint-ignore comment. This informs co-authors about the rule and why it is being suppressed.
+    "tau-lint/require-disable-description": "error",
+    "tau-lint/require-ignore-description": "error",
+    "tau-lint/no-literal-const-assertion": "error",
+    "tau-lint/no-useless-catch-unknown": "error",
+    "tau-lint/validate-jsdoc-codeblocks": "error",
+    "tau-lint/require-public-export-jsdoc": "warn",
+    "tau-lint/no-consecutive-jsdoc-blank-lines": "warn",
+    // Enabled per-file-type via overrides (only .tsx files). See docs/policy/color-policy.md.
+    "tau-lint/no-hardcoded-color": "off",
+    "unicorn/no-accessor-recursion": "error",
+    "unicorn/no-anonymous-default-export": "error",
+    "unicorn/no-array-callback-reference": "error",
+    "unicorn/no-array-for-each": "error",
+    "unicorn/no-array-method-this-argument": "error",
+    "unicorn/no-array-reduce": "error",
+    "unicorn/no-await-expression-member": "error",
+    "unicorn/no-await-in-promise-methods": "error",
+    "unicorn/no-console-spaces": "error",
+    "unicorn/no-document-cookie": "error",
+    "unicorn/no-empty-file": "error",
+    "unicorn/no-hex-escape": "error",
+    "unicorn/no-instanceof-builtins": "error",
+    "unicorn/no-invalid-fetch-options": "error",
+    "unicorn/no-invalid-remove-event-listener": "error",
+    "unicorn/no-length-as-slice-end": "error",
+    "unicorn/no-lonely-if": "error",
+    "unicorn/no-magic-array-flat-depth": "error",
+    "unicorn/no-negated-condition": "error",
+    "unicorn/no-negation-in-equality-check": "error",
+    "unicorn/no-new-array": "error",
+    "unicorn/no-new-buffer": "error",
+    // Disabled: DOM APIs, JSON, and many third-party libraries use `null` extensively. Banning it causes
+    // excessive friction without meaningful safety gains in a codebase that interacts with browser/DOM APIs.
+    "unicorn/no-null": "off",
+    "unicorn/no-object-as-default-parameter": "error",
+    "unicorn/no-process-exit": "error",
+    "unicorn/no-single-promise-in-promise-methods": "error",
+    "unicorn/no-static-only-class": "error",
+    "unicorn/no-thenable": "error",
+    "unicorn/no-this-assignment": "error",
+    "unicorn/no-typeof-undefined": "error",
+    "unicorn/no-unnecessary-await": "error",
+    "unicorn/no-unreadable-array-destructuring": "error",
+    "unicorn/no-unreadable-iife": "error",
+    "unicorn/no-useless-fallback-in-spread": "error",
+    "unicorn/no-useless-length-check": "error",
+    "unicorn/no-useless-promise-resolve-reject": "error",
+    "unicorn/no-useless-spread": "error",
+    "unicorn/no-useless-switch-case": "error",
+    // Disabled: conflicts with `consistent-return` and explicit `return undefined` patterns.
+    // Explicit `undefined` improves readability in functions with multiple return paths.
+    "unicorn/no-useless-undefined": "off",
+    "unicorn/no-zero-fractions": "error",
+    "unicorn/numeric-separators-style": "error",
+    "unicorn/prefer-add-event-listener": "error",
+    "unicorn/prefer-array-find": "error",
+    "unicorn/prefer-array-flat-map": "error",
+    "unicorn/prefer-array-flat": "error",
+    "unicorn/prefer-array-index-of": "error",
+    "unicorn/prefer-array-some": "error",
+    "unicorn/prefer-at": "error",
+    "unicorn/prefer-blob-reading-methods": "error",
+    "unicorn/prefer-code-point": "error",
+    "unicorn/prefer-date-now": "error",
+    "unicorn/prefer-default-parameters": "error",
+    "unicorn/prefer-dom-node-append": "error",
+    "unicorn/prefer-dom-node-dataset": "error",
+    "unicorn/prefer-dom-node-remove": "error",
+    "unicorn/prefer-dom-node-text-content": "error",
+    "unicorn/prefer-event-target": "error",
+    "unicorn/prefer-global-this": "error",
+    "unicorn/prefer-includes": "error",
+    "unicorn/prefer-keyboard-event-key": "error",
+    "unicorn/prefer-logical-operator-over-ternary": "error",
+    "unicorn/prefer-math-min-max": "error",
+    "unicorn/prefer-math-trunc": "error",
+    "unicorn/prefer-modern-dom-apis": "error",
+    "unicorn/prefer-modern-math-apis": "error",
+    "unicorn/prefer-module": "error",
+    "unicorn/prefer-native-coercion-functions": "error",
+    "unicorn/prefer-negative-index": "error",
+    "unicorn/prefer-node-protocol": "error",
+    "unicorn/prefer-number-properties": "error",
+    "unicorn/prefer-object-from-entries": "error",
+    "unicorn/prefer-optional-catch-binding": "error",
+    "unicorn/prefer-prototype-methods": "error",
+    "unicorn/prefer-query-selector": "error",
+    "unicorn/prefer-reflect-apply": "error",
+    "unicorn/prefer-regexp-test": "error",
+    "unicorn/prefer-set-has": "error",
+    "unicorn/prefer-set-size": "error",
+    "unicorn/prefer-spread": "error",
+    "unicorn/prefer-string-raw": "error",
+    "unicorn/prefer-string-replace-all": "error",
+    "unicorn/prefer-string-slice": "error",
+    "unicorn/prefer-string-starts-ends-with": "error",
+    "unicorn/prefer-string-trim-start-end": "error",
+    "unicorn/prefer-structured-clone": "error",
+    "unicorn/prefer-ternary": ["error", "only-single-line"],
+    "unicorn/prefer-top-level-await": "error",
+    "unicorn/prefer-type-error": "error",
+    "unicorn/relative-url-style": "error",
+    "unicorn/require-array-join-separator": "error",
+    "unicorn/require-number-to-fixed-digits-argument": "error",
+    // Disabled: XO default. The `targetOrigin` parameter is often intentionally omitted when posting
+    // messages within same-origin contexts (e.g. web workers), where specifying it adds no security value.
+    "unicorn/require-post-message-target-origin": "off",
+    "unicorn/switch-case-braces": "error",
+    "unicorn/text-encoding-identifier-case": "error",
+    "unicorn/throw-new-error": "error",
+    "promise/param-names": "error",
+    "promise/no-return-wrap": [
+      "error",
+      {
+        "allowReject": true
+      }
+    ],
+    "promise/no-new-statics": "error",
+    "promise/prefer-await-to-then": ["error", { "strict": false }],
+    "promise/prefer-catch": "error",
+    "promise/valid-params": "error",
+    // Disabled: TypeScript's own module resolution handles default import validation.
+    // This rule produces false positives with TypeScript's `esModuleInterop` and `allowSyntheticDefaultImports`.
+    "import/default": "off",
+    // Ensure imports with `type` modifier are also checked to include an extension.
+    "import/extensions": [
+      "error",
+      "always",
+      {
+        "ignorePackages": true,
+        "checkTypeImports": true
+      }
+    ],
+    // Ensure that import type side effects are prevented when using `verbatimModuleSyntax: true`.
+    "import/consistent-type-specifier-style": ["error", "prefer-top-level"],
+    "import/first": "error",
+    // Disabled: TypeScript's own module resolution validates namespace access.
+    // This rule is slow and produces false positives with TypeScript namespaces and re-exports.
+    "import/namespace": "off",
+    "import/no-absolute-path": "error",
+    "import/no-anonymous-default-export": "error",
+    "import/no-named-default": "error",
+    "import/no-webpack-loader-syntax": "error",
+    "import/no-self-import": "error",
+    "import/no-cycle": [
+      "error",
+      {
+        "ignoreExternal": true
+      }
+    ],
+    "import/no-amd": "error",
+    // Ensure that duplicate imports have separate lines for `type` and non-modifier imports.
+    "import/no-duplicates": [
+      "error",
+      {
+        "prefer-inline": false
+      }
+    ],
+    "import/no-empty-named-blocks": "error",
+    "import/no-mutable-exports": "error",
+    "import/no-named-as-default-member": "error",
+    "import/no-named-as-default": "error",
+    "import/no-unassigned-import": [
+      "error",
+      {
+        "allow": [
+          "@babel/polyfill",
+          "**/register",
+          "**/register.*",
+          "**/register/**",
+          "**/register/**.*",
+          "**/*.css",
+          "**/*.scss",
+          "**/*.sass",
+          "**/*.less"
+        ]
+      }
+    ],
+    "for-direction": "error",
+    "no-async-promise-executor": "error",
+    "no-await-in-loop": "error",
+    "no-compare-neg-zero": "error",
+    "no-cond-assign": "error",
+    "no-constant-condition": "error",
+    "no-control-regex": "error",
+    "no-debugger": "error",
+    "no-dupe-else-if": "error",
+    "no-dupe-keys": "error",
+    "no-duplicate-case": "error",
+    "no-empty-character-class": "error",
+    "no-empty": [
+      "error",
+      {
+        "allowEmptyCatch": true
+      }
+    ],
+    "no-empty-static-block": "error",
+    "no-ex-assign": "error",
+    "no-extra-boolean-cast": "error",
+    "no-func-assign": "error",
+    "no-import-assign": "error",
+    "no-inner-declarations": "error",
+    "no-invalid-regexp": "error",
+    "no-irregular-whitespace": "error",
+    "no-loss-of-precision": "error",
+    "no-misleading-character-class": "error",
+    "no-obj-calls": "error",
+    "no-promise-executor-return": "error",
+    "no-prototype-builtins": "error",
+    "no-regex-spaces": "error",
+    "no-setter-return": "error",
+    "no-sparse-arrays": "error",
+    "no-template-curly-in-string": "error",
+    "no-unsafe-finally": "error",
+    "no-unsafe-negation": [
+      "error",
+      {
+        "enforceForOrderingRelations": true
+      }
+    ],
+    "no-unsafe-optional-chaining": [
+      "error",
+      {
+        "disallowArithmeticOperators": true
+      }
+    ],
+    "no-useless-backreference": "error",
+    "use-isnan": "error",
+    "valid-typeof": [
+      "error",
+      {
+        "requireStringLiterals": false
+      }
+    ],
+    "accessor-pairs": [
+      "error",
+      {
+        "enforceForClassMembers": true
+      }
+    ],
+    "array-callback-return": [
+      "error",
+      {
+        "allowImplicit": true
+      }
+    ],
+    "block-scoped-var": "error",
+    "complexity": "warn",
+    // Disabled: superseded by `@typescript-eslint/switch-exhaustiveness-check` which provides
+    // type-aware exhaustiveness checking instead of requiring a meaningless `default` clause.
+    "default-case": "off",
+    "default-case-last": "error",
+    /*
+     * Enforce that curly braces are used in all control flow statements. This improves readability.
+     * For example:
+     *   if (condition) {
+     *     // ...
+     *   }
+     * instead of:
+     *   if (condition)
+     *     // ...
+     */
+    "curly": ["error", "all"],
+    "eqeqeq": "error",
+    "grouped-accessor-pairs": ["error", "getBeforeSet"],
+    "guard-for-in": "error",
+    "no-alert": "error",
+    "no-caller": "error",
+    "no-case-declarations": "error",
+    "no-constructor-return": "error",
+    "no-else-return": [
+      "error",
+      {
+        "allowElseIf": false
+      }
+    ],
+    "no-empty-pattern": "error",
+    "no-eq-null": "error",
+    "no-eval": "error",
+    "no-extend-native": "error",
+    "no-extra-bind": "error",
+    "no-extra-label": "error",
+    "no-fallthrough": "error",
+    "no-global-assign": "error",
+    "no-implicit-coercion": "error",
+    "no-iterator": "error",
+    "no-labels": "error",
+    "no-lone-blocks": "error",
+    "no-multi-str": "error",
+    "no-new-func": "error",
+    "no-new-wrappers": "error",
+    "no-nonoctal-decimal-escape": "error",
+    "no-object-constructor": "error",
+    "no-new": "error",
+    "no-proto": "error",
+    "no-redeclare": "error",
+    "no-return-assign": ["error", "always"],
+    "no-script-url": "error",
+    "no-self-assign": [
+      "error",
+      {
+        "props": true
+      }
+    ],
+    "no-self-compare": "error",
+    "no-sequences": "error",
+    // Disabled: superseded by `@typescript-eslint/only-throw-error` which is the type-aware
+    // version of this rule and handles TypeScript-specific patterns correctly.
+    "no-throw-literal": "off",
+    "no-unmodified-loop-condition": "error",
+    "no-unused-expressions": "error",
+    "no-unused-labels": "error",
+    "no-useless-call": "error",
+    "no-useless-catch": "error",
+    "no-useless-concat": "error",
+    "no-useless-escape": "error",
+    "no-useless-return": "error",
+    "no-void": [
+      "error",
+      {
+        "allowAsStatement": true
+      }
+    ],
+    "no-warning-comments": "warn",
+    "no-with": "error",
+    // Disabled: superseded by `@typescript-eslint/prefer-promise-reject-errors` which is the
+    // type-aware version of this rule that works correctly with TypeScript's Promise types.
+    "prefer-promise-reject-errors": "off",
+    "radix": "error",
+    "yoda": "error",
+    "no-delete-var": "error",
+    "no-label-var": "error",
+    "no-restricted-globals": [
+      "error",
+      "event",
+      {
+        "name": "atob",
+        "message": "This API is deprecated. Use https://github.com/sindresorhus/uint8array-extras instead."
+      },
+      {
+        "name": "btoa",
+        "message": "This API is deprecated. Use https://github.com/sindresorhus/uint8array-extras instead."
+      }
+    ],
+    "no-shadow-restricted-names": "error",
+    // Disabled: TypeScript's own `noUnusedLocals`/`noUnusedParameters` compiler options handle this.
+    // The ESLint rule produces false positives with type-only imports and ambient declarations.
+    "no-unused-vars": "off",
+    /*
+     * Use absolute imports instead of relative imports.
+     * Exception: relative imports of React-Router route types are allowed,
+     * e.g. `import type { Route } from './+types/route.js';`
+     */
+    "no-restricted-imports": [
+      "error",
+      {
+        "paths": ["error", "domain", "freelist", "smalloc", "punycode", "sys", "querystring", "colors"],
+        "patterns": [
+          {
+            "regex": "^\\.",
+            "allowImportNamePattern": "^Route$",
+            "message": "Use absolute imports instead of relative imports. For example, instead of `import { hexToRgb } from './utils/color.utils'`, use `import { hexToRgb } from '#utils/color.utils'`."
+          }
+        ]
+      }
+    ],
+    "capitalized-comments": [
+      "error",
+      "always",
+      {
+        "ignorePattern": "pragma|ignore|prettier-ignore|webpack\\w+:|c8|type-coverage:",
+        "ignoreInlineComments": true,
+        "ignoreConsecutiveComments": true
+      }
+    ],
+    // Disabled: oxlint's implementation has a bug where it incorrectly flags function *declarations*
+    // (including overload signatures). The rule should only target unnamed function *expressions*.
+    // ESLint continues to enforce this rule correctly. Re-enable when oxlint fixes the bug.
+    "func-names": "off",
+    "max-depth": "warn",
+    "max-lines": [
+      "warn",
+      {
+        "max": 1500,
+        "skipComments": true
+      }
+    ],
+    // Allow up to 5 nested callbacks. This is useful for test files with nested describe/it blocks.
+    "max-nested-callbacks": [
+      "error",
+      {
+        "max": 5
+      }
+    ],
+    "max-params": [
+      "error",
+      {
+        "max": 3
+      }
+    ],
+    "new-cap": [
+      "error",
+      {
+        "newIsCap": true,
+        "capIsNew": true
+      }
+    ],
+    "no-array-constructor": "error",
+    "no-bitwise": "error",
+    "no-lonely-if": "error",
+    "no-multi-assign": "error",
+    "no-unneeded-ternary": "error",
+    "operator-assignment": ["error", "always"],
+    "prefer-exponentiation-operator": "error",
+    "prefer-object-spread": "error",
+    "unicode-bom": ["error", "never"],
+    "constructor-super": "error",
+    "no-class-assign": "error",
+    "no-const-assign": "error",
+    "no-constant-binary-expression": "error",
+    "no-dupe-class-members": "error",
+    "no-new-native-nonconstructor": "error",
+    "no-this-before-super": "error",
+    "no-useless-computed-key": [
+      "error",
+      {
+        "enforceForClassMembers": true
+      }
+    ],
+    "no-useless-constructor": "error",
+    "no-useless-rename": "error",
+    "no-var": "error",
+    "prefer-const": [
+      "error",
+      {
+        "destructuring": "all"
+      }
+    ],
+    "prefer-destructuring": [
+      "error",
+      {
+        "VariableDeclarator": {
+          "array": false,
+          "object": true
+        },
+        "AssignmentExpression": {
+          "array": false,
+          "object": false
+        }
+      },
+      {
+        "enforceForRenamedProperties": false
+      }
+    ],
+    "prefer-numeric-literals": "error",
+    "prefer-object-has-own": "error",
+    "prefer-rest-params": "error",
+    "prefer-spread": "error",
+    "require-yield": "error",
+    "symbol-description": "error",
+    "node/no-new-require": "error",
+    "node/no-path-concat": "error",
+    "@typescript-eslint/adjacent-overload-signatures": "error",
+    "@typescript-eslint/array-type": [
+      "error",
+      {
+        "default": "array-simple"
+      }
+    ],
+    "@typescript-eslint/await-thenable": "error",
+    "@typescript-eslint/ban-ts-comment": [
+      "error",
+      {
+        "ts-expect-error": "allow-with-description",
+        "minimumDescriptionLength": 4
+      }
+    ],
+    "@typescript-eslint/ban-tslint-comment": "error",
+    "@typescript-eslint/no-restricted-types": [
+      "error",
+      {
+        "types": {
+          "object": {
+            "message": "The `object` type is hard to use. Use `Record<string, unknown>` instead. See: https://github.com/typescript-eslint/typescript-eslint/pull/848",
+            "fixWith": "Record<string, unknown>"
+          },
+          "null": {
+            "message": "Use `undefined` instead. See: https://github.com/sindresorhus/meta/issues/7",
+            "fixWith": "undefined"
+          },
+          "Buffer": {
+            "message": "Use Uint8Array instead. See: https://sindresorhus.com/blog/goodbye-nodejs-buffer",
+            "suggest": ["Uint8Array"]
+          },
+          "[]": "Don't use the empty array type `[]`. It only allows empty arrays. Use `SomeType[]` instead.",
+          "[[]]": "Don't use `[[]]`. It only allows an array with a single element which is an empty array. Use `SomeType[][]` instead.",
+          "[[[]]]": "Don't use `[[[]]]`. Use `SomeType[][][]` instead.",
+          "[[[[]]]]": "ur drunk 🤡",
+          "[[[[[]]]]]": "🦄💥"
+        }
+      }
+    ],
+    "@typescript-eslint/class-literal-property-style": ["error", "getters"],
+    "@typescript-eslint/consistent-generic-constructors": ["error", "constructor"],
+    "@typescript-eslint/consistent-indexed-object-style": "error",
+    "default-param-last": "error",
+    "@typescript-eslint/consistent-type-assertions": [
+      "error",
+      {
+        "assertionStyle": "as",
+        "objectLiteralTypeAssertions": "allow-as-parameter"
+      }
+    ],
+    "@typescript-eslint/consistent-type-definitions": ["error", "type"],
+    /*
+     * Enforce that the `type` keyword is used when importing types, e.g. `import type { Foo } from './foo'`.
+     * This ensures the compiler receives a hint to discard type values when they are present in import statements,
+     * alongside explicit, uniform import styles.
+     */
+    "@typescript-eslint/consistent-type-imports": [
+      "error",
+      {
+        "prefer": "type-imports",
+        "fixStyle": "separate-type-imports"
+      }
+    ],
+    // Enforce that `any` is not used.
+    "@typescript-eslint/no-explicit-any": [
+      "error",
+      {
+        "fixToUnknown": true,
+        "ignoreRestArgs": true
+      }
+    ],
+    /*
+     * Require explicit return and argument types on exported functions' and classes' public class methods.
+     * Note: This may feel cumbersome at first, especially for React components, but it is a good practice to enforce
+     * type safety and readability, especially when dealing with downstream consumers who are sensitive to type changes.
+     * Furthermore this rule does not expose an ignore option.
+     * @see https://github.com/typescript-eslint/typescript-eslint/issues/4208
+     */
+    "@typescript-eslint/explicit-module-boundary-types": [
+      "error",
+      {
+        "allowTypedFunctionExpressions": true,
+        "allowHigherOrderFunctions": true,
+        "allowDirectConstAssertionInArrowFunctions": true
+      }
+    ],
+    "@typescript-eslint/no-base-to-string": "error",
+    "@typescript-eslint/no-array-delete": "error",
+    "@typescript-eslint/no-confusing-void-expression": "error",
+    "@typescript-eslint/no-deprecated": "error",
+    "@typescript-eslint/no-duplicate-enum-values": "error",
+    "@typescript-eslint/no-duplicate-type-constituents": "error",
+    "@typescript-eslint/no-dynamic-delete": "error",
+    "no-empty-function": "error",
+    "@typescript-eslint/no-empty-interface": [
+      "error",
+      {
+        "allowSingleExtends": true
+      }
+    ],
+    "@typescript-eslint/no-empty-object-type": "error",
+    "@typescript-eslint/no-extra-non-null-assertion": "error",
+    "no-loop-func": "error",
+    "@typescript-eslint/no-extraneous-class": [
+      "error",
+      {
+        "allowConstructorOnly": false,
+        "allowEmpty": false,
+        "allowStaticOnly": false,
+        "allowWithDecorator": true
+      }
+    ],
+    "@typescript-eslint/no-floating-promises": [
+      "error",
+      {
+        "checkThenables": true,
+        "ignoreVoid": true,
+        "ignoreIIFE": true
+      }
+    ],
+    "@typescript-eslint/no-for-in-array": "error",
+    "@typescript-eslint/no-inferrable-types": "error",
+    "@typescript-eslint/no-meaningless-void-operator": "error",
+    "@typescript-eslint/no-misused-new": "error",
+    "@typescript-eslint/no-misused-promises": [
+      "error",
+      {
+        "checksConditionals": true,
+        "checksVoidReturn": false
+      }
+    ],
+    "@typescript-eslint/no-namespace": "error",
+    "@typescript-eslint/no-non-null-asserted-nullish-coalescing": "error",
+    "@typescript-eslint/no-non-null-asserted-optional-chain": "error",
+    "@typescript-eslint/no-require-imports": "error",
+    "@typescript-eslint/no-this-alias": [
+      "error",
+      {
+        "allowDestructuring": true
+      }
+    ],
+    "@typescript-eslint/only-throw-error": [
+      "error",
+      {
+        "allowThrowingUnknown": true,
+        "allowThrowingAny": false
+      }
+    ],
+    "@typescript-eslint/no-unnecessary-boolean-literal-compare": "error",
+    "@typescript-eslint/no-unnecessary-parameter-property-assignment": "error",
+    "@typescript-eslint/no-unnecessary-type-arguments": "error",
+    "@typescript-eslint/no-unnecessary-type-assertion": ["error", { "checkLiteralConstAssertions": true }],
+    "@typescript-eslint/no-unnecessary-type-constraint": "error",
+    "@typescript-eslint/no-unsafe-argument": "error",
+    "@typescript-eslint/no-unsafe-assignment": "error",
+    "@typescript-eslint/no-unsafe-call": "error",
+    "@typescript-eslint/no-unsafe-declaration-merging": "error",
+    "@typescript-eslint/no-unsafe-enum-comparison": "error",
+    "@typescript-eslint/no-unsafe-function-type": "error",
+    "@typescript-eslint/no-unsafe-return": "error",
+    "@typescript-eslint/no-useless-empty-export": "error",
+    "@typescript-eslint/no-wrapper-object-types": "error",
+    "@typescript-eslint/non-nullable-type-assertion-style": "error",
+    "@typescript-eslint/parameter-properties": [
+      "error",
+      {
+        "prefer": "parameter-property"
+      }
+    ],
+    "@typescript-eslint/prefer-as-const": "error",
+    "@typescript-eslint/prefer-for-of": "error",
+    "@typescript-eslint/prefer-function-type": "error",
+    "@typescript-eslint/prefer-includes": "error",
+    "@typescript-eslint/prefer-literal-enum-member": "error",
+    "@typescript-eslint/prefer-namespace-keyword": "error",
+    "@typescript-eslint/prefer-nullish-coalescing": [
+      "error",
+      {
+        "ignoreTernaryTests": false,
+        "ignoreConditionalTests": false,
+        "ignoreMixedLogicalExpressions": false
+      }
+    ],
+    "@typescript-eslint/prefer-promise-reject-errors": "error",
+    "@typescript-eslint/prefer-reduce-type-parameter": "error",
+    "@typescript-eslint/promise-function-async": "error",
+    "@typescript-eslint/restrict-plus-operands": [
+      "error",
+      {
+        "allowAny": false
+      }
+    ],
+    "@typescript-eslint/restrict-template-expressions": [
+      "error",
+      {
+        "allowNumber": true
+      }
+    ],
+    "@typescript-eslint/return-await": "error",
+    "@typescript-eslint/require-array-sort-compare": [
+      "error",
+      {
+        "ignoreStringArrays": true
+      }
+    ],
+    // Disabled: exhaustive switch checking is enforced manually via the `never` narrowing pattern
+    // (assign to `never` in `default` and throw) rather than through a lint rule.
+    "@typescript-eslint/switch-exhaustiveness-check": "off",
+    "@typescript-eslint/triple-slash-reference": [
+      "error",
+      {
+        "path": "never",
+        "types": "never",
+        "lib": "never"
+      }
+    ],
+    "@typescript-eslint/prefer-return-this-type": "error",
+    "@typescript-eslint/unified-signatures": [
+      "error",
+      {
+        "ignoreDifferentlyNamedParameters": true
+      }
+    ],
+    "@typescript-eslint/use-unknown-in-catch-callback-variable": "error",
+    // Disabled: superseded by `import/no-duplicates` which handles type imports correctly
+    // and supports the `prefer-inline` option for controlling type-only import merging.
+    "no-duplicate-imports": "off",
+    "react/button-has-type": "error",
+    "react/checked-requires-onchange-or-readonly": "error",
+    "react/forward-ref-uses-ref": "error",
+    "react/iframe-missing-sandbox": "error",
+    "react/no-array-index-key": "error",
+    "react/no-children-prop": "error",
+    "react/no-danger": "error",
+    "react/no-danger-with-children": "error",
+    "react/no-direct-mutation-state": "error",
+    "react/no-find-dom-node": "error",
+    "react/no-is-mounted": "error",
+    "react/no-namespace": "error",
+    "react/no-redundant-should-component-update": "error",
+    "react/no-render-return-value": "error",
+    "react/no-string-refs": [
+      "error",
+      {
+        "noTemplateLiterals": true
+      }
+    ],
+    "react/no-this-in-sfc": "error",
+    "react/no-unescaped-entities": "error",
+    // Disabled as TypeScript will check unknown properties. It can cause false positives for custom-elements.
+    "react/no-unknown-property": "off",
+    "react/no-unsafe": "error",
+    "react/react-in-jsx-scope": "error",
+    "react/self-closing-comp": "error",
+    "react/state-in-constructor": ["error", "never"],
+    "react/style-prop-object": [
+      "error",
+      {
+        "allow": ["FormattedNumber"]
+      }
+    ],
+    "react/void-dom-elements-no-children": "error",
+    "react/jsx-boolean-value": "error",
+    "react/jsx-key": [
+      "error",
+      {
+        "checkFragmentShorthand": true,
+        "checkKeyMustBeforeSpread": true,
+        "warnOnDuplicates": true
+      }
+    ],
+    "react/jsx-no-comment-textnodes": "error",
+    "react/jsx-no-constructed-context-values": "error",
+    "react/jsx-no-duplicate-props": "error",
+    "react/jsx-no-script-url": [
+      "error",
+      {
+        "includeFromSettings": true
+      }
+    ],
+    "react/jsx-no-target-blank": [
+      "error",
+      {
+        "warnOnSpreadAttributes": true,
+        "forms": true
+      }
+    ],
+    "react/jsx-no-undef": "error",
+    "react/jsx-no-useless-fragment": "error",
+    "react/jsx-curly-brace-presence": [
+      "error",
+      {
+        "props": "never",
+        "children": "never",
+        "propElementValues": "always"
+      }
+    ],
+    "react/jsx-fragments": ["error", "syntax"],
+    "react/jsx-pascal-case": "error",
+    "react/jsx-props-no-spread-multi": "error",
+    "promise/no-return-in-finally": "error",
+
+    "unicorn-js/better-regex": "error",
+    // Disabled: not implemented in oxlint natively and adds friction without strong value.
+    // TODO comments are tracked via `no-warning-comments` (as warnings) instead.
+    "unicorn-js/expiring-todo-comments": "off",
+    "unicorn-js/no-array-push-push": "error",
+    "unicorn-js/no-for-loop": "error",
+    "unicorn-js/no-named-default": "error",
+    "unicorn-js/no-unnecessary-polyfills": "error",
+    "unicorn-js/prefer-export-from": "error",
+    "unicorn-js/prefer-switch": "error",
+    "unicorn-js/prevent-abbreviations": [
+      "error",
+      {
+        "checkFilenames": true,
+        "replacements": {
+          "props": false,
+          "params": false,
+          "env": false,
+          "ref": false,
+          "db": false,
+          "dev": false,
+          "utils": false,
+          "lib": false,
+          "docs": false,
+          "args": false,
+          "dir": { "directory": true, "direction": false },
+          "dirs": { "directories": true, "directions": false }
+        },
+        "ignore": ["^[ij]$", "^i\\d+$"]
+      }
+    ],
+    // Disabled: XO default. Enforcing specific import styles (default vs named vs namespace)
+    // is too opinionated — the choice depends on the module's API design, not a blanket rule.
+    "unicorn-js/import-style": "off",
+
+    "node-js/no-unpublished-bin": "error",
+    "node-js/no-mixed-requires": "error",
+    "node-js/process-exit-as-throw": "error",
+    "node-js/no-deprecated-api": "error",
+    "node-js/prefer-global/buffer": "error",
+    "node-js/prefer-global/console": "error",
+    // Ideally ["error", "never"] to require explicit `import process from 'node:process'`,
+    // but the "never" option relies on ESLint scope analysis to detect bare `process` global
+    // references, which doesn't work through oxlint's jsPlugin adapter. Only "always" mode
+    // (flag `require("process")`) works via jsPlugins. Revisit when oxlint supports this natively.
+    "node-js/prefer-global/process": "off",
+    "node-js/prefer-global/text-decoder": "error",
+    "node-js/prefer-global/text-encoder": "error",
+    "node-js/prefer-global/url-search-params": "error",
+    "node-js/prefer-global/url": "error",
+    "node-js/prefer-promises/dns": "error",
+    "node-js/prefer-promises/fs": "error",
+
+    "no-use-extend-native/no-use-extend-native": "error",
+
+    "eslint-comments-js/disable-enable-pair": ["error", { "allowWholeFile": true }],
+    "eslint-comments-js/no-aggregating-enable": "error",
+    "eslint-comments-js/no-duplicate-disable": "error",
+    "eslint-comments-js/no-unused-disable": "error",
+    "eslint-comments-js/no-unused-enable": "error",
+    // Require a description for each ESLint rule comment. This informs co-authors about the rule and why it is being applied.
+    "eslint-comments-js/require-description": ["error", { "ignore": [] }],
+
+    // --- JSDoc correctness (global) ---
+    // Validates @access values are one of public|private|protected|package — catches typos like @access internal.
+    "jsdoc/check-access": "error",
+    // Void tags (@internal, @override, @abstract, @readonly, etc.) must have no body text.
+    "jsdoc/empty-tags": "error",
+    // Every @param tag must include a name — catches bare "@param - description" with no identifier.
+    "jsdoc/require-param-name": "error",
+    // @param names must match the function signature. checkDestructured:false skips sub-properties
+    // (e.g. @param options.key) since TypeScript types document the shape.
+    "jsdoc-js/check-param-names": ["error", { "checkDestructured": false }],
+    // Prohibits {Type} annotations in JSDoc — TypeScript already provides types; duplicating them
+    // in comments drifts out of sync and clutters IDE tooltips.
+    "jsdoc-js/no-types": "error",
+
+    "no-barrel-files/no-barrel-files": "error",
+
+    "enforce-uint8array-arraybuffer/enforce-uint8array-arraybuffer": "error",
+
+    "import/export": "error",
+    "import/named": "error",
+    "getter-return": "error",
+    "no-unreachable": "error",
+    // Disabled: TypeScript's compiler handles undefined variable detection far more accurately.
+    // This rule produces false positives on type-level declarations, namespaces, global augmentation,
+    // and ambient modules. Standard @typescript-eslint recommendation for TS projects.
+    "no-undef": "off",
+    "@typescript-eslint/dot-notation": "error",
+    "@typescript-eslint/consistent-type-exports": "error",
+    "@typescript-eslint/no-unnecessary-qualifier": "error",
+    "@typescript-eslint/prefer-find": "error",
+    "@typescript-eslint/prefer-optional-chain": "error",
+    "@typescript-eslint/prefer-readonly": "error",
+    "@typescript-eslint/prefer-string-starts-ends-with": "error",
+    "@typescript-eslint/prefer-regexp-exec": "error",
+    /*
+     * Enforce that unnecessary conditions are not used. This improves readability and reduces perceived cyclomatic complexity.
+     * For example:
+     *   function bar<T>(arg: string) {
+     *     // Arg can never be nullish
+     *     return arg?.length; // Therefore `?.` is unnecessary
+     *   }
+     */
+    "@typescript-eslint/no-unnecessary-condition": "error"
+  },
+  "overrides": [
+    {
+      /*
+       * NestJS overrides:
+       * - consistent-type-imports: off — DI requires runtime imports, type-only imports would break injection.
+       * - max-params: off — Constructor dependency injection requires many parameters.
+       * - new-cap exceptions — Decorators like @Injectable(), @Controller() etc. are called without `new`.
+       */
+      "files": [
+        "apps/api/**/*.service.ts",
+        "apps/api/**/*.controller.ts",
+        "apps/api/**/*.module.ts",
+        "apps/api/**/*.guard.ts",
+        "apps/api/**/*.gateway.ts",
+        "apps/api/**/*.interceptor.ts",
+        "apps/api/**/*.filter.ts",
+        "apps/api/**/*.pipe.ts",
+        "apps/api/**/*.provider.ts",
+        "apps/api/**/*.resolver.ts",
+        "apps/api/**/*.middleware.ts",
+        "apps/api/**/testing/*.ts"
+      ],
+      "rules": {
+        "@typescript-eslint/consistent-type-imports": "off",
+        "max-params": "off",
+        "new-cap": [
+          "error",
+          {
+            "capIsNewExceptions": [
+              "Injectable",
+              "Module",
+              "Controller",
+              "Get",
+              "Post",
+              "Put",
+              "Delete",
+              "Patch",
+              "Options",
+              "Head",
+              "All",
+              "Body",
+              "Res",
+              "Req",
+              "Inject",
+              "Global",
+              "UseGuards",
+              "UsePipes",
+              "UseInterceptors",
+              "UseFilters",
+              "Catch",
+              "ZodSerializerDto",
+              "Sse",
+              "WebSocketGateway",
+              "User",
+              "UseAuth",
+              "Span"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      // Declaration files declare types/interfaces for consumers — variables are "used" by importers, not locally.
+      "files": ["**/*.d.ts"],
+      "rules": {
+        "no-unused-vars": "off"
+      },
+      "plugins": ["typescript"]
+    },
+    {
+      // Type test files use `expectTypeOf()` patterns that involve unsafe calls and void expressions by design.
+      "files": ["**/*.test-d.ts"],
+      "rules": {
+        "@typescript-eslint/no-unsafe-call": "off",
+        "@typescript-eslint/no-confusing-void-expression": "off"
+      },
+      "plugins": ["typescript"]
+    },
+    {
+      // JSX component rules — React is a global variable and boolean props must use positive prefixes.
+      "files": ["**/*.tsx"],
+      "rules": {
+        "react/react-in-jsx-scope": "off",
+        /*
+         * Boolean property prefixes.
+         *
+         * Rules:
+         * - Names MUST always use the positive form of the word, never the antonym.
+         *
+         * Good vs Bad Examples:
+         * - isEnabled, not isDisabled
+         * - isVisible, not isHidden
+         * - shouldShow, not shouldHide
+         * - enableButton, not disableButton
+         * - makeDefault, not destroyDefault
+         * - withLabel, not withoutLabel
+         *
+         * More Usage Examples:
+         * `is`: isEnabled, isActive, isSelected
+         * `has`: hasValue, hasSelection, hasContent
+         * `as`: asChild
+         * `should`: shouldRender, shouldUpdate, shouldAnimate
+         * `enable`: enableEditing, enableDragging, enableZoom
+         * `make`: makeDefault, makeHandler, makeValidator
+         * `with`: withTheme, withContext, withRouter, withLabel
+         */
+        "react-js/boolean-prop-naming": [
+          "error",
+          {
+            "rule": "^(is|has|as|should|enable|make|with)[A-Z]([A-Za-z0-9]?)+$",
+            "validateNested": true
+          }
+        ]
+      },
+      "plugins": ["react"]
+    },
+    {
+      /*
+       * Packages MUST declare all their dependencies in the package.json, as they are
+       * published and consumers will not have access to the monorepo.
+       * Additionally, packages require JSDoc documentation for public API surfaces.
+       */
+      "files": ["packages/**/*.{ts,tsx}"],
+      "rules": {
+        // --- JSDoc completeness (packages only) ---
+        // See docs/policy/library-api-policy.md §13 for the full JSDoc standards.
+
+        // Every function parameter must have a @param tag. Destructured params are skipped —
+        // TypeScript types document the shape, so @param { a, b }: Options adds nothing.
+        "jsdoc/require-param": [
+          "warn",
+          {
+            "checkDestructured": false,
+            "checkDestructuredRoots": false,
+            "checkConstructors": false
+          }
+        ],
+        // Bare @param tags with no description are useless in IDE tooltips.
+        "jsdoc/require-param-description": "warn",
+        // Non-void functions must have @returns so the consumer knows what they get back.
+        "jsdoc/require-returns": [
+          "warn",
+          {
+            "checkConstructors": false
+          }
+        ],
+        // Bare @returns with no description is as unhelpful as omitting the tag entirely.
+        "jsdoc/require-returns-description": "warn",
+        // Validates tag names. Custom tags used by vitest and the runtime filesystem marker are allowlisted.
+        "jsdoc/check-tag-names": [
+          "error",
+          {
+            "definedTags": ["vitest-environment", "remarks", "internal"]
+          }
+        ],
+        // Every exported function, class, method, type alias, and interface must have a JSDoc block.
+        // This is the primary coverage gate — the remaining rules ensure that block is useful.
+        "jsdoc-js/require-jsdoc": [
+          "warn",
+          {
+            "publicOnly": true,
+            "require": {
+              "FunctionDeclaration": true,
+              "MethodDefinition": true,
+              "ClassDeclaration": true
+            },
+            "contexts": ["TSTypeAliasDeclaration", "TSInterfaceDeclaration"],
+            "checkConstructors": false
+          }
+        ],
+        // A JSDoc block with only tags and no description wastes the most visible tooltip real estate.
+        "jsdoc-js/require-description": [
+          "warn",
+          {
+            "contexts": [
+              "FunctionDeclaration",
+              "MethodDefinition",
+              "ClassDeclaration",
+              "TSTypeAliasDeclaration",
+              "TSInterfaceDeclaration"
+            ]
+          }
+        ],
+        // Enforces the TSDoc dash separator: @param name - description. Auto-fixable.
+        "jsdoc-js/require-hyphen-before-param-description": ["warn", "always"],
+        // Flags descriptions that merely restate the symbol name (e.g. "The user id" on `userId`).
+        // Policy §13 "Don't echo the name" — the IDE already shows the name, the description must add value.
+        "jsdoc-js/informative-docs": "warn",
+        // Catches empty JSDoc blocks (/** */) that satisfy require-jsdoc but carry zero information.
+        "jsdoc-js/no-blank-blocks": "warn",
+        // Enforces consistent tag ordering: @template → @param → @returns → @throws → @example → @see.
+        // Only checks order, not spacing between groups (formatting is handled by oxfmt).
+        "jsdoc-js/sort-tags": [
+          "warn",
+          {
+            "reportTagGroupSpacing": false,
+            "reportIntraTagGroupSpacing": false
+          }
+        ]
+      },
+      "plugins": ["jsdoc"]
+    },
+    {
+      // Test files are not part of the published API — JSDoc enforcement is unnecessary.
+      "files": ["packages/**/*.test.{ts,tsx}", "packages/**/*.test-d.{ts,tsx}"],
+      "rules": {
+        "jsdoc/require-param": "off",
+        "jsdoc/require-returns": "off",
+        "jsdoc/require-param-description": "off",
+        "jsdoc/require-returns-description": "off",
+        "jsdoc-js/require-jsdoc": "off",
+        "jsdoc-js/require-description": "off",
+        "jsdoc-js/require-hyphen-before-param-description": "off",
+        "jsdoc-js/informative-docs": "off",
+        "jsdoc-js/no-blank-blocks": "off",
+        "jsdoc-js/sort-tags": "off"
+      },
+      "plugins": ["jsdoc"]
+    },
+    {
+      // Package entry points need barrel file imports.
+      "files": ["{packages,libs}/**/index.ts"],
+      "rules": {
+        "no-barrel-files/no-barrel-files": "off"
+      }
+    },
+    {
+      // CAD examples may not always follow typical conventions. For example, it's
+      // easier to read d_x rather than dX, so we relax the rules here.
+      "files": ["libs/tau-examples/src/kernels/**/*.ts"],
+      "rules": {
+        "unicorn-js/prevent-abbreviations": "warn",
+        "unicorn/no-array-callback-reference": "warn",
+        "@typescript-eslint/explicit-module-boundary-types": "warn",
+        "@typescript-eslint/no-unsafe-assignment": "warn",
+        "@typescript-eslint/no-unsafe-call": "warn",
+        "@typescript-eslint/no-restricted-types": "warn",
+        "@typescript-eslint/no-unsafe-return": "warn",
+        "max-params": "warn"
+      },
+      "plugins": ["typescript"]
+    },
+    {
+      /*
+       * CJS compatibility shims deliberately check globals like `globalThis.__dirname === undefined`
+       * where TypeScript types say the value is always `string`. The types are wrong — at runtime
+       * these globals ARE undefined in worker/ESM contexts. Type-aware rules produce guaranteed
+       * false positives here.
+       */
+      "files": ["**/*.cjs"],
+      "rules": {
+        "@typescript-eslint/no-unnecessary-condition": "off",
+        "@typescript-eslint/prefer-nullish-coalescing": "off",
+        "@typescript-eslint/promise-function-async": "off"
+      }
+    },
+    {
+      // CLI scripts legitimately need `process.exit()` for signaling exit codes.
+      "files": ["**/scripts/**/*.mts", "**/scripts/**/*.ts"],
+      "rules": {
+        "unicorn/no-process-exit": "off"
+      }
+    },
+    {
+      // JS plugin files use JSDoc for types — disabling type-annotation rules that assume TypeScript.
+      "files": ["**/*.js"],
+      "rules": {
+        "jsdoc-js/no-types": "off"
+      }
+    },
+    {
+      // The oxlint JS plugin uses relative imports between rule files and shared utils.
+      // Type-aware rules produce false positives in .js files (JSON.parse → any, ESTree AST types).
+      "files": ["libs/oxlint/src/**/*.js"],
+      "rules": {
+        "no-restricted-imports": "off",
+        "@typescript-eslint/no-unsafe-assignment": "off",
+        "@typescript-eslint/no-unsafe-argument": "off",
+        "@typescript-eslint/no-unnecessary-condition": "off"
+      }
+    },
+    {
+      // Apps are excluded from JSDoc codeblock validation and @public export enforcement.
+      // Only libs/ and packages/ need compile-checked public API documentation.
+      "files": ["apps/**/*.{ts,tsx}"],
+      "rules": {
+        "tau-lint/validate-jsdoc-codeblocks": "off",
+        "tau-lint/require-public-export-jsdoc": "off"
+      }
+    },
+    {
+      // Color policy enforcement: flag hardcoded hex/rgb/hsl in component files.
+      // Scoped to .tsx only — .ts files like color.constants.ts legitimately contain color values.
+      // See docs/policy/color-policy.md for the full color system rules.
+      "files": ["**/*.tsx"],
+      "rules": {
+        "tau-lint/no-hardcoded-color": "warn"
+      }
+    }
+  ],
+  "settings": {
+    "jsdoc": {
+      "definedTags": ["vitest-environment", "remarks", "internal"]
+    }
+  }
+}

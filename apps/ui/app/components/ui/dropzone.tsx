@@ -83,8 +83,8 @@ export function Dropzone({
         )}
         data-drag-active={isDragActive}
         disabled={disabled}
-        type="button"
-        variant="outline"
+        type='button'
+        variant='outline'
         {...getRootProps()}
       >
         <input {...getInputProps()} disabled={disabled} />
@@ -122,17 +122,17 @@ export function DropzoneContent({ children, className }: DropzoneContentProps): 
 
   return (
     <div className={cn('flex flex-col items-center justify-center', className)}>
-      <div className="flex size-8 items-center justify-center rounded-md bg-muted text-muted-foreground">
-        <UploadIcon className="size-4" />
+      <div className='flex size-8 items-center justify-center rounded-md bg-muted text-muted-foreground'>
+        <UploadIcon className='size-4' />
       </div>
-      <p className="my-2 w-full truncate text-sm font-medium">
+      <p className='my-2 w-full truncate text-sm font-medium'>
         {src.length > maxLabelItems
           ? `${new Intl.ListFormat('en').format(
               src.slice(0, maxLabelItems).map((file) => file.name),
             )} and ${src.length - maxLabelItems} more`
           : new Intl.ListFormat('en').format(src.map((file) => file.name))}
       </p>
-      <p className="w-full text-xs text-wrap text-muted-foreground">Drag and drop or click to replace</p>
+      <p className='w-full text-xs text-wrap text-muted-foreground'>Drag and drop or click to replace</p>
     </div>
   );
 }
@@ -168,12 +168,12 @@ export function DropzoneEmptyState({ children, className }: DropzoneEmptyStatePr
 
   return (
     <div className={cn('flex flex-col items-center justify-center', className)}>
-      <div className="flex size-8 items-center justify-center rounded-md bg-muted text-muted-foreground">
-        <UploadIcon className="size-4" />
+      <div className='flex size-8 items-center justify-center rounded-md bg-muted text-muted-foreground'>
+        <UploadIcon className='size-4' />
       </div>
-      <p className="my-2 w-full truncate text-sm font-medium text-wrap">Upload {maxFiles === 1 ? 'a file' : 'files'}</p>
-      <p className="w-full truncate text-xs text-wrap text-muted-foreground">Drag and drop or click to upload</p>
-      {caption ? <p className="text-xs text-wrap text-muted-foreground">{caption}.</p> : null}
+      <p className='my-2 w-full truncate text-sm font-medium text-wrap'>Upload {maxFiles === 1 ? 'a file' : 'files'}</p>
+      <p className='w-full truncate text-xs text-wrap text-muted-foreground'>Drag and drop or click to upload</p>
+      {caption ? <p className='text-xs text-wrap text-muted-foreground'>{caption}.</p> : null}
     </div>
   );
 }

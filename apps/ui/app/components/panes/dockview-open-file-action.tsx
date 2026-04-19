@@ -1,11 +1,8 @@
 import { createContext, useCallback, useContext, useMemo } from 'react';
 import type { IDockviewHeaderActionsProps, DockviewGroupPanel, DockviewApi } from 'dockview-react';
 import { Plus } from 'lucide-react';
-import { useSelector } from '@xstate/react';
-import type { FileEntry } from '@taucad/types';
 import { FileSelector } from '#components/files/file-selector.js';
 import { DockviewPaneAction } from '#components/panes/dockview-pane-action.js';
-import { useFileManager } from '#hooks/use-file-manager.js';
 
 /**
  * Callback invoked when a file is selected from the open-file action.
@@ -39,19 +36,7 @@ export function DockviewOpenFileAction({
   group,
 }: IDockviewHeaderActionsProps): React.JSX.Element {
   const onFileSelect = useContext(DockviewFileActionContext);
-  const { fileManagerRef } = useFileManager();
-  const fileTree = useSelector(fileManagerRef, (state) => state.context.fileTree);
 
-  const files = useMemo(
-    () =>
-      [...fileTree.values()]
-        .filter((entry: FileEntry) => entry.type === 'file')
-        .map((entry: FileEntry) => ({ path: entry.path, size: entry.size })),
-    [fileTree],
-  );
-
-  // Determine the initial directory from the active panel's file path.
-  // Editor panels store the path as `filePath`, viewer panels as `entryFile`.
   const initialPath = useMemo(() => {
     if (!activePanel) {
       return undefined;
@@ -78,19 +63,18 @@ export function DockviewOpenFileAction({
 
   return (
     <FileSelector
-      files={files}
       selectedFile={undefined}
       initialPath={initialPath}
-      placeholder="Open file..."
-      title="Open File"
-      description="Choose a file to open in this pane"
-      searchPlaceholder="Search files..."
-      emptyMessage="No files found."
+      placeholder='Open file...'
+      title='Open File'
+      description='Choose a file to open in this pane'
+      searchPlaceholder='Search files...'
+      emptyMessage='No files found.'
       popoverProperties={{ align: 'start' }}
       onSelect={handleSelect}
     >
-      <DockviewPaneAction aria-label="Open file">
-        <Plus className="size-3.5" />
+      <DockviewPaneAction aria-label='Open file'>
+        <Plus className='size-3.5' />
       </DockviewPaneAction>
     </FileSelector>
   );

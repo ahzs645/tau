@@ -1,4 +1,4 @@
-import type { MutableRefObject } from 'react';
+import type { RefObject } from 'react';
 
 /**
  * Crossfade opacity values for source and target elements.
@@ -13,11 +13,11 @@ export type CrossfadeOpacity = {
  */
 export type CrossfadeState = {
   /** Progress ref (0 to 1) */
-  progressRef: MutableRefObject<number>;
+  progressRef: RefObject<number>;
   /** Whether crossfade is currently active */
-  isActiveRef: MutableRefObject<boolean>;
+  isActiveRef: RefObject<boolean>;
   /** Whether completion callback has been sent */
-  hasSentCompleteRef: MutableRefObject<boolean>;
+  hasSentCompleteRef: RefObject<boolean>;
 };
 
 /**
@@ -45,18 +45,24 @@ export function calculateCrossfadeOpacity(progress: number): CrossfadeOpacity {
 /**
  * Updates crossfade animation state for one frame.
  *
- * @param state - The crossfade state refs
- * @param delta - Frame delta time in seconds
- * @param duration - Total crossfade duration in milliseconds
- * @param onComplete - Optional callback when crossfade completes
+ * @param root0 - The crossfade update parameters
+ * @param root0.state - The crossfade state refs
+ * @param root0.delta - Frame delta time in seconds
+ * @param root0.duration - Total crossfade duration in milliseconds
+ * @param root0.onComplete - Optional callback when crossfade completes
  * @returns The current opacity values, or undefined if not active
  */
-export function updateCrossfade(
-  state: CrossfadeState,
-  delta: number,
-  duration: number,
-  onComplete?: () => void,
-): CrossfadeOpacity | undefined {
+export function updateCrossfade({
+  state,
+  delta,
+  duration,
+  onComplete,
+}: {
+  state: CrossfadeState;
+  delta: number;
+  duration: number;
+  onComplete?: () => void;
+}): CrossfadeOpacity | undefined {
   if (!state.isActiveRef.current) {
     return undefined;
   }

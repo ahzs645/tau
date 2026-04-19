@@ -1,0 +1,371 @@
+{
+  "name": "@taucad/runtime",
+  "version": "0.1.0",
+  "description": "Multi-kernel CAD runtime framework for browser and Node.js",
+  "type": "module",
+  "private": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/taucad/tau.git",
+    "directory": "packages/runtime"
+  },
+  "main": "./dist/cjs/index.cjs",
+  "types": "./dist/cjs/index.d.cts",
+  "module": "./dist/esm/index.js",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "keywords": [
+    "cad",
+    "replicad",
+    "zoo",
+    "openscad",
+    "jscad",
+    "kernel",
+    "worker",
+    "wasm"
+  ],
+  "author": "Richard Fontein",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts",
+    "./types": "./src/types/index.ts",
+    "./kernels": "./src/plugins/kernels-entry.ts",
+    "./middleware": "./src/plugins/middleware-entry.ts",
+    "./bundler": "./src/plugins/bundler-entry.ts",
+    "./transcoder": "./src/plugins/transcoder-factories.ts",
+    "./transport": "./src/transport/index.ts",
+    "./node": "./src/node.ts",
+    "./filesystem": "./src/filesystem/index.ts",
+    "./filesystem/node": "./src/filesystem/from-node-fs.ts",
+    "./testing": "./src/testing/index.ts",
+    "./worker": "./src/framework/kernel-runtime-worker.ts",
+    "./kernels/replicad": "./src/kernels/replicad/replicad.kernel.ts",
+    "./kernels/jscad": "./src/kernels/jscad/jscad.kernel.ts",
+    "./kernels/manifold": "./src/kernels/manifold/manifold.kernel.ts",
+    "./kernels/openscad": "./src/kernels/openscad/openscad.kernel.ts",
+    "./kernels/opencascade": "./src/kernels/opencascade/opencascade.kernel.ts",
+    "./kernels/zoo": "./src/kernels/zoo/zoo.kernel.ts",
+    "./kernels/zoo/engine-connection": "./src/kernels/zoo/engine-connection.ts",
+    "./kernels/tau": "./src/kernels/tau/tau.kernel.ts",
+    "./bundler/esbuild": "./src/bundler/esbuild.bundler.ts",
+    "./middleware/runtime-middleware": "./src/middleware/runtime-middleware.ts",
+    "./middleware/parameter-cache": "./src/middleware/parameter-cache.middleware.ts",
+    "./middleware/geometry-cache": "./src/middleware/geometry-cache.middleware.ts",
+    "./middleware/gltf-coordinate-transform": "./src/middleware/gltf-coordinate-transform.middleware.ts",
+    "./middleware/gltf-edge-detection": "./src/middleware/gltf-edge-detection.middleware.ts"
+  },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "require": {
+          "types": "./dist/cjs/index.d.cts",
+          "default": "./dist/cjs/index.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/index.d.ts",
+          "default": "./dist/esm/index.js"
+        }
+      },
+      "./worker": {
+        "require": {
+          "types": "./dist/cjs/framework/kernel-runtime-worker.d.cts",
+          "default": "./dist/cjs/framework/kernel-runtime-worker.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/framework/kernel-runtime-worker.d.ts",
+          "default": "./dist/esm/framework/kernel-runtime-worker.js"
+        }
+      },
+      "./types": {
+        "require": {
+          "types": "./dist/cjs/types/index.d.cts",
+          "default": "./dist/cjs/types/index.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/types/index.d.ts",
+          "default": "./dist/esm/types/index.js"
+        }
+      },
+      "./kernels": {
+        "require": {
+          "types": "./dist/cjs/plugins/kernels-entry.d.cts",
+          "default": "./dist/cjs/plugins/kernels-entry.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/plugins/kernels-entry.d.ts",
+          "default": "./dist/esm/plugins/kernels-entry.js"
+        }
+      },
+      "./middleware": {
+        "require": {
+          "types": "./dist/cjs/plugins/middleware-entry.d.cts",
+          "default": "./dist/cjs/plugins/middleware-entry.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/plugins/middleware-entry.d.ts",
+          "default": "./dist/esm/plugins/middleware-entry.js"
+        }
+      },
+      "./bundler": {
+        "require": {
+          "types": "./dist/cjs/plugins/bundler-entry.d.cts",
+          "default": "./dist/cjs/plugins/bundler-entry.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/plugins/bundler-entry.d.ts",
+          "default": "./dist/esm/plugins/bundler-entry.js"
+        }
+      },
+      "./transcoder": {
+        "require": {
+          "types": "./dist/cjs/plugins/transcoder-factories.d.cts",
+          "default": "./dist/cjs/plugins/transcoder-factories.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/plugins/transcoder-factories.d.ts",
+          "default": "./dist/esm/plugins/transcoder-factories.js"
+        }
+      },
+      "./transport": {
+        "require": {
+          "types": "./dist/cjs/transport/index.d.cts",
+          "default": "./dist/cjs/transport/index.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/transport/index.d.ts",
+          "default": "./dist/esm/transport/index.js"
+        }
+      },
+      "./middleware/runtime-middleware": {
+        "require": {
+          "types": "./dist/cjs/middleware/runtime-middleware.d.cts",
+          "default": "./dist/cjs/middleware/runtime-middleware.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/middleware/runtime-middleware.d.ts",
+          "default": "./dist/esm/middleware/runtime-middleware.js"
+        }
+      },
+      "./kernels/replicad": {
+        "require": {
+          "types": "./dist/cjs/kernels/replicad/replicad.kernel.d.cts",
+          "default": "./dist/cjs/kernels/replicad/replicad.kernel.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/kernels/replicad/replicad.kernel.d.ts",
+          "default": "./dist/esm/kernels/replicad/replicad.kernel.js"
+        }
+      },
+      "./kernels/jscad": {
+        "require": {
+          "types": "./dist/cjs/kernels/jscad/jscad.kernel.d.cts",
+          "default": "./dist/cjs/kernels/jscad/jscad.kernel.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/kernels/jscad/jscad.kernel.d.ts",
+          "default": "./dist/esm/kernels/jscad/jscad.kernel.js"
+        }
+      },
+      "./kernels/manifold": {
+        "require": {
+          "types": "./dist/cjs/kernels/manifold/manifold.kernel.d.cts",
+          "default": "./dist/cjs/kernels/manifold/manifold.kernel.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/kernels/manifold/manifold.kernel.d.ts",
+          "default": "./dist/esm/kernels/manifold/manifold.kernel.js"
+        }
+      },
+      "./kernels/openscad": {
+        "require": {
+          "types": "./dist/cjs/kernels/openscad/openscad.kernel.d.cts",
+          "default": "./dist/cjs/kernels/openscad/openscad.kernel.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/kernels/openscad/openscad.kernel.d.ts",
+          "default": "./dist/esm/kernels/openscad/openscad.kernel.js"
+        }
+      },
+      "./kernels/opencascade": {
+        "require": {
+          "types": "./dist/cjs/kernels/opencascade/opencascade.kernel.d.cts",
+          "default": "./dist/cjs/kernels/opencascade/opencascade.kernel.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/kernels/opencascade/opencascade.kernel.d.ts",
+          "default": "./dist/esm/kernels/opencascade/opencascade.kernel.js"
+        }
+      },
+      "./kernels/zoo": {
+        "require": {
+          "types": "./dist/cjs/kernels/zoo/zoo.kernel.d.cts",
+          "default": "./dist/cjs/kernels/zoo/zoo.kernel.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/kernels/zoo/zoo.kernel.d.ts",
+          "default": "./dist/esm/kernels/zoo/zoo.kernel.js"
+        }
+      },
+      "./kernels/zoo/engine-connection": {
+        "require": {
+          "types": "./dist/cjs/kernels/zoo/engine-connection.d.cts",
+          "default": "./dist/cjs/kernels/zoo/engine-connection.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/kernels/zoo/engine-connection.d.ts",
+          "default": "./dist/esm/kernels/zoo/engine-connection.js"
+        }
+      },
+      "./kernels/tau": {
+        "require": {
+          "types": "./dist/cjs/kernels/tau/tau.kernel.d.cts",
+          "default": "./dist/cjs/kernels/tau/tau.kernel.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/kernels/tau/tau.kernel.d.ts",
+          "default": "./dist/esm/kernels/tau/tau.kernel.js"
+        }
+      },
+      "./bundler/esbuild": {
+        "require": {
+          "types": "./dist/cjs/bundler/esbuild.bundler.d.cts",
+          "default": "./dist/cjs/bundler/esbuild.bundler.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/bundler/esbuild.bundler.d.ts",
+          "default": "./dist/esm/bundler/esbuild.bundler.js"
+        }
+      },
+      "./middleware/parameter-cache": {
+        "require": {
+          "types": "./dist/cjs/middleware/parameter-cache.middleware.d.cts",
+          "default": "./dist/cjs/middleware/parameter-cache.middleware.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/middleware/parameter-cache.middleware.d.ts",
+          "default": "./dist/esm/middleware/parameter-cache.middleware.js"
+        }
+      },
+      "./middleware/geometry-cache": {
+        "require": {
+          "types": "./dist/cjs/middleware/geometry-cache.middleware.d.cts",
+          "default": "./dist/cjs/middleware/geometry-cache.middleware.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/middleware/geometry-cache.middleware.d.ts",
+          "default": "./dist/esm/middleware/geometry-cache.middleware.js"
+        }
+      },
+      "./middleware/gltf-coordinate-transform": {
+        "require": {
+          "types": "./dist/cjs/middleware/gltf-coordinate-transform.middleware.d.cts",
+          "default": "./dist/cjs/middleware/gltf-coordinate-transform.middleware.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/middleware/gltf-coordinate-transform.middleware.d.ts",
+          "default": "./dist/esm/middleware/gltf-coordinate-transform.middleware.js"
+        }
+      },
+      "./middleware/gltf-edge-detection": {
+        "require": {
+          "types": "./dist/cjs/middleware/gltf-edge-detection.middleware.d.cts",
+          "default": "./dist/cjs/middleware/gltf-edge-detection.middleware.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/middleware/gltf-edge-detection.middleware.d.ts",
+          "default": "./dist/esm/middleware/gltf-edge-detection.middleware.js"
+        }
+      },
+      "./node": {
+        "require": {
+          "types": "./dist/cjs/node.d.cts",
+          "default": "./dist/cjs/node.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/node.d.ts",
+          "default": "./dist/esm/node.js"
+        }
+      },
+      "./filesystem": {
+        "require": {
+          "types": "./dist/cjs/filesystem/index.d.cts",
+          "default": "./dist/cjs/filesystem/index.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/filesystem/index.d.ts",
+          "default": "./dist/esm/filesystem/index.js"
+        }
+      },
+      "./filesystem/node": {
+        "require": {
+          "types": "./dist/cjs/filesystem/from-node-fs.d.cts",
+          "default": "./dist/cjs/filesystem/from-node-fs.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/filesystem/from-node-fs.d.ts",
+          "default": "./dist/esm/filesystem/from-node-fs.js"
+        }
+      },
+      "./testing": {
+        "require": {
+          "types": "./dist/cjs/testing/index.d.cts",
+          "default": "./dist/cjs/testing/index.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/testing/index.d.ts",
+          "default": "./dist/esm/testing/index.js"
+        }
+      }
+    }
+  },
+  "imports": {
+    "#*": "./src/*"
+  },
+  "dependencies": {
+    "@gltf-transform/core": "catalog:",
+    "@gltf-transform/extensions": "catalog:",
+    "@gltf-transform/functions": "catalog:",
+    "@jscad/modeling": "catalog:",
+    "@kittycad/lib": "catalog:",
+    "@msgpack/msgpack": "catalog:",
+    "@taucad/converter": "workspace:*",
+    "@taucad/json-schema": "workspace:*",
+    "@taucad/kcl-wasm-lib": "catalog:",
+    "@taucad/memory": "workspace:*",
+    "@taucad/types": "workspace:*",
+    "@taucad/utils": "workspace:*",
+    "cdn-resolve": "catalog:",
+    "culori": "catalog:",
+    "deepmerge": "catalog:",
+    "es-module-lexer": "catalog:",
+    "esbuild-wasm": "catalog:",
+    "json-schema-default": "catalog:",
+    "manifold-3d": "catalog:",
+    "opencascade.js": "file:../../tarballs/opencascade.js-3.0.0-beta.b3b3330.tgz",
+    "openscad-wasm-prebuilt": "catalog:",
+    "replicad": "file:../../tarballs/replicad-0.21.0-v8.55.tgz",
+    "replicad-opencascadejs": "file:../../tarballs/replicad-opencascadejs-0.21.0-v8.55.tgz",
+    "source-map-js": "catalog:",
+    "type-fest": "catalog:",
+    "uint8array-extras": "catalog:",
+    "uzip": "catalog:",
+    "vitest-mock-extended": "catalog:",
+    "ws": "catalog:",
+    "zod": "catalog:"
+  },
+  "peerDependencies": {
+    "vitest": ">=2.0.0"
+  },
+  "peerDependenciesMeta": {
+    "vitest": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@taucad/tau-examples": "workspace:*",
+    "geist": "catalog:"
+  }
+}

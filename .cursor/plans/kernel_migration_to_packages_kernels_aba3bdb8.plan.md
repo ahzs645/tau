@@ -1,6 +1,6 @@
 ---
-name: Kernel Migration to packages/kernels
-overview: Migrate the kernel runtime framework from apps/ui/app/components/geometry/kernel/ to packages/kernels/ (@taucad/kernels) as a first-class publishable npm package, fully decoupled from the UI application, with a minimal public API surface and comprehensive dual-environment (browser + Node.js) test validation.
+name: Kernel Migration to packages/runtime
+overview: Migrate the kernel runtime framework from apps/ui/app/components/geometry/kernel/ to packages/runtime/ (@taucad/runtime) as a first-class publishable npm package, fully decoupled from the UI application, with a minimal public API surface and comprehensive dual-environment (browser + Node.js) test validation.
 todos:
   - id: dep-tree
     content: "Phase 0: Generate and validate the full dependency tree inventory (every file, every import, classified as move/adapt/replace)"
@@ -12,10 +12,10 @@ todos:
     content: "Phase 2: Decouple FileManager type -- make kernel-worker-filemanager-bridge.ts self-contained without importing the UI FileManager type"
     status: completed
   - id: scaffold-package
-    content: "Phase 3a: Scaffold packages/kernels with package.json (exports map, deps), tsconfig, tsdown, vitest, project.json"
+    content: "Phase 3a: Scaffold packages/runtime with package.json (exports map, deps), tsconfig, tsdown, vitest, project.json"
     status: completed
   - id: copy-kernel-files
-    content: "Phase 3b: Copy kernel files to packages/kernels/src/ in new directory structure and rewrite all imports"
+    content: "Phase 3b: Copy kernel files to packages/runtime/src/ in new directory structure and rewrite all imports"
     status: completed
   - id: default-config-factory
     content: "Phase 3c: Implement createDefaultConfig() factory with self-resolving URLs via new URL(path, import.meta.url)"
@@ -27,25 +27,25 @@ todos:
     content: "Phase 5: Add dual-environment test gates -- node + jsdom matrix, CJS/ESM import smoke tests"
     status: completed
   - id: update-ui-imports
-    content: "Phase 6: Update UI app to consume @taucad/kernels via createDefaultConfig() and workspace dependency, remove old kernel directory"
+    content: "Phase 6: Update UI app to consume @taucad/runtime via createDefaultConfig() and workspace dependency, remove old kernel directory"
     status: completed
   - id: verify-build
-    content: "Phase 7: Run typecheck, lint, test, build for both kernels package and UI app; verify tarball contents"
+    content: "Phase 7: Run typecheck, lint, test, build for both runtime package and UI app; verify tarball contents"
     status: completed
 isProject: false
 ---
 
-# Kernel Migration to `packages/kernels`
+# Kernel Migration to `packages/runtime`
 
 ## 1. Current State
 
 The kernel code lives at `[apps/ui/app/components/geometry/kernel/](apps/ui/app/components/geometry/kernel/)` (~80 files) and is tightly coupled to the UI app through `#`-prefixed imports.
 
-A placeholder `[packages/kernels/](packages/kernels/)` already exists with scaffolding (`package.json` for `@taucad/kernels`, tsconfig, vitest, tsdown configs, `project.json`) but only contains `export const hello = 'world'`.
+A placeholder `[packages/runtime/](packages/runtime/)` already exists with scaffolding (`package.json` for `@taucad/runtime`, tsconfig, vitest, tsdown configs, `project.json`) but only contains `export const hello = 'world'`.
 
 ## 2. Target State
 
-`@taucad/kernels` becomes a standalone, environment-agnostic, npm-publishable package that:
+`@taucad/runtime` becomes a standalone, environment-agnostic, npm-publishable package that:
 
 - Contains all kernel framework code, middleware, bundlers, kernel implementations, and utilities
 - Depends only on `@taucad/*` packages/libs and external npm packages (zero `apps/ui/` imports)
@@ -62,7 +62,7 @@ Every file in `apps/ui/app/components/geometry/kernel/`, its imports, and the mi
 
 ### Legend
 
-- **Move**: Copy to `packages/kernels/src/`, rewrite internal `#` paths
+- **Move**: Copy to `packages/runtime/src/`, rewrite internal `#` paths
 - **Adapt**: Copy + modify (dependency replacement, API change, or environment fix)
 - **ExtDep**: External npm package (added to `package.json`)
 - **LibDep**: Workspace `@taucad/`* dependency
@@ -74,12 +74,12 @@ Every file in `apps/ui/app/components/geometry/kernel/`, its imports, and the mi
 | File                                        | Imports                                                                                                                                                                                                                                                                                                                                          | Action    |
 | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------- |
 | `utils/kernel-worker.ts`                    | `@taucad/types` (LibDep), `@taucad/types/symbols` (LibDep), `@taucad/types/constants` (LibDep), `deepmerge` (ExtDep), `type-fest` (ExtDep), `package.json` (UIReplace→own pkg version), `#machines/file-manager.js` (UIReplace→self-contained type), `#utils/path.utils.js` (UIReplace→`@taucad/utils/path`), internal kernel `#` imports (Move) | **Adapt** |
-| `utils/kernel-worker-client.ts`             | `@taucad/types` (LibDep) only                                                                                                                                                                                                                                                                                                                    | **Move**  |
-| `utils/kernel-worker-dispatcher.ts`         | `@taucad/types` (LibDep), `@taucad/types/symbols` (LibDep), internal kernel `#` imports (Move)                                                                                                                                                                                                                                                   | **Move**  |
-| `utils/kernel-message-adapter.ts`           | `@taucad/types` (LibDep), `node:worker_threads` (conditional)                                                                                                                                                                                                                                                                                    | **Move**  |
+| `utils/runtime-worker-client.ts`            | `@taucad/types` (LibDep) only                                                                                                                                                                                                                                                                                                                    | **Move**  |
+| `utils/runtime-worker-dispatcher.ts`        | `@taucad/types` (LibDep), `@taucad/types/symbols` (LibDep), internal kernel `#` imports (Move)                                                                                                                                                                                                                                                   | **Move**  |
+| `utils/runtime-message-adapter.ts`          | `@taucad/types` (LibDep), `node:worker_threads` (conditional)                                                                                                                                                                                                                                                                                    | **Move**  |
 | `utils/kernel-worker-filemanager-bridge.ts` | `#machines/file-manager.js` (UIReplace→self-contained type)                                                                                                                                                                                                                                                                                      | **Adapt** |
 | `utils/kernel-helpers.ts`                   | `@taucad/types` (LibDep)                                                                                                                                                                                                                                                                                                                         | **Move**  |
-| `utils/kernel-tracer.ts`                    | `@taucad/types` (LibDep)                                                                                                                                                                                                                                                                                                                         | **Move**  |
+| `utils/runtime-tracer.ts`                   | `@taucad/types` (LibDep)                                                                                                                                                                                                                                                                                                                         | **Move**  |
 | `utils/worker-telemetry.ts`                 | `@taucad/types` (LibDep)                                                                                                                                                                                                                                                                                                                         | **Move**  |
 | `utils/error-enrichment.ts`                 | `@taucad/types` (LibDep)                                                                                                                                                                                                                                                                                                                         | **Move**  |
 | `utils/common.ts`                           | `@taucad/types` (LibDep)                                                                                                                                                                                                                                                                                                                         | **Move**  |
@@ -91,7 +91,7 @@ Every file in `apps/ui/app/components/geometry/kernel/`, its imports, and the mi
 
 | File                                                 | Imports                                                                                                                                                            | Action    |
 | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------- |
-| `middleware/kernel-middleware.ts`                    | `zod` (ExtDep), `type-fest` (ExtDep), `deepmerge` (ExtDep), `@taucad/types` (LibDep)                                                                               | **Move**  |
+| `middleware/runtime-middleware.ts`                    | `zod` (ExtDep), `type-fest` (ExtDep), `deepmerge` (ExtDep), `@taucad/types` (LibDep)                                                                               | **Move**  |
 | `middleware/geometry-cache.middleware.ts`            | `@msgpack/msgpack` (ExtDep), `@taucad/types` (LibDep), `zod` (ExtDep), `#utils/path.utils.js` (UIReplace→`@taucad/utils/path`), internal kernel `#` imports (Move) | **Adapt** |
 | `middleware/parameter-cache.middleware.ts`           | `@taucad/types` (LibDep), `#utils/path.utils.js` (UIReplace→`@taucad/utils/path`), internal kernel `#` imports (Move)                                              | **Adapt** |
 | `middleware/gltf-coordinate-transform.middleware.ts` | `@taucad/types` (LibDep), internal kernel `#` imports (Move)                                                                                                       | **Move**  |
@@ -172,7 +172,7 @@ Every file in `apps/ui/app/components/geometry/kernel/`, its imports, and the mi
 | `openscad/parse-output.test.ts`                           | Internal kernel `#` imports                         | **Adapt** paths              |
 | `replicad/replicad.worker.test.ts`                        | `@vitest-environment node`, internal `#` imports    | **Adapt** paths + test utils |
 | `zoo/zoo.worker.test.ts`                                  | `@vitest-environment node`, internal `#` imports    | **Adapt** paths + test utils |
-| `middleware/kernel-middleware.test.ts`                    | Internal kernel `#` imports                         | **Adapt** paths              |
+| `middleware/runtime-middleware.test.ts`                    | Internal kernel `#` imports                         | **Adapt** paths              |
 | `middleware/kernel-worker-middleware.test.ts`             | Internal kernel `#` imports                         | **Adapt** paths              |
 | `middleware/geometry-cache.middleware.test.ts`            | Internal kernel `#` imports                         | **Adapt** paths              |
 | `middleware/gltf-coordinate-transform.middleware.test.ts` | Internal `#` imports                                | **Adapt** paths              |
@@ -208,7 +208,7 @@ Every file in `apps/ui/app/components/geometry/kernel/`, its imports, and the mi
 | `utils/path.utils.ts`   | `joinPath`, `normalizePath`                                                                                | None                                 | `@taucad/utils/path`                                                             |
 | `utils/file.utils.ts`   | `asBuffer` only                                                                                            | None                                 | `@taucad/utils/file`                                                             |
 | `utils/import.utils.ts` | `isBareSpecifier`, `parsePackageSpecifier`, `getCdnCachePath`, `resolveRelativePath`, `getNodeModulesPath` | `cdn-resolve`                        | `@taucad/utils/import`                                                           |
-| `utils/schema.utils.ts` | `jsonSchemaFromJson`, `hasJsonSchemaObjectProperties`                                                      | `@taucad/json-schema`, `json-schema` | Keep in kernels package as local util (uses `@taucad/json-schema` as direct dep) |
+| `utils/schema.utils.ts` | `jsonSchemaFromJson`, `hasJsonSchemaObjectProperties`                                                      | `@taucad/json-schema`, `json-schema` | Keep in runtime package as local util (uses `@taucad/json-schema` as direct dep) |
 
 
 ### 3.10 Summary of UIReplace Resolutions
@@ -219,7 +219,7 @@ Every file in `apps/ui/app/components/geometry/kernel/`, its imports, and the mi
 | `#utils/path.utils.js`        | 7 files             | → `@taucad/utils/path` (new export in `libs/utils`)                                      |
 | `#utils/file.utils.js`        | 5 files             | → `@taucad/utils/file` (new export in `libs/utils`)                                      |
 | `#utils/import.utils.js`      | 2 files             | → `@taucad/utils/import` (new export in `libs/utils`)                                    |
-| `#utils/schema.utils.js`      | 2 files             | → `#utils/schema.utils.js` (local copy in kernels pkg, depends on `@taucad/json-schema`) |
+| `#utils/schema.utils.js`      | 2 files             | → `#utils/schema.utils.js` (local copy in runtime pkg, depends on `@taucad/json-schema`) |
 | `#machines/file-manager.js`   | 2 files (type only) | → Self-contained `FileManagerPortable` type in bridge file                               |
 | `#filesystem/zenfs-config.js` | 1 file (test only)  | → Self-contained in-memory ZenFS setup in testing utils                                  |
 | `package.json` (version)      | 1 file              | → Own `package.json` version or build-time constant                                      |
@@ -231,7 +231,7 @@ Every file in `apps/ui/app/components/geometry/kernel/`, its imports, and the mi
 
 Minimal viable API. Everything not listed here is internal and must not be importable by consumers.
 
-### 4.1 Main Entry (`@taucad/kernels`)
+### 4.1 Main Entry (`@taucad/runtime`)
 
 Consumer-facing runtime API:
 
@@ -241,8 +241,8 @@ export { createDefaultConfig } from './config.js';
 export type { DefaultConfigOptions, DefaultConfigResult } from './config.js';
 
 // Main-thread client for communicating with kernel workers
-export { KernelWorkerClient } from './framework/kernel-worker-client.js';
-export type { OnLogCallback, OnTelemetryCallback, OnProgressCallback } from './framework/kernel-worker-client.js';
+export { RuntimeWorkerClient } from './framework/runtime-worker-client.js';
+export type { OnLogCallback, OnTelemetryCallback, OnProgressCallback } from './framework/runtime-worker-client.js';
 
 // FileManager bridge (main-thread side)
 export { createFileManagerPort } from './framework/kernel-worker-filemanager-bridge.js';
@@ -254,7 +254,7 @@ export { defineKernel, defineBundler } from '@taucad/types';
 export { createKernelSuccess, createKernelError } from './framework/kernel-helpers.js';
 ```
 
-### 4.2 Worker Entry (`@taucad/kernels/worker`)
+### 4.2 Worker Entry (`@taucad/runtime/worker`)
 
 Entry point for `new Worker()` or Node.js `worker_threads`. This file self-registers:
 
@@ -263,39 +263,39 @@ Entry point for `new Worker()` or Node.js `worker_threads`. This file self-regis
 export { KernelRuntimeWorker } from './framework/kernel-runtime-worker.js';
 ```
 
-### 4.3 Middleware Authoring (`@taucad/kernels/middleware`)
+### 4.3 Middleware Authoring (`@taucad/runtime/middleware`)
 
 For middleware authors:
 
 ```typescript
-export { createKernelMiddleware, createMiddlewareRuntime } from './middleware/kernel-middleware.js';
-export type { KernelMiddleware, KernelMiddlewareConfig } from './middleware/kernel-middleware.js';
+export { createRuntimeMiddleware, createMiddlewareRuntime } from './middleware/runtime-middleware.js';
+export type { KernelMiddleware, KernelMiddlewareConfig } from './middleware/runtime-middleware.js';
 ```
 
-### 4.4 Individual Kernel Modules (`@taucad/kernels/kernels/*`)
+### 4.4 Individual Kernel Modules (`@taucad/runtime/kernels/*`)
 
 Each kernel is a standalone entry point, default-exporting a `KernelDefinition`. Consumers reference these by URL (browser) or import directly (Node.js/testing):
 
-- `@taucad/kernels/kernels/replicad`
-- `@taucad/kernels/kernels/jscad`
-- `@taucad/kernels/kernels/openscad`
-- `@taucad/kernels/kernels/zoo`
-- `@taucad/kernels/kernels/tau`
+- `@taucad/runtime/kernels/replicad`
+- `@taucad/runtime/kernels/jscad`
+- `@taucad/runtime/kernels/openscad`
+- `@taucad/runtime/kernels/zoo`
+- `@taucad/runtime/kernels/tau`
 
-### 4.5 Bundler Modules (`@taucad/kernels/bundler/*`)
+### 4.5 Bundler Modules (`@taucad/runtime/bundler/*`)
 
-- `@taucad/kernels/bundler/esbuild`
+- `@taucad/runtime/bundler/esbuild`
 
-### 4.6 Middleware Modules (`@taucad/kernels/middleware/*`)
+### 4.6 Middleware Modules (`@taucad/runtime/middleware/*`)
 
 Each middleware is a standalone entry point, default-exporting a `KernelMiddleware`:
 
-- `@taucad/kernels/middleware/parameter-cache`
-- `@taucad/kernels/middleware/geometry-cache`
-- `@taucad/kernels/middleware/gltf-coordinate-transform`
-- `@taucad/kernels/middleware/gltf-edge-detection`
+- `@taucad/runtime/middleware/parameter-cache`
+- `@taucad/runtime/middleware/geometry-cache`
+- `@taucad/runtime/middleware/gltf-coordinate-transform`
+- `@taucad/runtime/middleware/gltf-edge-detection`
 
-### 4.7 Testing Utilities (`@taucad/kernels/testing`)
+### 4.7 Testing Utilities (`@taucad/runtime/testing`)
 
 For kernel/middleware authors writing tests:
 
@@ -303,10 +303,10 @@ For kernel/middleware authors writing tests:
 export {
   createTestWorker,
   initializeWorkerForTesting,
-  seedTestFilesystem,
-  clearTestFilesystem,
+  seedTestFileSystem,
+  clearTestFileSystem,
   createMockLogger,
-  createMockFilesystem,
+  createMockFileSystem,
   createMockRuntime,
   createSuccessResult,
   createErrorResult,
@@ -327,7 +327,7 @@ export {
 
 - `KernelWorker` base class (framework internal, not for extension by consumers)
 - `createWorkerDispatcher` (used only by the worker entry point)
-- `KernelTracer`, `WorkerTelemetryCollector` (internal instrumentation)
+- `RuntimeTracer`, `WorkerTelemetryCollector` (internal instrumentation)
 - `createFileManagerProxy` (worker-side internal)
 - `ResolvedMiddleware` type (framework internal)
 - Middleware state management (`createMiddlewareState`, `createMiddlewareLogger`)
@@ -427,11 +427,11 @@ export function createDefaultConfig(options?: DefaultConfigOptions): DefaultConf
 **Zero-config (any bundler or Node.js)** -- the recommended path:
 
 ```typescript
-import { createDefaultConfig, KernelWorkerClient, createFileManagerPort } from '@taucad/kernels';
+import { createDefaultConfig, RuntimeWorkerClient, createFileManagerPort } from '@taucad/runtime';
 
 const { workerUrl, kernelConfig, middlewareConfig, bundlerConfig } = createDefaultConfig();
 const worker = new Worker(workerUrl, { type: 'module' });
-const client = new KernelWorkerClient(worker, onLog);
+const client = new RuntimeWorkerClient(worker, onLog);
 await client.initialize({ kernelModules: kernelConfig }, fileManagerPort, middlewareConfig, bundlerConfig);
 ```
 
@@ -449,7 +449,7 @@ const config = createDefaultConfig({
 **Full manual control (power users)**:
 
 ```typescript
-import { KernelWorkerClient, createFileManagerPort } from '@taucad/kernels';
+import { RuntimeWorkerClient, createFileManagerPort } from '@taucad/runtime';
 import type { KernelConfig, MiddlewareConfig, BundlerConfig } from '@taucad/types';
 
 // Consumer resolves URLs however their environment requires
@@ -463,18 +463,18 @@ const kernelConfig: KernelConfig = [
 
 ```typescript
 import { Worker } from 'node:worker_threads';
-import { createDefaultConfig, KernelWorkerClient } from '@taucad/kernels';
+import { createDefaultConfig, RuntimeWorkerClient } from '@taucad/runtime';
 
 const { workerUrl, kernelConfig, middlewareConfig, bundlerConfig } = createDefaultConfig();
 const worker = new Worker(new URL(workerUrl));
-// kernel-message-adapter.ts handles Node.js MessagePort automatically
+// runtime-message-adapter.ts handles Node.js MessagePort automatically
 ```
 
 **Testing (direct injection, no worker or URL resolution needed)**:
 
 ```typescript
-import replicadKernel from '@taucad/kernels/kernels/replicad';
-import { createTestWorker } from '@taucad/kernels/testing';
+import replicadKernel from '@taucad/runtime/kernels/replicad';
+import { createTestWorker } from '@taucad/runtime/testing';
 
 const worker = await createTestWorker({
   kernels: [{ id: 'replicad', definition: replicadKernel }],
@@ -512,7 +512,7 @@ const worker = await createTestWorker({
 {
   ".": "./src/index.ts",
   "./worker": "./src/framework/kernel-runtime-worker.ts",
-  "./middleware": "./src/middleware/kernel-middleware.ts",
+  "./middleware": "./src/middleware/runtime-middleware.ts",
   "./kernels/replicad": "./src/kernels/replicad/replicad.kernel.ts",
   "./kernels/jscad": "./src/kernels/jscad/jscad.kernel.ts",
   "./kernels/openscad": "./src/kernels/openscad/openscad.kernel.ts",
@@ -552,15 +552,15 @@ All tests default to `node` environment. Worker tests already use `@vitest-envir
 The following APIs are used by the kernel framework and must work in both environments:
 
 
-| API                               | Node.js          | Browser     | Status                                         |
-| --------------------------------- | ---------------- | ----------- | ---------------------------------------------- |
-| `crypto.subtle.digest`            | 15+              | All modern  | Already used, works                            |
-| `performance.now()`               | All              | All         | Already used, works                            |
-| `TextEncoder`/`TextDecoder`       | All              | All         | Already used, works                            |
-| `MessageChannel`/`MessagePort`    | `worker_threads` | All         | `kernel-message-adapter.ts` handles both       |
-| `fetch`                           | 18+              | All         | Used for asset hashing; tests mock it          |
-| Dynamic `import()`                | All              | All         | Used for module loading                        |
-| `self.postMessage` / `parentPort` | `worker_threads` | Web Workers | `kernel-message-adapter.ts` detects and adapts |
+| API                               | Node.js          | Browser     | Status                                          |
+| --------------------------------- | ---------------- | ----------- | ----------------------------------------------- |
+| `crypto.subtle.digest`            | 15+              | All modern  | Already used, works                             |
+| `performance.now()`               | All              | All         | Already used, works                             |
+| `TextEncoder`/`TextDecoder`       | All              | All         | Already used, works                             |
+| `MessageChannel`/`MessagePort`    | `worker_threads` | All         | `runtime-message-adapter.ts` handles both       |
+| `fetch`                           | 18+              | All         | Used for asset hashing; tests mock it           |
+| Dynamic `import()`                | All              | All         | Used for module loading                         |
+| `self.postMessage` / `parentPort` | `worker_threads` | Web Workers | `runtime-message-adapter.ts` detects and adapts |
 
 
 ### 6.3 Dual-Environment Test Gates (Phase 5)
@@ -581,7 +581,7 @@ Beyond the unit/integration tests above, add these validation gates:
 
 ### 6.4 Test Adaptation
 
-- `kernel-testing.utils.ts`: Replace `#filesystem/zenfs-config.js` imports with a self-contained in-memory ZenFS configuration. The function `seedTestFilesystem()` will configure ZenFS with `InMemory` backend directly, removing the dependency on the UI app's filesystem configuration.
+- `kernel-testing.utils.ts`: Replace `#filesystem/zenfs-config.js` imports with a self-contained in-memory ZenFS configuration. The function `seedTestFileSystem()` will configure ZenFS with `InMemory` backend directly, removing the dependency on the UI app's filesystem configuration.
 - `kernel-geometry-testing.utils.ts`: Only needs import path updates.
 - All test files: Rewrite `#components/geometry/kernel/...` imports to `#framework/...`, `#middleware/...`, `#kernels/...`, etc.
 
@@ -589,7 +589,7 @@ Beyond the unit/integration tests above, add these validation gates:
 
 ## 7. Package Configuration
 
-### 7.1 `packages/kernels/package.json`
+### 7.1 `packages/runtime/package.json`
 
 Key sections:
 
@@ -633,7 +633,7 @@ Project references to `libs/types`, `libs/utils`. `NodeNext` module resolution.
 ## 8. Directory Structure
 
 ```
-packages/kernels/
+packages/runtime/
   src/
     index.ts                          # Public API (Section 4.1)
     config.ts                         # createDefaultConfig() factory (Section 5.3)
@@ -641,18 +641,18 @@ packages/kernels/
     framework/
       kernel-worker.ts                # KernelWorker base class (internal)
       kernel-runtime-worker.ts        # Worker entry (self-registering)
-      kernel-worker-client.ts         # Main-thread client (public)
-      kernel-worker-dispatcher.ts     # Worker-side dispatcher (internal)
-      kernel-message-adapter.ts       # Isomorphic message adapter (internal)
+      runtime-worker-client.ts         # Main-thread client (public)
+      runtime-worker-dispatcher.ts     # Worker-side dispatcher (internal)
+      runtime-message-adapter.ts       # Isomorphic message adapter (internal)
       kernel-worker-filemanager-bridge.ts  # FM bridge (public: createFileManagerPort)
       kernel-helpers.ts               # Result helpers (public)
-      kernel-tracer.ts                # Tracer (internal)
+      runtime-tracer.ts                # Tracer (internal)
       worker-telemetry.ts             # Telemetry (internal)
       error-enrichment.ts             # Error enrichment (internal)
       common.ts                       # Common utils (internal)
 
     middleware/
-      kernel-middleware.ts            # createKernelMiddleware (public)
+      kernel-middleware.ts            # createRuntimeMiddleware (public)
       geometry-cache.middleware.ts    # Built-in middleware (public as module)
       gltf-coordinate-transform.middleware.ts
       gltf-edge-detection.middleware.ts
@@ -739,7 +739,7 @@ packages/kernels/
 - The proxy's return type already inline-defines the interface -- make the `FileManagerPortable` type the canonical reference
 - Verify: `pnpm nx typecheck ui`
 
-### Phase 3: Scaffold and Populate `packages/kernels/`
+### Phase 3: Scaffold and Populate `packages/runtime/`
 
 - **3a**: Set up all config files based on existing `packages/converter/` patterns:
   - `package.json` with exports map, dependencies, publishConfig
@@ -750,8 +750,8 @@ packages/kernels/
 - **3b**: Copy files per the directory structure above
 - **3c**: Rewrite all imports:
   - `#components/geometry/kernel/utils/`* → `#framework/`* or `#utils/`*
-  - `#components/geometry/kernel/middleware/`* → `#middleware/*`
-  - `#components/geometry/kernel/bundlers/*` → `#bundler/*`
+  - `#components/geometry/kernel/middleware/`* → `#middleware/`*
+  - `#components/geometry/kernel/bundlers/`* → `#bundler/`*
   - `#components/geometry/kernel/*/` → `#kernels/*/`
   - `#utils/path.utils.js` → `@taucad/utils/path`
   - `#utils/file.utils.js` → `@taucad/utils/file`
@@ -773,7 +773,7 @@ packages/kernels/
 - Adapt `kernel-testing.utils.ts` to use self-contained in-memory ZenFS
 - Rewrite test import paths
 - Create `vitest.setup.ts` with minimal mocks
-- Run: `pnpm nx test kernels --watch=false`
+- Run: `pnpm nx test runtime --watch=false`
 - Fix any failures
 
 ### Phase 5: Dual-Environment Test Gates
@@ -781,30 +781,30 @@ packages/kernels/
 - Add CJS import smoke test
 - Add ESM import smoke test
 - Add jsdom browser-compatibility gate test
-- Run: `pnpm nx test kernels --watch=false`
+- Run: `pnpm nx test runtime --watch=false`
 
 ### Phase 6: Update UI App
 
-- Add `@taucad/kernels: workspace:`* to UI `package.json`
+- Add `@taucad/runtime: workspace:`* to UI `package.json`
 - Rewrite `kernel-worker.constants.ts`:
-  - Replace all `?url` imports with a single `createDefaultConfig()` call from `@taucad/kernels`
+  - Replace all `?url` imports with a single `createDefaultConfig()` call from `@taucad/runtime`
   - `defaultKernelConfig`, `debugKernelConfig`, `defaultMiddlewareConfig`, `defaultBundlerConfig` derived from the factory
   - The `debugKernelConfig` variant passes `{ kernels: { replicad: { options: { withExceptions: true } } } }`
   - The `ENV.TAU_WEBSOCKET_URL` for zoo kernel is injected via `createDefaultConfig({ kernels: { zoo: { options: { baseUrl } } } })`
-- Update `kernel.machine.ts` to import `KernelWorkerClient` and `createFileManagerPort` from `@taucad/kernels`
+- Update `kernel.machine.ts` to import `RuntimeWorkerClient` and `createFileManagerPort` from `@taucad/runtime`
 - Update `kernel.machine.ts` to use `workerUrl` from the config instead of `?url` import of runtime worker
 - Update route files that import kernel/middleware URLs directly (e.g. `auth-splashback.tsx`) to use `createDefaultConfig()` or individual subpath imports with the universal `new URL` pattern
 - Update `kcl-register-language.ts` dynamic import path
 - Remove `apps/ui/app/components/geometry/kernel/` directory
-- Add `@taucad/kernels` to Vite's `optimizeDeps.exclude` to preserve `new URL()` resolution during dev
+- Add `@taucad/runtime` to Vite's `optimizeDeps.exclude` to preserve `new URL()` resolution during dev
 - Run: `pnpm nx test ui --watch=false`
 
 ### Phase 7: Final Verification
 
-- `pnpm nx typecheck kernels`
-- `pnpm nx lint kernels`
-- `pnpm nx build kernels` -- verify dist output structure
+- `pnpm nx typecheck runtime`
+- `pnpm nx lint runtime`
+- `pnpm nx build runtime` -- verify dist output structure
 - `pnpm nx typecheck ui && pnpm nx test ui --watch=false`
-- Inspect tarball contents: `cd packages/kernels && pnpm pack --dry-run`
+- Inspect tarball contents: `cd packages/runtime && pnpm pack --dry-run`
 - Verify exports map resolves correctly in built output
 

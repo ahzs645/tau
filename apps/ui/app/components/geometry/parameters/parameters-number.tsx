@@ -1,10 +1,8 @@
 import * as React from 'react';
 import { useSelector, useActorRef } from '@xstate/react';
-import { Slider } from '#components/ui/slider.js';
-import { ParametersInputNumber } from '#components/geometry/parameters/parameters-input-number.js';
+import { ParametersNumberField } from '#components/geometry/parameters/parameters-number-field.js';
 import { parameterMachine } from '#machines/parameter.machine.js';
-import type { MeasurementDescriptor } from '#constants/build-parameters.js';
-import { cn } from '#utils/ui.utils.js';
+import type { MeasurementDescriptor } from '#constants/project-parameters.js';
 import type { Units } from '#components/geometry/parameters/rjsf-context.js';
 
 type ParametersNumberProps = {
@@ -15,7 +13,7 @@ type ParametersNumberProps = {
   readonly min?: number;
   readonly max?: number;
   readonly step?: number;
-  // eslint-disable-next-line react/boolean-prop-naming -- disabled is standard HTML/React prop
+  // oxlint-disable-next-line react-js/boolean-prop-naming -- third-party component prop
   readonly disabled?: boolean;
   /**
    * Whether to commit value changes continually on every slider movement.
@@ -24,6 +22,7 @@ type ParametersNumberProps = {
    */
   readonly enableContinualOnChange?: boolean;
   readonly className?: string;
+  readonly 'aria-label'?: string;
   readonly units: Units;
 };
 
@@ -38,7 +37,8 @@ export function ParametersNumber({
   disabled,
   units,
   enableContinualOnChange = false,
-  ...properties
+  className,
+  'aria-label': ariaLabel,
 }: ParametersNumberProps): React.JSX.Element {
   // Create ref for input element (for focus and arrow key listeners)
   const inputRef = React.useRef<HTMLInputElement>(null);
@@ -103,49 +103,35 @@ export function ParametersNumber({
   const isApproximation = useSelector(parameterRef, (state) => state.context.isApproximation);
   const rangeMin = useSelector(parameterRef, (state) => state.context.rangeMin);
   const rangeMax = useSelector(parameterRef, (state) => state.context.rangeMax);
-  const baseStep = useSelector(parameterRef, (state) => state.context.baseStep);
   const currentStep = useSelector(parameterRef, (state) => state.context.step);
   const displayUnit = useSelector(parameterRef, (state) => state.context.displayUnit);
 
   return (
-    <div className="flex w-full flex-row items-center gap-2">
-      <Slider
-        variant="inset"
-        value={[localValue]}
-        min={rangeMin}
-        max={rangeMax}
-        step={currentStep}
-        disabled={disabled}
-        className="[&_[data-slot=slider-track]]:h-7 md:[&_[data-slot=slider-track]]:h-4.5"
-        onValueChange={([newValue]) => {
-          // Send slider change event to machine (in display units)
-          parameterRef.send({ type: 'sliderChanged', value: Number(newValue) });
-        }}
-        onValueCommit={([newValue]) => {
-          // Send slider release event to machine (in display units)
-          parameterRef.send({ type: 'sliderReleased', value: Number(newValue) });
-        }}
-      />
-      <ParametersInputNumber
-        ref={inputRef}
-        value={localValue}
-        formattedValue={formattedValue}
-        isApproximation={isApproximation}
-        unit={displayUnit}
-        step={baseStep}
-        descriptor={descriptor}
-        disabled={disabled}
-        onValueChange={(newValue) => {
-          // Send input change event to machine (in display units)
-          parameterRef.send({ type: 'inputChanged', value: newValue });
-        }}
-        onTextChange={(text) => {
-          // Send text input event to machine for parsing and conversion
-          parameterRef.send({ type: 'textInputChanged', text });
-        }}
-        {...properties}
-        className={cn('h-7 w-24 bg-background', properties.className)}
-      />
-    </div>
+    <ParametersNumberField
+      ref={inputRef}
+      value={localValue}
+      formattedValue={formattedValue}
+      isApproximation={isApproximation}
+      unit={displayUnit}
+      descriptor={descriptor}
+      rangeMin={rangeMin}
+      rangeMax={rangeMax}
+      step={currentStep}
+      disabled={disabled}
+      className={className}
+      aria-label={ariaLabel}
+      onSliderChange={(newValue) => {
+        parameterRef.send({ type: 'sliderChanged', value: newValue });
+      }}
+      onSliderRelease={(newValue) => {
+        parameterRef.send({ type: 'sliderReleased', value: newValue });
+      }}
+      onValueChange={(newValue) => {
+        parameterRef.send({ type: 'inputChanged', value: newValue });
+      }}
+      onTextChange={(text) => {
+        parameterRef.send({ type: 'textInputChanged', text });
+      }}
+    />
   );
 }

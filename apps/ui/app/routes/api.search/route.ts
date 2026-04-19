@@ -7,8 +7,8 @@ const server = createFromSource(source, {
   language: 'english',
 });
 
-// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types -- inferred type
+// oxlint-disable-next-line @typescript-eslint/explicit-module-boundary-types -- inferred type
 export async function loader({ request }: Route.LoaderArgs) {
-  // eslint-disable-next-line new-cap -- Fumadocs internals
+  // oxlint-disable-next-line new-cap -- Fumadocs internals
   return server.GET(request);
 }

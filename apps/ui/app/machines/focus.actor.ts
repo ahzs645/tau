@@ -6,7 +6,7 @@ import { fromCallback } from 'xstate';
  */
 export const focusListener = fromCallback<
   { type: 'focusStateChanged'; isFocused: boolean },
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- ref can be null.
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- ref can be null.
   { elementRef: React.RefObject<HTMLElement | null> }
 >(({ sendBack, input }) => {
   const { elementRef } = input;

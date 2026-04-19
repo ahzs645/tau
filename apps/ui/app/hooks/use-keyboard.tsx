@@ -472,7 +472,7 @@ export function useKeybinding(
   const mergedOptions = useMemo<Required<KeybindingOptions>>(
     () => ({ ...defaultOptions, ...options }),
     // Serialize options to a stable string for dependency comparison
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: we serialize for stability
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- intentional: we serialize for stability
     [JSON.stringify(options)],
   );
 

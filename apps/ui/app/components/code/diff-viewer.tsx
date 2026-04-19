@@ -1,7 +1,8 @@
-import { useMemo } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { diffLines } from 'diff';
+import type { HighlighterCore } from 'shiki/core';
 import type { CodeLanguage } from '@taucad/types';
-import { highlighter, diffTransformer } from '#lib/shiki.js';
+import { getHighlighter, diffTransformer } from '#lib/shiki.lib.js';
 import { cn } from '#utils/ui.utils.js';
 import { useTheme } from '#hooks/use-theme.js';
 
@@ -19,6 +20,7 @@ type DiffSegment = { type: 'code'; lines: DiffLine[] } | { type: 'hidden'; count
  * Process diff changes to only show context lines around changes.
  * Returns segments of code and hidden line counts.
  */
+// oxlint-disable-next-line complexity -- diff processing has many branches by design
 function processDiffWithContext(originalContent: string, modifiedContent: string): DiffSegment[] {
   const changes = diffLines(originalContent, modifiedContent);
 
@@ -186,12 +188,12 @@ type HiddenLinesSeparatorProps = {
 
 function HiddenLinesSeparator({ count }: HiddenLinesSeparatorProps): React.JSX.Element {
   return (
-    <div className="flex h-4 w-full items-center gap-1 bg-muted/10 px-1 text-[11px] text-muted-foreground">
-      <span className="w-4 border-t border-muted-foreground/20" />
-      <span className="shrink-0 whitespace-nowrap">
+    <div className='flex h-4 w-full items-center gap-1 bg-muted/10 px-1 text-[11px] text-muted-foreground'>
+      <span className='w-4 border-t border-muted-foreground/20' />
+      <span className='shrink-0 whitespace-nowrap'>
         {count} hidden line{count === 1 ? '' : 's'}
       </span>
-      <span className="flex-1 border-t border-muted-foreground/20" />
+      <span className='flex-1 border-t border-muted-foreground/20' />
     </div>
   );
 }
@@ -216,6 +218,14 @@ export function DiffViewer({
   className,
 }: DiffViewerProps): React.JSX.Element {
   const { theme } = useTheme();
+  const [highlighter, setHighlighter] = useState<HighlighterCore | undefined>();
+
+  useEffect(() => {
+    const loadHighlighter = async () => {
+      setHighlighter(await getHighlighter());
+    };
+    void loadHighlighter();
+  }, []);
 
   const segments = useMemo(
     () => processDiffWithContext(originalContent, modifiedContent),
@@ -223,9 +233,13 @@ export function DiffViewer({
   );
 
   const renderedSegments = useMemo(() => {
+    if (!highlighter) {
+      return null;
+    }
+
     return segments.map((segment, segmentIndex) => {
       if (segment.type === 'hidden') {
-        // eslint-disable-next-line react/no-array-index-key -- segments are stable during render
+        // oxlint-disable-next-line react/no-array-index-key -- segments are stable during render
         return <HiddenLinesSeparator key={`hidden-${segmentIndex}`} count={segment.count} />;
       }
 
@@ -238,9 +252,9 @@ export function DiffViewer({
 
       return (
         <div
-          // eslint-disable-next-line react/no-array-index-key -- segments are stable during render
+          // oxlint-disable-next-line react/no-array-index-key -- segments are stable during render
           key={`code-${segmentIndex}`}
-          // eslint-disable-next-line react/no-danger -- Shiki returns trusted HTML
+          // oxlint-disable-next-line react/no-danger -- Shiki returns trusted HTML
           dangerouslySetInnerHTML={{ __html: html }}
           className={cn(
             // Pre element styles
@@ -264,7 +278,7 @@ export function DiffViewer({
         />
       );
     });
-  }, [segments, language, theme]);
+  }, [segments, language, theme, highlighter]);
 
   // Outer container w-max min-w-full ensures all segments extend to longest line across all groups
   return <div className={cn('w-max min-w-full text-xs', className)}>{renderedSegments}</div>;

@@ -9,6 +9,7 @@
 /**
  * RPC operation names.
  * These are the names of remote procedure calls that the server can invoke on the client.
+ * @public
  */
 export const rpcName = {
   readFile: 'read_file',
@@ -19,11 +20,16 @@ export const rpcName = {
   globSearch: 'glob_search',
   getKernelResult: 'get_kernel_result',
   captureObservations: 'capture_observations',
+  fetchGeometry: 'fetch_geometry',
+  captureScreenshot: 'capture_screenshot',
+  appendFile: 'append_file',
+  editFile: 'edit_file',
 } as const satisfies Record<string, string>;
 
 /**
  * Array of all RPC operation names.
  * Used by type guards and validation at runtime.
+ * @public
  */
 export const rpcNames = Object.values(rpcName) as [(typeof rpcName)[keyof typeof rpcName]];
 
@@ -31,6 +37,7 @@ export const rpcNames = Object.values(rpcName) as [(typeof rpcName)[keyof typeof
  * Error codes for RPC infrastructure failures.
  * These represent issues with the RPC transport/execution itself,
  * not business-level errors from the client.
+ * @public
  */
 export const rpcExecutionErrorCode = {
   /** RPC execution timed out waiting for client response */
@@ -50,6 +57,7 @@ export const rpcExecutionErrorCode = {
 /**
  * Array of all RPC execution error codes.
  * Used by type guards to validate error codes at runtime.
+ * @public
  */
 export const rpcExecutionErrorCodes = Object.values(rpcExecutionErrorCode) as [
   (typeof rpcExecutionErrorCode)[keyof typeof rpcExecutionErrorCode],

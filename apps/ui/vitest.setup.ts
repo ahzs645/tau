@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/naming-convention -- CONSTANT_CASE is expected for environment variables */
-// eslint-disable-next-line import-x/no-unassigned-import -- this is a side effect
+// oxlint-disable-next-line import-x/no-unassigned-import -- this is a side effect
 import '@testing-library/jest-dom';
 
 // Mock window.ENV for testing - required since the app uses window.ENV in browser environments
@@ -50,6 +50,11 @@ globalThis.IntersectionObserver = class IntersectionObserver {
     return '0px';
   }
 
+  /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/IntersectionObserver/scrollMargin) */
+  public get scrollMargin() {
+    return '0px';
+  }
+
   /** [MDN Reference](https://developer.mozilla.org/docs/Web/API/IntersectionObserver/thresholds) */
   public readonly thresholds: readonly number[] = [0];
 
@@ -90,12 +95,19 @@ globalThis.ResizeObserver = class ResizeObserver {
 // (PerformanceMeasureOptions with { start, detail }), which causes
 // "Invalid target origin '[object Object]'" errors. Replace with no-op stubs
 // that return minimal PerformanceEntry-shaped objects.
-const stubEntry = { name: '', startTime: 0, duration: 0, entryType: '', detail: undefined, toJSON: () => ({}) };
+const stubEntry = {
+  name: '',
+  startTime: 0,
+  duration: 0,
+  entryType: '',
+  detail: undefined,
+  toJSON: () => ({}),
+};
 globalThis.performance.mark = (() => stubEntry) as typeof globalThis.performance.mark;
 globalThis.performance.measure = (() => stubEntry) as typeof globalThis.performance.measure;
 
 // PerformanceObserver is not available in jsdom -- stub it for telemetry code
-// eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- jsdom doesn't provide PerformanceObserver despite type declarations
+// oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition, @typescript-eslint/consistent-type-assertions -- jsdom doesn't provide PerformanceObserver despite type declarations; class assignment to globalThis requires cast
 globalThis.PerformanceObserver ??= class PerformanceObserver {
   public observe() {
     // No-op

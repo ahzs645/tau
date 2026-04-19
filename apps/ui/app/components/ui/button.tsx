@@ -16,7 +16,7 @@ const buttonVariants = cva(
           'border bg-background shadow-xs hover:bg-accent hover:text-accent-foreground dark:bg-input/30 dark:border-input dark:hover:bg-input/60',
         // A variant of the outline, used when overlaying onto a canvas
         overlay: 'border bg-sidebar shadow-xs hover:bg-accent hover:text-accent-foreground',
-        secondary: 'bg-secondary text-secondary-foreground shadow-xs hover:bg-secondary/80 active:bg-black/20',
+        secondary: 'bg-secondary border text-secondary-foreground shadow-xs hover:bg-secondary/80 active:bg-black/20',
         neutral: 'bg-accent/70 text-foreground shadow-xs hover:bg-accent',
         ghost: 'hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50',
         link: 'underline-offset-4 hover:underline',
@@ -48,7 +48,7 @@ function Button({
   }): React.JSX.Element {
   const Comp = asChild ? SlotPrimitive.Slot : 'button';
 
-  return <Comp data-slot="button" className={cn(buttonVariants({ variant, size, className }))} {...properties} />;
+  return <Comp data-slot='button' className={cn(buttonVariants({ variant, size, className }))} {...properties} />;
 }
 
 export { Button, buttonVariants };

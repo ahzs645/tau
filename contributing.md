@@ -1,4 +1,3 @@
-
 ## Development
 
 ### Prerequisites
@@ -10,16 +9,19 @@
 ### Setup
 
 1. Install dependencies:
+
    ```bash
    pnpm install
    ```
 
 2. Start the infrastructure (PostgreSQL + Redis):
+
    ```bash
    pnpm infra:up
    ```
 
 3. Create your environment file in UI and API:
+
    ```bash
    cp apps/ui/.env.example apps/ui/.env.local
    cp apps/api/.env.example apps/api/.env.local
@@ -27,6 +29,7 @@
    ```
 
 4. Start the development servers:
+
    ```bash
    pnpm dev
    ```
@@ -36,6 +39,7 @@
 ### Infrastructure Commands
 
 #### Docker Compose Commands
+
 ```bash
 # Start all infrastructure (PostgreSQL + Redis)
 pnpm infra:up
@@ -67,8 +71,8 @@ docker-compose -f infra/docker-compose.yml down
 docker-compose -f infra/docker-compose.yml logs -f
 ```
 
-
 #### Drizzle Commands
+
 ```bash
 # Generate migrations. This is required when making changes to the database schema. SQL files are generated in the apps/api/app/database/migrations directory.
 pnpm db:generate
@@ -88,6 +92,7 @@ This project uses ESLint for linting. The linting configuration is intentionally
 - AI Copilots have guardrails to ensure code is consistent.
 
 Here are some specific rules to be aware of, and why they are important:
+
 - `tsconfig.json`
   - `strict`: required by libraries such as `zod`, enforcing TypeScript best practices.
   - `erasableSyntaxOnly`: ensures that all Typescript code can be run on Node.js directly via type-stripping. The exception is NestJS apps, which require non-erasable syntax for dependency injection.

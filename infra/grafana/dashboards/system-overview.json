@@ -1,0 +1,495 @@
+{
+  "uid": "tau-system-overview",
+  "title": "System Overview",
+  "description": "Single-pane-of-glass health view across all Tau subsystems. Drill into detail dashboards via links.",
+  "tags": ["tau", "overview", "home"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "service",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(up, service_name)",
+        "current": { "text": "tau-api", "value": "tau-api" },
+        "includeAll": false,
+        "refresh": 1
+      },
+      {
+        "name": "instance",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(up{service_name=\"$service\"}, instance)",
+        "current": { "text": "All", "value": "$__all" },
+        "includeAll": true,
+        "allValue": ".*",
+        "refresh": 1
+      }
+    ]
+  },
+  "links": [
+    {
+      "title": "SLO / Executive",
+      "type": "link",
+      "url": "/d/tau-slo-executive",
+      "icon": "dashboard",
+      "targetBlank": false
+    },
+    { "title": "API (REST)", "type": "link", "url": "/d/tau-api-overview", "icon": "dashboard", "targetBlank": false },
+    {
+      "title": "WebSocket / RPC",
+      "type": "link",
+      "url": "/d/tau-websocket-rpc",
+      "icon": "dashboard",
+      "targetBlank": false
+    },
+    { "title": "AI Agent", "type": "link", "url": "/d/tau-ai-agent", "icon": "dashboard", "targetBlank": false },
+    { "title": "CAD Kernel", "type": "link", "url": "/d/tau-cad-kernel", "icon": "dashboard", "targetBlank": false },
+    {
+      "title": "Infrastructure",
+      "type": "link",
+      "url": "/d/tau-infrastructure",
+      "icon": "dashboard",
+      "targetBlank": false
+    }
+  ],
+  "panels": [
+    {
+      "type": "row",
+      "title": "Health at a Glance",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "collapsed": false
+    },
+    {
+      "title": "API Availability",
+      "description": "Percentage of requests not returning 5xx (5m window)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 1 },
+      "targets": [
+        {
+          "expr": "(1 - (sum(rate(http_server_duration_count{service_name=~\"$service\",http_status_code=~\"5..\"}[5m])) or vector(0)) / clamp_min(sum(rate(http_server_duration_count{service_name=~\"$service\"}[5m])), 1e-10)) * 100",
+          "legendFormat": "availability"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 2,
+          "thresholds": {
+            "steps": [
+              { "value": 0, "color": "red" },
+              { "value": 99, "color": "yellow" },
+              { "value": 99.9, "color": "green" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "API Error Rate",
+      "description": "5xx errors as % of total HTTP requests",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 1 },
+      "targets": [
+        {
+          "expr": "(sum(rate(http_server_duration_count{service_name=~\"$service\",http_status_code=~\"5..\"}[5m])) or vector(0)) / clamp_min(sum(rate(http_server_duration_count{service_name=~\"$service\"}[5m])), 1e-10) * 100"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 2,
+          "thresholds": {
+            "steps": [
+              { "value": 0, "color": "green" },
+              { "value": 1, "color": "yellow" },
+              { "value": 5, "color": "red" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "WebSocket Clients",
+      "description": "Active WebSocket connections",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
+      "targets": [{ "expr": "ws_connections_active{service_name=~\"$service\"}" }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": { "steps": [{ "value": 0, "color": "blue" }] }
+        }
+      }
+    },
+    {
+      "title": "Redis",
+      "description": "Redis connection health",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
+      "targets": [{ "expr": "redis_connection_state{service_name=~\"$service\"}" }],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            {
+              "options": { "0": { "text": "DOWN", "color": "red" }, "1": { "text": "UP", "color": "green" } },
+              "type": "value"
+            }
+          ],
+          "noValue": "N/A"
+        }
+      }
+    },
+    {
+      "title": "AI Cost",
+      "description": "Estimated LLM spend in the selected time range",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 1 },
+      "targets": [
+        { "expr": "sum(increase(gen_ai_client_cost_total{service_name=~\"$service\"}[$__range])) or vector(0)" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "thresholds": {
+            "steps": [
+              { "value": 0, "color": "green" },
+              { "value": 5, "color": "yellow" },
+              { "value": 20, "color": "red" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "SSE Streams",
+      "description": "Active server-sent event streams (AI chat)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 1 },
+      "targets": [{ "expr": "sse_connections_active{service_name=~\"$service\"} or vector(0)" }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": { "steps": [{ "value": 0, "color": "blue" }] }
+        }
+      }
+    },
+
+    {
+      "type": "row",
+      "title": "Traffic",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 },
+      "collapsed": false
+    },
+    {
+      "title": "HTTP Request Rate",
+      "description": "Total HTTP requests per second",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 6 },
+      "targets": [
+        {
+          "expr": "sum(rate(http_server_duration_count{service_name=~\"$service\"}[5m]))",
+          "legendFormat": "req/s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "fillOpacity": 15, "lineWidth": 2 } }
+      }
+    },
+    {
+      "title": "RPC Call Rate",
+      "description": "Socket.IO RPC calls per second",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 6 },
+      "targets": [
+        {
+          "expr": "sum(rate(rpc_server_call_duration_count{service_name=~\"$service\"}[5m])) or vector(0)",
+          "legendFormat": "calls/s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "fillOpacity": 15, "lineWidth": 2 } }
+      }
+    },
+    {
+      "title": "Active Connections",
+      "description": "WebSocket + SSE connections over time",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 6 },
+      "targets": [
+        {
+          "expr": "ws_connections_active{service_name=~\"$service\"}",
+          "legendFormat": "WebSocket"
+        },
+        {
+          "expr": "sse_connections_active{service_name=~\"$service\"}",
+          "legendFormat": "SSE"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "fillOpacity": 15, "lineWidth": 2 } }
+      }
+    },
+
+    {
+      "type": "row",
+      "title": "Latency Across the Stack",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 13 },
+      "collapsed": false
+    },
+    {
+      "title": "HTTP p95",
+      "description": "API REST endpoint latency (95th percentile)",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 6, "x": 0, "y": 14 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(http_server_duration_bucket{service_name=~\"$service\"}[5m])) by (le))",
+          "legendFormat": "HTTP p95"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms", "custom": { "fillOpacity": 10, "lineWidth": 2 } } }
+    },
+    {
+      "title": "RPC p95",
+      "description": "Socket.IO RPC call latency (95th percentile)",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 6, "x": 6, "y": 14 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(rpc_server_call_duration_bucket{service_name=~\"$service\"}[5m])) by (le))",
+          "legendFormat": "RPC p95"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "fillOpacity": 10, "lineWidth": 2 } } }
+    },
+    {
+      "title": "DB p95",
+      "description": "PostgreSQL query latency (95th percentile)",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 6, "x": 12, "y": 14 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(db_client_operation_duration_bucket{service_name=~\"$service\",db_system=\"postgresql\"}[5m])) by (le))",
+          "legendFormat": "DB p95"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "fillOpacity": 10, "lineWidth": 2 } } }
+    },
+    {
+      "title": "LLM p95",
+      "description": "AI model call latency (95th percentile)",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 6, "x": 18, "y": 14 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(gen_ai_client_operation_duration_bucket{service_name=~\"$service\"}[5m])) by (le))",
+          "legendFormat": "LLM p95"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "fillOpacity": 10, "lineWidth": 2 } } }
+    },
+
+    {
+      "type": "row",
+      "title": "Errors",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 21 },
+      "collapsed": false
+    },
+    {
+      "title": "Error Rates by Subsystem",
+      "description": "Errors/sec across HTTP, RPC, and kernel execution",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 22 },
+      "targets": [
+        {
+          "expr": "sum(rate(http_server_duration_count{service_name=~\"$service\",http_status_code=~\"5..\"}[5m])) or vector(0)",
+          "legendFormat": "HTTP 5xx"
+        },
+        {
+          "expr": "sum(rate(rpc_server_call_duration_count{service_name=~\"$service\",rpc_status=\"error\"}[5m])) or vector(0)",
+          "legendFormat": "RPC errors"
+        },
+        {
+          "expr": "sum(rate(kernel_executions_total{service_name=~\"$service\",kernel_status=\"error\"}[5m])) or vector(0)",
+          "legendFormat": "Kernel errors"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "fillOpacity": 15, "lineWidth": 2, "drawStyle": "bars" } }
+      }
+    },
+    {
+      "title": "WS Disconnections",
+      "description": "WebSocket disconnect rate by reason",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 22 },
+      "targets": [
+        {
+          "expr": "sum(rate(ws_disconnections_total{service_name=~\"$service\",ws_close_reason!=\"\"}[5m])) by (ws_close_reason)",
+          "legendFormat": "{{ws_close_reason}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "fillOpacity": 15, "lineWidth": 2 } }
+      }
+    },
+
+    {
+      "type": "row",
+      "title": "AI & CAD",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 29 },
+      "collapsed": false
+    },
+    {
+      "title": "LLM Token Throughput",
+      "description": "Token generation rate by model",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 30 },
+      "targets": [
+        {
+          "expr": "sum(rate(gen_ai_client_token_usage_sum{service_name=~\"$service\"}[5m])) by (gen_ai_request_model)",
+          "legendFormat": "{{gen_ai_request_model}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "short", "custom": { "fillOpacity": 15, "lineWidth": 2 } }
+      }
+    },
+    {
+      "title": "Tool Invocations",
+      "description": "AI tool call rate by tool name",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 30 },
+      "targets": [
+        {
+          "expr": "sum(rate(gen_ai_tool_invocations_total{service_name=~\"$service\"}[5m])) by (gen_ai_tool_name)",
+          "legendFormat": "{{gen_ai_tool_name}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "fillOpacity": 15, "lineWidth": 2 } }
+      }
+    },
+    {
+      "title": "Kernel Execution Rate",
+      "description": "Client-side CAD kernel evaluations per second",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 30 },
+      "targets": [
+        {
+          "expr": "sum(rate(kernel_executions_total{service_name=~\"$service\"}[5m])) by (kernel_status)",
+          "legendFormat": "{{kernel_status}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "fillOpacity": 15, "lineWidth": 2 } }
+      }
+    },
+
+    {
+      "type": "row",
+      "title": "Process & Infrastructure",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 37 },
+      "collapsed": false
+    },
+    {
+      "title": "Heap Memory",
+      "description": "Node.js V8 heap usage",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 8, "x": 0, "y": 38 },
+      "targets": [
+        {
+          "expr": "sum(v8js_memory_heap_used{service_name=~\"$service\"})",
+          "legendFormat": "heap used"
+        },
+        {
+          "expr": "sum(v8js_memory_heap_limit{service_name=~\"$service\"})",
+          "legendFormat": "heap limit"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "bytes", "custom": { "fillOpacity": 15, "lineWidth": 2 } }
+      }
+    },
+    {
+      "title": "DB Query Latency (p95)",
+      "description": "PostgreSQL and Redis query p95 latency",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 8, "x": 8, "y": 38 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(db_client_operation_duration_bucket{service_name=~\"$service\",db_system=\"postgresql\"}[5m])) by (le))",
+          "legendFormat": "PostgreSQL p95"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "s", "custom": { "fillOpacity": 10, "lineWidth": 2 } }
+      }
+    },
+    {
+      "title": "Event Loop Utilization",
+      "description": "Node.js event loop utilization (0-1)",
+      "type": "timeseries",
+      "gridPos": { "h": 7, "w": 8, "x": 16, "y": 38 },
+      "targets": [
+        {
+          "expr": "nodejs_eventloop_utilization{service_name=~\"$service\"}",
+          "legendFormat": "utilization"
+        },
+        {
+          "expr": "nodejs_eventloop_delay_p99{service_name=~\"$service\"}",
+          "legendFormat": "p99 delay"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "custom": { "fillOpacity": 15, "lineWidth": 2 } },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "p99 delay" },
+            "properties": [
+              { "id": "unit", "value": "s" },
+              { "id": "custom.axisPlacement", "value": "right" }
+            ]
+          }
+        ]
+      }
+    },
+
+    {
+      "title": "Logs",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 45 },
+      "collapsed": true,
+      "panels": [
+        {
+          "title": "Error Logs",
+          "type": "logs",
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 46 },
+          "datasource": { "type": "loki", "uid": "loki" },
+          "targets": [{ "expr": "{service_name=~\"$service\"} |= \"level\" | json | level = \"error\"", "refId": "A" }],
+          "options": {
+            "showTime": true,
+            "showLabels": true,
+            "showCommonLabels": false,
+            "wrapLogMessage": true,
+            "prettifyLogMessage": false,
+            "enableLogDetails": true,
+            "sortOrder": "Descending"
+          }
+        },
+        {
+          "title": "Recent Traces",
+          "type": "traces",
+          "gridPos": { "h": 8, "w": 24, "x": 0, "y": 54 },
+          "datasource": { "type": "tempo", "uid": "tempo" },
+          "targets": [{ "query": "{resource.service.name=~\"$service\"}", "refId": "A", "queryType": "traceqlSearch" }]
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39
+}

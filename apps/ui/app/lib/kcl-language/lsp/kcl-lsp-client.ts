@@ -184,7 +184,7 @@ export class KclLspClient {
       return undefined;
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-restricted-types -- LSP can return null
+    // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- LSP can return null
     const result = await this.request<LSP.CompletionItem[] | LSP.CompletionList | null>(
       'textDocument/completion',
       parameters,

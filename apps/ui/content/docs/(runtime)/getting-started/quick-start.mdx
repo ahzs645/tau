@@ -1,0 +1,92 @@
+---
+title: Quick Start
+description: Render your first 3D model with @taucad/runtime in under 4 minutes.
+icon: lucide:rocket
+---
+
+# Quick Start
+
+Render a 3D model from TypeScript code using the Replicad kernel. You will install the package, create a runtime client, and render geometry to glTF.
+
+## Prerequisites
+
+- Node.js 20 or later
+- A package manager: npm, pnpm, or yarn
+
+## Install
+
+```bash tab="pnpm"
+pnpm add @taucad/runtime
+```
+
+```bash tab="npm"
+npm install @taucad/runtime
+```
+
+```bash tab="yarn"
+yarn add @taucad/runtime
+```
+
+For framework-specific configuration (Vite, Node.js), see [Installation](./installation).
+
+## Render a 3D Model
+
+Create a file called `render.ts` and paste the following code:
+
+```typescript
+import { createRuntimeClient, presets } from '@taucad/runtime';
+
+const client = createRuntimeClient(presets.all());
+
+const result = await client.render({
+  code: {
+    'main.ts': `
+    import { drawRoundedRectangle } from 'replicad';
+
+    export default function main() {
+      return drawRoundedRectangle(30, 50, 5).sketchOnPlane('XY').extrude(10);
+    }
+  `,
+  },
+});
+
+if (result.success) {
+  console.log(`Rendered ${result.data.length} geometries`);
+  console.log(`Format: ${result.data[0].format}`);
+} else {
+  console.error('Render failed:', result.issues);
+}
+
+client.terminate();
+```
+
+`presets.all()` includes all built-in kernels, middleware, and bundlers. For tree-shaking, configure individual plugins with `createRuntimeClientOptions`:
+
+```typescript
+import { createRuntimeClient, createRuntimeClientOptions, fromMemoryFS } from '@taucad/runtime';
+import { replicad } from '@taucad/runtime/kernels';
+import { esbuild } from '@taucad/runtime/bundler';
+
+const options = createRuntimeClientOptions({
+  kernels: [replicad()],
+  bundlers: [esbuild()],
+  fileSystem: fromMemoryFS(),
+});
+
+const client = createRuntimeClient(options);
+```
+
+## Expected Output
+
+```
+Rendered 1 geometries
+Format: gltf
+```
+
+Each entry in `result.data` is a `Geometry` object containing a glTF binary (GLB) that you can display in any 3D viewer, save to disk, or pass to a renderer like Three.js.
+
+## What's Next
+
+- [Your First Kernel](./your-first-kernel) -- Build parametric models with parameters and STEP export
+- [Choose a Kernel](../guides/choosing-a-kernel) -- Compare Replicad, OpenCASCADE, Manifold, OpenSCAD, JSCAD, and Zoo
+- [API Reference: Client](../api/client) -- Full documentation for `createRuntimeClient`

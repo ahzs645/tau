@@ -1,18 +1,21 @@
 import type { Document } from '@gltf-transform/core';
+import type { FileInput } from '@taucad/types';
 import { BaseLoader } from '#loaders/base.loader.js';
-import type { File } from '#types.js';
 import { GltfDracoDecoder } from '#loaders/draco/gltf-draco-decoder.js';
 import { createNodeIo } from '#gltf.utils.js';
 
+/**
+ * Loader for Draco-compressed mesh files (.drc).
+ */
 export class DracoLoader extends BaseLoader<Document> {
   private readonly decoder = new GltfDracoDecoder();
 
-  protected async parseAsync(files: File[]): Promise<Document> {
+  protected async parseAsync(files: FileInput[]): Promise<Document> {
     await this.decoder.initialize();
     this.decoder.setVerbosity(0);
 
-    const { data } = this.findPrimaryFile(files);
-    const arrayBuffer = this.uint8ArrayToArrayBuffer(data);
+    const { bytes } = this.findPrimaryFile(files);
+    const arrayBuffer = this.uint8ArrayToArrayBuffer(bytes);
 
     try {
       // Decode Draco file to get raw geometry data

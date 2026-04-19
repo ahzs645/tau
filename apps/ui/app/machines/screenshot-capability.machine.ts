@@ -10,6 +10,7 @@ import { ensureMatcapTextureLoaded } from '#components/geometry/graphics/three/m
 import { calculateFovDistanceCompensation } from '#components/geometry/graphics/three/utils/math.utils.js';
 import { computeViewFittingZoom } from '#components/geometry/graphics/three/utils/camera.utils.js';
 import { defaultStageOptions } from '#components/geometry/graphics/three/stage.js';
+import { sceneTag, hasSceneTag, findBySceneTag } from '#components/geometry/graphics/three/utils/scene-tags.js';
 
 // Capture mode discriminator
 type CaptureMode = 'threejs' | 'svg';
@@ -22,14 +23,23 @@ type ScreenshotCapabilityContext = {
   camera?: THREE.Camera;
   svgElement?: SVGSVGElement;
   captureMode?: CaptureMode;
-  queuedCaptureRequests: Array<{ options?: ScreenshotOptions; requestId: string; isComposite?: boolean }>;
+  queuedCaptureRequests: Array<{
+    options?: ScreenshotOptions;
+    requestId: string;
+    isComposite?: boolean;
+  }>;
   isRegistered: boolean;
   registrationError?: string;
 };
 
 // Event types
 type ScreenshotCapabilityEvent =
-  | { type: 'registerCapture'; gl: THREE.WebGLRenderer; scene: THREE.Scene; camera: THREE.Camera }
+  | {
+      type: 'registerCapture';
+      gl: THREE.WebGLRenderer;
+      scene: THREE.Scene;
+      camera: THREE.Camera;
+    }
   | { type: 'registerSvgCapture'; svgElement: SVGSVGElement }
   | { type: 'unregisterCapture'; captureMode?: 'threejs' | 'svg' }
   | { type: 'capture'; options?: ScreenshotOptions; requestId: string }
@@ -64,11 +74,16 @@ const defaultCompositeOptions = {
  *
  * @param itemCount - Number of items to arrange in a grid.
  * @param preferredRatio - Target column-to-row ratio.
+ * @param preferredRatio.columns - Number of preferred columns.
+ * @param preferredRatio.rows - Number of preferred rows.
  * @returns The grid dimensions that best match the preferred ratio.
  */
 export function calculateOptimalGrid(
   itemCount: number,
-  preferredRatio: { columns: number; rows: number } = defaultCompositeOptions.preferredRatio,
+  preferredRatio: {
+    columns: number;
+    rows: number;
+  } = defaultCompositeOptions.preferredRatio,
 ): { columns: number; rows: number } {
   if (itemCount <= 0) {
     return { columns: 1, rows: 1 };
@@ -324,7 +339,7 @@ async function captureSvgScreenshots(svgElement: SVGSVGElement, options?: Screen
   const defaultOptions = {
     aspectRatio: 16 / 9,
     output: {
-      format: 'image/png' as const,
+      format: 'image/png',
       quality: 0.92,
       isPreview: true,
     },
@@ -373,7 +388,9 @@ async function captureSvgScreenshots(svgElement: SVGSVGElement, options?: Screen
   // Serialise and create a Blob URL
   const serializer = new XMLSerializer();
   const svgString = serializer.serializeToString(clone);
-  const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
+  const svgBlob = new Blob([svgString], {
+    type: 'image/svg+xml;charset=utf-8',
+  });
   const url = URL.createObjectURL(svgBlob);
 
   try {
@@ -395,20 +412,20 @@ async function captureSvgScreenshots(svgElement: SVGSVGElement, options?: Screen
     canvas.width = width * pixelRatio;
     canvas.height = height * pixelRatio;
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) {
+    const context = canvas.getContext('2d');
+    if (!context) {
       throw new Error('Could not get 2D canvas context for SVG screenshot');
     }
 
-    ctx.scale(pixelRatio, pixelRatio);
+    context.scale(pixelRatio, pixelRatio);
 
     // Fill background colour
     if (bgColor && bgColor !== 'transparent' && bgColor !== 'rgba(0, 0, 0, 0)') {
-      ctx.fillStyle = bgColor;
-      ctx.fillRect(0, 0, width, height);
+      context.fillStyle = bgColor;
+      context.fillRect(0, 0, width, height);
     }
 
-    ctx.drawImage(img, 0, 0, width, height);
+    context.drawImage(img, 0, 0, width, height);
 
     // Export as data URL via Blob → FileReader (consistent with Three.js path)
     const mimeType = config.output.format;
@@ -452,32 +469,55 @@ async function captureSvgScreenshots(svgElement: SVGSVGElement, options?: Screen
 // ---------------------------------------------------------------------------
 
 /**
- * Core screenshot capture logic shared between regular and composite captures
+ * Remove objects from a cloned scene that are unsafe to traverse after cloning.
+ *
+ * TransformControls (and subclasses) override `updateMatrixWorld` and
+ * unconditionally access `this.camera`, which is `undefined` on cloned
+ * instances because `Object3D.clone()` calls `new this.constructor()`
+ * without arguments.
  */
-async function captureScreenshots(
-  gl: THREE.WebGLRenderer,
-  scene: THREE.Scene,
-  camera: THREE.Camera,
-  options?: ScreenshotOptions,
-): Promise<string[]> {
-  // Additional validation to ensure canvas is still valid
+export function removeCloneUnsafeObjects(scene: THREE.Scene): void {
+  const toRemove: THREE.Object3D[] = [];
+  scene.traverse((object) => {
+    if ('isTransformControls' in object) {
+      toRemove.push(object);
+    }
+  });
+  for (const object of toRemove) {
+    object.removeFromParent();
+  }
+}
+
+/**
+ * Core screenshot capture logic.
+ * Renders each camera angle into a temporary canvas and returns data URLs.
+ */
+async function captureScreenshots({
+  gl,
+  scene,
+  camera,
+  options,
+}: {
+  gl: THREE.WebGLRenderer;
+  scene: THREE.Scene;
+  camera: THREE.Camera;
+  options?: ScreenshotOptions;
+}): Promise<string[]> {
   if (!gl.domElement.isConnected) {
     throw new Error('Screenshot attempted on disconnected canvas - canvas may have been recreated');
   }
 
-  // Setup default options
   const defaultOptions = {
     aspectRatio: 16 / 9,
     zoomLevel: 1.25,
     cameraAngles: [{ phi: undefined, theta: undefined }] as CameraAngle[],
     output: {
-      format: 'image/png' as const,
+      format: 'image/png',
       quality: 0.92,
       isPreview: true,
     },
   } satisfies ScreenshotOptions;
 
-  // Merge provided options with defaults
   const config = {
     ...defaultOptions,
     ...options,
@@ -487,19 +527,16 @@ async function captureScreenshots(
     },
   };
 
-  // Ensure we have camera angles array
   if (config.cameraAngles.length === 0) {
     config.cameraAngles = defaultOptions.cameraAngles;
   }
 
   const originalHeight = gl.domElement.height;
 
-  // Calculate target dimensions based on aspect ratio
   const targetAspect = config.aspectRatio;
   let width = Math.round(originalHeight * targetAspect);
   let height = originalHeight;
 
-  // Apply maxResolution constraint if specified
   if (config.maxResolution) {
     const maxDimension = Math.max(width, height);
     if (maxDimension > config.maxResolution) {
@@ -509,137 +546,110 @@ async function captureScreenshots(
     }
   }
 
-  // Create a single temporary canvas for all screenshots
   const screenshotCanvas = document.createElement('canvas');
   screenshotCanvas.width = width;
   screenshotCanvas.height = height;
 
-  // Create a single temporary WebGL renderer for all screenshots
   const screenshotRenderer = new THREE.WebGLRenderer({
     canvas: screenshotCanvas,
     alpha: true,
     antialias: true,
     logarithmicDepthBuffer: true,
+    preserveDrawingBuffer: true,
+    stencil: true,
   });
 
   try {
-    // Copy settings from the main renderer
     screenshotRenderer.setSize(width, height, false);
 
-    // For composite screenshots, use 1:1 pixel ratio to respect maxResolution
-    // For high-quality single screenshots, we could use the original pixel ratio
     const useHighDpi = config.cameraAngles.length === 1;
     const pixelRatio = useHighDpi ? gl.getPixelRatio() : 1;
     screenshotRenderer.setPixelRatio(pixelRatio);
 
     screenshotRenderer.outputColorSpace = gl.outputColorSpace;
-
-    // Matcap materials produce values in displayable range — no filmic
-    // tone-mapping curve needed. NoToneMapping avoids the ACES mid-tone
-    // darkening that previously made screenshots inconsistent with the viewer.
     screenshotRenderer.toneMapping = THREE.NoToneMapping;
     screenshotRenderer.toneMappingExposure = 1;
+    screenshotRenderer.localClippingEnabled = gl.localClippingEnabled;
 
     const dataUrls: string[] = [];
 
-    // Create a copy of the scene for the screenshot so we don't modify the original
     const screenshotScene = scene.clone();
+    removeCloneUnsafeObjects(screenshotScene);
 
-    // Handle preview mode - hide non-preview objects in the cloned scene
     if (config.output.isPreview) {
       screenshotScene.traverse((object) => {
-        if (object.userData['isPreviewOnly']) {
+        if (hasSceneTag(object, sceneTag.previewOnly)) {
           object.visible = false;
         }
       });
     }
 
-    // Replace all mesh materials with matcap so that screenshots are
-    // lighting-independent and produce consistent results regardless of the
-    // scene's environment map or light rig configuration.
     const matcapTexture = await ensureMatcapTextureLoaded();
     applyMatcapToClonedScene(screenshotScene, matcapTexture);
 
-    // Clear the environment map — matcap ignores it but removing avoids
-    // unnecessary GPU work in the temporary renderer.
     screenshotScene.environment = null;
     screenshotScene.environmentIntensity = 0;
 
-    // Compute the geometry's bounding-box center and sphere radius from the
-    // cloned scene so the camera orbits and frames the actual model, not the
-    // world origin. This mirrors what useGeometryBounds + resetCamera do in
-    // the live viewer.
+    // Temporarily hide section-view helpers (cap planes, stencil groups) so they
+    // don't inflate the bounding box — their large plane geometry would push the
+    // camera too far away, producing blank screenshots.
+    const sectionViewHelpers = findBySceneTag(screenshotScene, sceneTag.sectionViewHelper);
+    for (const helper of sectionViewHelpers) {
+      helper.visible = false;
+    }
+
     const boundingBox = new THREE.Box3().setFromObject(screenshotScene);
+
+    for (const helper of sectionViewHelpers) {
+      helper.visible = true;
+    }
     const geometryCenter = new THREE.Vector3();
     const boundingSphere = new THREE.Sphere();
     boundingBox.getCenter(geometryCenter);
     boundingBox.getBoundingSphere(boundingSphere);
     const geometryRadius = boundingSphere.radius > 0 ? boundingSphere.radius : 1000;
 
-    // Process each camera angle using the same canvas and renderer
     for (const cameraAngle of config.cameraAngles) {
-      // Create a copy of the camera for the screenshot so we don't modify the original
       const screenshotCamera = (camera as THREE.PerspectiveCamera).clone();
 
-      // Fix FOV to 45 degrees for consistent perspective across all screenshots,
-      // regardless of the user's FOV slider setting. Compensate zoom so the
-      // same visible area is preserved: tan(newFov/2) / tan(oldFov/2).
       const screenshotFov = 45;
       const zoomCompensation = calculateFovDistanceCompensation(screenshotFov, screenshotCamera.fov, 1);
       screenshotCamera.fov = screenshotFov;
       screenshotCamera.zoom = config.zoomLevel * zoomCompensation;
       screenshotCamera.aspect = config.aspectRatio;
 
-      // Apply spherical coordinate positioning only if both phi and theta are specified
       if (cameraAngle.phi !== undefined && cameraAngle.theta !== undefined) {
-        // Compute a reasonable camera distance from the bounding-sphere radius.
-        // The tight zoom computed afterwards handles precise framing, so the
-        // distance only needs to be far enough to avoid clipping.
         const standardFov = 60;
         const adjustedOffsetRatio =
           defaultStageOptions.offsetRatio * calculateFovDistanceCompensation(standardFov, screenshotFov, 1);
         const distance = geometryRadius * adjustedOffsetRatio;
 
-        // Convert phi and theta to radians
         const phiRad = (cameraAngle.phi * Math.PI) / 180;
         const thetaRad = (cameraAngle.theta * Math.PI) / 180;
 
-        // Get the current up vector to determine coordinate system
         const upVector = THREE.Object3D.DEFAULT_UP.clone();
 
-        // Calculate offset using standard spherical coordinates, then add to
-        // the geometry center so the camera orbits the model, not the origin.
-        // Standard convention: phi is polar angle from up axis, theta is azimuthal angle
         let ox: number;
         let oy: number;
         let oz: number;
 
         if (upVector.z === 1) {
-          // Z-up coordinate system (current app configuration)
           ox = distance * Math.sin(phiRad) * Math.cos(thetaRad);
           oy = distance * Math.sin(phiRad) * Math.sin(thetaRad);
           oz = distance * Math.cos(phiRad);
         } else if (upVector.y === 1) {
-          // Y-up coordinate system (Three.js default)
           ox = distance * Math.sin(phiRad) * Math.cos(thetaRad);
           oz = distance * Math.sin(phiRad) * Math.sin(thetaRad);
           oy = distance * Math.cos(phiRad);
         } else {
-          // X-up coordinate system (less common)
           oy = distance * Math.sin(phiRad) * Math.cos(thetaRad);
           oz = distance * Math.sin(phiRad) * Math.sin(thetaRad);
           ox = distance * Math.cos(phiRad);
         }
 
-        // Position camera at geometryCenter + spherical offset
         screenshotCamera.position.set(geometryCenter.x + ox, geometryCenter.y + oy, geometryCenter.z + oz);
-
-        // Look at the geometry center, not the world origin
         screenshotCamera.lookAt(geometryCenter);
 
-        // Compute tight zoom to maximise frame usage for this specific viewing
-        // angle. This projects the bounding-box corners into the camera's view
-        // plane and picks the zoom that fills both dimensions with padding.
         screenshotCamera.zoom = computeViewFittingZoom({
           cameraPosition: screenshotCamera.position,
           target: geometryCenter,
@@ -652,59 +662,17 @@ async function captureScreenshots(
       screenshotCamera.updateProjectionMatrix();
       screenshotCamera.updateMatrixWorld(true);
 
-      // No lighting setup needed — matcap materials are self-lit and ignore
-      // all scene lights, environment maps, and headlamp positioning.
-
-      // Render the scene to the canvas with this camera angle
       screenshotRenderer.render(screenshotScene, screenshotCamera);
 
-      // Use toBlob API on the canvas
-      // eslint-disable-next-line no-await-in-loop -- sequential processing required for shared canvas
-      const blob = await new Promise<Blob | undefined>((resolve) => {
-        const mimeType = config.output.format;
-        const quality = mimeType === 'image/jpeg' || mimeType === 'image/webp' ? config.output.quality : undefined;
-
-        screenshotCanvas.toBlob(
-          (result) => {
-            resolve(result ?? undefined);
-          },
-          mimeType,
-          quality,
-        );
-      });
-
-      if (!blob) {
-        throw new Error('Failed to create blob from canvas');
-      }
-
-      // Convert blob to data URL
-      // eslint-disable-next-line no-await-in-loop -- sequential processing required for shared canvas
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.addEventListener('load', () => {
-          resolve(reader.result as string);
-        });
-        reader.addEventListener('error', reject);
-        reader.readAsDataURL(blob);
-      });
-
-      dataUrls.push(dataUrl);
+      dataUrls.push(screenshotCanvas.toDataURL(config.output.format, config.output.quality));
     }
 
-    // Dispose matcap materials applied to the cloned scene.
-    // Material.dispose() releases the compiled shader program but does NOT
-    // dispose the shared matcap texture singleton.
     disposeClonedSceneMaterials(screenshotScene);
 
     return dataUrls;
   } finally {
-    // Cleanup the temporary renderer
     screenshotRenderer.dispose();
-
-    // Additional cleanup to prevent WebGL context accumulation
     screenshotRenderer.forceContextLoss();
-
-    // Remove the canvas from memory
     screenshotCanvas.width = 0;
     screenshotCanvas.height = 0;
   }
@@ -721,11 +689,11 @@ async function captureScreenshots(
  */
 export const screenshotCapabilityMachine = setup({
   types: {
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate config
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate config
     context: {} as ScreenshotCapabilityContext,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate config
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate config
     events: {} as ScreenshotCapabilityEvent,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate config
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate config
     input: {} as ScreenshotCapabilityInput,
   },
   actors: {
@@ -744,9 +712,9 @@ export const screenshotCapabilityMachine = setup({
 
       (async () => {
         try {
-          const dataUrls = await captureScreenshots(gl, scene, camera, options);
+          const dataUrls = await captureScreenshots({ gl, scene, camera, options });
           sendBack({ type: 'screenshotCompleted', dataUrls, requestId });
-        } catch (error: unknown) {
+        } catch (error) {
           sendBack({
             type: 'screenshotFailed',
             error: error instanceof Error ? error.message : 'Screenshot failed',
@@ -771,24 +739,23 @@ export const screenshotCapabilityMachine = setup({
 
       (async () => {
         try {
-          // First, capture individual screenshots using the shared logic
-          const dataUrls = await captureScreenshots(gl, scene, camera, options);
-
-          // Create composite image from individual screenshots
+          const dataUrls = await captureScreenshots({ gl, scene, camera, options });
           const compositeOptions = options?.composite ?? defaultCompositeOptions;
 
-          // Create screenshot data with labels based on camera angles
           const screenshots = dataUrls.map((dataUrl, index) => {
             const cameraAngle = options?.cameraAngles?.[index];
             const label = cameraAngle?.label ?? `φ${cameraAngle?.phi}° θ${cameraAngle?.theta}°`;
-
             return { label, dataUrl };
           });
 
           const compositeDataUrl = await createCompositeImage(screenshots, compositeOptions);
 
-          sendBack({ type: 'screenshotCompleted', dataUrls: [compositeDataUrl], requestId });
-        } catch (error: unknown) {
+          sendBack({
+            type: 'screenshotCompleted',
+            dataUrls: [compositeDataUrl],
+            requestId,
+          });
+        } catch (error) {
           sendBack({
             type: 'screenshotFailed',
             error: error instanceof Error ? error.message : 'Composite screenshot failed',
@@ -814,7 +781,7 @@ export const screenshotCapabilityMachine = setup({
         try {
           const dataUrls = await captureSvgScreenshots(svgElement, options);
           sendBack({ type: 'screenshotCompleted', dataUrls, requestId });
-        } catch (error: unknown) {
+        } catch (error) {
           sendBack({
             type: 'screenshotFailed',
             error: error instanceof Error ? error.message : 'SVG screenshot failed',
@@ -837,19 +804,21 @@ export const screenshotCapabilityMachine = setup({
 
       (async () => {
         try {
-          // SVG is always a single flat image (no camera angles)
           const dataUrls = await captureSvgScreenshots(svgElement, options);
-
-          // For composite, still wrap in the composite image creator
           const compositeOptions = options?.composite ?? defaultCompositeOptions;
+
           const screenshots = dataUrls.map((dataUrl) => ({
             label: '2D View',
             dataUrl,
           }));
 
           const compositeDataUrl = await createCompositeImage(screenshots, compositeOptions);
-          sendBack({ type: 'screenshotCompleted', dataUrls: [compositeDataUrl], requestId });
-        } catch (error: unknown) {
+          sendBack({
+            type: 'screenshotCompleted',
+            dataUrls: [compositeDataUrl],
+            requestId,
+          });
+        } catch (error) {
           sendBack({
             type: 'screenshotFailed',
             error: error instanceof Error ? error.message : 'SVG composite screenshot failed',
@@ -866,7 +835,7 @@ export const screenshotCapabilityMachine = setup({
         gl: event.gl,
         scene: event.scene,
         camera: event.camera,
-        captureMode: 'threejs' as const,
+        captureMode: 'threejs',
         isRegistered: true,
       });
       enqueue.sendTo(context.graphicsRef, {
@@ -878,7 +847,7 @@ export const screenshotCapabilityMachine = setup({
       assertEvent(event, 'registerSvgCapture');
       enqueue.assign({
         svgElement: event.svgElement,
-        captureMode: 'svg' as const,
+        captureMode: 'svg',
         isRegistered: true,
       });
       enqueue.sendTo(context.graphicsRef, {
@@ -886,7 +855,9 @@ export const screenshotCapabilityMachine = setup({
         actorRef: self,
       });
     }),
-    unregisterFromGraphics: sendTo(({ context }) => context.graphicsRef, { type: 'unregisterScreenshotCapability' }),
+    unregisterFromGraphics: sendTo(({ context }) => context.graphicsRef, {
+      type: 'unregisterScreenshotCapability',
+    }),
     unregisterCapture: enqueueActions(({ enqueue, context }) => {
       enqueue.assign({
         gl: undefined,
@@ -896,7 +867,9 @@ export const screenshotCapabilityMachine = setup({
         captureMode: undefined,
         isRegistered: false,
       });
-      enqueue.sendTo(context.graphicsRef, { type: 'unregisterScreenshotCapability' });
+      enqueue.sendTo(context.graphicsRef, {
+        type: 'unregisterScreenshotCapability',
+      });
     }),
     forwardResult: sendTo(
       ({ context }) => context.graphicsRef,
@@ -1026,7 +999,11 @@ export const screenshotCapabilityMachine = setup({
           actions: 'registerSvgWithGraphics',
         },
         unregisterCapture: [
-          { guard: { type: 'shouldUnregister' }, target: 'waitingForRegistration', actions: 'unregisterCapture' },
+          {
+            guard: { type: 'shouldUnregister' },
+            target: 'waitingForRegistration',
+            actions: 'unregisterCapture',
+          },
         ],
       },
     },
@@ -1061,7 +1038,11 @@ export const screenshotCapabilityMachine = setup({
           actions: 'queueCaptureRequest',
         },
         unregisterCapture: [
-          { guard: { type: 'shouldUnregister' }, target: 'waitingForRegistration', actions: 'unregisterCapture' },
+          {
+            guard: { type: 'shouldUnregister' },
+            target: 'waitingForRegistration',
+            actions: 'unregisterCapture',
+          },
         ],
       },
     },
@@ -1096,7 +1077,11 @@ export const screenshotCapabilityMachine = setup({
           actions: 'queueCaptureRequest',
         },
         unregisterCapture: [
-          { guard: { type: 'shouldUnregister' }, target: 'waitingForRegistration', actions: 'unregisterCapture' },
+          {
+            guard: { type: 'shouldUnregister' },
+            target: 'waitingForRegistration',
+            actions: 'unregisterCapture',
+          },
         ],
       },
     },
@@ -1130,7 +1115,11 @@ export const screenshotCapabilityMachine = setup({
           actions: 'queueCaptureRequest',
         },
         unregisterCapture: [
-          { guard: { type: 'shouldUnregister' }, target: 'waitingForRegistration', actions: 'unregisterCapture' },
+          {
+            guard: { type: 'shouldUnregister' },
+            target: 'waitingForRegistration',
+            actions: 'unregisterCapture',
+          },
         ],
       },
     },
@@ -1163,7 +1152,11 @@ export const screenshotCapabilityMachine = setup({
           actions: 'queueCaptureRequest',
         },
         unregisterCapture: [
-          { guard: { type: 'shouldUnregister' }, target: 'waitingForRegistration', actions: 'unregisterCapture' },
+          {
+            guard: { type: 'shouldUnregister' },
+            target: 'waitingForRegistration',
+            actions: 'unregisterCapture',
+          },
         ],
       },
     },

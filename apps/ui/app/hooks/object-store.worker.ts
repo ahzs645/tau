@@ -1,17 +1,17 @@
 import { expose } from 'comlink';
 import type { PartialDeep } from 'type-fest';
-import type { Build } from '@taucad/types';
+import type { Project } from '@taucad/types';
 import type { Chat } from '@taucad/chat';
 import { IndexedDbStorageProvider } from '#db/indexeddb-storage.js';
 import type { EditorState, EditorStateInput, PanelState } from '#types/editor.types.js';
 import { defaultPanelState } from '#constants/editor.constants.js';
 
 /**
- * Type for initial editor state overrides during build creation.
+ * Type for initial editor state overrides during project creation.
  * Uses PartialDeep to allow partial nested objects (e.g., openPanels: { chat: true }).
- * Excludes buildId and lastChatId as those are set automatically.
+ * Excludes projectId and lastChatId as those are set automatically.
  */
-export type InitialEditorState = PartialDeep<Omit<EditorStateInput, 'buildId' | 'lastChatId'>>;
+export type InitialEditorState = PartialDeep<Omit<EditorStateInput, 'projectId' | 'lastChatId'>>;
 
 // Create a singleton instance of the storage provider
 const storage = new IndexedDbStorageProvider();
@@ -19,45 +19,48 @@ const storage = new IndexedDbStorageProvider();
 // Define the worker's API
 const objectStoreWorker = {
   // ============================================================================
-  // Build Methods
+  // Project Methods
   // ============================================================================
 
-  async createBuild(build: Omit<Build, 'id' | 'createdAt' | 'updatedAt'>): Promise<Build> {
-    return storage.createBuild(build);
+  async createProject(project: Omit<Project, 'id' | 'createdAt' | 'updatedAt'>): Promise<Project> {
+    return storage.createProject(project);
   },
 
   /**
-   * Atomic method to create a build with its associated chat and Editor state in one call.
+   * Atomic method to create a project with its associated chat and Editor state in one call.
    * This reduces roundtrips between main thread and worker.
    * Implements rollback on partial failure to maintain atomicity.
    *
+   * @param options - Options for project creation
+   * @param options.project - The project data to create
+   * @param options.chat - The chat data to create
    * @param options.editorState - Optional initial editor state overrides (e.g., panelState for initial panel layout)
    */
-  // eslint-disable-next-line complexity -- TODO: Refactor this function to make it more readable.
-  async createBuildWithResources(options: {
-    build: Omit<Build, 'id' | 'createdAt' | 'updatedAt'>;
+  // oxlint-disable-next-line complexity -- TODO: Refactor this function to make it more readable.
+  async createProjectWithResources(options: {
+    project: Omit<Project, 'id' | 'createdAt' | 'updatedAt'>;
     chat: Omit<Chat, 'id' | 'resourceId' | 'createdAt' | 'updatedAt'>;
     editorState?: InitialEditorState;
-  }): Promise<{ build: Build; chat: Chat }> {
-    const build = await storage.createBuild(options.build);
+  }): Promise<{ project: Project; chat: Chat }> {
+    const project = await storage.createProject(options.project);
 
     let chat: Chat;
     try {
-      chat = await storage.createChat(build.id, options.chat);
+      chat = await storage.createChat(project.id, options.chat);
     } catch (chatError) {
-      // Rollback: delete the build since chat creation failed
+      // Rollback: delete the project since chat creation failed
       try {
-        await storage.deleteBuild(build.id);
+        await storage.deleteProject(project.id);
       } catch (cleanupError) {
-        console.error('Failed to cleanup build after chat creation failure:', cleanupError);
+        console.error('Failed to cleanup project after chat creation failure:', cleanupError);
       }
 
       throw chatError;
     }
 
     try {
-      // Derive main file from build assets for auto-populating editor state
-      const mainFile = options.build.assets.mechanical?.main;
+      // Derive main file from project assets for auto-populating editor state
+      const mainFile = options.project.assets.mechanical?.main;
 
       // Auto-populate activeFilePath and openFiles from main file if not provided
       const activeFilePath = options.editorState?.activeFilePath ?? mainFile;
@@ -65,7 +68,7 @@ const objectStoreWorker = {
         options.editorState?.openFiles && options.editorState.openFiles.length > 0
           ? options.editorState.openFiles
           : mainFile
-            ? [{ path: mainFile, name: mainFile.split('/').pop() ?? mainFile }]
+            ? [{ path: mainFile, name: mainFile.split('/').pop() ?? mainFile, lastAccessedAt: Date.now() }]
             : [];
 
       // Merge provided panelState with defaults
@@ -79,10 +82,18 @@ const objectStoreWorker = {
           ...options.editorState?.panelState?.panelSizes,
         },
         mobileActiveTab: options.editorState?.panelState?.mobileActiveTab ?? defaultPanelState.mobileActiveTab,
+        kernelPaneview: {
+          ...defaultPanelState.kernelPaneview,
+          ...options.editorState?.panelState?.kernelPaneview,
+        },
+        parametersPaneview: {
+          ...defaultPanelState.parametersPaneview,
+          ...options.editorState?.panelState?.parametersPaneview,
+        },
       };
 
       await storage.updateEditorState({
-        buildId: build.id,
+        projectId: project.id,
         openFiles,
         activeFilePath,
         lastChatId: chat.id,
@@ -92,7 +103,7 @@ const objectStoreWorker = {
         viewSettings: {},
       });
     } catch (editorStateError) {
-      // Rollback: delete chat and build since editor state update failed
+      // Rollback: delete chat and project since editor state update failed
       try {
         await storage.deleteChat(chat.id);
       } catch (cleanupError) {
@@ -100,38 +111,38 @@ const objectStoreWorker = {
       }
 
       try {
-        await storage.deleteBuild(build.id);
+        await storage.deleteProject(project.id);
       } catch (cleanupError) {
-        console.error('Failed to cleanup build after editor state update failure:', cleanupError);
+        console.error('Failed to cleanup project after editor state update failure:', cleanupError);
       }
 
       throw editorStateError;
     }
 
-    return { build, chat };
+    return { project, chat };
   },
 
-  async duplicateBuild(buildId: string): Promise<Build> {
-    const build = await storage.getBuild(buildId);
-    if (!build) {
-      throw new Error(`Build not found: ${buildId}`);
+  async duplicateProject(projectId: string): Promise<Project> {
+    const project = await storage.getProject(projectId);
+    if (!project) {
+      throw new Error(`Project not found: ${projectId}`);
     }
 
-    // Create the duplicated build
-    const newBuild = await storage.createBuild({
-      ...build,
-      name: `${build.name} (Copy)`,
+    // Create the duplicated project
+    const newProject = await storage.createProject({
+      ...project,
+      name: `${project.name} (Copy)`,
     });
 
-    // Duplicate all chats for this build
-    const chatIdMapping = await storage.duplicateResourceChats(buildId, newBuild.id);
+    // Duplicate all chats for this project
+    const chatIdMapping = await storage.duplicateResourceChats(projectId, newProject.id);
 
     // Duplicate Editor state if it exists, mapping lastChatId to the cloned chat
-    const sourceEditorState = await storage.getEditorState(buildId);
+    const sourceEditorState = await storage.getEditorState(projectId);
     if (sourceEditorState) {
       const newLastChatId = sourceEditorState.lastChatId ? chatIdMapping[sourceEditorState.lastChatId] : undefined;
       await storage.updateEditorState({
-        buildId: newBuild.id,
+        projectId: newProject.id,
         openFiles: sourceEditorState.openFiles,
         activeFilePath: sourceEditorState.activeFilePath,
         lastChatId: newLastChatId,
@@ -142,38 +153,38 @@ const objectStoreWorker = {
       });
     }
 
-    return newBuild;
+    return newProject;
   },
 
-  async updateBuild(
-    buildId: string,
-    update: PartialDeep<Build>,
+  async updateProject(
+    projectId: string,
+    update: PartialDeep<Project>,
     options?: {
       ignoreKeys?: string[];
       noUpdatedAt?: boolean;
     },
-  ): Promise<Build | undefined> {
-    return storage.updateBuild(buildId, update, options);
+  ): Promise<Project | undefined> {
+    return storage.updateProject(projectId, update, options);
   },
 
-  async getBuilds(options?: { includeDeleted?: boolean }): Promise<Build[]> {
-    return storage.getBuilds(options);
+  async getProjects(options?: { includeDeleted?: boolean }): Promise<Project[]> {
+    return storage.getProjects(options);
   },
 
-  async getBuild(buildId: string): Promise<Build | undefined> {
-    return storage.getBuild(buildId);
+  async getProject(projectId: string): Promise<Project | undefined> {
+    return storage.getProject(projectId);
   },
 
-  async deleteBuild(buildId: string): Promise<void> {
-    // Delete all chats associated with the build
-    const chats = await storage.getChatsForResource(buildId, { includeDeleted: true });
+  async deleteProject(projectId: string): Promise<void> {
+    // Delete all chats associated with the project
+    const chats = await storage.getChatsForResource(projectId, { includeDeleted: true });
     await Promise.all(chats.map(async (chat) => storage.deleteChat(chat.id)));
 
-    // Delete the Editor state for the build
-    await storage.deleteEditorState(buildId);
+    // Delete the Editor state for the project
+    await storage.deleteEditorState(projectId);
 
-    // Delete the build itself
-    return storage.deleteBuild(buildId);
+    // Delete the project itself
+    return storage.deleteProject(projectId);
   },
 
   // ============================================================================
@@ -219,16 +230,16 @@ const objectStoreWorker = {
   // Editor State Methods
   // ============================================================================
 
-  async getEditorState(buildId: string): Promise<EditorState | undefined> {
-    return storage.getEditorState(buildId);
+  async getEditorState(projectId: string): Promise<EditorState | undefined> {
+    return storage.getEditorState(projectId);
   },
 
   async updateEditorState(editorState: EditorStateInput): Promise<EditorState> {
     return storage.updateEditorState(editorState);
   },
 
-  async deleteEditorState(buildId: string): Promise<void> {
-    return storage.deleteEditorState(buildId);
+  async deleteEditorState(projectId: string): Promise<void> {
+    return storage.deleteEditorState(projectId);
   },
 };
 

@@ -1,11 +1,17 @@
 #!/usr/bin/env node
-/* eslint-disable no-bitwise, complexity -- Utility script using TS Compiler API with bitwise flag checks */
+/* oxlint-disable no-bitwise, complexity -- Utility script using TS Compiler API with bitwise flag checks */
 
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import process from 'node:process';
 import ts from 'typescript';
 import type { ApiData, ApiEntry } from '#api-extraction.types.js';
+
+type TsExtractionContext = {
+  checker: ts.TypeChecker;
+  printer: ts.Printer;
+  program: ts.Program;
+};
 
 /**
  * Extract @jscad/modeling type declarations into a single bundled .d.ts file
@@ -22,8 +28,8 @@ import type { ApiData, ApiEntry } from '#api-extraction.types.js';
 // Configuration
 // =============================================================================
 
-const jscadSrcDir = join(import.meta.dirname, '../../../node_modules/@jscad/modeling/src');
-const entryFile = join(jscadSrcDir, 'index.d.ts');
+const jscadSourceDirectory = join(import.meta.dirname, '../../../node_modules/@jscad/modeling/src');
+const entryFile = join(jscadSourceDirectory, 'index.d.ts');
 
 /** Files containing cross-cutting foundation types referenced across namespaces. */
 const foundationTypeFiles = [
@@ -46,7 +52,7 @@ const foundationTypeFiles = [
   'measurements/types.d.ts',
   'utils/recursiveArray.d.ts',
   'utils/corners.d.ts',
-].map((p) => join(jscadSrcDir, p));
+].map((p) => join(jscadSourceDirectory, p));
 
 /** Built-in TypeScript types that never need resolution. */
 const builtinTypes = new Set([
@@ -102,7 +108,7 @@ type ExtractionResult = {
   declarations: string[];
   nestedNamespaces: Map<string, ExtractionResult>;
   /** All type names referenced in declarations */
-  typeRefs: Set<string>;
+  typeReferences: Set<string>;
   /** All names defined (exported) in this namespace */
   definedNames: Set<string>;
 };
@@ -149,19 +155,17 @@ function isModuleSymbol(symbol: ts.Symbol): boolean {
 // =============================================================================
 
 /**
- * Ensure a declaration string starts with `export` and does not contain a
- * redundant `declare` keyword (inside a `declare module` block, `declare`
- * is implicit).
+ * Ensure a declaration string starts with `export`. Preserves `declare`
+ * since the output is a raw module `.d.ts` file where `export declare`
+ * is valid and correct.
  */
 function addExportModifier(text: string): string {
   if (text.startsWith('export ')) {
-    return text.replace(/^export\s+declare\s+/, 'export ');
+    return text;
   }
-
   if (text.startsWith('declare ')) {
-    return 'export ' + text.slice('declare '.length);
+    return 'export ' + text;
   }
-
   return 'export ' + text;
 }
 
@@ -170,14 +174,17 @@ function addExportModifier(text: string): string {
  * Returns `undefined` for node kinds that should be skipped (re-export specifiers, etc.).
  */
 function printDeclarationText(
-  decl: ts.Declaration,
-  resolved: ts.Symbol,
-  exportName: string,
-  sourceFile: ts.SourceFile,
-  checker: ts.TypeChecker,
-  printer: ts.Printer,
-  printedStatements: Set<ts.Node>,
+  input: {
+    decl: ts.Declaration;
+    resolved: ts.Symbol;
+    exportName: string;
+    sourceFile: ts.SourceFile;
+    printedStatements: Set<ts.Node>;
+  },
+  context: TsExtractionContext,
 ): string | undefined {
+  const { decl, resolved, exportName, sourceFile, printedStatements } = input;
+  const { checker, printer } = context;
   if (ts.isFunctionDeclaration(decl)) {
     return addExportModifier(printer.printNode(ts.EmitHint.Unspecified, decl, sourceFile).trim());
   }
@@ -231,12 +238,12 @@ function printDeclarationText(
  * Walk an AST node and collect all type reference identifier names.
  */
 function collectTypeReferences(node: ts.Node): Set<string> {
-  const refs = new Set<string>();
+  const references = new Set<string>();
 
   function walk(n: ts.Node): void {
     if (ts.isTypeReferenceNode(n)) {
       if (ts.isIdentifier(n.typeName)) {
-        refs.add(n.typeName.text);
+        references.add(n.typeName.text);
       } else if (ts.isQualifiedName(n.typeName)) {
         // For Namespace.Type, collect the root name
         let root: ts.EntityName = n.typeName;
@@ -245,7 +252,7 @@ function collectTypeReferences(node: ts.Node): Set<string> {
         }
 
         if (ts.isIdentifier(root)) {
-          refs.add(root.text);
+          references.add(root.text);
         }
       }
     }
@@ -254,7 +261,7 @@ function collectTypeReferences(node: ts.Node): Set<string> {
   }
 
   walk(node);
-  return refs;
+  return references;
 }
 
 // =============================================================================
@@ -266,10 +273,11 @@ function collectTypeReferences(node: ts.Node): Set<string> {
  * Also resolves file-local types (like `type Vec = Vec1 | Vec2 | Vec3`) that are
  * referenced by exported declarations but not themselves exported.
  */
-function extractModuleContent(moduleSymbol: ts.Symbol, checker: ts.TypeChecker, printer: ts.Printer): ExtractionResult {
+function extractModuleContent(moduleSymbol: ts.Symbol, context: TsExtractionContext): ExtractionResult {
+  const { checker, printer } = context;
   const declarations: string[] = [];
   const nestedNamespaces = new Map<string, ExtractionResult>();
-  const typeRefs = new Set<string>();
+  const typeReferences = new Set<string>();
   const definedNames = new Set<string>();
   const visitedSourceFiles = new Set<ts.SourceFile>();
   const printedStatements = new Set<ts.Node>();
@@ -278,7 +286,7 @@ function extractModuleContent(moduleSymbol: ts.Symbol, checker: ts.TypeChecker, 
   try {
     moduleExports = checker.getExportsOfModule(moduleSymbol);
   } catch {
-    return { declarations, nestedNamespaces, typeRefs, definedNames };
+    return { declarations, nestedNamespaces, typeReferences, definedNames };
   }
 
   for (const exportSymbol of moduleExports) {
@@ -286,15 +294,15 @@ function extractModuleContent(moduleSymbol: ts.Symbol, checker: ts.TypeChecker, 
 
     // Nested namespace: export * as X from './Y'
     if (isModuleSymbol(resolved)) {
-      const nested = extractModuleContent(resolved, checker, printer);
+      const nested = extractModuleContent(resolved, context);
       if (nested.declarations.length > 0 || nested.nestedNamespaces.size > 0) {
         nestedNamespaces.set(exportSymbol.name, nested);
         definedNames.add(exportSymbol.name);
 
         // Bubble up unresolved type refs from nested namespace
-        for (const ref of nested.typeRefs) {
+        for (const ref of nested.typeReferences) {
           if (!nested.definedNames.has(ref)) {
-            typeRefs.add(ref);
+            typeReferences.add(ref);
           }
         }
       }
@@ -320,17 +328,18 @@ function extractModuleContent(moduleSymbol: ts.Symbol, checker: ts.TypeChecker, 
 
       // Collect type references from the declaration
       for (const ref of collectTypeReferences(decl)) {
-        typeRefs.add(ref);
+        typeReferences.add(ref);
       }
 
       const text = printDeclarationText(
-        decl,
-        resolved,
-        exportSymbol.name,
-        sourceFile,
-        checker,
-        printer,
-        printedStatements,
+        {
+          decl,
+          resolved,
+          exportName: exportSymbol.name,
+          sourceFile,
+          printedStatements,
+        },
+        context,
       );
 
       if (text) {
@@ -344,7 +353,7 @@ function extractModuleContent(moduleSymbol: ts.Symbol, checker: ts.TypeChecker, 
   // (e.g. `type Vec = Vec1 | Vec2 | Vec3` in translate.d.ts).
   // We scan visited source files for matching type declarations.
   const localTypeDecls: string[] = [];
-  for (const ref of typeRefs) {
+  for (const ref of typeReferences) {
     if (definedNames.has(ref) || builtinTypes.has(ref)) {
       continue;
     }
@@ -358,9 +367,9 @@ function extractModuleContent(moduleSymbol: ts.Symbol, checker: ts.TypeChecker, 
           );
           definedNames.add(ref);
 
-          // eslint-disable-next-line max-depth -- for completeness
+          // oxlint-disable-next-line max-depth -- for completeness
           for (const innerRef of collectTypeReferences(statement)) {
-            typeRefs.add(innerRef);
+            typeReferences.add(innerRef);
           }
 
           found = true;
@@ -373,9 +382,9 @@ function extractModuleContent(moduleSymbol: ts.Symbol, checker: ts.TypeChecker, 
           );
           definedNames.add(ref);
 
-          // eslint-disable-next-line max-depth -- for completeness
+          // oxlint-disable-next-line max-depth -- for completeness
           for (const innerRef of collectTypeReferences(statement)) {
-            typeRefs.add(innerRef);
+            typeReferences.add(innerRef);
           }
 
           found = true;
@@ -393,7 +402,7 @@ function extractModuleContent(moduleSymbol: ts.Symbol, checker: ts.TypeChecker, 
   return {
     declarations: [...localTypeDecls, ...declarations],
     nestedNamespaces,
-    typeRefs,
+    typeReferences,
     definedNames,
   };
 }
@@ -440,7 +449,10 @@ function buildFoundationTypeMap(
         // Also map by the resolved symbol's own name — needed for default exports
         // where the export name is 'default' but the symbol name is 'RecursiveArray'
         if (resolved.name !== exp.name && resolved.name !== 'default') {
-          map.set(resolved.name, { symbol: resolved, sourceFile: declSourceFile });
+          map.set(resolved.name, {
+            symbol: resolved,
+            sourceFile: declSourceFile,
+          });
         }
       }
     }
@@ -456,10 +468,9 @@ function buildFoundationTypeMap(
  */
 function resolveFoundationTypes(
   namespaces: Map<string, ExtractionResult>,
-  checker: ts.TypeChecker,
-  printer: ts.Printer,
-  program: ts.Program,
+  context: TsExtractionContext,
 ): FoundationType[] {
+  const { checker, printer, program } = context;
   const typeMap = buildFoundationTypeMap(checker, program);
   const resolved = new Map<string, FoundationType>();
   const pending = new Set<string>();
@@ -482,7 +493,7 @@ function resolveFoundationTypes(
 
   // Seed with unresolved type references from all namespaces
   function collectUnresolved(result: ExtractionResult): void {
-    for (const ref of result.typeRefs) {
+    for (const ref of result.typeReferences) {
       if (!result.definedNames.has(ref) && !builtinTypes.has(ref)) {
         pending.add(ref);
       }
@@ -578,7 +589,7 @@ function getNeededImports(content: ExtractionResult, foundationTypeNames: Set<st
   const needed = new Set<string>();
 
   function collect(result: ExtractionResult): void {
-    for (const ref of result.typeRefs) {
+    for (const ref of result.typeReferences) {
       if (!result.definedNames.has(ref) && foundationTypeNames.has(ref)) {
         needed.add(ref);
       }
@@ -593,55 +604,55 @@ function getNeededImports(content: ExtractionResult, foundationTypeNames: Set<st
   return needed;
 }
 
-function generateOutput(namespaces: Map<string, ExtractionResult>, foundationTypes: FoundationType[]): string {
-  const lines: string[] = [];
+function generateOutput(
+  namespaces: Map<string, ExtractionResult>,
+  foundationTypes: FoundationType[],
+): Record<string, string> {
+  const modules: Record<string, string> = {};
   const foundationTypeNames = new Set(foundationTypes.map((ft) => ft.name));
 
-  // Header
-  lines.push(
+  // ── Main module: @jscad/modeling ──────────────────────────────────────
+  const mainLines: string[] = [
     '// Bundled type declarations for @jscad/modeling.',
     '// Auto-generated by extract-jscad-types.ts - do not edit manually.',
     '',
-    "declare module '@jscad/modeling' {",
-  );
+  ];
 
   if (foundationTypes.length > 0) {
-    lines.push('  // --- Foundation Types ---');
     for (const ft of foundationTypes) {
-      lines.push(indentBlock(ft.declaration, 2));
+      mainLines.push(ft.declaration);
     }
-
-    lines.push('');
+    mainLines.push('');
   }
 
   for (const [name, content] of namespaces) {
-    lines.push(`  // --- Namespace: ${name} ---`, formatNamespaceBlock(name, content, 2), '');
+    mainLines.push(formatNamespaceBlock(name, content, 0), '');
   }
 
-  lines.push('}');
+  modules['@jscad/modeling'] = mainLines.join('\n');
 
-  // ── Subpath module declarations ──────────────────────────────────────
+  // ── Subpath modules: @jscad/modeling/<name> ───────────────────────────
   for (const [name, content] of namespaces) {
-    lines.push(`declare module '@jscad/modeling/${name}' {`);
+    const subLines: string[] = [];
 
-    // Import foundation types from the main module
     const needed = getNeededImports(content, foundationTypeNames);
     if (needed.size > 0) {
-      lines.push(`  import type { ${[...needed].sort().join(', ')} } from '@jscad/modeling';`);
+      subLines.push(`import type { ${[...needed].sort().join(', ')} } from '@jscad/modeling';`);
+      subLines.push('');
     }
 
     for (const decl of content.declarations) {
-      lines.push(indentBlock(decl, 2));
+      subLines.push(decl);
     }
 
     for (const [nestedName, nestedContent] of content.nestedNamespaces) {
-      lines.push(formatNamespaceBlock(nestedName, nestedContent, 2));
+      subLines.push(formatNamespaceBlock(nestedName, nestedContent, 0));
     }
 
-    lines.push('}');
+    modules[`@jscad/modeling/${name}`] = subLines.join('\n') + '\n';
   }
 
-  return lines.join('\n') + '\n';
+  return modules;
 }
 
 // =============================================================================
@@ -697,9 +708,9 @@ function classifyDeclaration(decl: ts.Declaration): ApiEntry['kind'] | undefined
 function extractStructuredEntries(
   moduleSymbol: ts.Symbol,
   modulePath: string,
-  checker: ts.TypeChecker,
-  printer: ts.Printer,
+  context: TsExtractionContext,
 ): ApiEntry[] {
+  const { checker, printer } = context;
   const entries: ApiEntry[] = [];
   const seenNames = new Set<string>();
 
@@ -716,7 +727,7 @@ function extractStructuredEntries(
     // Nested namespace
     if (isModuleSymbol(resolved)) {
       const nestedPath = modulePath ? `${modulePath}.${exportSymbol.name}` : exportSymbol.name;
-      entries.push(...extractStructuredEntries(resolved, nestedPath, checker, printer));
+      entries.push(...extractStructuredEntries(resolved, nestedPath, context));
       continue;
     }
 
@@ -804,13 +815,14 @@ export function buildApiData(): ApiData {
   const rootExports = checker.getExportsOfModule(mainModuleSymbol);
   const allEntries: ApiEntry[] = [];
 
+  const context: TsExtractionContext = { checker, printer, program };
   for (const nsExport of rootExports) {
     const resolved = resolveSymbol(nsExport, checker);
     if (!isModuleSymbol(resolved)) {
       continue;
     }
 
-    allEntries.push(...extractStructuredEntries(resolved, nsExport.name, checker, printer));
+    allEntries.push(...extractStructuredEntries(resolved, nsExport.name, context));
   }
 
   // Add foundation types as top-level entries
@@ -818,11 +830,9 @@ export function buildApiData(): ApiData {
     new Map(
       rootExports
         .filter((ns) => isModuleSymbol(resolveSymbol(ns, checker)))
-        .map((ns) => [ns.name, extractModuleContent(resolveSymbol(ns, checker), checker, printer)]),
+        .map((ns) => [ns.name, extractModuleContent(resolveSymbol(ns, checker), context)]),
     ),
-    checker,
-    printer,
-    program,
+    context,
   );
 
   for (const ft of foundationTypes) {
@@ -861,10 +871,11 @@ export function buildApiData(): ApiData {
 // =============================================================================
 
 /**
- * Build the complete bundled type declaration string.
+ * Build the bundled type declarations as a map of module path to raw `.d.ts`
+ * content. Each entry is registered at its own virtual file path in Monaco.
  * Exported for testing.
  */
-export function buildNamespaceBundle(): string {
+export function buildNamespaceBundle(): Record<string, string> {
   const program = createJscadProgram();
   const checker = program.getTypeChecker();
   const printer = ts.createPrinter({ removeComments: true });
@@ -883,7 +894,7 @@ export function buildNamespaceBundle(): string {
   const rootExports = checker.getExportsOfModule(mainModuleSymbol);
   console.log(`Found ${rootExports.length} top-level namespace exports`);
 
-  // Extract each namespace
+  const context: TsExtractionContext = { checker, printer, program };
   const namespaces = new Map<string, ExtractionResult>();
 
   for (const nsExport of rootExports) {
@@ -895,7 +906,7 @@ export function buildNamespaceBundle(): string {
     }
 
     console.log(`  Processing namespace: ${nsExport.name}`);
-    const content = extractModuleContent(resolved, checker, printer);
+    const content = extractModuleContent(resolved, context);
     namespaces.set(nsExport.name, content);
 
     const declCount = content.declarations.length;
@@ -905,7 +916,7 @@ export function buildNamespaceBundle(): string {
 
   // Resolve foundation types
   console.log('\nResolving foundation types...');
-  const foundationTypes = resolveFoundationTypes(namespaces, checker, printer, program);
+  const foundationTypes = resolveFoundationTypes(namespaces, context);
   console.log(
     `Resolved ${foundationTypes.length} foundation types: ${foundationTypes.map((ft) => ft.name).join(', ')}`,
   );
@@ -917,21 +928,33 @@ function main(): void {
   try {
     console.log('Extracting @jscad/modeling type declarations...\n');
 
-    const outputDir = join(import.meta.dirname, 'generated/jscad');
-    mkdirSync(outputDir, { recursive: true });
-    console.log(`Output directory: ${outputDir}`);
+    const outputDirectory = join(import.meta.dirname, 'generated/jscad');
+    mkdirSync(outputDirectory, { recursive: true });
+    console.log(`Output directory: ${outputDirectory}`);
 
-    // Generate bundled .d.ts
+    // Generate bundled types (one raw .d.ts per module)
     const bundledTypes = buildNamespaceBundle();
-    const outputPath = join(outputDir, 'jscad-modeling.bundled.d.ts');
-    writeFileSync(outputPath, bundledTypes);
+    const outputPath = join(outputDirectory, 'jscad-modeling.bundled.json');
+    writeFileSync(outputPath, JSON.stringify(bundledTypes));
     console.log(`\nBundled type declarations written to ${outputPath}`);
-    console.log(`Output size: ${(bundledTypes.length / 1024).toFixed(1)} KB`);
+    const moduleNames = Object.keys(bundledTypes);
+    console.log(`Generated ${moduleNames.length} module declarations:`);
+    for (const name of moduleNames) {
+      console.log(`  - ${name} (${(bundledTypes[name]!.length / 1024).toFixed(1)} KB)`);
+    }
+
+    // Write individual .d.ts files for type-level testing
+    const modulesDirectory = join(outputDirectory, 'modules');
+    for (const [modulePath, content] of Object.entries(bundledTypes)) {
+      const targetDirectory = join(modulesDirectory, modulePath);
+      mkdirSync(targetDirectory, { recursive: true });
+      writeFileSync(join(targetDirectory, 'index.d.ts'), content);
+    }
 
     // Generate structured JSON
     console.log('\n📝 Generating structured API data JSON...');
     const apiData = buildApiData();
-    const jsonPath = join(outputDir, 'jscad-api-data.json');
+    const jsonPath = join(outputDirectory, 'jscad-api-data.json');
     writeFileSync(jsonPath, JSON.stringify(apiData, null, 2));
     console.log(`✅ API data JSON saved to ${jsonPath}`);
     console.log(

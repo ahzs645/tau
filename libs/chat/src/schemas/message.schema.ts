@@ -7,13 +7,10 @@ import { z } from 'zod';
 import { messageMetadataSchema } from '#schemas/metadata.schema.js';
 import { providerMetadataSchema } from '#schemas/message-provider.schema.js';
 import type { MyUIMessage } from '#types/message.types.js';
-import { usageDataSchema } from '#schemas/message-data.schema.js';
+import { usageDataSchema, contextCompactionDataSchema, contextUsageDataSchema } from '#schemas/message-data.schema.js';
 import { editFileInputSchema, editFileOutputSchema } from '#schemas/tools/edit-file.tool.schema.js';
-import {
-  testModelOutputSchema,
-  editTestsInputSchema,
-  editTestsOutputSchema,
-} from '#schemas/tools/test-model.tool.schema.js';
+import { testModelOutputSchema } from '@taucad/testing';
+import { editTestsInputSchema, editTestsOutputSchema } from '#schemas/tools/test-model.tool.schema.js';
 import { webBrowserInputSchema, webBrowserOutputSchema } from '#schemas/tools/web-browser.tool.schema.js';
 import { webSearchInputSchema, webSearchOutputSchema } from '#schemas/tools/web-search.tool.schema.js';
 import { readFileInputSchema, readFileOutputSchema } from '#schemas/tools/read-file.tool.schema.js';
@@ -26,7 +23,7 @@ import {
   getKernelResultInputSchema,
   getKernelResultOutputSchema,
 } from '#schemas/tools/get-kernel-result.tool.schema.js';
-import { reasoningInputSchema, reasoningOutputSchema } from '#schemas/tools/reasoning.tool.schema.js';
+import { screenshotInputSchema, screenshotOutputSchema } from '#schemas/tools/screenshot.tool.schema.js';
 import { toolName } from '#constants/tool.constants.js';
 import type { ToolName } from '#types/tool.types.js';
 
@@ -170,15 +167,17 @@ const toolPartSchemas = [
   ...createToolSchemas(toolName.deleteFile, deleteFileInputSchema, deleteFileOutputSchema),
   ...createToolSchemas(toolName.grep, grepInputSchema, grepOutputSchema),
   ...createToolSchemas(toolName.globSearch, globSearchInputSchema, globSearchOutputSchema),
-  // Kernel and reasoning tools
+  // Kernel tools
   ...createToolSchemas(toolName.getKernelResult, getKernelResultInputSchema, getKernelResultOutputSchema),
-  ...createToolSchemas(toolName.reasoning, reasoningInputSchema, reasoningOutputSchema),
+  // Screenshot tool
+  ...createToolSchemas(toolName.screenshot, screenshotInputSchema, screenshotOutputSchema),
   // Transfer tools use empty input schemas with string output
   ...createEmptyInputToolSchemas(toolName.transferToCadExpert, z.string()),
   ...createEmptyInputToolSchemas(toolName.transferToResearchExpert, z.string()),
   ...createEmptyInputToolSchemas(toolName.transferBackToSupervisor, z.string()),
 ];
 
+/** @public */
 export const uiMessagesSchema: z.ZodType<MyUIMessage[]> = z
   .array(
     z.object({
@@ -229,6 +228,16 @@ export const uiMessagesSchema: z.ZodType<MyUIMessage[]> = z
               type: z.literal('data-usage'),
               id: z.string().optional(),
               data: usageDataSchema,
+            }),
+            z.object({
+              type: z.literal('data-context-compaction'),
+              id: z.string().optional(),
+              data: contextCompactionDataSchema,
+            }),
+            z.object({
+              type: z.literal('data-context-usage'),
+              id: z.string().optional(),
+              data: contextUsageDataSchema,
             }),
             z.object({
               type: z.literal('dynamic-tool'),

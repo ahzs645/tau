@@ -90,18 +90,18 @@ export function GridOverflowControl(): React.ReactNode {
         <Grid3X3 />
         Grid: {localizedSmallGridSize} {unit}
       </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent className="w-48">
+      <DropdownMenuSubContent className='w-48'>
         <DropdownMenuLabel>Unit</DropdownMenuLabel>
         <DropdownMenuRadioGroup value={unit} onValueChange={handleUnitChange}>
           {gridUnitOptions.map((option) => (
             <DropdownMenuRadioItem
               key={option.value}
-              className="flex items-center justify-between gap-2"
+              className='flex items-center justify-between gap-2'
               value={option.value}
               onSelect={preventClose}
             >
               <span>{option.label}</span>
-              <span className="flex w-8 items-center justify-center rounded-xs bg-neutral/20 px-1 py-0.5 font-mono text-xs">
+              <span className='flex w-8 items-center justify-center rounded-xs bg-neutral/20 px-1 py-0.5 font-mono text-xs'>
                 {option.value}
               </span>
             </DropdownMenuRadioItem>
@@ -170,7 +170,7 @@ export function MeasureOverflowControl(): React.ReactNode {
 
   return (
     <DropdownMenuSwitchItem isChecked={isMeasureActive} onIsCheckedChange={handleToggle}>
-      <Ruler className="-rotate-45" />
+      <Ruler className='-rotate-45' />
       Measure
     </DropdownMenuSwitchItem>
   );

@@ -3,7 +3,7 @@
  * from the browser File API and FileSystem API.
  */
 
-import { joinPath } from '#utils/path.utils.js';
+import { joinRelativePath } from '@taucad/utils/path';
 
 export type FileData = {
   filename: string;
@@ -37,7 +37,7 @@ async function readAllEntries(reader: FileSystemDirectoryReader): Promise<FileSy
   let batch = await readBatch();
   while (batch.length > 0) {
     entries.push(...batch);
-    // eslint-disable-next-line no-await-in-loop -- need to read batches sequentially
+    // oxlint-disable-next-line no-await-in-loop -- need to read batches sequentially
     batch = await readBatch();
   }
 
@@ -50,16 +50,21 @@ type ProgressStats = { processed: number; total: number };
 /**
  * Recursively read a FileSystemEntry (file or directory) and add to files map.
  */
-async function readEntry(
-  entry: FileSystemEntry,
-  basePath: string,
-  files: FileMap,
-  progressInfo?: { onProgress?: ProgressCallback; stats?: ProgressStats },
-): Promise<void> {
+async function readEntry({
+  entry,
+  basePath,
+  files,
+  progressInfo,
+}: {
+  entry: FileSystemEntry;
+  basePath: string;
+  files: FileMap;
+  progressInfo?: { onProgress?: ProgressCallback; stats?: ProgressStats };
+}): Promise<void> {
   if (entry.isFile) {
     const fileEntry = entry as FileSystemFileEntry;
     const file = await getFileFromEntry(fileEntry);
-    const path = basePath ? joinPath(basePath, entry.name) : entry.name;
+    const path = basePath ? joinRelativePath(basePath, entry.name) : entry.name;
     const arrayBuffer = await file.arrayBuffer();
     files.set(path, {
       filename: path,
@@ -71,10 +76,10 @@ async function readEntry(
       progressInfo.onProgress(progressInfo.stats.processed, progressInfo.stats.total);
     }
   } else if (entry.isDirectory) {
-    const dirEntry = entry as FileSystemDirectoryEntry;
-    const reader = dirEntry.createReader();
+    const directoryEntry = entry as FileSystemDirectoryEntry;
+    const reader = directoryEntry.createReader();
     const entries = await readAllEntries(reader);
-    const newBase = basePath ? joinPath(basePath, entry.name) : entry.name;
+    const newBase = basePath ? joinRelativePath(basePath, entry.name) : entry.name;
 
     // Update total count
     if (progressInfo?.stats) {
@@ -82,8 +87,8 @@ async function readEntry(
     }
 
     for (const child of entries) {
-      // eslint-disable-next-line no-await-in-loop -- need to read sequentially for progress
-      await readEntry(child, newBase, files, progressInfo);
+      // oxlint-disable-next-line no-await-in-loop -- need to read sequentially for progress
+      await readEntry({ entry: child, basePath: newBase, files, progressInfo });
     }
   }
 }
@@ -117,8 +122,13 @@ export async function readFromDataTransfer(
 
   // Process all entries
   for (const entry of entries) {
-    // eslint-disable-next-line no-await-in-loop -- need to read sequentially for progress
-    await readEntry(entry, '', files, { onProgress, stats });
+    // oxlint-disable-next-line no-await-in-loop -- need to read sequentially for progress
+    await readEntry({
+      entry,
+      basePath: '',
+      files,
+      progressInfo: { onProgress, stats },
+    });
   }
 
   return normalizeFilePaths(files);
@@ -137,7 +147,7 @@ export async function readFromFileList(fileList: FileList | File[], onProgress?:
     // Use webkitRelativePath if available (folder upload), otherwise just filename
     const path = file.webkitRelativePath || file.name;
 
-    // eslint-disable-next-line no-await-in-loop -- need to read sequentially for progress
+    // oxlint-disable-next-line no-await-in-loop -- need to read sequentially for progress
     const arrayBuffer = await file.arrayBuffer();
     files.set(path, {
       filename: path,
@@ -168,7 +178,12 @@ export async function readFromDirectoryHandle(
   stats.processed = 0;
 
   // Second pass: read files
-  await readDirectoryHandleRecursive(handle, '', files, { onProgress, stats });
+  await readDirectoryHandleRecursive({
+    handle,
+    basePath: '',
+    files,
+    progressInfo: { onProgress, stats },
+  });
 
   return files;
 }
@@ -182,7 +197,7 @@ async function countDirectoryFiles(handle: FileSystemDirectoryHandle, stats: Pro
     if (entry.kind === 'file') {
       stats.processed++;
     } else {
-      // eslint-disable-next-line no-await-in-loop -- sequential counting required
+      // oxlint-disable-next-line no-await-in-loop -- sequential counting required
       await countDirectoryFiles(entry, stats);
     }
   }
@@ -206,20 +221,25 @@ async function collectDirectoryEntries(
 /**
  * Recursively read files from a FileSystemDirectoryHandle into a FileMap.
  */
-async function readDirectoryHandleRecursive(
-  handle: FileSystemDirectoryHandle,
-  basePath: string,
-  files: FileMap,
-  progressInfo?: { onProgress?: ProgressCallback; stats?: ProgressStats },
-): Promise<void> {
+async function readDirectoryHandleRecursive({
+  handle,
+  basePath,
+  files,
+  progressInfo,
+}: {
+  handle: FileSystemDirectoryHandle;
+  basePath: string;
+  files: FileMap;
+  progressInfo?: { onProgress?: ProgressCallback; stats?: ProgressStats };
+}): Promise<void> {
   const entries = await collectDirectoryEntries(handle);
   for (const entry of entries) {
-    const entryPath = basePath ? joinPath(basePath, entry.name) : entry.name;
+    const entryPath = basePath ? joinRelativePath(basePath, entry.name) : entry.name;
 
     if (entry.kind === 'file') {
-      // eslint-disable-next-line no-await-in-loop -- sequential file reading for progress tracking
+      // oxlint-disable-next-line no-await-in-loop -- sequential file reading for progress tracking
       const file = await entry.getFile();
-      // eslint-disable-next-line no-await-in-loop -- sequential file reading for progress tracking
+      // oxlint-disable-next-line no-await-in-loop -- sequential file reading for progress tracking
       const arrayBuffer = await file.arrayBuffer();
       files.set(entryPath, {
         filename: entryPath,
@@ -231,8 +251,13 @@ async function readDirectoryHandleRecursive(
         progressInfo.onProgress(progressInfo.stats.processed, progressInfo.stats.total);
       }
     } else {
-      // eslint-disable-next-line no-await-in-loop -- sequential traversal required
-      await readDirectoryHandleRecursive(entry, entryPath, files, progressInfo);
+      // oxlint-disable-next-line no-await-in-loop -- sequential traversal required
+      await readDirectoryHandleRecursive({
+        handle: entry,
+        basePath: entryPath,
+        files,
+        progressInfo,
+      });
     }
   }
 }

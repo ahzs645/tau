@@ -78,11 +78,11 @@ export function InlineTextEditor({
   };
 
   return (
-    <div data-slot="inline-text-editor" className={className}>
+    <div data-slot='inline-text-editor' className={className}>
       {isEditing ? (
         <form
-          data-slot="form"
-          className="flex h-full items-center gap-1"
+          data-slot='form'
+          className='flex h-full items-center gap-1'
           onSubmit={(event) => {
             event.preventDefault();
             void save();
@@ -90,9 +90,9 @@ export function InlineTextEditor({
         >
           <Input
             autoFocus
-            data-slot="input"
-            autoComplete="off"
-            type="text"
+            data-slot='input'
+            autoComplete='off'
+            type='text'
             value={editValue}
             placeholder={placeholder}
             className={cn(inlineTextEditorVariants({ variant }))}
@@ -127,10 +127,10 @@ export function InlineTextEditor({
             }}
           />
           <Button
-            data-slot="save-button"
-            type="submit"
-            size="sm"
-            className="h-full"
+            data-slot='save-button'
+            type='submit'
+            size='sm'
+            className='h-full'
             disabled={!editValue.trim() || editValue === value}
           >
             Save
@@ -138,15 +138,15 @@ export function InlineTextEditor({
         </form>
       ) : (
         <Button
-          variant="ghost"
-          className="h-full cursor-text justify-start px-2"
+          variant='ghost'
+          className='h-full cursor-text justify-start px-2'
           disabled={isDisabled}
           onClick={startEditing}
         >
           {renderDisplay ? (
             renderDisplay(value)
           ) : (
-            <span data-slot="display-text" className="truncate">
+            <span data-slot='display-text' className='truncate'>
               {value}
             </span>
           )}

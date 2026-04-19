@@ -63,7 +63,7 @@ export function ThreeProvider({
   // page, converter, preview, etc.).  In that case we skip tracking entirely.
   const webglRef = useWebglContextRef();
 
-  // eslint-disable-next-line react/hook-use-state -- one-time snapshot, setter intentionally unused
+  // oxlint-disable-next-line react/hook-use-state -- one-time snapshot, setter intentionally unused
   const [isOverLimit] = useState(() => {
     if (!webglRef) {
       return false;
@@ -115,7 +115,7 @@ export function ThreeProvider({
         stencil: true,
       }}
       dpr={dpr}
-      frameloop="demand"
+      frameloop='demand'
       className={cn('bg-background', className)}
       onCreated={({ gl }) => {
         // Neutral ACES exposure -- depth contrast comes from AO and targeted directional lights.

@@ -17,7 +17,6 @@ const environmentSchema = z.object({
   // Chat & LLMs
   OPENAI_API_KEY: z.string(),
   ANTHROPIC_API_KEY: z.string(),
-  SAMBA_API_KEY: z.string().optional(),
   MORPH_API_KEY: z.string().optional(),
   GOOGLE_VERTEX_AI_CREDENTIALS: jsonCodec(
     z.object({
@@ -36,6 +35,7 @@ const environmentSchema = z.object({
   ),
   TAVILY_API_KEY: z.string().optional(),
   CEREBRAS_API_KEY: z.string().optional(),
+  TOGETHER_API_KEY: z.string().optional(),
   LANGSMITH_TRACING: z.string().optional(),
   LANGSMITH_ENDPOINT: z.string().optional(),
   LANGSMITH_PROJECT: z.string().optional(),
@@ -49,12 +49,20 @@ const environmentSchema = z.object({
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
 
+  // Local Model Providers
+  OLLAMA_ENABLED: z.coerce.boolean().default(false).describe('Enable Ollama local model provider'),
+
   // Kernel Integrations
   ZOO_API_KEY: z.string().describe('Zoo.dev API key for KCL kernel proxy'),
   ZOO_WEBSOCKET_URL: z.string().describe('Zoo.dev API URL for KCL kernel proxy').default('wss://api.zoo.dev'),
 
   // Redis Configuration
   REDIS_URL: z.string().describe('Redis connection URL (e.g., redis://localhost:6379 or rediss://... for TLS)'),
+
+  // OpenTelemetry
+  OTEL_EXPORTER_OTLP_ENDPOINT: z.string().optional().describe('OTLP endpoint for traces and logs'),
+  OTEL_EXPORTER_OTLP_HEADERS: z.string().optional().describe('OTLP auth headers (e.g., Grafana Cloud Basic auth)'),
+  OTEL_METRICS_PORT: z.string().optional().default('9464').describe('Port for Prometheus metrics exporter'),
   /* eslint-enable @typescript-eslint/naming-convention -- renabling */
 });
 

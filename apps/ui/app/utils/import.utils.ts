@@ -2,7 +2,7 @@
  * Import Resolution Utilities
  *
  * Shared pure functions for import specifier parsing and path resolution.
- * Used by both the kernel worker (esbuild bundling) and the main thread
+ * Used by both the runtime worker (esbuild bundling) and the main thread
  * (Monaco navigation, type acquisition).
  *
  * All functions are pure -- no filesystem or network access.
@@ -26,8 +26,8 @@ export type PackageInfo = {
 
 /**
  * Root directory for the CDN module cache in the virtual filesystem.
- * Lives at the filesystem root (`/`), outside any project directory (`/builds/xyz/`),
- * so cached modules are shared across all projects and persist across builds.
+ * Lives at the filesystem root (`/`), outside any project directory (`/projects/xyz/`),
+ * so cached modules are shared across all projects and persist across projects.
  */
 const nodeModulesRoot = '/node_modules';
 
@@ -42,7 +42,7 @@ const nodeModulesRoot = '/node_modules';
  * Non-bare specifiers include relative paths ('./foo'), absolute paths ('/foo'),
  * and URLs ('https://cdn.example.com/foo').
  *
- * This utility is shared between the kernel worker (module resolution)
+ * This utility is shared between the runtime worker (module resolution)
  * and the main thread (type acquisition).
  */
 export function isBareSpecifier(specifier: string): boolean {

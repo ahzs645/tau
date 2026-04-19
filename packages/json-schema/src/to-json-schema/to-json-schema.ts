@@ -8,6 +8,7 @@ const filteredFormats = stringFormats.filter((item) => !skipReverseFind.has(item
 
 type ArrayMode = 'all' | 'first' | 'uniform' | 'tuple';
 
+// oxlint-disable-next-line max-params -- callback type definition: 4th param is the default-implementation function
 type PostProcessFunction = (
   type: string,
   schema: JSONSchema7,
@@ -107,7 +108,7 @@ class ToJsonSchema {
   /**
    * Gets JSON schema for provided value
    * @param value - Value to get schema for
-   * @returns JSON schema
+   * @returns draft-07 JSON Schema describing the value's shape
    */
   public getSchema(value: unknown): JSONSchema7 {
     const type = getType(value);
@@ -318,6 +319,21 @@ class ToJsonSchema {
   }
 }
 
+/**
+ * Converts a JavaScript value to a JSON Schema (RFC draft-07) that would validate it.
+ *
+ * @param value - the value to convert (object, array, primitive, or null)
+ * @param options - conversion options (string format detection, required fields, array mode)
+ * @returns A JSON Schema that would validate the input value.
+ *
+ * @example <caption>Inferring schema from a value</caption>
+ * ```typescript
+ * import { toJsonSchema } from '@taucad/json-schema';
+ *
+ * const schema = toJsonSchema({ name: 'Tau', version: 1 });
+ * // { type: 'object', properties: { name: { type: 'string' }, version: { type: 'integer' } } }
+ * ```
+ */
 export function toJsonSchema(value: unknown, options?: Options): JSONSchema7 {
   const tjs = new ToJsonSchema(options);
   return tjs.getSchema(value);

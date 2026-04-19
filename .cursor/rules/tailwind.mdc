@@ -1,5 +1,5 @@
 ---
-description: 
+description: "Tailwind CSS: color tokens from global.css, opacity modifiers"
 globs: *.tsx
 alwaysApply: false
 ---

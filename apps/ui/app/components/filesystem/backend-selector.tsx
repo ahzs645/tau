@@ -8,7 +8,7 @@
 import { useMemo } from 'react';
 import { Check, ChevronDown, Database, FolderOpen, HardDrive, MemoryStick } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import type { FilesystemBackend } from '@taucad/types';
+import type { FileSystemBackend } from '@taucad/types';
 import { filesystemBackendMeta } from '@taucad/types/constants';
 import { Button } from '#components/ui/button.js';
 import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
@@ -19,7 +19,7 @@ import { isFileSystemAccessSupported } from '#constants/browser.constants.js';
  * Backend option for the selector dropdown.
  */
 export type BackendOption = {
-  value: FilesystemBackend;
+  value: FileSystemBackend;
   label: string;
   description: string;
   icon: LucideIcon;
@@ -52,7 +52,7 @@ export const backendOptions: BackendOption[] = [
 ];
 
 type BackendSelectorProps = {
-  readonly value: FilesystemBackend;
+  readonly value: FileSystemBackend;
   readonly onSelect: (backend: string) => void | Promise<void>;
   readonly isLoading?: boolean;
   /** Whether to hide internal-only backends like memory. Defaults to false. */
@@ -75,10 +75,8 @@ export function BackendSelector({
     () =>
       backendOptions.filter(
         (option) =>
-          // OPFS is disabled due to file corruption issues -- hide from all selectors
-          option.value !== 'opfs' &&
           // Memory is internal-only
-          (!isInternalHidden || option.value !== 'memory'),
+          !isInternalHidden || option.value !== 'memory',
       ),
     [isInternalHidden],
   );
@@ -94,30 +92,30 @@ export function BackendSelector({
       defaultValue={currentOption}
       getValue={(item) => item.value}
       renderLabel={(item, selectedItem) => (
-        <span className="flex w-full items-center justify-between gap-4">
-          <div className="flex items-center gap-2">
-            <item.icon className="size-4" />
-            <div className="flex flex-col items-start gap-0.5">
-              <span className="font-medium">{item.label}</span>
-              <span className="text-xs text-muted-foreground">{item.description}</span>
+        <span className='flex w-full items-center justify-between gap-4'>
+          <div className='flex items-center gap-2'>
+            <item.icon className='size-4' />
+            <div className='flex flex-col items-start gap-0.5'>
+              <span className='font-medium'>{item.label}</span>
+              <span className='text-xs text-muted-foreground'>{item.description}</span>
             </div>
           </div>
-          {selectedItem?.value === item.value ? <Check className="size-4 shrink-0" /> : undefined}
+          {selectedItem?.value === item.value ? <Check className='size-4 shrink-0' /> : undefined}
         </span>
       )}
       popoverProperties={{ className: 'w-[340px]' }}
       isDisabled={(item) => item.value === 'webaccess' && !isFileSystemAccessSupported}
-      title="Select Storage Backend"
-      description="Choose where to store files"
+      title='Select Storage Backend'
+      description='Choose where to store files'
       isSearchEnabled={false}
       onSelect={onSelect}
     >
-      <Button variant="outline" className="w-[160px] justify-between" disabled={isLoading}>
-        <span className="flex items-center gap-2">
-          {isLoading ? <Loader className="size-4" /> : <currentOption.icon className="size-4" />}
-          <span className="truncate">{currentOption.label}</span>
+      <Button variant='outline' size='sm' className='w-[160px] justify-between' disabled={isLoading}>
+        <span className='flex items-center gap-2'>
+          {isLoading ? <Loader className='size-3.5' /> : <currentOption.icon className='size-3.5' />}
+          <span className='truncate'>{currentOption.label}</span>
         </span>
-        <ChevronDown className="size-4 shrink-0 opacity-50" />
+        <ChevronDown className='size-4 shrink-0 opacity-50' />
       </Button>
     </ComboBoxResponsive>
   );

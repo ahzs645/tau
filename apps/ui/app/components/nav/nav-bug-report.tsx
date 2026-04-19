@@ -46,14 +46,14 @@ export function NavBugReport(): React.JSX.Element {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <SidebarMenuButton asChild className="size-7">
-          <a href={bugReportUrl} target="_blank" rel="noopener noreferrer">
-            <Bug className="size-4" />
-            <span className="sr-only">Report a bug</span>
+        <SidebarMenuButton asChild className='size-7'>
+          <a href={bugReportUrl} target='_blank' rel='noopener noreferrer'>
+            <Bug className='size-4' />
+            <span className='sr-only'>Report a bug</span>
           </a>
         </SidebarMenuButton>
       </TooltipTrigger>
-      <TooltipContent side="top">Report a bug</TooltipContent>
+      <TooltipContent side='top'>Report a bug</TooltipContent>
     </Tooltip>
   );
 }

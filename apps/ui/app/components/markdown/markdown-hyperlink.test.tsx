@@ -44,21 +44,21 @@ describe('isExternalLink', () => {
 describe('MarkdownHyperlink', () => {
   describe('external links', () => {
     it('opens in new tab for https:// links', () => {
-      render(<MarkdownHyperlink href="https://example.com">External Link</MarkdownHyperlink>);
+      render(<MarkdownHyperlink href='https://example.com'>External Link</MarkdownHyperlink>);
 
       const link = screen.getByRole('link', { name: 'External Link' });
       expect(link).toHaveAttribute('target', '_blank');
     });
 
     it('opens in new tab for http:// links', () => {
-      render(<MarkdownHyperlink href="http://example.com">External Link</MarkdownHyperlink>);
+      render(<MarkdownHyperlink href='http://example.com'>External Link</MarkdownHyperlink>);
 
       const link = screen.getByRole('link', { name: 'External Link' });
       expect(link).toHaveAttribute('target', '_blank');
     });
 
     it('sets rel="noopener noreferrer" for external links', () => {
-      render(<MarkdownHyperlink href="https://example.com">External Link</MarkdownHyperlink>);
+      render(<MarkdownHyperlink href='https://example.com'>External Link</MarkdownHyperlink>);
 
       const link = screen.getByRole('link', { name: 'External Link' });
       expect(link).toHaveAttribute('rel', 'noopener noreferrer');
@@ -69,7 +69,7 @@ describe('MarkdownHyperlink', () => {
     it('opens in same tab for relative paths', () => {
       render(
         <MemoryRouter>
-          <MarkdownHyperlink href="/legal/privacy">Internal Link</MarkdownHyperlink>
+          <MarkdownHyperlink href='/legal/privacy'>Internal Link</MarkdownHyperlink>
         </MemoryRouter>,
       );
 
@@ -80,7 +80,7 @@ describe('MarkdownHyperlink', () => {
     it('opens in same tab for anchor links', () => {
       render(
         <MemoryRouter>
-          <MarkdownHyperlink href="#section-1">Anchor Link</MarkdownHyperlink>
+          <MarkdownHyperlink href='#section-1'>Anchor Link</MarkdownHyperlink>
         </MemoryRouter>,
       );
 
@@ -91,7 +91,7 @@ describe('MarkdownHyperlink', () => {
     it('does not set rel for internal links', () => {
       render(
         <MemoryRouter>
-          <MarkdownHyperlink href="/legal/privacy">Internal Link</MarkdownHyperlink>
+          <MarkdownHyperlink href='/legal/privacy'>Internal Link</MarkdownHyperlink>
         </MemoryRouter>,
       );
 
@@ -104,7 +104,7 @@ describe('MarkdownHyperlink', () => {
     it('applies underline class', () => {
       render(
         <MemoryRouter>
-          <MarkdownHyperlink href="/test">Link</MarkdownHyperlink>
+          <MarkdownHyperlink href='/test'>Link</MarkdownHyperlink>
         </MemoryRouter>,
       );
 
@@ -115,7 +115,7 @@ describe('MarkdownHyperlink', () => {
     it('applies underline-offset-3 class', () => {
       render(
         <MemoryRouter>
-          <MarkdownHyperlink href="/test">Link</MarkdownHyperlink>
+          <MarkdownHyperlink href='/test'>Link</MarkdownHyperlink>
         </MemoryRouter>,
       );
 
@@ -126,7 +126,7 @@ describe('MarkdownHyperlink', () => {
     it('applies transition classes', () => {
       render(
         <MemoryRouter>
-          <MarkdownHyperlink href="/test">Link</MarkdownHyperlink>
+          <MarkdownHyperlink href='/test'>Link</MarkdownHyperlink>
         </MemoryRouter>,
       );
 
@@ -137,7 +137,7 @@ describe('MarkdownHyperlink', () => {
     it('applies additional className from props', () => {
       render(
         <MemoryRouter>
-          <MarkdownHyperlink href="/test" className="custom-class">
+          <MarkdownHyperlink href='/test' className='custom-class'>
             Link
           </MarkdownHyperlink>
         </MemoryRouter>,
@@ -152,7 +152,7 @@ describe('MarkdownHyperlink', () => {
     it('sets href attribute', () => {
       render(
         <MemoryRouter>
-          <MarkdownHyperlink href="/legal/privacy">Link</MarkdownHyperlink>
+          <MarkdownHyperlink href='/legal/privacy'>Link</MarkdownHyperlink>
         </MemoryRouter>,
       );
 
@@ -163,7 +163,7 @@ describe('MarkdownHyperlink', () => {
     it('renders children', () => {
       render(
         <MemoryRouter>
-          <MarkdownHyperlink href="/test">Click me</MarkdownHyperlink>
+          <MarkdownHyperlink href='/test'>Click me</MarkdownHyperlink>
         </MemoryRouter>,
       );
 
@@ -173,7 +173,7 @@ describe('MarkdownHyperlink', () => {
     it('passes through additional props', () => {
       render(
         <MemoryRouter>
-          <MarkdownHyperlink href="/test" data-testid="custom-link">
+          <MarkdownHyperlink href='/test' data-testid='custom-link'>
             Link
           </MarkdownHyperlink>
         </MemoryRouter>,

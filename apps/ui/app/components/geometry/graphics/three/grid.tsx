@@ -1,5 +1,6 @@
 import React from 'react';
 import * as THREE from 'three';
+import { useThree } from '@react-three/fiber';
 import { InfiniteGrid } from '#components/geometry/graphics/three/react/infinite-grid.js';
 import { Theme, useTheme } from '#hooks/use-theme.js';
 import { useGraphicsSelector } from '#hooks/use-graphics.js';
@@ -13,6 +14,11 @@ export const Grid = React.memo(() => {
   const gridSizes = useGraphicsSelector((state) => state.context.gridSizes);
   const upDirection = useGraphicsSelector((state) => state.context.upDirection);
   const { theme } = useTheme();
+  const { invalidate } = useThree();
+
+  React.useEffect(() => {
+    invalidate();
+  }, [invalidate]);
 
   // Calculate theme-aware grid color
   const gridColor = React.useMemo(
@@ -24,7 +30,7 @@ export const Grid = React.memo(() => {
   // x: X-up (1,0,0) -> grid on YZ plane -> 'zyx'
   // y: Y-up (0,1,0) -> grid on XZ plane -> 'xzy'
   // z: Z-up (0,0,1) -> grid on XY plane -> 'xyz'
-  const axes = upDirection === 'x' ? ('zyx' as const) : upDirection === 'y' ? ('xzy' as const) : ('xyz' as const);
+  const axes = upDirection === 'x' ? 'zyx' : upDirection === 'y' ? 'xzy' : 'xyz';
 
   // Memoize materialProperties to prevent InfiniteGrid from recreating its
   // ShaderMaterial on every Grid re-render (the inline object would be a new reference each time).

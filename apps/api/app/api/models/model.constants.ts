@@ -3,25 +3,26 @@ import type { CloudProviderId } from '#api/models/model.service.js';
 
 export const modelList: Record<CloudProviderId, Record<string, Model>> = {
   anthropic: {
-    'claude-4.6-opus': {
-      id: 'anthropic-claude-opus-4.6',
-      name: 'Opus 4.6',
-      slug: 'claude-opus-4.6',
+    'claude-4.7-opus': {
+      id: 'anthropic-claude-opus-4.7',
+      name: 'Opus 4.7',
+      slug: 'claude-opus-4.7',
       description:
-        "Anthropic's most powerful model with adaptive reasoning, great for designing complex multi-part assemblies.",
+        "Anthropic's most powerful model with adaptive reasoning and 1M context, great for designing complex multi-part assemblies.",
       provider: {
         id: 'anthropic',
         name: 'Anthropic',
       },
-      model: 'claude-opus-4-6',
+      model: 'claude-opus-4-7',
       support: {
         toolChoice: false,
       },
       details: {
         family: 'claude',
         families: ['claude'],
-        contextWindow: 200_000,
+        contextWindow: 1_000_000,
         maxTokens: 128_000,
+        knowledgeCutoff: '2026-01',
         cost: {
           inputTokens: 5,
           outputTokens: 25,
@@ -31,53 +32,16 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       },
       configuration: {
         streaming: true,
-        maxTokens: 20_000,
+        maxTokens: 120_000,
         // @ts-expect-error: FIXME - some models use camelCase
         // eslint-disable-next-line @typescript-eslint/naming-convention -- some models use snake_case
-        max_tokens: 20_000,
+        max_tokens: 120_000,
         thinking: {
           type: 'adaptive',
+          display: 'summarized',
         },
         outputConfig: {
-          effort: 'medium',
-        },
-      },
-    },
-    'claude-4.5-opus': {
-      id: 'anthropic-claude-opus-4.5',
-      name: 'Opus 4.5',
-      slug: 'claude-opus-4.5',
-      description: 'Previous Anthropic flagship with extended thinking capabilities.',
-      provider: {
-        id: 'anthropic',
-        name: 'Anthropic',
-      },
-      model: 'claude-opus-4-5-20251101',
-      support: {
-        toolChoice: false,
-      },
-      details: {
-        family: 'claude',
-        families: ['claude'],
-        contextWindow: 200_000,
-        maxTokens: 32_000,
-        cost: {
-          inputTokens: 5,
-          outputTokens: 25,
-          cacheReadTokens: 0.5,
-          cacheWriteTokens: 6.25,
-        },
-      },
-      configuration: {
-        streaming: true,
-        maxTokens: 20_000,
-        // @ts-expect-error: FIXME - some models use camelCase
-        // eslint-disable-next-line @typescript-eslint/naming-convention -- some models use snake_case
-        max_tokens: 20_000,
-        thinking: {
-          type: 'enabled',
-          // eslint-disable-next-line @typescript-eslint/naming-convention -- some models use snake_case
-          budget_tokens: 5000,
+          effort: 'high',
         },
       },
     },
@@ -99,6 +63,7 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
         families: ['claude'],
         contextWindow: 200_000,
         maxTokens: 64_000,
+        knowledgeCutoff: '2025-08',
         cost: {
           inputTokens: 3,
           outputTokens: 15,
@@ -108,15 +73,15 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       },
       configuration: {
         streaming: true,
-        maxTokens: 20_000,
+        maxTokens: 120_000,
         // @ts-expect-error: FIXME - some models use camelCase
         // eslint-disable-next-line @typescript-eslint/naming-convention -- some models use snake_case
-        max_tokens: 20_000,
+        max_tokens: 120_000,
         thinking: {
           type: 'adaptive',
         },
         outputConfig: {
-          effort: 'medium',
+          effort: 'high',
         },
       },
     },
@@ -138,6 +103,7 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
         families: ['claude'],
         contextWindow: 200_000,
         maxTokens: 64_000,
+        knowledgeCutoff: '2025-07',
         cost: {
           inputTokens: 1,
           outputTokens: 5,
@@ -160,53 +126,55 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
     },
   },
   openai: {
-    'gpt-5.2': {
-      id: 'openai-gpt-5.2',
-      name: 'GPT-5.2',
-      slug: 'gpt-5.2',
+    'gpt-5.4': {
+      id: 'openai-gpt-5.4',
+      name: 'GPT-5.4',
+      slug: 'gpt-5.4',
       description:
-        "OpenAI's most capable model with advanced reasoning, great for design tasks that require complex reasoning.",
+        "OpenAI's most capable model for professional work with frontier reasoning, coding, and 1M+ context window.",
       provider: {
         id: 'openai',
         name: 'OpenAI',
       },
-      model: 'gpt-5.2',
+      model: 'gpt-5.4',
       details: {
         family: 'gpt',
-        families: ['GPT-5.2'],
-        contextWindow: 400_000,
+        families: ['GPT-5.4'],
+        contextWindow: 1_050_000,
         maxTokens: 128_000,
+        knowledgeCutoff: '2025-08',
         cost: {
-          inputTokens: 1.75,
-          outputTokens: 14,
-          cacheReadTokens: 0.175,
+          inputTokens: 2.5,
+          outputTokens: 15,
+          cacheReadTokens: 0.25,
           cacheWriteTokens: 0,
         },
       },
       configuration: {
         streaming: true,
         temperature: 1,
-        // @ts-expect-error: OpenAI reasoning params not in typed schema
-        reasoningText: {
-          effort: 'medium',
+        reasoning: {
+          effort: 'high',
+          summary: 'auto',
         },
       },
     },
-    'gpt-5.2-codex': {
-      id: 'openai-gpt-5.2-codex',
-      name: 'GPT-5.2 Codex',
-      slug: 'gpt-5.2-codex',
-      description: 'Specialized for code generation and programming tasks.',
+    'gpt-5.3-codex': {
+      id: 'openai-gpt-5.3-codex',
+      name: 'GPT-5.3 Codex',
+      slug: 'gpt-5.3-codex',
+      description: 'Agentic coding model optimized for code generation and multi-step programming tasks.',
       provider: {
         id: 'openai',
         name: 'OpenAI',
       },
-      model: 'gpt-5.2-codex',
+      model: 'gpt-5.3-codex',
       details: {
         family: 'gpt',
-        families: ['GPT-5.2'],
+        families: ['GPT-5.3'],
         contextWindow: 400_000,
         maxTokens: 128_000,
+        knowledgeCutoff: '2025-08',
         cost: {
           inputTokens: 1.75,
           outputTokens: 14,
@@ -217,9 +185,9 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       configuration: {
         streaming: true,
         temperature: 1,
-        // @ts-expect-error: OpenAI reasoning params not in typed schema
-        reasoningText: {
+        reasoning: {
           effort: 'high',
+          summary: 'auto',
         },
       },
     },
@@ -238,6 +206,7 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
         families: ['GPT-4.1'],
         contextWindow: 1_047_576,
         maxTokens: 32_768,
+        knowledgeCutoff: '2024-06',
         cost: {
           inputTokens: 2,
           outputTokens: 8,
@@ -250,41 +219,34 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       },
     },
   },
-
   vertexai: {
-    'gemini-3-pro': {
-      id: 'google-gemini-3-pro',
-      name: 'Gemini 3 Pro',
-      slug: 'gemini-3-pro',
-      description: "Google's most capable model with a large context window, great for complex design tasks.",
+    'gemini-3.1-pro': {
+      id: 'google-gemini-3.1-pro',
+      name: 'Gemini 3.1 Pro',
+      slug: 'gemini-3.1-pro',
+      description: "Google's most advanced Pro-tier model with deep reasoning and parallel tool call streaming.",
       provider: {
         id: 'vertexai',
         name: 'Google',
       },
-      model: 'gemini-3-pro-preview',
+      model: 'gemini-3.1-pro-preview',
       details: {
         family: 'gemini',
         families: ['gemini'],
         contextWindow: 1_048_576,
         maxTokens: 65_536,
+        knowledgeCutoff: '2025-01',
         cost: {
-          inputTokens: 2, // $2 / 1M input tokens (Vertex AI pricing)
-          outputTokens: 12, // $12 / 1M output tokens (Vertex AI pricing)
-          cacheReadTokens: 0.2, // $0.2 / 1M cached input tokens
+          inputTokens: 2,
+          outputTokens: 12,
+          cacheReadTokens: 0.2,
           cacheWriteTokens: 0,
         },
       },
       configuration: {
         streaming: true,
-        // Thinking requires temperature: 1 for Gemini 3 models
         temperature: 1,
-        // Gemini 3 Pro thinking config - HIGH is default, supports: LOW, HIGH
-        // Thinking cannot be turned off for Gemini 3 Pro
-        // @ts-expect-error: thinkingConfig not in typed schema yet
-        thinkingConfig: {
-          thinkingLevel: 'HIGH',
-          includeThoughts: true,
-        },
+        thinkingLevel: 'HIGH',
       },
     },
     'gemini-3-flash': {
@@ -302,23 +264,201 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
         families: ['gemini'],
         contextWindow: 1_048_576,
         maxTokens: 65_536,
+        knowledgeCutoff: '2025-01',
         cost: {
-          inputTokens: 0.5, // $0.5 / 1M input tokens (Vertex AI pricing)
-          outputTokens: 3, // $3 / 1M output tokens (Vertex AI pricing)
-          cacheReadTokens: 0.05, // $0.05 / 1M cached input tokens
+          inputTokens: 0.5,
+          outputTokens: 3,
+          cacheReadTokens: 0.05,
           cacheWriteTokens: 0,
         },
       },
       configuration: {
         streaming: true,
-        // Thinking requires temperature: 1 for Gemini 3 models
         temperature: 1,
-        // Gemini 3 Flash thinking config - HIGH is default, supports: MINIMAL, LOW, MEDIUM, HIGH
-        // @ts-expect-error: thinkingConfig not in typed schema yet
-        thinkingConfig: {
-          thinkingLevel: 'HIGH',
-          includeThoughts: true,
+        thinkingLevel: 'MEDIUM',
+      },
+    },
+  },
+
+  together: {
+    'deepseek-v3.1': {
+      id: 'together-deepseek-v3.1',
+      name: 'DeepSeek V3.1',
+      slug: 'deepseek-v3.1',
+      description: 'Best open-source coder with native thinking-in-tool-use, great for complex CAD code generation.',
+      provider: {
+        id: 'together',
+        name: 'Together AI',
+      },
+      model: 'deepseek-ai/DeepSeek-V3.1',
+      support: {
+        toolChoice: false,
+      },
+      details: {
+        family: 'deepseek',
+        families: ['deepseek'],
+        contextWindow: 128_000,
+        maxTokens: 64_000,
+        knowledgeCutoff: '2024-07',
+        cost: {
+          inputTokens: 0.6,
+          outputTokens: 1.7,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
         },
+      },
+      configuration: {
+        streaming: true,
+      },
+    },
+    'deepseek-r1': {
+      id: 'together-deepseek-r1',
+      name: 'DeepSeek R1',
+      slug: 'deepseek-r1',
+      description: 'Best open-source reasoning model for complex geometry and multi-step assembly design.',
+      provider: {
+        id: 'together',
+        name: 'Together AI',
+      },
+      model: 'deepseek-ai/DeepSeek-R1',
+      support: {
+        toolChoice: false,
+      },
+      details: {
+        family: 'deepseek',
+        families: ['deepseek'],
+        contextWindow: 128_000,
+        maxTokens: 64_000,
+        knowledgeCutoff: '2024-07',
+        cost: {
+          inputTokens: 3,
+          outputTokens: 7,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        },
+      },
+      configuration: {
+        streaming: true,
+      },
+    },
+    'glm-5.1': {
+      id: 'together-glm-5.1',
+      name: 'GLM-5.1',
+      slug: 'glm-5.1',
+      description: 'Flagship open-source model for long-horizon agentic coding and complex engineering tasks.',
+      provider: {
+        id: 'together',
+        name: 'Together AI',
+      },
+      model: 'zai-org/GLM-5.1',
+      support: {
+        toolChoice: false,
+      },
+      details: {
+        family: 'glm',
+        families: ['glm'],
+        contextWindow: 202_752,
+        maxTokens: 128_000,
+        cost: {
+          inputTokens: 1.4,
+          outputTokens: 4.4,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        },
+      },
+      configuration: {
+        streaming: true,
+      },
+    },
+    'qwen-3.5-397b': {
+      id: 'together-qwen-3.5-397b',
+      name: 'Qwen 3.5 397B',
+      slug: 'qwen-3.5-397b',
+      description: 'Near-linear attention with 262K context and native multimodal, strong for large CAD projects.',
+      provider: {
+        id: 'together',
+        name: 'Together AI',
+      },
+      model: 'Qwen/Qwen3.5-397B-A17B',
+      support: {
+        toolChoice: false,
+      },
+      details: {
+        family: 'qwen',
+        families: ['qwen'],
+        contextWindow: 262_144,
+        maxTokens: 64_000,
+        cost: {
+          inputTokens: 0.6,
+          outputTokens: 3.6,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        },
+      },
+      configuration: {
+        streaming: true,
+      },
+    },
+    'llama-4-maverick': {
+      id: 'together-llama-4-maverick',
+      name: 'Llama 4 Maverick',
+      slug: 'llama-4-maverick',
+      description: 'Strong general-purpose and coding model with 1M context window and massive ecosystem support.',
+      provider: {
+        id: 'together',
+        name: 'Together AI',
+      },
+      model: 'meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8',
+      support: {
+        toolChoice: false,
+      },
+      details: {
+        family: 'llama',
+        families: ['llama'],
+        contextWindow: 1_048_576,
+        maxTokens: 64_000,
+        knowledgeCutoff: '2024-08',
+        cost: {
+          inputTokens: 0.27,
+          outputTokens: 0.85,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        },
+      },
+      configuration: {
+        streaming: true,
+      },
+    },
+  },
+
+  cerebras: {
+    'qwen-3-235b': {
+      id: 'cerebras-qwen-3-235b',
+      name: 'Qwen 3 235B',
+      slug: 'cerebras-qwen-3-235b',
+      description: 'Strong reasoning model running at ~1,400 tok/s, great for iterative CAD design.',
+      provider: {
+        id: 'cerebras',
+        name: 'Cerebras',
+      },
+      model: 'qwen-3-235b-a22b-instruct-2507',
+      support: {
+        toolChoice: false,
+      },
+      details: {
+        family: 'qwen',
+        families: ['qwen'],
+        contextWindow: 128_000,
+        maxTokens: 64_000,
+        cost: {
+          inputTokens: 0.4,
+          outputTokens: 0.8,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        },
+      },
+      configuration: {
+        streaming: true,
       },
     },
   },

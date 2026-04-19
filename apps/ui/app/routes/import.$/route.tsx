@@ -1,9 +1,9 @@
 import { useLoaderData, useLocation, useNavigate } from 'react-router';
 import type { MetaDescriptor } from 'react-router';
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useActorRef, useSelector } from '@xstate/react';
 import { AlertCircle, X, XCircle } from 'lucide-react';
-import { fromPromise } from 'xstate';
+import { fromSafeAsync } from '#lib/xstate.lib.js';
 import type { Route } from './+types/route.js';
 import type { Handle } from '#types/matches.types.js';
 import { importGitHubMachine } from '#machines/import-github.machine.js';
@@ -14,10 +14,10 @@ import { Button } from '#components/ui/button.js';
 import { Input } from '#components/ui/input.js';
 import { SvgIcon } from '#components/icons/svg-icon.js';
 import { formatFileSize } from '#components/geometry/converter/converter-utils.js';
-import { useBuildManager } from '#hooks/use-build-manager.js';
+import { useProjectManager } from '#hooks/use-project-manager.js';
 import { RepositoryCard } from '#routes/import.$/repository-card.js';
 import { BranchSelector } from '#routes/import.$/branch-selector.js';
-import { FileSelector } from '#components/files/file-selector.js';
+import { FileSelector, createStaticDataSource } from '#components/files/file-selector.js';
 import { SuggestedClones } from '#routes/import.$/suggested-clones.js';
 import { UploadCard } from '#routes/import.$/upload-card.js';
 import { parseGitHubUrl, normalizeGitHubUrl } from '#routes/import.$/import.utils.js';
@@ -46,7 +46,7 @@ export function meta({ loaderData }: Route.MetaArgs): MetaDescriptor[] {
  * - /import/https://github.com/owner/repo
  * - /import/https://github.com/owner/repo?ref=main&main=file.scad
  */
-// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types -- inferred type
+// oxlint-disable-next-line @typescript-eslint/explicit-module-boundary-types -- inferred type
 export function loader({ request, params }: Route.LoaderArgs) {
   const url = new URL(request.url);
   const splatPath = (params as { '*'?: string })['*'] ?? '';
@@ -82,11 +82,11 @@ export function loader({ request, params }: Route.LoaderArgs) {
 
 type ImportMode = 'github' | 'disk';
 
-// eslint-disable-next-line complexity -- TODO: consider refactoring.
+// oxlint-disable-next-line complexity -- TODO: consider refactoring.
 export default function ImportRoute(): React.JSX.Element {
   const { owner, repo, ref, mainFile } = useLoaderData<typeof loader>();
   const navigate = useNavigate();
-  const buildManager = useBuildManager();
+  const projectManager = useProjectManager();
 
   // Track active import mode
   const [activeMode, setActiveMode] = useState<ImportMode | undefined>(undefined);
@@ -95,14 +95,14 @@ export default function ImportRoute(): React.JSX.Element {
   const gitHubActorRef = useActorRef(
     importGitHubMachine.provide({
       actors: {
-        createBuildActor: fromPromise(async ({ input }) => {
-          const buildFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};
+        createProjectActor: fromSafeAsync(async ({ input }) => {
+          const projectFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};
           for (const [path, file] of input.files) {
-            buildFiles[path] = { content: file.content };
+            projectFiles[path] = { content: file.content };
           }
 
-          const build = await buildManager.createBuild({
-            build: {
+          const project = await projectManager.createProject({
+            project: {
               name: `${input.owner}/${input.repo}`,
               description: `Imported from GitHub: https://github.com/${input.owner}/${input.repo}`,
               author: {
@@ -118,10 +118,10 @@ export default function ImportRoute(): React.JSX.Element {
                 },
               },
             },
-            files: buildFiles,
+            files: projectFiles,
           });
 
-          return { type: 'buildCreated', buildId: build.id };
+          return { type: 'projectCreated', projectId: project.id };
         }),
       },
     }),
@@ -140,14 +140,14 @@ export default function ImportRoute(): React.JSX.Element {
   const diskActorRef = useActorRef(
     importDiskMachine.provide({
       actors: {
-        createBuildActor: fromPromise(async ({ input }) => {
-          const buildFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};
+        createProjectActor: fromSafeAsync(async ({ input }) => {
+          const projectFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};
           for (const [path, file] of input.files) {
-            buildFiles[path] = { content: file.content };
+            projectFiles[path] = { content: file.content };
           }
 
-          const build = await buildManager.createBuild({
-            build: {
+          const project = await projectManager.createProject({
+            project: {
               name: input.importName,
               description: `Imported from disk`,
               author: {
@@ -163,10 +163,10 @@ export default function ImportRoute(): React.JSX.Element {
                 },
               },
             },
-            files: buildFiles,
+            files: projectFiles,
           });
 
-          return { type: 'buildCreated', buildId: build.id };
+          return { type: 'projectCreated', projectId: project.id };
         }),
       },
     }),
@@ -187,7 +187,7 @@ export default function ImportRoute(): React.JSX.Element {
     (snapshot) => snapshot.context.extractProgress as { processed: number; total: number },
   );
   const gitHubError = useSelector(gitHubActorRef, (snapshot) => snapshot.context.error);
-  const gitHubBuildId = useSelector(gitHubActorRef, (snapshot) => snapshot.context.buildId);
+  const gitHubProjectId = useSelector(gitHubActorRef, (snapshot) => snapshot.context.projectId);
   const gitHubFiles = useSelector(gitHubActorRef, (snapshot) => snapshot.context.files);
   const gitHubSelectedMainFile = useSelector(gitHubActorRef, (snapshot) => snapshot.context.selectedMainFile);
   const requestedMainFile = useSelector(gitHubActorRef, (snapshot) => snapshot.context.requestedMainFile);
@@ -198,6 +198,7 @@ export default function ImportRoute(): React.JSX.Element {
   const branches = useSelector(gitHubActorRef, (snapshot) => snapshot.context.branches);
   const selectedBranch = useSelector(gitHubActorRef, (snapshot) => snapshot.context.selectedBranch);
   const repoFiles = useSelector(gitHubActorRef, (snapshot) => snapshot.context.repoFiles);
+  const repoFilesDataSource = useMemo(() => createStaticDataSource(repoFiles), [repoFiles]);
   const isLoadingFiles = useSelector(gitHubActorRef, (snapshot) => snapshot.context.isLoadingFiles);
   const fetchErrors = useSelector(gitHubActorRef, (snapshot) => snapshot.context.fetchErrors);
   const hasMoreBranches = useSelector(gitHubActorRef, (snapshot) => snapshot.context.hasMoreBranches);
@@ -210,7 +211,7 @@ export default function ImportRoute(): React.JSX.Element {
   const diskSelectedMainFile = useSelector(diskActorRef, (snapshot) => snapshot.context.selectedMainFile);
   const diskProgress = useSelector(diskActorRef, (snapshot) => snapshot.context.progress);
   const diskError = useSelector(diskActorRef, (snapshot) => snapshot.context.error);
-  const diskBuildId = useSelector(diskActorRef, (snapshot) => snapshot.context.buildId);
+  const diskProjectId = useSelector(diskActorRef, (snapshot) => snapshot.context.projectId);
 
   // Track if this is the initial mount to avoid syncing on first render
   const isInitialMount = useRef(true);
@@ -290,19 +291,19 @@ export default function ImportRoute(): React.JSX.Element {
     };
   }, [gitHubActorRef]);
 
-  // Navigate when GitHub build is created
+  // Navigate when GitHub project is created
   useEffect(() => {
-    if (gitHubState.matches('success') && gitHubBuildId) {
-      void navigate(`/builds/${gitHubBuildId}`);
+    if (gitHubState.matches('success') && gitHubProjectId) {
+      void navigate(`/projects/${gitHubProjectId}`);
     }
-  }, [gitHubState, gitHubBuildId, navigate]);
+  }, [gitHubState, gitHubProjectId, navigate]);
 
-  // Navigate when Disk build is created
+  // Navigate when Disk project is created
   useEffect(() => {
-    if (diskState.matches('success') && diskBuildId) {
-      void navigate(`/builds/${diskBuildId}`);
+    if (diskState.matches('success') && diskProjectId) {
+      void navigate(`/projects/${diskProjectId}`);
     }
-  }, [diskState, diskBuildId, navigate]);
+  }, [diskState, diskProjectId, navigate]);
 
   // Disk import handlers
   const handleFilesSelected = useCallback(
@@ -359,11 +360,11 @@ export default function ImportRoute(): React.JSX.Element {
   if (isDiskActive && diskState.matches('selectingMainFile')) {
     return (
       <ImportMainFileView
-        title="Review Import"
+        title='Review Import'
         subtitle={diskImportName}
         files={diskFiles}
         selectedMainFile={diskSelectedMainFile}
-        variant="disk"
+        variant='disk'
         repo={diskImportName}
         onSelectMainFile={(file) => {
           diskActorRef.send({ type: 'selectMainFile', file });
@@ -395,15 +396,15 @@ export default function ImportRoute(): React.JSX.Element {
     const isExtracting = diskState.matches('extracting');
     const isCreating = diskState.matches('creating');
 
-    const title = isReading ? 'Reading Files' : isExtracting ? 'Extracting ZIP' : 'Creating Build';
-    const statusText = isReading ? 'Reading files...' : isExtracting ? 'Extracting files...' : 'Creating build...';
+    const title = isReading ? 'Reading Files' : isExtracting ? 'Extracting ZIP' : 'Creating Project';
+    const statusText = isReading ? 'Reading files...' : isExtracting ? 'Extracting files...' : 'Creating project...';
 
     return (
       <ImportProcessingView
         title={title}
         statusText={statusText}
         progress={diskProgress}
-        variant="disk"
+        variant='disk'
         onCancel={
           isCreating
             ? undefined
@@ -441,46 +442,46 @@ export default function ImportRoute(): React.JSX.Element {
       const isFetchingFiles = gitHubState.matches('fetchingFiles');
 
       return (
-        <div className="flex min-h-full flex-col items-center justify-start px-4 pt-6 pb-16 md:justify-center md:pt-8">
-          <div className="w-full max-w-4xl space-y-6">
-            <div className="flex flex-col items-center gap-4">
-              <div className="text-center">
-                <h1 className="text-2xl font-semibold">Import Project</h1>
-                <p className="text-sm text-muted-foreground">Import from GitHub or upload from your computer</p>
+        <div className='flex min-h-full flex-col items-center justify-start px-4 pt-6 pb-16 md:justify-center md:pt-8'>
+          <div className='w-full max-w-4xl space-y-6'>
+            <div className='flex flex-col items-center gap-4'>
+              <div className='text-center'>
+                <h1 className='text-2xl font-semibold'>Import Project</h1>
+                <p className='text-sm text-muted-foreground'>Import from GitHub or upload from your computer</p>
               </div>
             </div>
 
             {/* Side-by-side cards when no valid repo */}
             {isValidRepo ? (
-              <div className="space-y-4">
+              <div className='space-y-4'>
                 {/* Repository URL Input */}
-                <div className="space-y-2 rounded-lg border bg-sidebar p-6">
-                  <label htmlFor="repo-url" className="text-sm font-medium">
+                <div className='space-y-2 rounded-lg border bg-sidebar p-6'>
+                  <label htmlFor='repo-url' className='text-sm font-medium'>
                     Repository URL
                   </label>
-                  <div className="group relative">
+                  <div className='group relative'>
                     <Input
-                      id="repo-url"
-                      type="url"
-                      placeholder="https://github.com/owner/repo"
+                      id='repo-url'
+                      type='url'
+                      placeholder='https://github.com/owner/repo'
                       value={repoUrl}
-                      className="pr-8 font-mono text-sm"
+                      className='pr-8 font-mono text-sm'
                       onChange={(event) => {
                         gitHubActorRef.send({ type: 'updateRepoUrl', url: event.target.value });
                       }}
                     />
                     {repoUrl.length > 0 ? (
                       <Button
-                        variant="secondary"
-                        size="icon"
-                        className="absolute top-1/2 right-1.5 size-5 -translate-y-1/2 bg-neutral/10 p-0 text-muted-foreground hover:text-foreground"
-                        type="button"
-                        aria-label="Clear URL"
+                        variant='secondary'
+                        size='icon'
+                        className='absolute top-1/2 right-1.5 size-5 -translate-y-1/2 bg-neutral/10 p-0 text-muted-foreground hover:text-foreground'
+                        type='button'
+                        aria-label='Clear URL'
                         onClick={() => {
                           gitHubActorRef.send({ type: 'updateRepoUrl', url: '' });
                         }}
                       >
-                        <X className="size-3.5" />
+                        <X className='size-3.5' />
                       </Button>
                     ) : undefined}
                   </div>
@@ -495,11 +496,11 @@ export default function ImportRoute(): React.JSX.Element {
 
                 {/* Validation Feedback */}
                 {!isCheckingOrFetching && !repoMetadata ? (
-                  <div className="flex items-start gap-3 rounded-lg border border-warning/50 bg-warning/10 p-4 text-warning">
-                    <AlertCircle className="size-5 shrink-0" />
-                    <div className="flex flex-col gap-1">
-                      <div className="font-semibold">Repository Not Found</div>
-                      <div className="text-sm">
+                  <div className='flex items-start gap-3 rounded-lg border border-warning/50 bg-warning/10 p-4 text-warning'>
+                    <AlertCircle className='size-5 shrink-0' />
+                    <div className='flex flex-col gap-1'>
+                      <div className='font-semibold'>Repository Not Found</div>
+                      <div className='text-sm'>
                         The repository may not exist, be private, or you may not have access to it. Please check the URL
                         and try again.
                       </div>
@@ -508,11 +509,11 @@ export default function ImportRoute(): React.JSX.Element {
                 ) : undefined}
 
                 {!isCheckingOrFetching && repoMetadata?.isPrivate ? (
-                  <div className="border-info/50 bg-info/10 text-info flex items-start gap-3 rounded-lg border p-4">
-                    <AlertCircle className="size-5 shrink-0" />
-                    <div className="flex flex-col gap-1">
-                      <div className="font-semibold">Private Repository</div>
-                      <div className="text-sm">
+                  <div className='border-info/50 bg-info/10 text-info flex items-start gap-3 rounded-lg border p-4'>
+                    <AlertCircle className='size-5 shrink-0' />
+                    <div className='flex flex-col gap-1'>
+                      <div className='font-semibold'>Private Repository</div>
+                      <div className='text-sm'>
                         This is a private repository. Make sure you have access permissions to import it.
                       </div>
                     </div>
@@ -527,11 +528,11 @@ export default function ImportRoute(): React.JSX.Element {
                   isLoadingFiles ||
                   fetchErrors.branches !== undefined ||
                   fetchErrors.files !== undefined) ? (
-                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div className='grid grid-cols-1 gap-4 md:grid-cols-2'>
                     {/* Branch Selector or Error */}
                     {branches.length > 0 ? (
-                      <div className="space-y-2 rounded-lg border bg-sidebar p-6">
-                        <label className="text-sm font-medium">Branch</label>
+                      <div className='space-y-2 rounded-lg border bg-sidebar p-6'>
+                        <label className='text-sm font-medium'>Branch</label>
                         <BranchSelector
                           branches={branches}
                           selectedBranch={selectedBranch}
@@ -549,12 +550,12 @@ export default function ImportRoute(): React.JSX.Element {
                         />
                       </div>
                     ) : fetchErrors.branches ? (
-                      <div className="flex items-start gap-3 rounded-lg border border-warning/50 bg-warning/10 p-4 text-warning">
-                        <AlertCircle className="size-5 shrink-0" />
-                        <div className="flex flex-col gap-1">
-                          <div className="text-sm font-medium">Could not fetch branches</div>
-                          <div className="text-xs opacity-80">
-                            Import will use the <span className="font-semibold">{selectedBranch}</span> branch.
+                      <div className='flex items-start gap-3 rounded-lg border border-warning/50 bg-warning/10 p-4 text-warning'>
+                        <AlertCircle className='size-5 shrink-0' />
+                        <div className='flex flex-col gap-1'>
+                          <div className='text-sm font-medium'>Could not fetch branches</div>
+                          <div className='text-xs opacity-80'>
+                            Import will use the <span className='font-semibold'>{selectedBranch}</span> branch.
                           </div>
                         </div>
                       </div>
@@ -562,10 +563,10 @@ export default function ImportRoute(): React.JSX.Element {
 
                     {/* Main File Selector or Error */}
                     {repoFiles.length > 0 || isLoadingFiles ? (
-                      <div className="space-y-2 rounded-lg border bg-sidebar p-6">
-                        <label className="text-sm font-medium">Main File</label>
+                      <div className='space-y-2 rounded-lg border bg-sidebar p-6'>
+                        <label className='text-sm font-medium'>Main File</label>
                         <FileSelector
-                          files={repoFiles}
+                          dataSource={repoFilesDataSource}
                           selectedFile={gitHubSelectedMainFile}
                           isLoading={isLoadingFiles}
                           popoverProperties={{
@@ -577,11 +578,11 @@ export default function ImportRoute(): React.JSX.Element {
                         />
                       </div>
                     ) : fetchErrors.files ? (
-                      <div className="flex items-start gap-3 rounded-lg border border-warning/50 bg-warning/10 p-4 text-warning">
-                        <AlertCircle className="size-5 shrink-0" />
-                        <div className="flex flex-col gap-1">
-                          <div className="text-sm font-medium">Could not list files</div>
-                          <div className="text-xs opacity-80">You can still proceed with the import.</div>
+                      <div className='flex items-start gap-3 rounded-lg border border-warning/50 bg-warning/10 p-4 text-warning'>
+                        <AlertCircle className='size-5 shrink-0' />
+                        <div className='flex flex-col gap-1'>
+                          <div className='text-sm font-medium'>Could not list files</div>
+                          <div className='text-xs opacity-80'>You can still proceed with the import.</div>
                         </div>
                       </div>
                     ) : undefined}
@@ -589,10 +590,10 @@ export default function ImportRoute(): React.JSX.Element {
                 ) : undefined}
 
                 {/* Start Import Button and Short Link */}
-                <div className="flex gap-2">
+                <div className='flex gap-2'>
                   <Button
-                    className="flex-1"
-                    size="lg"
+                    className='flex-1'
+                    size='lg'
                     disabled={isCheckingOrFetching || isFetchingFiles || !repoMetadata}
                     onClick={() => {
                       setActiveMode('github');
@@ -602,12 +603,12 @@ export default function ImportRoute(): React.JSX.Element {
                     Start Import
                   </Button>
                   <CopyButton
-                    size="icon"
-                    className="size-11"
-                    variant="outline"
-                    tooltip="Copy short link"
-                    readyToCopyText=""
-                    copiedText=""
+                    size='icon'
+                    className='size-11'
+                    variant='outline'
+                    tooltip='Copy short link'
+                    readyToCopyText=''
+                    copiedText=''
                     getText={() => {
                       // Build short URL with /i instead of /import
                       // Use repoUrl from machine context (not browser URL) to avoid https:/ normalization
@@ -626,26 +627,26 @@ export default function ImportRoute(): React.JSX.Element {
               </div>
             ) : (
               <>
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div className='grid grid-cols-1 gap-4 md:grid-cols-2'>
                   {/* GitHub Import Card */}
-                  <div className="space-y-2 rounded-lg border bg-sidebar p-6">
-                    <div className="mb-4 flex items-center gap-3">
-                      <div className="flex size-10 items-center justify-center rounded-full bg-linear-to-br from-primary/20 to-primary/10">
-                        <SvgIcon id="github" className="size-5 text-primary" />
+                  <div className='space-y-2 rounded-lg border bg-sidebar p-6'>
+                    <div className='mb-4 flex items-center gap-3'>
+                      <div className='flex size-10 items-center justify-center rounded-full bg-linear-to-br from-primary/20 to-primary/10'>
+                        <SvgIcon id='github' className='size-5 text-primary' />
                       </div>
                       <div>
-                        <h2 className="font-medium">Import from GitHub</h2>
-                        <p className="text-xs text-muted-foreground">Enter a repository URL</p>
+                        <h2 className='font-medium'>Import from GitHub</h2>
+                        <p className='text-xs text-muted-foreground'>Enter a repository URL</p>
                       </div>
                     </div>
 
-                    <div className="group relative">
+                    <div className='group relative'>
                       <Input
-                        id="repo-url"
-                        type="url"
-                        placeholder="https://github.com/owner/repo"
+                        id='repo-url'
+                        type='url'
+                        placeholder='https://github.com/owner/repo'
                         value={repoUrl}
-                        className="pr-8 font-mono text-sm"
+                        className='pr-8 font-mono text-sm'
                         onChange={(event) => {
                           setActiveMode('github');
                           gitHubActorRef.send({ type: 'updateRepoUrl', url: event.target.value });
@@ -653,16 +654,16 @@ export default function ImportRoute(): React.JSX.Element {
                       />
                       {repoUrl.length > 0 ? (
                         <Button
-                          variant="secondary"
-                          size="icon"
-                          className="absolute top-1/2 right-1.5 size-5 -translate-y-1/2 bg-neutral/10 p-0 text-muted-foreground hover:text-foreground"
-                          type="button"
-                          aria-label="Clear URL"
+                          variant='secondary'
+                          size='icon'
+                          className='absolute top-1/2 right-1.5 size-5 -translate-y-1/2 bg-neutral/10 p-0 text-muted-foreground hover:text-foreground'
+                          type='button'
+                          aria-label='Clear URL'
                           onClick={() => {
                             gitHubActorRef.send({ type: 'updateRepoUrl', url: '' });
                           }}
                         >
-                          <X className="size-3.5" />
+                          <X className='size-3.5' />
                         </Button>
                       ) : undefined}
                     </div>
@@ -716,12 +717,12 @@ export default function ImportRoute(): React.JSX.Element {
 
       return (
         <ImportMainFileView
-          title="Review Import"
+          title='Review Import'
           subtitle={`${owner}/${repo}${ref === 'main' ? '' : ` @ ${ref}`}`}
           requestedMainFileWarning={requestedFileWarning}
           files={gitHubFiles}
           selectedMainFile={gitHubSelectedMainFile}
-          variant="github"
+          variant='github'
           owner={owner}
           repo={repo}
           onSelectMainFile={(file) => {
@@ -750,16 +751,16 @@ export default function ImportRoute(): React.JSX.Element {
 
     default: {
       return (
-        <div className="flex min-h-full flex-col items-center justify-start px-4 pt-6 pb-16 md:justify-center md:pt-8">
-          <div className="w-full max-w-2xl space-y-6">
-            <div className="flex flex-col items-center gap-4">
-              <div className="flex size-16 items-center justify-center rounded-full bg-linear-to-br from-primary/20 to-primary/10">
-                <SvgIcon id="github" className="size-8 text-primary" />
+        <div className='flex min-h-full flex-col items-center justify-start px-4 pt-6 pb-16 md:justify-center md:pt-8'>
+          <div className='w-full max-w-2xl space-y-6'>
+            <div className='flex flex-col items-center gap-4'>
+              <div className='flex size-16 items-center justify-center rounded-full bg-linear-to-br from-primary/20 to-primary/10'>
+                <SvgIcon id='github' className='size-8 text-primary' />
               </div>
 
-              <div className="text-center">
-                <h1 className="text-2xl font-semibold">Importing Repository</h1>
-                <p className="text-sm text-muted-foreground">
+              <div className='text-center'>
+                <h1 className='text-2xl font-semibold'>Importing Repository</h1>
+                <p className='text-sm text-muted-foreground'>
                   {repoOwner}/{repoName}
                   {selectedBranch && selectedBranch !== 'main' ? ` @ ${selectedBranch}` : ''}
                 </p>
@@ -771,11 +772,11 @@ export default function ImportRoute(): React.JSX.Element {
               <RepositoryCard metadata={repoMetadata} owner={repoOwner} repo={repoName} isLoading={false} />
             ) : undefined}
 
-            <div className="space-y-4">
+            <div className='space-y-4'>
               {/* Downloading */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-sm">
-                  <span className="flex items-center gap-2 font-medium">
+              <div className='space-y-2'>
+                <div className='flex items-center justify-between text-sm'>
+                  <span className='flex items-center gap-2 font-medium'>
                     {gitHubState.matches('downloading') ? (
                       <>
                         <Loader />
@@ -786,7 +787,7 @@ export default function ImportRoute(): React.JSX.Element {
                     )}
                   </span>
                   {downloadProgress.loaded > 0 ? (
-                    <span className="text-muted-foreground">
+                    <span className='text-muted-foreground'>
                       {downloadProgress.total > 0
                         ? `${formatFileSize(downloadProgress.loaded)} / ${formatFileSize(downloadProgress.total)}`
                         : formatFileSize(downloadProgress.loaded)}
@@ -801,26 +802,27 @@ export default function ImportRoute(): React.JSX.Element {
                         ? undefined
                         : 0
                   }
-                  className="h-2"
+                  className='h-2'
                 />
               </div>
 
               {/* Extracting */}
-              {(gitHubState.matches('extracting') || gitHubState.matches('creating')) && downloadProgress.loaded > 0 ? (
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="flex items-center gap-2 font-medium">
-                      {gitHubState.matches('extracting') ? (
+              {(gitHubState.matches('downloading') || gitHubState.matches('creating')) &&
+              downloadProgress.loaded > 0 ? (
+                <div className='space-y-2'>
+                  <div className='flex items-center justify-between text-sm'>
+                    <span className='flex items-center gap-2 font-medium'>
+                      {gitHubState.matches('creating') ? (
+                        '✓ Extracted'
+                      ) : (
                         <>
                           <Loader />
                           <span>Extracting files...</span>
                         </>
-                      ) : (
-                        '✓ Extracted'
                       )}
                     </span>
                     {gitHubExtractProgress.total > 0 ? (
-                      <span className="text-muted-foreground">
+                      <span className='text-muted-foreground'>
                         {gitHubExtractProgress.processed} / {gitHubExtractProgress.total} files
                       </span>
                     ) : undefined}
@@ -831,34 +833,34 @@ export default function ImportRoute(): React.JSX.Element {
                         ? (gitHubExtractProgress.processed / gitHubExtractProgress.total) * 100
                         : 0
                     }
-                    className="h-2"
+                    className='h-2'
                   />
                 </div>
               ) : undefined}
 
               {/* Creating */}
               {gitHubState.matches('creating') ? (
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="flex items-center gap-2 font-medium">
+                <div className='space-y-2'>
+                  <div className='flex items-center justify-between text-sm'>
+                    <span className='flex items-center gap-2 font-medium'>
                       <Loader />
-                      <span>Creating build...</span>
+                      <span>Creating project...</span>
                     </span>
                   </div>
-                  <Progress value={100} className="h-2" />
+                  <Progress value={100} className='h-2' />
                 </div>
               ) : undefined}
 
               {/* Cancel Button - show during download/extract only */}
-              {gitHubState.matches('downloading') || gitHubState.matches('extracting') ? (
+              {gitHubState.matches('downloading') ? (
                 <Button
-                  variant="outline"
-                  className="w-full"
+                  variant='outline'
+                  className='w-full'
                   onClick={() => {
                     gitHubActorRef.send({ type: 'cancelDownload' });
                   }}
                 >
-                  <XCircle className="mr-2 size-4" />
+                  <XCircle className='mr-2 size-4' />
                   Cancel Import
                 </Button>
               ) : undefined}

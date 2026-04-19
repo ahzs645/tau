@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { Slot as SlotPrimitive } from 'radix-ui';
-import { useBuild } from '#hooks/use-build.js';
+import { useProject } from '#hooks/use-project.js';
 import { cn } from '#utils/ui.utils.js';
 
 type FileLinkProps = {
@@ -40,18 +40,18 @@ export function FileLink({
   children,
   asChild = false,
 }: FileLinkProps): React.JSX.Element {
-  const build = useBuild({ enableNoContext: true });
+  const project = useProject({ enableNoContext: true });
 
   const handleClick = useCallback(
     (event: React.MouseEvent) => {
       event.preventDefault();
       event.stopPropagation();
 
-      if (!build) {
+      if (!project) {
         return;
       }
 
-      build.editorRef.send({
+      project.editorRef.send({
         type: 'openFile',
         path,
         source: 'user',
@@ -59,7 +59,7 @@ export function FileLink({
         column: column ?? 1,
       });
     },
-    [build, path, lineNumber, column],
+    [project, path, lineNumber, column],
   );
 
   const Component = asChild ? SlotPrimitive.Slot : 'button';

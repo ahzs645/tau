@@ -14,6 +14,7 @@ const log = createKclLogger('Rename Provider');
  */
 export function createRenameProvider(monaco: typeof Monaco, client: KclLspClient): Monaco.languages.RenameProvider {
   return {
+    // oxlint-disable-next-line max-params -- Monaco editor API contract
     async provideRenameEdits(
       model: Monaco.editor.ITextModel,
       position: Monaco.Position,
@@ -59,7 +60,10 @@ export function createRenameProvider(monaco: typeof Monaco, client: KclLspClient
         if ('range' in result) {
           // PrepareRenameResult with range
           const prepareResult = result as {
-            range: { start: { line: number; character: number }; end: { line: number; character: number } };
+            range: {
+              start: { line: number; character: number };
+              end: { line: number; character: number };
+            };
             placeholder: string;
           };
 
@@ -100,7 +104,10 @@ function convertWorkspaceEdit(
     changes?: Record<
       string,
       Array<{
-        range: { start: { line: number; character: number }; end: { line: number; character: number } };
+        range: {
+          start: { line: number; character: number };
+          end: { line: number; character: number };
+        };
         newText: string;
       }>
     >;

@@ -13,12 +13,7 @@
     },
     "outDir": "./out-tsc/spec",
     "rootDirs": [".", "./.react-router/types"],
-    "types": [
-      "vitest/importMeta",
-      "vite/client",
-      "node",
-      "vitest"
-    ]
+    "types": ["vitest/importMeta", "vite/client", "node", "vitest"]
   },
   "include": [
     "vite.config.ts",

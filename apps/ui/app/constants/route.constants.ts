@@ -1,8 +1,6 @@
 import {
   BookOpen,
-  Bot,
   ChartColumn,
-  FileAxis3D,
   Files,
   Frame,
   Hammer,
@@ -10,6 +8,7 @@ import {
   Map,
   PieChart,
   Settings,
+  Shuffle,
   UsersRound,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -36,36 +35,36 @@ export const navRoutes: {
 } = {
   navMain: [
     {
-      title: 'Builds',
-      url: '/builds/library',
+      title: 'Projects',
+      url: '/projects/library',
       icon: Hammer,
       // Items: [
       //   {
       //     title: 'History',
-      //     url: '/builds/history',
+      //     url: '/projects/history',
       //   },
       //   {
       //     title: 'Starred',
-      //     url: '/builds/starred',
+      //     url: '/projects/starred',
       //   },
       //   {
       //     title: 'Settings',
-      //     url: '/builds/settings',
+      //     url: '/projects/settings',
       //   },
       // ],
     },
     {
       title: 'Community',
-      url: '/builds/community',
+      url: '/projects/community',
       icon: UsersRound,
     },
     {
-      title: 'Converter',
-      url: '/converter',
-      icon: FileAxis3D,
+      title: 'Convert',
+      url: '/convert',
+      icon: Shuffle,
     },
     {
-      title: 'Importer',
+      title: 'Import',
       url: '/import',
       icon: Import,
     },
@@ -74,11 +73,6 @@ export const navRoutes: {
     //   url: '/workflows',
     //   icon: Workflow,
     // },
-    {
-      title: 'Models',
-      url: '/models',
-      icon: Bot,
-    },
     {
       title: 'Usage',
       url: '/usage',

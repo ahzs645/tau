@@ -36,7 +36,6 @@
       "options": {
         "buildTargetName": "build",
         "previewTargetName": "preview",
-        "testTargetName": "test",
         "devTargetName": "dev",
         "serveTargetName": "serve",
         "serveStaticTargetName": "serve-static",
@@ -54,7 +53,7 @@
       "plugin": "@nx/js/typescript",
       "options": {
         "typecheck": {
-          "targetName": "typecheck"
+          "targetName": "typecheck-tsc"
         },
         "build": {
           "targetName": "typebuild",
@@ -63,9 +62,37 @@
           "watchDepsName": "watch-deps"
         }
       }
+    },
+    {
+      "plugin": "./tools/tsgo.plugin.ts",
+      "options": {
+        "targetName": "typecheck"
+      }
+    },
+    {
+      "plugin": "@nx/vitest",
+      "options": {
+        "testTargetName": "test"
+      }
     }
   ],
   "targetDefaults": {
+    "lint": {
+      "options": {
+        "command": "oxlint -c $NX_WORKSPACE_ROOT/.oxlintrc.json {args.files} && eslint {args.files}",
+        "forwardAllArgs": false
+      },
+      "inputs": [
+        "default",
+        "^default",
+        "{workspaceRoot}/eslint.config.mjs",
+        "{workspaceRoot}/.oxlintrc.json",
+        "{workspaceRoot}/libs/oxlint/src/**/*",
+        {
+          "externalDependencies": ["eslint", "oxlint"]
+        }
+      ]
+    },
     "e2e-ci--**/*": {
       "dependsOn": ["^build"]
     },
@@ -99,5 +126,39 @@
   "namedInputs": {
     "sharedGlobals": ["{workspaceRoot}/.github/workflows/ci.yml"],
     "default": ["{projectRoot}/**/*", "sharedGlobals"]
+  },
+  "release": {
+    "projects": ["packages/*"],
+    "versionPlans": {
+      "ignorePatternsForPlanCheck": ["**/*.spec.ts", "**/*.test.ts", "**/*.md"]
+    },
+    "version": {
+      "preVersionCommand": "pnpm nx run-many -t build --projects=packages/*",
+      "conventionalCommits": true
+    },
+    "changelog": {
+      "workspaceChangelog": {
+        "file": "CHANGELOG.md",
+        "renderOptions": {
+          "authors": true,
+          "commitReferences": true,
+          "versionTitleDate": true
+        }
+      },
+      "projectChangelogs": {
+        "file": "CHANGELOG.md",
+        "renderOptions": {
+          "authors": false,
+          "commitReferences": true,
+          "versionTitleDate": true
+        }
+      }
+    },
+    "releaseTag": {
+      "pattern": "v{version}"
+    },
+    "git": {
+      "commitMessage": "chore(release): v{version}"
+    }
   }
 }

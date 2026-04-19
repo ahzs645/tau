@@ -39,7 +39,7 @@ const toolMetadata: Partial<Record<ToolName, ToolMetadata>> = {
   },
   [toolName.testModel]: {
     label: 'Test Model',
-    description: 'Run visual tests on the 3D model',
+    description: 'Run measurement tests on the 3D model',
     icon: Image,
   },
   [toolName.editTests]: {
@@ -90,7 +90,7 @@ const modeItems: ToolSelectorItem[] = [
 ];
 
 const toolItems: ToolSelectorItem[] = Object.entries(toolMetadata).map(([key, metadata]) => ({
-  type: 'tool' as const,
+  type: 'tool',
   tool: key as ToolName,
   label: metadata.label,
   description: metadata.description,
@@ -149,7 +149,7 @@ export const ChatToolSelector = memo(function ({
     (itemId: string) => {
       // Check if it's a mode selection
       const modeItem = modeItems.find((item) => item.type === 'mode' && item.mode === itemId);
-      if (modeItem && modeItem.type === 'mode') {
+      if (modeItem?.type === 'mode') {
         switch (modeItem.mode) {
           case 'auto': {
             onValueChange?.(toolMode.auto);
@@ -178,7 +178,7 @@ export const ChatToolSelector = memo(function ({
 
       // It's a tool selection - toggle the tool
       const toolItem = toolItems.find((item) => item.type === 'tool' && item.tool === itemId);
-      if (toolItem && toolItem.type === 'tool') {
+      if (toolItem?.type === 'tool') {
         const currentTools = Array.isArray(value) ? value : [];
         const isCurrentlySelected = currentTools.includes(toolItem.tool);
 
@@ -225,15 +225,15 @@ export const ChatToolSelector = memo(function ({
       const isSelected = isItemSelected(item);
 
       return (
-        <span className="flex w-full items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Icon className="size-4" />
-            <div className="flex flex-col items-start">
+        <span className='flex w-full items-center justify-between'>
+          <div className='flex items-center gap-2'>
+            <Icon className='size-4' />
+            <div className='flex flex-col items-start'>
               <span>{item.label}</span>
-              <span className="text-xs text-muted-foreground">{item.description}</span>
+              <span className='text-xs text-muted-foreground'>{item.description}</span>
             </div>
           </div>
-          {isSelected ? <Check className="size-4" /> : null}
+          {isSelected ? <Check className='size-4' /> : null}
         </span>
       );
     },
@@ -256,14 +256,14 @@ export const ChatToolSelector = memo(function ({
       {...properties}
       className="data-[slot='popover-content']:w-[280px]"
       popoverProperties={popoverProperties}
-      emptyListMessage="No options found."
-      searchPlaceHolder="Search tools..."
-      title="Tool Selection"
-      description="Select the tool mode or individual tools to use."
+      emptyListMessage='No options found.'
+      searchPlaceHolder='Search tools...'
+      title='Tool Selection'
+      description='Select the tool mode or individual tools to use.'
       groupedItems={groupedItems}
       renderLabel={renderLabel}
       getValue={getValue}
-      placeholder="Select tools"
+      placeholder='Select tools'
       defaultValue={defaultValue}
       isNested={isNested}
       isSearchEnabled={false}

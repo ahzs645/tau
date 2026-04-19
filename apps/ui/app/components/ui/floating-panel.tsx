@@ -7,7 +7,7 @@ import { cn } from '#utils/ui.utils.js';
 import { Button } from '#components/ui/button.js';
 import { PaneButton } from '#components/ui/pane-button.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
-import { DrawerClose, DrawerHandle } from '#components/ui/drawer.js';
+import { DrawerClose, DrawerHandle, useIsInsideDrawer } from '#components/ui/drawer.js';
 import { useIsMobile } from '#hooks/use-mobile.js';
 import { CollapsibleCodeBlock } from '#components/ui/collapsible-code-block.js';
 import { useAnalytics } from '#hooks/use-analytics.js';
@@ -17,10 +17,19 @@ type Side = 'left' | 'right';
 type TooltipSide = 'left' | 'right' | 'top' | 'bottom';
 type Align = 'start' | 'end';
 
+const chainStopPropagation = <E extends React.SyntheticEvent>(
+  handler: ((event: E) => void) | undefined,
+): ((event: E) => void) => {
+  return (event: E) => {
+    event.stopPropagation();
+    handler?.(event);
+  };
+};
+
 const floatingPanelContentHeaderVariants = cva(
   cn(
     'group/floating-panel-content-header',
-    'flex h-7.75 max-md:h-10 items-center justify-between',
+    'flex h-7.75 shrink-0 max-md:h-10 items-center justify-between',
     'border-b bg-sidebar py-0.5',
     'text-sm font-medium text-muted-foreground',
   ),
@@ -120,7 +129,7 @@ function FloatingPanel({
     <FloatingPanelContext.Provider value={contextValue}>
       <div
         className={cn('group/floating-panel relative size-full overflow-hidden bg-background', className)}
-        data-slot="floating-panel"
+        data-slot='floating-panel'
         data-state={isOpen ? 'open' : 'closed'}
       >
         {children}
@@ -150,9 +159,7 @@ function FloatingPanelTriggerButton({
   const context = React.useContext(FloatingPanelContext);
   const side = context?.side ?? 'right';
 
-  const defaultTooltipSide = React.useMemo(() => {
-    return tooltipSide ?? side;
-  }, [tooltipSide, side]);
+  const defaultTooltipSide = React.useMemo(() => tooltipSide ?? side, [tooltipSide, side]);
 
   // Render icon based on whether it's a ReactNode or a LucideIcon component
   const renderIcon = (): React.ReactNode => {
@@ -169,10 +176,10 @@ function FloatingPanelTriggerButton({
     <Tooltip>
       <TooltipTrigger asChild>
         <Button
-          size="icon"
-          variant="overlay"
+          size='icon'
+          variant='overlay'
           className={cn('text-muted-foreground', className)}
-          data-slot="floating-panel-trigger"
+          data-slot='floating-panel-trigger'
           onClick={onClick}
         >
           <span className={cn('group-data-[state=open]/floating-panel:[&_svg]:text-primary')}>{renderIcon()}</span>
@@ -193,8 +200,8 @@ type FloatingPanelCloseProps = {
 
 function FloatingPanelClose({ icon, className, children, tooltipContent }: FloatingPanelCloseProps): React.JSX.Element {
   const { isOpen, close } = useFloatingPanel();
-
   const isMobile = useIsMobile();
+  const isInsideDrawer = useIsInsideDrawer();
 
   const renderIcon = (): React.ReactNode => {
     if (React.isValidElement(icon)) {
@@ -205,18 +212,16 @@ function FloatingPanelClose({ icon, className, children, tooltipContent }: Float
     return <IconComponent />;
   };
 
-  // Inline close button -- rendered directly on desktop, wrapped with
-  // DrawerClose on mobile so the drawer dismiss gesture works.
   const button = (
     <FloatingPanelMenuButton
       tooltip={tooltipContent(isOpen)}
-      tooltipSide="top"
+      tooltipSide='top'
       className={cn(
         'text-muted-foreground',
         'max-md:rounded-full max-md:border max-md:bg-background/70 max-md:backdrop-blur-lg',
         className,
       )}
-      aria-label="Close panel"
+      aria-label='Close panel'
       onClick={close}
     >
       {renderIcon()}
@@ -224,7 +229,7 @@ function FloatingPanelClose({ icon, className, children, tooltipContent }: Float
     </FloatingPanelMenuButton>
   );
 
-  if (isMobile) {
+  if (isMobile && isInsideDrawer) {
     return <DrawerClose asChild>{button}</DrawerClose>;
   }
 
@@ -308,10 +313,16 @@ class FloatingPanelErrorBoundary extends React.Component<
     return { hasError: true, error };
   }
 
-  public override state: FloatingPanelErrorBoundaryState = { hasError: false, error: undefined };
+  public override state: FloatingPanelErrorBoundaryState = {
+    hasError: false,
+    error: undefined,
+  };
 
   public override componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
-    this.props.analytics.captureException(error, { errorInfo, context: { component: 'FloatingPanel' } });
+    this.props.analytics.captureException(error, {
+      errorInfo,
+      context: { component: 'FloatingPanel' },
+    });
     console.error('FloatingPanel content error:', error, errorInfo);
   }
 
@@ -340,7 +351,7 @@ function FloatingPanelContent({ children, className, errorFallback }: FloatingPa
   const fallback = errorFallback ?? ((props) => <FloatingPanelErrorContent {...props} />);
   const analytics = useAnalytics();
   return (
-    <div className={cn('flex size-full flex-col bg-sidebar/50', className)} data-slot="floating-panel-content">
+    <div className={cn('flex size-full flex-col bg-sidebar/50', className)} data-slot='floating-panel-content'>
       <FloatingPanelErrorBoundary fallback={fallback} analytics={analytics}>
         {children}
       </FloatingPanelErrorBoundary>
@@ -374,24 +385,48 @@ const drawerHandleOverrides = cn(
 function FloatingPanelContentHeader({ children, className }: FloatingPanelContentHeaderProps): React.JSX.Element {
   const { side } = useFloatingPanel();
   const isMobile = useIsMobile();
+  const isInsideDrawer = useIsInsideDrawer();
+  const handleRef = React.useRef<HTMLDivElement>(null);
 
-  // On mobile the header is a DrawerHandle so the entire bar responds to
-  // drag-to-close gestures (the parent Drawer uses `handleOnly`).
-  // Button taps still work because vaul distinguishes taps from drags.
-  const Comp = isMobile ? DrawerHandle : 'div';
+  if (isMobile && isInsideDrawer) {
+    return (
+      <DrawerHandle
+        ref={handleRef}
+        className={cn('relative', floatingPanelContentHeaderVariants({ side }), drawerHandleOverrides, className)}
+        data-slot='floating-panel-content-header'
+        onClickCapture={(event: React.MouseEvent) => {
+          // Portaled content (e.g. nested drawer overlays from ComboBoxResponsive)
+          // lives inside the React tree but outside the real DOM subtree.
+          // Prevent such clicks from reaching vaul's handleStartCycle, which
+          // would cycle the parent drawer's snap points.
+          // DismissableLayer (which closes the nested drawer) uses native
+          // pointerdown events on the document, so stopping the React click
+          // here does not interfere with it.
+          if (handleRef.current && !handleRef.current.contains(event.target as Node)) {
+            const target = event.target instanceof HTMLElement ? event.target : null;
+            // Allow clicks on Radix portaled content (dropdown menus, popovers)
+            // to reach their event handlers. Propagation from these clicks is
+            // instead stopped at the DropdownMenuContent level so they never
+            // reach vaul's handleStartCycle.
+            if (target?.closest('[data-radix-popper-content-wrapper]')) {
+              return;
+            }
+            event.stopPropagation();
+          }
+        }}
+      >
+        {children}
+      </DrawerHandle>
+    );
+  }
 
   return (
-    <Comp
-      className={cn(
-        'relative',
-        floatingPanelContentHeaderVariants({ side }),
-        isMobile && drawerHandleOverrides,
-        className,
-      )}
-      data-slot="floating-panel-content-header"
+    <div
+      className={cn('relative', floatingPanelContentHeaderVariants({ side }), className)}
+      data-slot='floating-panel-content-header'
     >
       {children}
-    </Comp>
+    </div>
   );
 }
 
@@ -408,10 +443,11 @@ function FloatingPanelContentHeaderActions({
     <div
       className={cn(
         'flex items-center pl-1 max-md:gap-1.5',
-        'group-hover/floating-panel:opacity-100 md:opacity-0',
+        'md:opacity-0 md:transition-opacity md:duration-150 md:ease-in-out',
+        'group-hover/floating-panel:opacity-100',
         className,
       )}
-      data-slot="floating-panel-content-header-actions"
+      data-slot='floating-panel-content-header-actions'
     >
       {children}
     </div>
@@ -426,12 +462,29 @@ type FloatingPanelMenuButtonProps = React.ComponentProps<typeof PaneButton>;
  * Thin wrapper around the shared `PaneButton` that adds mobile-responsive
  * sizing (`max-md:size-8 max-md:rounded-md`) and the
  * `floating-panel-menu-button` data-slot for styling hooks.
+ *
+ * When rendered inside a mobile drawer, stops click and pointerDown
+ * propagation at the button level so vaul's DrawerHandle doesn't cycle
+ * snap points or initiate drag state. Propagation is stopped here (not on
+ * the parent actions container) so that React Portal children like nested
+ * drawer overlays are unaffected.
  */
-function FloatingPanelMenuButton({ className, ...properties }: FloatingPanelMenuButtonProps): React.JSX.Element {
+function FloatingPanelMenuButton({
+  className,
+  onClick,
+  onPointerDown,
+  ...properties
+}: FloatingPanelMenuButtonProps): React.JSX.Element {
+  const isMobile = useIsMobile();
+  const isInsideDrawer = useIsInsideDrawer();
+  const isDrawerHandle = isMobile && isInsideDrawer;
+
   return (
     <PaneButton
-      data-slot="floating-panel-menu-button"
+      data-slot='floating-panel-menu-button'
       className={cn('max-md:size-8 max-md:rounded-md', className)}
+      onClick={isDrawerHandle ? chainStopPropagation(onClick) : onClick}
+      onPointerDown={isDrawerHandle ? chainStopPropagation(onPointerDown) : onPointerDown}
       {...properties}
     />
   );
@@ -450,8 +503,8 @@ type FloatingPanelButtonGroupProps = {
 function FloatingPanelButtonGroup({ children, className }: FloatingPanelButtonGroupProps): React.JSX.Element {
   return (
     <div
-      role="group"
-      data-slot="floating-panel-button-group"
+      role='group'
+      data-slot='floating-panel-button-group'
       className={cn(
         'flex items-center',
         'max-md:overflow-hidden max-md:rounded-full max-md:border max-md:bg-background/70 max-md:backdrop-blur-lg',
@@ -465,7 +518,7 @@ function FloatingPanelButtonGroup({ children, className }: FloatingPanelButtonGr
 
 function FloatingPanelContentTitle({ children, className }: FloatingPanelContentTitleProps): React.JSX.Element {
   return (
-    <h2 className={cn('text-sm font-medium text-nowrap', className)} data-slot="floating-panel-content-title">
+    <h2 className={cn('text-sm font-medium text-nowrap', className)} data-slot='floating-panel-content-title'>
       {children}
     </h2>
   );
@@ -473,7 +526,7 @@ function FloatingPanelContentTitle({ children, className }: FloatingPanelContent
 
 function FloatingPanelContentBody({ children, className }: FloatingPanelContentBodyProps): React.JSX.Element {
   return (
-    <div className={cn('flex-1 overflow-y-auto', className)} data-slot="floating-panel-content-body">
+    <div className={cn('flex-1 overflow-y-auto', className)} data-slot='floating-panel-content-body'>
       {children}
     </div>
   );
@@ -501,49 +554,49 @@ function FloatingPanelErrorContent({
 
   return (
     <div className={cn('flex h-full flex-col items-center justify-center gap-4 p-6', className)}>
-      <div className="flex w-full max-w-sm flex-col items-center gap-3 text-center">
+      <div className='flex w-full max-w-sm flex-col items-center gap-3 text-center'>
         {/* Error Icon */}
-        <div className="flex size-12 items-center justify-center rounded-full bg-destructive/10">
-          <AlertCircle className="size-6 text-destructive" />
+        <div className='flex size-12 items-center justify-center rounded-full bg-destructive/10'>
+          <AlertCircle className='size-6 text-destructive' />
         </div>
 
         {/* Error Title */}
-        <h3 className="text-lg font-semibold text-foreground">{title}</h3>
+        <h3 className='text-lg font-semibold text-foreground'>{title}</h3>
 
         {/* Description */}
         {displayDescription ? (
-          <p className="max-w-xs text-sm text-muted-foreground">{displayDescription}</p>
+          <p className='max-w-xs text-sm text-muted-foreground'>{displayDescription}</p>
         ) : undefined}
 
-        <p className="max-w-3xs text-sm text-pretty text-muted-foreground">
+        <p className='max-w-3xs text-sm text-pretty text-muted-foreground'>
           Our team has been notified of the error and will investigate it shortly.
         </p>
 
         {/* Error Details with Stack Trace */}
         {errorStack ? (
           <CollapsibleCodeBlock
-            language="bash"
+            language='bash'
             title={errorMessage ?? 'Error'}
             text={errorStack}
             collapsedLineCount={3}
-            className="text-left text-destructive/80"
-            containerClassName="w-full"
+            className='text-left text-destructive/80'
+            containerClassName='w-full'
           />
         ) : errorMessage ? (
-          <div className="w-full rounded-md border border-destructive/20 bg-destructive/5 p-3 text-left">
-            <p className="text-xs font-medium text-destructive/80">{errorMessage}</p>
+          <div className='w-full rounded-md border border-destructive/20 bg-destructive/5 p-3 text-left'>
+            <p className='text-xs font-medium text-destructive/80'>{errorMessage}</p>
           </div>
         ) : undefined}
       </div>
 
       {/* Action Buttons */}
-      <div className="flex flex-wrap items-center justify-center gap-2">
-        <Button variant="default" size="sm" className="gap-2" onClick={onRetry}>
-          <RotateCcw className="size-4" />
+      <div className='flex flex-wrap items-center justify-center gap-2'>
+        <Button variant='default' size='sm' className='gap-2' onClick={onRetry}>
+          <RotateCcw className='size-4' />
           Try Again
         </Button>
-        <Button variant="outline" size="sm" className="gap-2" onClick={onReload}>
-          <RefreshCcw className="size-4" />
+        <Button variant='outline' size='sm' className='gap-2' onClick={onReload}>
+          <RefreshCcw className='size-4' />
           Reload Page
         </Button>
       </div>

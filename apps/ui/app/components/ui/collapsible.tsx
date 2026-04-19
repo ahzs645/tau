@@ -2,13 +2,13 @@ import { Collapsible as CollapsiblePrimitive } from 'radix-ui';
 import { cn } from '#utils/ui.utils.js';
 
 function Collapsible({ ...properties }: React.ComponentProps<typeof CollapsiblePrimitive.Root>): React.JSX.Element {
-  return <CollapsiblePrimitive.Root data-slot="collapsible" {...properties} />;
+  return <CollapsiblePrimitive.Root data-slot='collapsible' {...properties} />;
 }
 
 function CollapsibleTrigger({
   ...properties
 }: React.ComponentProps<typeof CollapsiblePrimitive.CollapsibleTrigger>): React.JSX.Element {
-  return <CollapsiblePrimitive.CollapsibleTrigger data-slot="collapsible-trigger" {...properties} />;
+  return <CollapsiblePrimitive.CollapsibleTrigger data-slot='collapsible-trigger' {...properties} />;
 }
 
 function CollapsibleContent({
@@ -23,7 +23,7 @@ function CollapsibleContent({
         forceMount && 'data-[state=closed]:hidden',
         className,
       )}
-      data-slot="collapsible-content"
+      data-slot='collapsible-content'
       forceMount={forceMount ? true : undefined}
       {...properties}
     />

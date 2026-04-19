@@ -1,0 +1,241 @@
+---
+title: Create Custom Middleware
+description: Build middleware with defineMiddleware to intercept and transform kernel operations.
+icon: lucide:git-branch-plus
+---
+
+# Create Custom Middleware
+
+Build middleware with `defineMiddleware` to intercept and transform kernel operations. Middleware uses an onion-model wrap pattern: code after `handler()` runs on the return journey.
+
+## Prerequisites
+
+- [Install @taucad/runtime](../getting-started/installation)
+- Completed the [Quick Start](../getting-started/quick-start)
+- [Use Middleware](./using-middleware) -- Add built-in middleware to your client
+- [Middleware Model](../concepts/middleware-model) -- Understand the onion model
+
+## Goal
+
+Create a logging middleware and a stateful caching middleware. Learn the wrap pattern, `stateSchema`, and `optionsSchema`.
+
+## Steps
+
+### 1. Import defineMiddleware
+
+Import from `@taucad/runtime/middleware`:
+
+```typescript
+import { defineMiddleware } from '@taucad/runtime/middleware';
+```
+
+### 2. Create a Simple Logging Middleware
+
+Use `wrapCreateGeometry` (or `wrapGetParameters`, `wrapExportGeometry`) to log before and after the operation. Call `handler(input)` to continue the chain:
+
+```typescript
+import { defineMiddleware } from '@taucad/runtime/middleware';
+
+const loggingMiddleware = defineMiddleware({
+  name: 'Logging',
+  async wrapCreateGeometry(input, handler, { logger }) {
+    logger.debug('Computing geometry...');
+    const result = await handler(input);
+    logger.debug('Geometry computed');
+    return result;
+  },
+});
+```
+
+Code before `handler()` runs on the way down; code after runs on the way back up (onion model).
+
+### 3. Use the Onion Model Wrap Pattern
+
+The wrap pattern gives you full control. You can short-circuit (return without calling `handler`), transform input, or transform output:
+
+```typescript @ts-nocheck
+import { defineMiddleware } from '@taucad/runtime/middleware';
+
+// Application-specific cache — replace with your storage backend
+const cache = new Map<string, unknown>();
+const checkCache = async (key: string) => cache.get(key) ?? null;
+const writeCache = async (key: string, value: unknown) => {
+  cache.set(key, value);
+};
+
+const cacheMiddleware = defineMiddleware({
+  name: 'SimpleCache',
+  async wrapCreateGeometry(input, handler, { logger, dependencyHash }) {
+    const cached = await checkCache(dependencyHash);
+    if (cached) {
+      logger.debug('Cache hit');
+      return cached;
+    }
+
+    const result = await handler(input);
+
+    await writeCache(dependencyHash, result);
+    return result;
+  },
+});
+```
+
+Short-circuited results still flow through upstream middleware because each layer wraps the next.
+
+### 4. Add Stateful Middleware with stateSchema
+
+Use `stateSchema` (Zod) for type-safe state that persists during the operation. Access `state` from the runtime:
+
+```typescript @ts-nocheck
+import { defineMiddleware } from '@taucad/runtime/middleware';
+import { z } from 'zod';
+
+const statefulCacheMiddleware = defineMiddleware({
+  name: 'StatefulCache',
+  stateSchema: z.object({
+    cacheKey: z.string().optional(),
+    cacheHit: z.boolean().optional(),
+  }),
+  async wrapCreateGeometry(input, handler, { logger, state, dependencyHash }) {
+    const cacheKey = dependencyHash;
+
+    const cached = await checkCache(cacheKey);
+    if (cached) {
+      state.update({ cacheKey, cacheHit: true });
+      return cached;
+    }
+
+    state.update({ cacheKey, cacheHit: false });
+    const result = await handler(input);
+    await writeCache(cacheKey, result);
+    return result;
+  },
+});
+```
+
+`state.update()` merges partial data into the state. Values are validated against `stateSchema`.
+
+### 5. Add optionsSchema for Configuration
+
+Use `optionsSchema` for configurable middleware. The schema supports `.default()` for optional options:
+
+```typescript @ts-nocheck
+import { defineMiddleware } from '@taucad/runtime/middleware';
+import { z } from 'zod';
+
+const configurableCacheMiddleware = defineMiddleware({
+  name: 'ConfigurableCache',
+  optionsSchema: z.object({
+    maxAgeMs: z.number().default(60_000),
+    enabled: z.boolean().default(true),
+  }),
+  stateSchema: z.object({
+    cacheKey: z.string().optional(),
+  }),
+  async wrapCreateGeometry(input, handler, { options, state, dependencyHash }) {
+    if (!options.enabled) {
+      return handler(input);
+    }
+
+    const cached = await checkCache(dependencyHash, options.maxAgeMs);
+    if (cached) {
+      state.update({ cacheKey: dependencyHash });
+      return cached;
+    }
+
+    const result = await handler(input);
+    await writeCache(dependencyHash, result, options.maxAgeMs);
+    return result;
+  },
+});
+```
+
+Options are resolved from schema defaults and caller overrides when the middleware is registered.
+
+### 6. Export and Register Your Middleware
+
+Middleware runs in the worker and must be loaded as a separate module. Create a module file that exports the middleware (default or named with a `name` property), then a factory that returns a [`MiddlewarePlugin`](../api/middleware):
+
+```typescript @ts-nocheck
+// my-cache.middleware.ts
+import { defineMiddleware } from '@taucad/runtime/middleware';
+import { z } from 'zod';
+
+const myCacheMiddleware = defineMiddleware({
+  name: 'MyCache',
+  stateSchema: z.object({ cacheKey: z.string().optional() }),
+  async wrapCreateGeometry(input, handler, { state, dependencyHash }) {
+    const cached = await checkCache(dependencyHash);
+    if (cached) return cached;
+    const result = await handler(input);
+    await writeCache(dependencyHash, result);
+    return result;
+  },
+});
+
+export default myCacheMiddleware;
+```
+
+```typescript @ts-nocheck
+// my-cache-plugin.ts
+import type { MiddlewarePlugin } from '@taucad/runtime';
+
+export function myCache(): MiddlewarePlugin {
+  return {
+    id: 'my-cache',
+    moduleUrl: new URL('./my-cache.middleware.js', import.meta.url).href,
+    options: {},
+  };
+}
+```
+
+Pass the factory to [`createRuntimeClient`](../api/client):
+
+```typescript @ts-nocheck
+import { createRuntimeClient } from '@taucad/runtime';
+import { fromNodeFS } from '@taucad/runtime/filesystem/node';
+import { replicad } from '@taucad/runtime/kernels';
+import { esbuild } from '@taucad/runtime/bundler';
+import { myCache } from './my-cache-plugin.js';
+
+const client = createRuntimeClient({
+  kernels: [replicad()],
+  bundlers: [esbuild()],
+  fileSystem: fromNodeFS('/path/to/project'),
+  middleware: [myCache()],
+});
+```
+
+### 7. Wrap Multiple Operations
+
+Implement `wrapGetParameters` and `wrapExportGeometry` when needed:
+
+```typescript @ts-nocheck
+const fullMiddleware = defineMiddleware({
+  name: 'FullMiddleware',
+  async wrapGetParameters(input, handler, { logger }) {
+    logger.debug('Getting parameters');
+    return handler(input);
+  },
+  async wrapCreateGeometry(input, handler, { logger }) {
+    logger.debug('Creating geometry');
+    return handler(input);
+  },
+  async wrapExportGeometry(input, handler, { logger }) {
+    logger.debug('Exporting geometry');
+    return handler(input);
+  },
+});
+```
+
+## Variations
+
+- **Version**: Set `version` for cache-key computation. Changing the version invalidates caches that include middleware signatures.
+- **Runtime services**: Destructure `logger`, `filesystem`, `dependencies`, `dependencyHash`, `state`, and `options` from the `KernelMiddlewareRuntime` as needed.
+- **Inline middleware**: For testing or single-app use, you can pass middleware objects directly if your setup supports it. Production use typically requires a module URL for worker loading.
+
+## Related
+
+- [Middleware Model](../concepts/middleware-model) -- Onion model and execution order
+- [Use Middleware](./using-middleware) -- Add built-in middleware
+- [API Reference: Middleware](../api/middleware) -- defineMiddleware and types

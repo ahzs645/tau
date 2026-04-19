@@ -9,8 +9,8 @@ import type { Handle } from '#types/matches.types.js';
 export const handle: Handle = {
   breadcrumb() {
     return (
-      <Button asChild variant="ghost">
-        <Link to="/legal/cookies">Cookie Policy</Link>
+      <Button asChild variant='ghost'>
+        <Link to='/legal/cookies'>Cookie Policy</Link>
       </Button>
     );
   },

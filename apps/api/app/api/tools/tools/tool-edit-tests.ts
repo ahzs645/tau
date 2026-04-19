@@ -12,23 +12,16 @@ export const editTestsToolDefinition = {
 
 Uses the same pattern as edit_file - specify edits with // ... existing code ... to represent unchanged sections.
 
-Example edit to add a new requirement:
+Example:
 {
   "requirements": [
-    // ... existing code ...
-    {
-      "id": "req_hole_visible",
-      "description": "Circular hole visible through the sphere",
-      "type": "visual"
-    }
+    { "id": "req_width", "type": "measurement", "description": "Model is 100mm wide", "check": "boundingBox", "expected": { "size": { "x": 100 } }, "tolerance": 1 },
+    { "id": "req_centered", "type": "measurement", "description": "Centered at origin XY", "check": "boundingBox", "expected": { "center": { "x": 0, "y": 0 } }, "tolerance": 0.5 },
+    { "id": "req_solid", "type": "measurement", "description": "Single connected solid", "check": "connectedComponents", "expected": { "count": 1 } }
   ]
 }
 
-**Requirement guidelines:**
-- Describe VISIBLE OUTCOMES, not CAD operations
-- Do NOT specify views (FRONT, TOP, etc.) - all 6 orthographic views are analyzed automatically
-- Good: "Circular hole visible through sphere", "Smooth curved surface"
-- Bad: "TOP view shows hole", "Boolean difference applied"
+Checks: boundingBox (size/center — specify only axes to check), meshCount (number of returned shapes), connectedComponents (disconnected pieces — use for "single solid" checks), vertexCount.
 
 Use this tool BEFORE making model changes (TDD approach).`,
   schema: editTestsInputSchema,
@@ -56,8 +49,11 @@ export const editTestsTool: ChatTool<
   const { codeEdit } = args;
 
   // Step 1: Read the current test.json content via RPC
-  const readResult = await chatRpcService.sendRpcRequest(chatId, toolCallId, rpcName.readFile, {
-    targetFile: testFile,
+  const readResult = await chatRpcService.sendRpcRequest({
+    chatId,
+    toolCallId,
+    rpcName: rpcName.readFile,
+    args: { targetFile: testFile },
   });
 
   // Assert infrastructure success - throws ToolError for timeout, disconnect, validation
@@ -100,13 +96,19 @@ export const editTestsTool: ChatTool<
   }
 
   // Step 3: Write the edited content back via RPC
-  const writeResult = await chatRpcService.sendRpcRequest(chatId, toolCallId, rpcName.createFile, {
-    targetFile: testFile,
-    content: editResult.editedContent,
+  const writeResult = await chatRpcService.sendRpcRequest({
+    chatId,
+    toolCallId,
+    rpcName: rpcName.createFile,
+    args: { targetFile: testFile, content: editResult.editedContent },
   });
 
   // Assert RPC success - throws ToolError for any infrastructure or client error
-  assertRpcSuccess(writeResult, toolName.editTests, toolCallId, 'Cannot save test.json');
+  assertRpcSuccess(writeResult, {
+    toolName: toolName.editTests,
+    toolCallId,
+    clientErrorMessage: 'Cannot save test.json',
+  });
 
   const result: EditTestsOutput = {
     diffStats: {

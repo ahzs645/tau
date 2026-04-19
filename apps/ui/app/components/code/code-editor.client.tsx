@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef } from 'react';
 import type { CompletionRegistration } from 'monacopilot';
 import type * as Monaco from 'monaco-editor';
 import { cn } from '#utils/ui.utils.js';
-import { configureMonaco, registerCompletions } from '#lib/monaco.js';
+import { configureMonaco, registerCompletions } from '#lib/monaco.lib.js';
 import { useIsMobile } from '#hooks/use-mobile.js';
 import { Theme, useTheme } from '#hooks/use-theme.js';
 
@@ -36,12 +36,19 @@ const maxForceTokenizeLines = 5000;
 function createOverflowWidgetsDomNode(): HTMLDivElement {
   const node = document.createElement('div');
   node.className = 'monaco-editor';
-  node.style.cssText = 'position:fixed;top:0;left:0;overflow:visible;z-index:50;pointer-events:none;';
+  node.style.cssText = 'position:fixed;top:0;left:0;width:0;height:0;overflow:visible;z-index:50;';
   document.body.append(node);
   return node;
 }
 
 const overflowWidgetsDomNode = createOverflowWidgetsDomNode();
+
+// Scrollbar styling shared between the editor wrapper and the overflow
+// container (hover/suggest/parameter hints live on document.body).
+const monacoScrollbarStyles = [
+  '[&_.monaco-scrollable-element_>_.scrollbar]:!bg-(--scrollbar-track)',
+  '[&_.monaco-scrollable-element_>_.scrollbar_>_.slider]:!bg-(--scrollbar-thumb)/80',
+] as const;
 
 await configureMonaco();
 
@@ -50,10 +57,19 @@ export function CodeEditor({ className, ...rest }: CodeEditorProperties): React.
   const completionRef = useRef<CompletionRegistration | undefined>(null);
   const isMobile = useIsMobile();
 
-  // Sync the shared overflow widgets container theme class so hover
-  // tooltips, suggest widgets, and parameter hints are styled correctly.
+  // Sync the shared overflow widgets container with the current theme and
+  // styling overrides. This container lives on document.body (outside the
+  // editor wrapper DOM), so Tailwind descendant selectors from the wrapper
+  // don't reach it — styles are applied directly since it IS .monaco-editor.
   useEffect(() => {
-    overflowWidgetsDomNode.className = `monaco-editor ${theme === Theme.DARK ? 'vs-dark' : 'vs'}`;
+    overflowWidgetsDomNode.className = cn(
+      'monaco-editor',
+      theme === Theme.DARK ? 'vs-dark' : 'vs',
+      // Override Monaco's default SF Mono/system sans-serif with app fonts
+      '![--monaco-monospace-font:var(--font-mono)]',
+      '![font-family:var(--font-sans)]',
+      ...monacoScrollbarStyles,
+    );
   }, [theme]);
 
   const handleMount = useCallback((editor: Monaco.editor.IStandaloneCodeEditor, monaco: typeof Monaco) => {
@@ -72,6 +88,7 @@ export function CodeEditor({ className, ...rest }: CodeEditorProperties): React.
       // Monaco's tokenization.forceTokenization is a stable internal API used
       // extensively by its own features (colorizer, auto-indent, comment commands,
       // etc.) but not exposed in public type declarations.
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- Monaco internal API not exposed in public type declarations
       const tokenization = model as unknown as {
         tokenization?: { forceTokenization?: (lineNumber: number) => void };
       };
@@ -101,7 +118,7 @@ export function CodeEditor({ className, ...rest }: CodeEditorProperties): React.
         scrollBeyondLastColumn: 1,
         // Disable vertical scroll beyond last line
         scrollBeyondLastLine: false,
-        wordWrap: 'on',
+        wordWrap: 'off',
         // Render overflow widgets (hover, suggest, parameter hints) in a shared
         // container on document.body so they escape Dockview's CSS containment.
         // fixedOverflowWidgets uses position:fixed with viewport coordinates;
@@ -150,21 +167,51 @@ export function CodeEditor({ className, ...rest }: CodeEditorProperties): React.
   const classNames = useMemo(
     () =>
       cn(
-        // Target Monaco editor elements with Tailwind's nested syntax
-        // Override the background color of the Monaco editor
+        // Override Monaco CSS variables to match the app theme
         '[&_.monaco-editor]:![--vscode-editor-background:var(--background)]',
         '[&_.monaco-editor]:![--vscode-editorStickyScroll-background:var(--background)]',
         '[&_.monaco-editor]:![--vscode-breadcrumb-background:transparent]',
         '[&_.monaco-editor]:![--vscode-multiDiffEditor-background:var(--background)]',
         '[&_.monaco-editor]:![--vscode-editorMarkerNavigation-background:var(--background)]',
         '[&_.monaco-editor]:![--vscode-editorGutter-background:var(--background)]',
+
+        // Peek view: replace Monaco's default orange match highlights with
+        // the app's primary color (teal). The result list highlight (30%
+        // opacity) and editor preview highlight (40% opacity) mirror VS
+        // Code's opacity levels but use the primary hue.
+        '[&_.monaco-editor]:![--vscode-peekViewResult-matchHighlightBackground:oklch(0.75_0.15_var(--hue-primary)_/_0.3)]',
+        '[&_.monaco-editor]:![--vscode-peekViewEditor-matchHighlightBackground:oklch(0.75_0.15_var(--hue-primary)_/_0.4)]',
+
+        // Override Monaco's default system fonts with app fonts.
+        // --monaco-monospace-font: used by code blocks in hover, suggest
+        //   details, parameter hints, and go-to-error widgets.
+        // font-family: sets the base UI font for prose/labels in all widgets;
+        //   Monaco's inline styles on .view-line elements override it for code.
+        '[&_.monaco-editor]:![--monaco-monospace-font:var(--font-mono)]',
+        '[&_.monaco-editor]:![font-family:var(--font-sans)]',
+
         // Hide the redundant text area cover element
         '[&_.monaco-editor-background.textAreaCover.line-numbers]:!hidden',
         // Disable ::before pseudo-elements on line numbers
         '[&_.line-numbers::before]:!hidden',
-        // Existing scrollbar styles
-        '[&_.monaco-scrollable-element_>_.scrollbar]:!bg-(--scrollbar-track)',
-        '[&_.monaco-scrollable-element_>_.scrollbar_>_.slider]:!bg-(--scrollbar-thumb)/80',
+
+        // Peek view: increase the close-button right padding from Monaco's
+        // default 2px so it doesn't appear flush with the transparent scrollbar
+        // track (which makes the gap invisible and the button look cut off).
+        '[&_.peekview-widget_.head_.peekview-actions]:!pr-2',
+        // Peek view: the ref-tree (definitions list) doesn't inherit the
+        // editor's font settings — force monospace at the editor font size.
+        '[&_.reference-zone-widget_.ref-tree]:![font-size:13px]',
+        '[&_.reference-zone-widget_.ref-tree]:!font-mono',
+        // Peek view: filename in the title bar should use monospace
+        '[&_.peekview-title_.filename]:!font-mono',
+
+        // Go-to-error: code spans in marker messages should use monospace
+        '[&_.marker-widget_.message_.code]:!font-mono',
+
+        // Scrollbar styling (shared with the overflow container)
+        ...monacoScrollbarStyles,
+
         className,
       ),
     [className],

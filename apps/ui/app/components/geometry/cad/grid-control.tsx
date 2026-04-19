@@ -91,7 +91,7 @@ export function GridSizeIndicator({ className }: GridSizeIndicatorProps): React.
       <Tooltip>
         <TooltipTrigger asChild>
           <DropdownMenuTrigger asChild>
-            <Button variant="overlay" size="icon" className={cn('relative font-mono [&>span]:leading-none', className)}>
+            <Button variant='overlay' size='icon' className={cn('relative font-mono [&>span]:leading-none', className)}>
               <span
                 className={cn(
                   getTextSizeClass(localizedSmallGridSize),
@@ -100,9 +100,9 @@ export function GridSizeIndicator({ className }: GridSizeIndicatorProps): React.
               >
                 <span>{localizedSmallGridSize}</span>
               </span>
-              <span className="absolute bottom-2.25 flex translate-y-1/2 items-center justify-center gap-0.25 text-xs tracking-wide">
+              <span className='absolute bottom-2.25 flex translate-y-1/2 items-center justify-center gap-0.25 text-xs tracking-wide'>
                 {unit}
-                {isGridSizeLocked ? <LockIcon className="size-2" strokeWidth={4} /> : null}
+                {isGridSizeLocked ? <LockIcon className='size-2' strokeWidth={4} /> : null}
               </span>
             </Button>
           </DropdownMenuTrigger>
@@ -110,7 +110,7 @@ export function GridSizeIndicator({ className }: GridSizeIndicatorProps): React.
         <TooltipContent>Change unit settings</TooltipContent>
       </Tooltip>
       <DropdownMenuContent
-        className="w-72"
+        className='w-72'
         onCloseAutoFocus={(event) => {
           event.preventDefault();
         }}
@@ -120,12 +120,12 @@ export function GridSizeIndicator({ className }: GridSizeIndicatorProps): React.
           {gridUnitOptions.map((option) => (
             <DropdownMenuRadioItem
               key={option.value}
-              className="flex items-center justify-between gap-2"
+              className='flex items-center justify-between gap-2'
               value={option.value}
               onSelect={preventClose}
             >
               <span>{option.label}</span>
-              <span className="flex w-8 items-center justify-center rounded-xs bg-neutral/20 px-1 py-0.5 font-mono text-xs">
+              <span className='flex w-8 items-center justify-center rounded-xs bg-neutral/20 px-1 py-0.5 font-mono text-xs'>
                 {option.value}
               </span>
             </DropdownMenuRadioItem>
@@ -137,8 +137,8 @@ export function GridSizeIndicator({ className }: GridSizeIndicatorProps): React.
           {isGridSizeLocked ? <Lock /> : <LockOpen />}
           Lock Grid Size ({localizedSmallGridSize} {unit})
         </DropdownMenuSwitchItem>
-        <span className="inline-flex items-center gap-1 p-2 text-xs font-medium text-muted-foreground/80">
-          <Info className="size-3 stroke-2" /> Adjust grid size by changing zoom level
+        <span className='inline-flex items-center gap-1 p-2 text-xs font-medium text-muted-foreground/80'>
+          <Info className='size-3 stroke-2' /> Adjust grid size by changing zoom level
         </span>
       </DropdownMenuContent>
     </DropdownMenu>

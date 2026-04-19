@@ -74,7 +74,7 @@ describe('stringToColor', () => {
   });
 
   it('should generate well-distributed colors for similar inputs', () => {
-    const extensions = ['stl', 'step', 'stp', 'stl-binary'];
+    const extensions = ['stl', 'step', 'stp', 'gltf'];
     const colors = extensions.map((extension) => stringToColor(extension));
     const hues = colors.map((color) => {
       const hueRegex = /(\d+)deg/;
@@ -95,7 +95,7 @@ describe('stringToColor', () => {
     const formatColors = {
       stl: stringToColor('stl'),
       gltf: stringToColor('gltf'),
-      obj: stringToColor('obj'),
+      obj: stringToColor('obj'), // eslint-disable-line id-denylist -- OBJ file format identifier
       threeMf: stringToColor('3mf'),
     };
 

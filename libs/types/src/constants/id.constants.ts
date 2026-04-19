@@ -17,9 +17,9 @@ export const idPrefix = {
    */
   chat: 'chat',
   /**
-   * A build ID.
+   * A project ID.
    */
-  build: 'bld',
+  project: 'proj',
   /**
    * An LLM chat tool call ID.
    */
@@ -108,4 +108,8 @@ export const idPrefix = {
    * A view ID
    */
   view: 'view',
+  /**
+   * A browser tab ID.
+   */
+  tab: 'tab',
 } as const satisfies Record<string, string>;

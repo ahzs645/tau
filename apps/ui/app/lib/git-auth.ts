@@ -14,7 +14,7 @@ export const githubRepoScopes = ['repo'];
  *
  * This function initiates an OAuth flow to request additional GitHub scopes
  * for repository access. It should be called when the user wants to connect
- * their build to a Git repository.
+ * their project to a Git repository.
  *
  * @returns Promise that resolves when the OAuth flow completes
  * @throws Error if the OAuth flow fails or is cancelled by the user
@@ -35,8 +35,7 @@ export async function requestGitHubRepoAccess(): Promise<void> {
   await authClient.linkSocial({
     provider: 'github',
     scopes: githubRepoScopes,
-    // eslint-disable-next-line @typescript-eslint/naming-convention -- Better Auth naming convention
-    callbackURL: globalThis.location.href, // Return to current page after OAuth
+    callbackURL: globalThis.location.href,
   });
 }
 
@@ -55,7 +54,7 @@ export async function getGitHubAccessToken(): Promise<string> {
       providerId: 'github',
     });
 
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- tokenData can be null
+    // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- tokenData can be null
     if (!tokenData) {
       throw new Error('No GitHub account linked. Please link your GitHub account in Settings first.');
     }

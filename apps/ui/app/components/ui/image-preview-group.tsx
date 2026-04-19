@@ -133,9 +133,9 @@ function ImagePreviewGroup({
     <>
       {/* Thumbnail grid */}
       <div
-        aria-label="Image gallery"
+        aria-label='Image gallery'
         className={cn('flex flex-wrap items-start justify-center gap-3', className)}
-        role="group"
+        role='group'
         tabIndex={0}
         onKeyDown={handleKeyDown}
       >
@@ -148,8 +148,8 @@ function ImagePreviewGroup({
             )}
           >
             <div
-              className="cursor-pointer overflow-hidden rounded-md border bg-neutral/30 transition-colors hover:bg-neutral/40"
-              role="button"
+              className='cursor-pointer overflow-hidden rounded-md border bg-neutral/30 transition-colors hover:bg-neutral/40'
+              role='button'
               tabIndex={-1}
               onClick={() => {
                 handleThumbnailClick(index);
@@ -168,14 +168,14 @@ function ImagePreviewGroup({
               <img
                 alt={`${alt} - ${item.label}`}
                 className={cn(thumbnailSize, 'object-cover')}
-                loading="lazy"
+                loading='lazy'
                 src={item.src}
               />
             </div>
 
             {/* Optional label below thumbnail */}
             {hasLabels ? (
-              <span className="text-[10px] tracking-wide text-muted-foreground uppercase">{item.label}</span>
+              <span className='text-[10px] tracking-wide text-muted-foreground uppercase'>{item.label}</span>
             ) : undefined}
           </div>
         ))}
@@ -183,28 +183,28 @@ function ImagePreviewGroup({
 
       {/* Full-size carousel dialog - carousel stays mounted for fast open */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="h-[80vh] w-auto max-w-[90vw]! overflow-hidden p-0 max-md:min-w-[90vw]">
+        <DialogContent className='h-[80vh] w-auto max-w-[90vw]! overflow-hidden p-0 max-md:min-w-[90vw]'>
           <Carousel
             ref={carouselRef}
-            className="flex h-full w-full flex-col outline-none"
+            className='flex h-full w-full flex-col outline-none'
             opts={{ loop: true }}
             setApi={setCarouselApi}
             tabIndex={0}
           >
             {/* Carousel content with navigation buttons */}
-            <div className="relative flex flex-1 items-center justify-center overflow-hidden">
-              <CarouselContent className="h-full items-center">
+            <div className='relative flex flex-1 items-center justify-center overflow-hidden'>
+              <CarouselContent className='h-full items-center'>
                 {items.map((item) => (
-                  <CarouselItem key={item.id} className="flex h-full items-center justify-center pl-0">
-                    <div className="relative">
+                  <CarouselItem key={item.id} className='flex h-full items-center justify-center pl-0'>
+                    <div className='relative'>
                       <img
                         alt={`${alt} - ${item.label}`}
-                        className="max-h-[calc(80vh-6rem)] w-auto rounded-lg object-contain"
-                        loading="lazy"
+                        className='max-h-[calc(80vh-6rem)] w-auto rounded-lg object-contain'
+                        loading='lazy'
                         src={item.src}
                       />
                       {/* Label overlay on top-left of image */}
-                      <div className="absolute top-2 left-6 rounded bg-black/60 px-2 py-1 text-xs font-medium tracking-wide text-white uppercase">
+                      <div className='absolute top-2 left-6 rounded bg-black/60 px-2 py-1 text-xs font-medium tracking-wide text-white uppercase'>
                         {item.label}
                       </div>
                     </div>
@@ -213,10 +213,10 @@ function ImagePreviewGroup({
               </CarouselContent>
             </div>
 
-            <CarouselPrevious className="left-2 max-md:top-[calc(100%-2rem)]" />
-            <CarouselNext className="right-2 max-md:top-[calc(100%-2rem)]" />
+            <CarouselPrevious className='left-2 max-md:top-[calc(100%-2rem)]' />
+            <CarouselNext className='right-2 max-md:top-[calc(100%-2rem)]' />
             {/* Current position indicator */}
-            <div className="mb-5 shrink-0 pt-3 text-center text-xs font-medium text-muted-foreground">
+            <div className='mb-5 shrink-0 pt-3 text-center text-xs font-medium text-muted-foreground'>
               {selectedIndex + 1} / {items.length}
             </div>
           </Carousel>

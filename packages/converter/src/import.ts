@@ -6,13 +6,15 @@
  */
 
 /* eslint-disable @typescript-eslint/naming-convention -- formats can be valid identifiers */
-import type { File, InputFormat } from '#types.js';
+import type { FileExtension, FileInput } from '@taucad/types';
+import type { FileResolver } from '#file-resolver.js';
 import type { BaseLoader } from '#loaders/base.loader.js';
 import { DracoLoader } from '#loaders/draco.loader.js';
 import { GltfLoader } from '#loaders/gltf.loader.js';
 import { ThreeDmLoader } from '#loaders/3dm.loader.js';
 import { OcctLoader } from '#loaders/occt.loader.js';
 import { AssimpLoader } from '#loaders/assimp.loader.js';
+import type { SupportedImportFormat } from '#formats.js';
 
 const loaderFromInputFormat = {
   '3dm': new ThreeDmLoader(),
@@ -38,6 +40,7 @@ const loaderFromInputFormat = {
   md5mesh: new AssimpLoader(),
   'mesh.xml': new AssimpLoader(),
   nff: new AssimpLoader(),
+  // eslint-disable-next-line id-denylist -- OBJ file format identifier
   obj: new AssimpLoader(),
   off: new AssimpLoader(),
   ogex: new AssimpLoader(),
@@ -47,7 +50,6 @@ const loaderFromInputFormat = {
   stp: new OcctLoader(),
   smd: new AssimpLoader(),
   usda: new AssimpLoader(),
-  usdc: new AssimpLoader(),
   usdz: new AssimpLoader(),
   wrl: new AssimpLoader(),
   x: new AssimpLoader(),
@@ -76,18 +78,26 @@ const loaderFromInputFormat = {
   // skp: new UnimplementedLoader('SketchUp .skp files are not implemented. This proprietary format requires specialized SketchUp file parsing capabilities.'),
   // sldprt: new UnimplementedLoader('SolidWorks .sldprt files are not implemented. This proprietary format requires specialized CAD file parsing capabilities.'),
   // x_t: new UnimplementedLoader('Parasolid .x_t files are not implemented. This proprietary format requires specialized CAD kernel integration.'),
-} as const satisfies Partial<Record<InputFormat, BaseLoader>>;
+} as const satisfies Record<SupportedImportFormat, BaseLoader> & Partial<Record<FileExtension, BaseLoader>>;
 
-export type SupportedImportFormat = keyof typeof loaderFromInputFormat;
-
-export const supportedImportFormats = Object.keys(loaderFromInputFormat) as SupportedImportFormat[];
-
-export const importFiles = async (files: File[], format: SupportedImportFormat): Promise<Uint8Array<ArrayBuffer>> => {
+/**
+ * Imports files in the given format and produces a single GLB buffer.
+ *
+ * @param files - the input files to import
+ * @param format - the source format to use when selecting a loader
+ * @param resolver - optional file resolver for on-demand sidecar asset loading
+ * @returns A promise that resolves to GLB data as Uint8Array.
+ */
+export const importFiles = async (
+  files: FileInput[],
+  format: SupportedImportFormat,
+  resolver?: FileResolver,
+): Promise<Uint8Array<ArrayBuffer>> => {
   const loader = loaderFromInputFormat[format];
 
   loader.initialize({ format });
 
-  const result = await loader.loadAsync(files);
+  const result = await loader.loadAsync(files, resolver ? { resolver } : undefined);
 
   return result;
 };

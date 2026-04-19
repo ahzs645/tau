@@ -13,6 +13,9 @@ import type {
   RpcExecutionError,
   RpcValidationError,
 } from '@taucad/chat';
+import { AttributeKey } from '@taucad/telemetry';
+import { MetricsService } from '#telemetry/metrics.js';
+import { injectTraceContext } from '#telemetry/tracer.service.js';
 
 /** Timeout for RPC execution in milliseconds (60 seconds) */
 export const rpcExecutionTimeoutMs = 60_000;
@@ -20,13 +23,6 @@ export const rpcExecutionTimeoutMs = 60_000;
 /** Delay before clearing the aborted-chat entry after an abort signal fires (milliseconds).
  *  Catches straggler RPCs that start after abort but before LangGraph fully stops. */
 export const abortCleanupDelayMs = 5000;
-
-type PendingRequest = {
-  resolve: (value: unknown) => void;
-  timeoutId: ReturnType<typeof setTimeout>;
-  rpcName: keyof RpcSchemasRegistry;
-  chatId: string;
-};
 
 /**
  * Service for managing Socket.IO-based RPC execution.
@@ -49,8 +45,9 @@ export class ChatRpcService implements OnModuleDestroy {
   /** Active Socket.IO connections by chatId (supports multiple tabs per chat) */
   private readonly connections = new Map<string, Set<Socket>>();
 
-  /** Pending RPC requests by requestId */
-  private readonly pendingRequests = new Map<string, PendingRequest>();
+  /** Chat ownership: maps chatId to the userId that first joined the room.
+   *  Prevents other authenticated users from joining another user's chat. */
+  private readonly chatOwners = new Map<string, string>();
 
   /** Track aborted chats to reject new RPCs after abort */
   private readonly abortedChats = new Set<string>();
@@ -59,12 +56,27 @@ export class ChatRpcService implements OnModuleDestroy {
    *  from a previous abort can be cancelled when a new signal is registered. */
   private readonly abortCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
+  /** Track active abort signal listeners per chatId for cleanup on re-registration */
+  private readonly activeAbortListeners = new Map<string, { signal: AbortSignal; listener: () => void }>();
+
+  public constructor(private readonly metrics: MetricsService) {}
+
   /**
    * Register a Socket.IO connection for a chat room.
-   * Multiple sockets can join the same room (e.g., multiple tabs).
-   * The socket should already be joined to the room via Socket.IO.
+   * Multiple sockets can join the same room (e.g., multiple tabs) from the same user.
+   * Returns false if a different user already owns this chatId.
    */
-  public registerConnection(chatId: string, socket: Socket): void {
+  public registerConnection(chatId: string, socket: Socket, userId: string): boolean {
+    const existingOwner = this.chatOwners.get(chatId);
+    if (existingOwner && existingOwner !== userId) {
+      this.logger.warn(`Ownership check failed for chat ${chatId}: user ${userId} denied, owned by ${existingOwner}`);
+      return false;
+    }
+
+    if (!existingOwner) {
+      this.chatOwners.set(chatId, userId);
+    }
+
     let socketSet = this.connections.get(chatId);
 
     if (!socketSet) {
@@ -75,8 +87,9 @@ export class ChatRpcService implements OnModuleDestroy {
     socketSet.add(socket);
 
     this.logger.debug(
-      `Registered connection for chat ${chatId} (socket: ${socket.id}, total sockets: ${socketSet.size})`,
+      `Registered connection for chat ${chatId} (socket: ${socket.id}, user: ${userId}, total sockets: ${socketSet.size})`,
     );
+    return true;
   }
 
   /**
@@ -95,11 +108,10 @@ export class ChatRpcService implements OnModuleDestroy {
       `Unregistered connection for chat ${chatId} (socket: ${socket.id}, remaining sockets: ${socketSet.size})`,
     );
 
-    // Only clean up the map entry and reject pending requests when no sockets remain
     if (socketSet.size === 0) {
       this.connections.delete(chatId);
+      this.chatOwners.delete(chatId);
       this.logger.debug(`All connections removed for chat ${chatId}`);
-      this.rejectPendingRequestsForChat(chatId, 'CLIENT_DISCONNECTED');
     }
   }
 
@@ -125,11 +137,10 @@ export class ChatRpcService implements OnModuleDestroy {
       }
     }
 
-    // Clean up empty chat registrations after iteration completes
     for (const chatId of chatIdsToDelete) {
       this.connections.delete(chatId);
+      this.chatOwners.delete(chatId);
       this.logger.debug(`All connections removed for chat ${chatId} on socket disconnect`);
-      this.rejectPendingRequestsForChat(chatId, 'CLIENT_DISCONNECTED');
     }
   }
 
@@ -146,6 +157,13 @@ export class ChatRpcService implements OnModuleDestroy {
    * Zero tool changes needed — tools keep calling sendRpcRequest as before.
    */
   public registerAbortSignal(chatId: string, signal: AbortSignal): void {
+    // Remove listener from any previously registered signal for this chatId
+    const existing = this.activeAbortListeners.get(chatId);
+    if (existing) {
+      existing.signal.removeEventListener('abort', existing.listener);
+      this.activeAbortListeners.delete(chatId);
+    }
+
     // Cancel any stale cleanup timer from a previous abort so it cannot
     // prematurely clear the abort entry for the new request.
     this.cancelAbortCleanupTimer(chatId);
@@ -155,19 +173,19 @@ export class ChatRpcService implements OnModuleDestroy {
 
     if (signal.aborted) {
       this.abortedChats.add(chatId);
-      this.rejectPendingRequestsForChat(chatId, 'CLIENT_DISCONNECTED');
       this.scheduleAbortCleanup(chatId);
       return;
     }
 
     const onAbort = (): void => {
       this.abortedChats.add(chatId);
-      this.rejectPendingRequestsForChat(chatId, 'CLIENT_DISCONNECTED');
       signal.removeEventListener('abort', onAbort);
+      this.activeAbortListeners.delete(chatId);
       this.scheduleAbortCleanup(chatId);
     };
 
     signal.addEventListener('abort', onAbort);
+    this.activeAbortListeners.set(chatId, { signal, listener: onAbort });
   }
 
   /**
@@ -176,23 +194,10 @@ export class ChatRpcService implements OnModuleDestroy {
    * and potentially accessing destroyed resources.
    */
   public onModuleDestroy(): void {
-    this.logger.log('Cleaning up pending RPC requests on shutdown...');
+    this.logger.log('Cleaning up RPC service on shutdown...');
 
-    for (const [requestId, pending] of this.pendingRequests) {
-      clearTimeout(pending.timeoutId);
-
-      const shutdownError: RpcExecutionError = {
-        errorCode: 'CLIENT_DISCONNECTED',
-        message: 'Server is shutting down. RPC request cancelled.',
-        rpcName: pending.rpcName,
-      };
-
-      pending.resolve(shutdownError);
-      this.logger.debug(`Cancelled pending request ${requestId} on shutdown`);
-    }
-
-    this.pendingRequests.clear();
     this.connections.clear();
+    this.chatOwners.clear();
 
     for (const timerId of this.abortCleanupTimers.values()) {
       clearTimeout(timerId);
@@ -200,6 +205,11 @@ export class ChatRpcService implements OnModuleDestroy {
 
     this.abortCleanupTimers.clear();
     this.abortedChats.clear();
+
+    for (const { signal, listener } of this.activeAbortListeners.values()) {
+      signal.removeEventListener('abort', listener);
+    }
+    this.activeAbortListeners.clear();
 
     this.logger.log('RPC service cleanup complete');
   }
@@ -215,43 +225,36 @@ export class ChatRpcService implements OnModuleDestroy {
    * The tool layer should convert RPC errors to tool errors using rpcErrorToToolError().
    *
    * @template T - The RPC name (must be a key in RpcSchemasRegistry)
-   * @param chatId - The chat room ID
-   * @param toolCallId - The tool call ID (passed through to RpcRequest for client tracking)
-   * @param rpcName - The name of the RPC operation to execute
-   * @param args - The input arguments (type-checked against RPC's input schema)
+   * @param request - The RPC request object
+   * @param request.chatId - The chat room ID
+   * @param request.toolCallId - The tool call ID (passed through to RpcRequest for client tracking)
+   * @param request.rpcName - The name of the RPC operation to execute
+   * @param request.args - The input arguments (type-checked against RPC's input schema)
    * @returns The validated result (type-checked against RPC's result schema) or an RPC error object
    */
-  public async sendRpcRequest<T extends keyof RpcSchemasRegistry>(
-    chatId: string,
-    toolCallId: string,
-    rpcName: T,
-    args: RpcInput<T>,
-  ): Promise<RpcResult<T> | RpcExecutionError | RpcValidationError> {
-    // Reject immediately if this chat's request was already aborted
+  public async sendRpcRequest<T extends keyof RpcSchemasRegistry>(request: {
+    chatId: string;
+    toolCallId: string;
+    rpcName: T;
+    args: RpcInput<T>;
+  }): Promise<RpcResult<T> | RpcExecutionError | RpcValidationError> {
+    const { chatId, toolCallId, rpcName, args } = request;
+
     if (this.abortedChats.has(chatId)) {
-      const abortedError: RpcExecutionError = {
-        errorCode: 'CLIENT_DISCONNECTED',
-        message: 'Chat request was cancelled.',
-        rpcName,
-      };
-      return abortedError;
+      return { errorCode: 'CLIENT_DISCONNECTED', message: 'Chat request was cancelled.', rpcName };
     }
 
     const socketSet = this.connections.get(chatId);
-
-    // Find the first connected socket from the set
     const socket = socketSet ? this.getConnectedSocket(socketSet) : undefined;
 
     if (!socket) {
-      const noConnectionError: RpcExecutionError = {
+      return {
         errorCode: 'NO_CONNECTION',
         message: 'No WebSocket connection to the browser. The user has likely closed or navigated away from the page.',
         rpcName,
       };
-      return noConnectionError;
     }
 
-    // Validate input args against the RPC's input schema
     const inputValidation = this.validateRpcInput(rpcName, args);
     if (!inputValidation.success) {
       this.logger.warn(`Input validation failed for ${rpcName}:`, inputValidation.error.validationErrors);
@@ -259,45 +262,63 @@ export class ChatRpcService implements OnModuleDestroy {
     }
 
     const requestId = generatePrefixedId(idPrefix.request);
+    const traceContext = injectTraceContext();
+    const rpcRequest: RpcRequest = {
+      type: 'rpc_request',
+      chatId,
+      requestId,
+      toolCallId,
+      rpcName,
+      args: inputValidation.data,
+      ...(Object.keys(traceContext).length > 0 ? { traceContext } : {}),
+    };
 
-    return new Promise((resolve) => {
-      // Set up timeout
-      const timeoutId = setTimeout(() => {
-        const pending = this.pendingRequests.get(requestId);
+    this.logger.debug(`Sending RPC request ${requestId} for ${rpcName} to chat ${chatId}`);
 
-        if (pending) {
-          this.pendingRequests.delete(requestId);
-          const timeoutError: RpcExecutionError = {
-            errorCode: 'TIMEOUT',
-            message: `RPC execution timed out after ${rpcExecutionTimeoutMs / 1000} seconds. The client may be disconnected or unresponsive.`,
-            rpcName: pending.rpcName,
-          };
-          this.logger.warn(`RPC call ${requestId} timed out for chat ${chatId}`);
-          resolve(timeoutError);
-        }
-      }, rpcExecutionTimeoutMs);
+    const startTime = performance.now();
+    this.metrics.rpcActiveCalls.add(1, { [AttributeKey.RPC_METHOD]: rpcName });
 
-      // Store pending request
-      this.pendingRequests.set(requestId, {
-        resolve: resolve as (value: unknown) => void,
-        timeoutId,
-        rpcName,
-        chatId,
+    const outboundSize = estimateJsonSize(rpcRequest);
+    this.metrics.wsMessageSize.record(outboundSize, {
+      [AttributeKey.WS_DIRECTION]: 'out',
+      [AttributeKey.RPC_METHOD]: rpcName,
+    });
+
+    try {
+      /* oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- emitWithAck returns untyped ack */
+      const response: RpcResponse = await socket.timeout(rpcExecutionTimeoutMs).emitWithAck('rpc_request', rpcRequest);
+
+      const inboundSize = estimateJsonSize(response);
+      this.metrics.wsMessageSize.record(inboundSize, {
+        [AttributeKey.WS_DIRECTION]: 'in',
+        [AttributeKey.RPC_METHOD]: rpcName,
       });
 
-      // Send request to client via Socket.IO emit
-      const request: RpcRequest = {
-        type: 'rpc_request',
-        chatId,
-        requestId,
-        toolCallId,
-        rpcName,
-        args: inputValidation.data,
-      };
+      if (response.error) {
+        this.recordRpcDuration(startTime, rpcName, { status: 'error' });
+        return { errorCode: 'UNHANDLED_CLIENT_ERROR', message: response.error, rpcName };
+      }
 
-      socket.emit('rpc_request', request);
-      this.logger.debug(`Sent RPC request ${requestId} for ${rpcName} to chat ${chatId}`);
-    });
+      const validated = this.validateRpcResult(rpcName, response.result);
+
+      if (validated.success) {
+        this.recordRpcDuration(startTime, rpcName, { status: 'ok' });
+        this.logger.debug(`Resolved RPC call ${requestId} for ${rpcName}`);
+        return validated.data as RpcResult<T>;
+      }
+
+      this.recordRpcDuration(startTime, rpcName, { status: 'error' });
+      return validated.error;
+    } catch {
+      const errorCode = socket.connected ? 'TIMEOUT' : 'CLIENT_DISCONNECTED';
+      const message = socket.connected
+        ? `RPC execution timed out after ${rpcExecutionTimeoutMs / 1000} seconds. The client may be disconnected or unresponsive.`
+        : 'WebSocket client disconnected before RPC execution completed.';
+
+      this.recordRpcDuration(startTime, rpcName, { status: 'error', errorType: errorCode });
+      this.logger.warn(`RPC call ${requestId} failed for chat ${chatId}: ${errorCode}`);
+      return { errorCode, message, rpcName };
+    }
   }
 
   /**
@@ -306,47 +327,6 @@ export class ChatRpcService implements OnModuleDestroy {
   public isConnected(chatId: string): boolean {
     const socketSet = this.connections.get(chatId);
     return socketSet ? this.getConnectedSocket(socketSet) !== undefined : false;
-  }
-
-  /**
-   * Handle an RPC response from a client.
-   * Called by the gateway when receiving an rpc_response event.
-   */
-  public handleRpcResponse(message: RpcResponse): void {
-    const { requestId, result, error: clientError } = message;
-    const pending = this.pendingRequests.get(requestId);
-
-    if (!pending) {
-      this.logger.warn(`Received response for unknown request ${requestId}`);
-      return;
-    }
-
-    // Clean up
-    clearTimeout(pending.timeoutId);
-    this.pendingRequests.delete(requestId);
-
-    if (clientError) {
-      // Client reported an error during execution (client is still connected)
-      const errorResult: RpcExecutionError = {
-        errorCode: 'UNHANDLED_CLIENT_ERROR',
-        message: clientError,
-        rpcName: pending.rpcName,
-      };
-      pending.resolve(errorResult);
-      return;
-    }
-
-    // Validate the result against the RPC's result schema
-    const validated = this.validateRpcResult(pending.rpcName, result);
-
-    if (validated.success) {
-      pending.resolve(validated.data);
-    } else {
-      // Return validation error so caller can handle it
-      pending.resolve(validated.error);
-    }
-
-    this.logger.debug(`Resolved RPC call ${requestId} for ${pending.rpcName}`);
   }
 
   /**
@@ -436,30 +416,21 @@ export class ChatRpcService implements OnModuleDestroy {
     return { success: false, error: validationError };
   }
 
-  /**
-   * Resolve all pending requests for a chat with an error (e.g., when client disconnects).
-   */
-  private rejectPendingRequestsForChat(chatId: string, errorType: 'CLIENT_DISCONNECTED' | 'TIMEOUT'): void {
-    for (const [requestId, pending] of this.pendingRequests) {
-      if (pending.chatId === chatId) {
-        clearTimeout(pending.timeoutId);
-        this.pendingRequests.delete(requestId);
-
-        const errorMessage =
-          errorType === 'CLIENT_DISCONNECTED'
-            ? 'WebSocket client disconnected before RPC execution completed.'
-            : `RPC execution timed out after ${rpcExecutionTimeoutMs / 1000} seconds.`;
-
-        const disconnectError: RpcExecutionError = {
-          errorCode: errorType,
-          message: errorMessage,
-          rpcName: pending.rpcName,
-        };
-
-        pending.resolve(disconnectError);
-        this.logger.debug(`Resolved pending request ${requestId} with ${errorType}`);
-      }
+  private recordRpcDuration(
+    startTime: number,
+    rpcMethod: string,
+    options: { status: string; errorType?: string },
+  ): void {
+    const durationSeconds = (performance.now() - startTime) / 1000;
+    const attributes: Record<string, string> = {
+      [AttributeKey.RPC_METHOD]: rpcMethod,
+      [AttributeKey.RPC_STATUS]: options.status,
+    };
+    if (options.errorType) {
+      attributes[AttributeKey.ERROR_TYPE] = options.errorType;
     }
+    this.metrics.rpcCallDuration.record(durationSeconds, attributes);
+    this.metrics.rpcActiveCalls.add(-1, { [AttributeKey.RPC_METHOD]: rpcMethod });
   }
 
   /**
@@ -469,6 +440,7 @@ export class ChatRpcService implements OnModuleDestroy {
    * if a new signal is registered for the same chatId.
    */
   private scheduleAbortCleanup(chatId: string): void {
+    this.cancelAbortCleanupTimer(chatId);
     const timerId = setTimeout(() => {
       this.abortedChats.delete(chatId);
       this.abortCleanupTimers.delete(chatId);
@@ -487,3 +459,11 @@ export class ChatRpcService implements OnModuleDestroy {
     }
   }
 }
+
+const estimateJsonSize = (value: unknown): number => {
+  try {
+    return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+  } catch {
+    return 0;
+  }
+};

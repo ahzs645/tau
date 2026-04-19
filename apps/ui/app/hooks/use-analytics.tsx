@@ -2,7 +2,7 @@ import { PostHogProvider, usePostHog } from 'posthog-js/react';
 import type { PostHog } from 'posthog-js/react';
 import { useAuthenticate } from '@daveyplate/better-auth-ui';
 import { useEffect, useRef } from 'react';
-import { posthogConfig } from '#lib/posthog.js';
+import { posthogConfig } from '#lib/posthog.lib.js';
 import { useCookie } from '#hooks/use-cookie.js';
 import { cookieName } from '#constants/cookie.constants.js';
 
@@ -15,6 +15,7 @@ export type ConsentStatus = 'pending' | 'granted' | 'denied';
  * Used when PostHog is not configured (e.g., no API key in development or self-hosted).
  */
 /* eslint-disable @typescript-eslint/naming-convention -- posthog-js uses snake_case method names */
+// oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- noop stub for external PostHog type; only methods actually called are implemented
 const noopAnalytics = {
   opt_in_capturing: () => undefined,
   opt_out_capturing: () => undefined,
@@ -107,6 +108,35 @@ function AnalyticsIdentifier({ children }: { readonly children: React.ReactNode 
   return children;
 }
 
+/**
+ * Starts PostHog session recording after the browser is idle, avoiding the synchronous
+ * rrweb DOM snapshot during the critical rendering path. Uses `requestIdleCallback` with
+ * a `setTimeout` fallback for Safari.
+ */
+export function DeferredSessionRecording(): React.ReactNode {
+  const posthog = usePostHog();
+
+  useEffect(() => {
+    const start = () => {
+      posthog.startSessionRecording();
+    };
+
+    if ('requestIdleCallback' in globalThis) {
+      const id = requestIdleCallback(start);
+      return () => {
+        cancelIdleCallback(id);
+      };
+    }
+
+    const id = setTimeout(start, 0);
+    return () => {
+      clearTimeout(id);
+    };
+  }, [posthog]);
+
+  return undefined;
+}
+
 export function AnalyticsProvider({ children }: { readonly children: React.ReactNode }): React.ReactNode {
   const { options, apiKey } = posthogConfig;
 
@@ -119,6 +149,7 @@ export function AnalyticsProvider({ children }: { readonly children: React.React
 
   return (
     <PostHogProvider options={options} apiKey={apiKey}>
+      <DeferredSessionRecording />
       <AnalyticsIdentifier>{children}</AnalyticsIdentifier>
     </PostHogProvider>
   );

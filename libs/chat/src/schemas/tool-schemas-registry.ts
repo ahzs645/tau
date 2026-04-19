@@ -5,8 +5,9 @@ import type { CreateFileOutput } from '#schemas/tools/create-file.tool.schema.js
 import type { GrepOutput } from '#schemas/tools/grep.tool.schema.js';
 import type { GlobSearchOutput } from '#schemas/tools/glob-search.tool.schema.js';
 import type { GetKernelResultOutput } from '#schemas/tools/get-kernel-result.tool.schema.js';
-import type { TestModelOutput } from '#schemas/tools/test-model.tool.schema.js';
+import type { TestModelOutput } from '@taucad/testing';
 import type { EditFileOutput } from '#schemas/tools/edit-file.tool.schema.js';
+import type { ScreenshotOutput } from '#schemas/tools/screenshot.tool.schema.js';
 
 /**
  * Type-only registry mapping tool names to their output types.
@@ -14,6 +15,7 @@ import type { EditFileOutput } from '#schemas/tools/edit-file.tool.schema.js';
  * since validation happens upstream via the ChatRpc service).
  *
  * Includes both client tools and server-orchestrated tools that produce trimmable output.
+ * @public
  */
 export type ToolOutputRegistry = {
   [toolName.testModel]: TestModelOutput;
@@ -24,4 +26,5 @@ export type ToolOutputRegistry = {
   [toolName.listDirectory]: ListDirectoryOutput;
   [toolName.grep]: GrepOutput;
   [toolName.globSearch]: GlobSearchOutput;
+  [toolName.screenshot]: ScreenshotOutput;
 };

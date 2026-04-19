@@ -1,0 +1,26 @@
+name: 'v8-O3-noLTO-wasmOptO4-rbv-simd-noExc'
+description: 'Return-by-value + SIMD + wasm-opt O4, no exceptions (single build)'
+
+compilation:
+  optimization: '-O3'
+  lto: false
+  exceptions: 'none'
+  threading: 'single-threaded'
+  defines: ['OCCT_NO_DUMP']
+  undefines: ['OCC_CONVERT_SIGNALS']
+
+linking:
+  yaml: 'custom_build_single_v8.yml'
+  wasmOptLevel: '-O4'
+
+optimizations:
+  closure: true
+  evalCtors: true
+  evalCtorsLevel: 2
+  converge: true
+  patchDump: true
+  simd: true
+  bigint: true
+
+benchmark:
+  iterations: 100

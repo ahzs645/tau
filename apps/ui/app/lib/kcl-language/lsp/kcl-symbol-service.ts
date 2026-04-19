@@ -9,10 +9,7 @@ import type { Node } from '@taucad/kcl-wasm-lib/bindings/Node';
 import type { Program } from '@taucad/kcl-wasm-lib/bindings/Program';
 import type { KclValue } from '@taucad/kcl-wasm-lib/bindings/KclValue';
 import type { BodyItem } from '@taucad/kcl-wasm-lib/bindings/BodyItem';
-import type { VariableDeclaration } from '@taucad/kcl-wasm-lib/bindings/VariableDeclaration';
-import type { FunctionExpression } from '@taucad/kcl-wasm-lib/bindings/FunctionExpression';
 import type { Parameter } from '@taucad/kcl-wasm-lib/bindings/Parameter';
-import type { ImportStatement } from '@taucad/kcl-wasm-lib/bindings/ImportStatement';
 import type { LspFileManager } from '#lib/kcl-language/lsp/kcl-lsp-client.js';
 import { createKclLogger } from '#lib/kcl-language/lsp/kcl-logs.js';
 
@@ -125,15 +122,15 @@ export class KclSymbolService {
   /**
    * Set the parse function (from KclUtils)
    */
-  public setParseFunction(parseFn: ParseFunction): void {
-    this.parseFunction = parseFn;
+  public setParseFunction(parseFunction: ParseFunction): void {
+    this.parseFunction = parseFunction;
   }
 
   /**
    * Set the mock execution function (from KclUtils)
    */
-  public setMockExecuteFunction(executeFn: MockExecuteFunction): void {
-    this.mockExecuteFunction = executeFn;
+  public setMockExecuteFunction(executeFunction: MockExecuteFunction): void {
+    this.mockExecuteFunction = executeFunction;
   }
 
   /**
@@ -168,8 +165,8 @@ export class KclSymbolService {
 
     const allSymbols: KclSymbol[] = [];
 
-    // Capture parseFunction to satisfy TypeScript in async callback
-    const parseFn = this.parseFunction;
+    // Capture to satisfy TypeScript in async callback
+    const { parseFunction } = this;
 
     // Parse all stdlib modules in parallel
     const parseResults = await Promise.all(
@@ -178,9 +175,14 @@ export class KclSymbolService {
         const uri = `std://${moduleName}`;
 
         try {
-          const parseResult = await parseFn(entry.source);
+          const parseResult = await parseFunction(entry.source);
           const lineOffsets = computeLineOffsets(entry.source);
-          const symbols = extractSymbolsFromProgram(parseResult.program, uri, entry.source, lineOffsets);
+          const symbols = extractSymbolsFromProgram({
+            program: parseResult.program,
+            uri,
+            content: entry.source,
+            lineOffsets,
+          });
 
           // Mark all stdlib symbols with their module for better documentation
           const moduleSymbols: KclSymbol[] = [];
@@ -232,19 +234,27 @@ export class KclSymbolService {
     log.debug('Reparsing', uris.length, 'cached documents');
 
     // Collect documents that need reparsing
-    const documentsToReparse: Array<{ uri: string; content: string; version: number }> = [];
+    const documentsToReparse: Array<{
+      uri: string;
+      content: string;
+      version: number;
+    }> = [];
     for (const uri of uris) {
       const cached = this.cache.get(uri);
-      if (cached && cached.symbols.length === 0) {
-        documentsToReparse.push({ uri, content: cached.content, version: cached.version });
+      if (cached?.symbols.length === 0) {
+        documentsToReparse.push({
+          uri,
+          content: cached.content,
+          version: cached.version,
+        });
       }
     }
 
     // Reparse all documents in parallel
     await Promise.all(
-      documentsToReparse.map(async (doc) => {
-        log.debug('Reparsing document:', doc.uri);
-        await this.updateDocument(doc.uri, doc.content, doc.version + 1);
+      documentsToReparse.map(async (document_) => {
+        log.debug('Reparsing document:', document_.uri);
+        await this.updateDocument(document_.uri, document_.content, document_.version + 1);
       }),
     );
   }
@@ -376,7 +386,14 @@ export class KclSymbolService {
   /**
    * Get the symbol that a usage refers to
    */
-  public getDefinitionForUsage(uri: string, line: number, column: number, word: string): KclSymbol | undefined {
+  public getDefinitionForUsage(options: {
+    uri: string;
+    line: number;
+    column: number;
+    word: string;
+  }): KclSymbol | undefined {
+    const { uri, line, column, word } = options;
+
     // First check if we're on a declaration
     const symbolAtPosition = this.getSymbolAtPosition(uri, line, column);
     if (symbolAtPosition) {
@@ -576,7 +593,12 @@ export class KclSymbolService {
 
       // Extract symbols even if there are parse errors (partial AST)
       // The WASM parser returns a partial program even when there are errors
-      symbols = extractSymbolsFromProgram(program, uri, content, lineOffsets);
+      symbols = extractSymbolsFromProgram({
+        program,
+        uri,
+        content,
+        lineOffsets,
+      });
       succeeded = true;
       log.debug('Extracted', symbols.length, 'symbols from AST (errors:', parseResult.errors.length, ')');
 
@@ -627,10 +649,16 @@ export class KclSymbolService {
    */
   private extractVariablesFromError(error: unknown): Partial<Record<string, KclValue>> {
     if (error && typeof error === 'object' && 'variables' in error) {
-      const errorWithVars = error as { variables?: Partial<Record<string, KclValue>> };
-      if (errorWithVars.variables && typeof errorWithVars.variables === 'object') {
-        log.debug('Mock execution failed but extracted', Object.keys(errorWithVars.variables).length, 'partial vars');
-        return errorWithVars.variables;
+      const errorWithVariables = error as {
+        variables?: Partial<Record<string, KclValue>>;
+      };
+      if (errorWithVariables.variables && typeof errorWithVariables.variables === 'object') {
+        log.debug(
+          'Mock execution failed but extracted',
+          Object.keys(errorWithVariables.variables).length,
+          'partial vars',
+        );
+        return errorWithVariables.variables;
       }
     }
 
@@ -743,22 +771,28 @@ function resolveImportPath(currentFileUri: string, importPath: string): string {
  * Escape special regex characters
  */
 function escapeRegExp(string: string): string {
-  return string.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
+  return string.replaceAll(/[$()*+.?[\\\]^{|}]/g, String.raw`\$&`);
 }
 
 /**
  * Extract symbols from a parsed KCL program
  */
-function extractSymbolsFromProgram(
-  program: Node<Program>,
-  uri: string,
-  content: string,
-  lineOffsets: number[],
-): KclSymbol[] {
+function extractSymbolsFromProgram(options: {
+  program: Node<Program>;
+  uri: string;
+  content: string;
+  lineOffsets: number[];
+}): KclSymbol[] {
+  const { program, uri, content, lineOffsets } = options;
   const symbols: KclSymbol[] = [];
 
   for (const bodyItem of program.body) {
-    const extracted = extractSymbolFromBodyItem(bodyItem, uri, content, lineOffsets);
+    const extracted = extractSymbolFromBodyItem({
+      item: bodyItem,
+      uri,
+      content,
+      lineOffsets,
+    });
     if (extracted) {
       symbols.push(...extracted);
     }
@@ -770,15 +804,17 @@ function extractSymbolsFromProgram(
 /**
  * Extract symbol(s) from a body item
  */
-function extractSymbolFromBodyItem(
-  item: BodyItem,
-  uri: string,
-  content: string,
-  lineOffsets: number[],
-): KclSymbol[] | undefined {
+function extractSymbolFromBodyItem(options: {
+  item: BodyItem;
+  uri: string;
+  content: string;
+  lineOffsets: number[];
+}): KclSymbol[] | undefined {
+  const { item, uri, content, lineOffsets } = options;
+
   switch (item.type) {
     case 'VariableDeclaration': {
-      return extractVariableSymbol(item, uri, content, lineOffsets);
+      return extractVariableSymbol({ item, uri, content, lineOffsets });
     }
 
     case 'ImportStatement': {
@@ -794,24 +830,24 @@ function extractSymbolFromBodyItem(
 /**
  * Extract variable/function symbol from a VariableDeclaration
  */
-function extractVariableSymbol(
-  item: BodyItem & { type: 'VariableDeclaration' },
-  uri: string,
-  _content: string,
-  lineOffsets: number[],
-): KclSymbol[] {
+function extractVariableSymbol(options: {
+  item: BodyItem & { type: 'VariableDeclaration' };
+  uri: string;
+  content: string;
+  lineOffsets: number[];
+}): KclSymbol[] {
+  const { item, uri, lineOffsets } = options;
   const symbols: KclSymbol[] = [];
-  const declaration = item as unknown as Node<VariableDeclaration>;
-  const declarator = declaration.declaration;
+  const declarator = item.declaration;
   const { name } = declarator.id;
-  const isExported = declaration.visibility === 'export';
+  const isExported = item.visibility === 'export';
 
   const position = offsetToPosition(lineOffsets, declarator.id.start);
 
   // Check if this is a function declaration
   if (declarator.init.type === 'FunctionExpression') {
-    const funcExpr = declarator.init as unknown as Node<FunctionExpression>;
-    const parameters = extractParameters(funcExpr.params, uri, lineOffsets);
+    const functionExpression = declarator.init;
+    const parameters = extractParameters(functionExpression.params, uri, lineOffsets);
 
     // Add function symbol
     symbols.push({
@@ -892,7 +928,10 @@ function extractParameters(parameters: Parameter[], _uri: string, _lineOffsets: 
       type: typeString,
       isLabeled: parameter.labeled !== false,
       hasDefault: parameter.default_value !== undefined && parameter.default_value !== null,
-      range: { start: parameter.identifier.start, end: parameter.identifier.end },
+      range: {
+        start: parameter.identifier.start,
+        end: parameter.identifier.end,
+      },
     };
   });
 }
@@ -1006,11 +1045,10 @@ function extractImportSymbol(
   lineOffsets: number[],
 ): KclSymbol[] {
   const symbols: KclSymbol[] = [];
-  const importStmt = item as unknown as Node<ImportStatement>;
-  const isExported = importStmt.visibility === 'export';
+  const isExported = item.visibility === 'export';
 
   // Extract path based on ImportPath type
-  const pathValue = importStmt.path;
+  const pathValue = item.path;
   let importPath = '';
 
   if ('filename' in pathValue) {
@@ -1029,7 +1067,7 @@ function extractImportSymbol(
   log.debug('extractImportSymbol: path type:', pathValue.type, 'extracted path:', importPath);
 
   // Extract selector (imported names)
-  const { selector } = importStmt;
+  const { selector } = item;
 
   log.debug('extractImportSymbol: selector type:', selector.type);
 

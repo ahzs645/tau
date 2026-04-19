@@ -13,17 +13,17 @@ export const getModels = async (): Promise<Model[]> => {
     const response = await fetch(`${ENV.TAU_API_URL}/v1/models`, {
       credentials: 'include',
     });
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- TODO: replace with SDK fetcher
+    // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- TODO: replace with SDK fetcher
     const data = await response.json();
 
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-return -- TODO: replace with SDK fetcher
+    // oxlint-disable-next-line @typescript-eslint/no-unsafe-return -- TODO: replace with SDK fetcher
     return data;
   } catch {
     return [];
   }
 };
 
-// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types -- intentionally allowing inference
+// oxlint-disable-next-line @typescript-eslint/explicit-module-boundary-types -- intentionally allowing inference
 export const useModels = () => {
   const loaderData = useRouteLoaderData<typeof loader>('root');
   const [selectedModelId, setSelectedModelId] = useCookie(cookieName.chatModel, defaultChatModel);

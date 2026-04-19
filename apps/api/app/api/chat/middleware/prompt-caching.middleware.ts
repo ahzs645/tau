@@ -68,10 +68,7 @@ function addCacheControlToHumanMessage(message: HumanMessage): HumanMessage {
  */
 function addCacheControlToAiMessage(message: AIMessage): AIMessage {
   const { content } = message;
-  // Access additional_kwargs which may contain tool_calls
-  const additionalKwargs = (message as unknown as Record<string, unknown>)['additional_kwargs'] as
-    | Record<string, unknown>
-    | undefined;
+  const { additional_kwargs: additionalKwargs } = message;
 
   // Handle string content - convert to content block array
   if (typeof content === 'string' && content.length > 0) {
@@ -89,6 +86,10 @@ function addCacheControlToAiMessage(message: AIMessage): AIMessage {
       tool_calls: message.tool_calls,
       // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
       additional_kwargs: additionalKwargs,
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
+      response_metadata: message.response_metadata,
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
+      usage_metadata: message.usage_metadata,
     });
   }
 
@@ -114,6 +115,10 @@ function addCacheControlToAiMessage(message: AIMessage): AIMessage {
       tool_calls: message.tool_calls,
       // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
       additional_kwargs: additionalKwargs,
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
+      response_metadata: message.response_metadata,
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
+      usage_metadata: message.usage_metadata,
     });
   }
 
@@ -134,6 +139,10 @@ function addCacheControlToAiMessage(message: AIMessage): AIMessage {
       tool_calls: message.tool_calls,
       // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
       additional_kwargs: additionalKwargs,
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
+      response_metadata: message.response_metadata,
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
+      usage_metadata: message.usage_metadata,
     });
   }
 

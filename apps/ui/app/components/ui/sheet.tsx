@@ -4,19 +4,19 @@ import { XIcon } from 'lucide-react';
 import { cn } from '#utils/ui.utils.js';
 
 function Sheet({ ...properties }: React.ComponentProps<typeof SheetPrimitive.Root>): React.JSX.Element {
-  return <SheetPrimitive.Root data-slot="sheet" {...properties} />;
+  return <SheetPrimitive.Root data-slot='sheet' {...properties} />;
 }
 
 function SheetTrigger({ ...properties }: React.ComponentProps<typeof SheetPrimitive.Trigger>): React.JSX.Element {
-  return <SheetPrimitive.Trigger data-slot="sheet-trigger" {...properties} />;
+  return <SheetPrimitive.Trigger data-slot='sheet-trigger' {...properties} />;
 }
 
 function SheetClose({ ...properties }: React.ComponentProps<typeof SheetPrimitive.Close>): React.JSX.Element {
-  return <SheetPrimitive.Close data-slot="sheet-close" {...properties} />;
+  return <SheetPrimitive.Close data-slot='sheet-close' {...properties} />;
 }
 
 function SheetPortal({ ...properties }: React.ComponentProps<typeof SheetPrimitive.Portal>): React.JSX.Element {
-  return <SheetPrimitive.Portal data-slot="sheet-portal" {...properties} />;
+  return <SheetPrimitive.Portal data-slot='sheet-portal' {...properties} />;
 }
 
 function SheetOverlay({
@@ -25,7 +25,7 @@ function SheetOverlay({
 }: React.ComponentProps<typeof SheetPrimitive.Overlay>): React.JSX.Element {
   return (
     <SheetPrimitive.Overlay
-      data-slot="sheet-overlay"
+      data-slot='sheet-overlay'
       className={cn(
         'fixed inset-0 z-50 bg-black/50 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0',
         className,
@@ -47,7 +47,7 @@ function SheetContent({
     <SheetPortal>
       <SheetOverlay />
       <SheetPrimitive.Content
-        data-slot="sheet-content"
+        data-slot='sheet-content'
         className={cn(
           'shadow-lg fixed z-50 flex flex-col bg-background transition ease-in-out data-[state=closed]:animate-out data-[state=closed]:duration-300 data-[state=open]:animate-in data-[state=open]:duration-500',
           side === 'right' &&
@@ -63,9 +63,9 @@ function SheetContent({
         {...properties}
       >
         {children}
-        <SheetPrimitive.Close className="absolute top-4 right-4 rounded-xs opacity-70 ring-offset-background hover:opacity-100 focus:ring-3 focus:ring-ring focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none data-[state=open]:bg-secondary">
-          <XIcon className="size-4" />
-          <span className="sr-only">Close</span>
+        <SheetPrimitive.Close className='absolute top-4 right-4 rounded-xs opacity-70 ring-offset-background hover:opacity-100 focus:ring-3 focus:ring-ring focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none data-[state=open]:bg-secondary'>
+          <XIcon className='size-4' />
+          <span className='sr-only'>Close</span>
         </SheetPrimitive.Close>
       </SheetPrimitive.Content>
     </SheetPortal>
@@ -73,11 +73,11 @@ function SheetContent({
 }
 
 function SheetHeader({ className, ...properties }: React.ComponentProps<'div'>): React.JSX.Element {
-  return <div data-slot="sheet-header" className={cn('flex flex-col gap-1.5 p-4', className)} {...properties} />;
+  return <div data-slot='sheet-header' className={cn('flex flex-col gap-1.5 p-4', className)} {...properties} />;
 }
 
 function SheetFooter({ className, ...properties }: React.ComponentProps<'div'>): React.JSX.Element {
-  return <div data-slot="sheet-footer" className={cn('mt-auto flex flex-col gap-2 p-4', className)} {...properties} />;
+  return <div data-slot='sheet-footer' className={cn('mt-auto flex flex-col gap-2 p-4', className)} {...properties} />;
 }
 
 function SheetTitle({
@@ -86,7 +86,7 @@ function SheetTitle({
 }: React.ComponentProps<typeof SheetPrimitive.Title>): React.JSX.Element {
   return (
     <SheetPrimitive.Title
-      data-slot="sheet-title"
+      data-slot='sheet-title'
       className={cn('font-semibold text-foreground', className)}
       {...properties}
     />
@@ -99,7 +99,7 @@ function SheetDescription({
 }: React.ComponentProps<typeof SheetPrimitive.Description>): React.JSX.Element {
   return (
     <SheetPrimitive.Description
-      data-slot="sheet-description"
+      data-slot='sheet-description'
       className={cn('text-sm text-muted-foreground', className)}
       {...properties}
     />

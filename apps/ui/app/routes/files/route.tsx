@@ -1,8 +1,18 @@
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { Link } from 'react-router';
-import { Database, Download, FolderArchive, FolderOpen, MoreHorizontal, RefreshCw, Star, Trash2 } from 'lucide-react';
+import {
+  Database,
+  Download,
+  FolderArchive,
+  FolderOpen,
+  HardDrive,
+  MoreHorizontal,
+  RefreshCw,
+  Star,
+  Trash2,
+} from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import type { FilesystemBackend, Build } from '@taucad/types';
+import type { FileSystemBackend, Project } from '@taucad/types';
 import { ExternalLink } from '#components/external-link.js';
 import { Button } from '#components/ui/button.js';
 import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
@@ -11,7 +21,7 @@ import { Tree, Folder, File } from '#components/magicui/file-tree.js';
 import type { TreeViewElement } from '#components/magicui/file-tree.js';
 import { useCookie } from '#hooks/use-cookie.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
-import { useBuilds } from '#hooks/use-builds.js';
+import { useProjects } from '#hooks/use-projects.js';
 import { cookieName } from '#constants/cookie.constants.js';
 import { isFileSystemAccessSupported } from '#constants/browser.constants.js';
 import type { Handle } from '#types/matches.types.js';
@@ -23,13 +33,14 @@ import {
   checkHandlePermission,
   requestHandlePermission,
 } from '#filesystem/handle-store.js';
-import type { FileTreeNode } from '#machines/file-manager.js';
+import type { FileTreeNode } from '@taucad/filesystem';
+import { joinPath, parentDirectory } from '@taucad/utils/path';
 
 export const handle: Handle = {
   breadcrumb() {
     return (
-      <Button asChild variant="ghost">
-        <Link to="/files">Files</Link>
+      <Button asChild variant='ghost'>
+        <Link to='/files'>Files</Link>
       </Button>
     );
   },
@@ -39,7 +50,7 @@ export const handle: Handle = {
  * Backend column metadata.
  */
 type BackendColumnMeta = {
-  key: FilesystemBackend;
+  key: FileSystemBackend;
   label: string;
   icon: LucideIcon;
   description: string;
@@ -54,7 +65,13 @@ const backendColumns: BackendColumnMeta[] = [
     description: 'Browser database storage',
     isSupported: true,
   },
-  // OPFS column removed -- disabled due to file corruption issues
+  {
+    key: 'opfs',
+    label: 'OPFS',
+    icon: HardDrive,
+    description: 'Origin Private File System',
+    isSupported: typeof navigator !== 'undefined' && 'storage' in navigator,
+  },
   {
     key: 'webaccess',
     label: 'File System',
@@ -87,30 +104,35 @@ const fileActions: ItemAction[] = [
  */
 const folderActions: ItemAction[] = [
   { value: 'download-zip', label: 'Download as ZIP', icon: FolderArchive },
-  { value: 'delete', label: 'Delete Directory', icon: Trash2, variant: 'destructive' },
+  {
+    value: 'delete',
+    label: 'Delete Directory',
+    icon: Trash2,
+    variant: 'destructive',
+  },
 ];
 
 /**
- * Extract build ID from a path that is exactly "/builds/bld_xxx" (not subfolders)
+ * Extract project ID from a path that is exactly "/projects/proj_xxx" (not subfolders)
  */
-function extractBuildId(path: string): string | undefined {
-  const match = /^\/builds\/([^/]+)$/.exec(path);
+function extractProjectId(path: string): string | undefined {
+  const match = /^\/projects\/([^/]+)$/.exec(path);
   return match?.[1];
 }
 
 /**
- * Link to a build page that opens in a new tab
+ * Link to a project page that opens in a new tab
  */
-function BuildLink({
-  buildId,
-  buildName,
+function ProjectLink({
+  projectId,
+  projectName,
 }: {
-  readonly buildId: string;
-  readonly buildName: string;
+  readonly projectId: string;
+  readonly projectName: string;
 }): React.JSX.Element {
   return (
     <span
-      role="presentation"
+      role='presentation'
       onClick={(event) => {
         event.stopPropagation();
       }}
@@ -118,11 +140,11 @@ function BuildLink({
       <ExternalLink
         withArrow
         isArrowOnHoverOnly
-        href={`/builds/${buildId}`}
-        className="text-xs text-muted-foreground max-md:hidden"
-        arrowSize="xs"
+        href={`/projects/${projectId}`}
+        className='text-xs text-muted-foreground max-md:hidden'
+        arrowSize='xs'
       >
-        {buildName}
+        {projectName}
       </ExternalLink>
     </span>
   );
@@ -177,24 +199,24 @@ function FileActions({
             item.variant === 'destructive' && 'text-destructive [&>svg]:text-destructive!',
           )}
         >
-          <item.icon className="size-4" />
+          <item.icon className='size-4' />
           <span>{item.label}</span>
         </div>
       )}
-      title="File Actions"
-      description="Choose an action for this file"
+      title='File Actions'
+      description='Choose an action for this file'
       isSearchEnabled={false}
       onSelect={handleAction}
     >
       <Button
-        variant="ghost"
-        size="icon"
-        className="size-6 shrink-0"
+        variant='ghost'
+        size='icon'
+        className='size-6 shrink-0'
         onClick={(event) => {
           event.stopPropagation();
         }}
       >
-        <MoreHorizontal className="size-4" />
+        <MoreHorizontal className='size-4' />
       </Button>
     </ComboBoxResponsive>
   );
@@ -235,24 +257,24 @@ function FolderActions({
             item.variant === 'destructive' && 'text-destructive [&>svg]:text-destructive!',
           )}
         >
-          <item.icon className="size-4" />
+          <item.icon className='size-4' />
           <span>{item.label}</span>
         </div>
       )}
-      title="Folder Actions"
-      description="Choose an action for this folder"
+      title='Folder Actions'
+      description='Choose an action for this folder'
       isSearchEnabled={false}
       onSelect={handleAction}
     >
       <Button
-        variant="ghost"
-        size="icon"
-        className="size-6 shrink-0"
+        variant='ghost'
+        size='icon'
+        className='size-6 shrink-0'
         onClick={(event) => {
           event.stopPropagation();
         }}
       >
-        <MoreHorizontal className="size-4" />
+        <MoreHorizontal className='size-4' />
       </Button>
     </ComboBoxResponsive>
   );
@@ -266,17 +288,17 @@ type TreeActionHandlers = {
   onDownloadFile: (path: string) => Promise<void>;
   onDeleteFolder: (path: string) => Promise<void>;
   onDownloadFolderZip: (path: string) => Promise<void>;
-  buildsMap: Map<string, Build>;
+  projectsMap: Map<string, Project>;
 };
 
 /**
- * Compose folder label with optional build link
+ * Compose folder label with optional project link
  */
-function FolderLabel({ name, build }: { readonly name: string; readonly build?: Build }): React.JSX.Element {
+function FolderLabel({ name, project }: { readonly name: string; readonly project?: Project }): React.JSX.Element {
   return (
-    <span className="inline-flex items-center gap-2">
+    <span className='inline-flex items-center gap-2'>
       <span>{name}</span>
-      {build ? <BuildLink buildId={build.id} buildName={build.name} /> : undefined}
+      {project ? <ProjectLink projectId={project.id} projectName={project.name} /> : undefined}
     </span>
   );
 }
@@ -287,14 +309,14 @@ function FolderLabel({ name, build }: { readonly name: string; readonly build?: 
 function renderTree(elements: TreeViewElement[], handlers: TreeActionHandlers): React.ReactNode {
   return elements.map((element) => {
     if (element.children) {
-      // Check if this folder corresponds to a build
-      const buildId = extractBuildId(element.id);
-      const build = buildId ? handlers.buildsMap.get(buildId) : undefined;
+      // Check if this folder corresponds to a project
+      const projectId = extractProjectId(element.id);
+      const project = projectId ? handlers.projectsMap.get(projectId) : undefined;
 
       return (
         <Folder
           key={element.id}
-          element={<FolderLabel name={element.name} build={build} />}
+          element={<FolderLabel name={element.name} project={project} />}
           value={element.id}
           actions={
             <FolderActions
@@ -324,51 +346,21 @@ function renderTree(elements: TreeViewElement[], handlers: TreeActionHandlers): 
 }
 
 /**
- * Convert FileTreeNode[] from the worker to TreeViewElement[] for the file tree component.
- * The types are structurally compatible, but this explicit mapping ensures type safety.
+ * Recursively count entries whose name starts with `proj_` (project directories).
  */
-function toTreeViewElements(nodes: FileTreeNode[]): TreeViewElement[] {
-  return nodes.map((node) => ({
-    id: node.id,
-    name: node.name,
-    children: node.children ? toTreeViewElements(node.children) : undefined,
-  }));
-}
-
-/**
- * Recursively count entries whose name starts with `bld_` (build directories).
- */
-function countBuilds(elements: TreeViewElement[]): number {
+function countProjects(elements: TreeViewElement[]): number {
   let count = 0;
   for (const element of elements) {
-    if (element.name.startsWith('bld_')) {
+    if (element.name.startsWith('proj_')) {
       count += 1;
     }
 
     if (element.children) {
-      count += countBuilds(element.children);
+      count += countProjects(element.children);
     }
   }
 
   return count;
-}
-
-/**
- * Collect IDs of all folders named "builds" so they can be expanded by default.
- */
-function findBuildsFolderIds(elements: TreeViewElement[]): string[] {
-  const ids: string[] = [];
-  for (const element of elements) {
-    if (element.name === 'builds' && element.children) {
-      ids.push(element.id);
-    }
-
-    if (element.children) {
-      ids.push(...findBuildsFolderIds(element.children));
-    }
-  }
-
-  return ids;
 }
 
 // ============ WebAccess Directory State ============
@@ -397,6 +389,7 @@ function BackendColumn({
   onConnectDirectory,
   onGrantAccess,
   onChangeDirectory,
+  onExpand,
 }: {
   readonly meta: BackendColumnMeta;
   readonly isDefault: boolean;
@@ -409,6 +402,7 @@ function BackendColumn({
   readonly onConnectDirectory?: () => void;
   readonly onGrantAccess?: () => void;
   readonly onChangeDirectory?: () => void;
+  readonly onExpand?: (id: string) => void;
 }): React.JSX.Element {
   const Icon = meta.icon;
   const isDisabled = !meta.isSupported;
@@ -416,36 +410,36 @@ function BackendColumn({
   return (
     <div className={cn('flex min-h-0 flex-col gap-3 rounded-lg border bg-card p-4', isDisabled && 'opacity-50')}>
       {/* Column Header */}
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <Icon className="size-4 shrink-0 text-muted-foreground" />
-          <div className="flex flex-col gap-0.5">
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-medium">{meta.label}</span>
-              {countBuilds(fileTree) > 0 ? (
-                <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                  {countBuilds(fileTree)}
+      <div className='flex items-start justify-between gap-2'>
+        <div className='flex items-center gap-2'>
+          <Icon className='size-4 shrink-0 text-muted-foreground' />
+          <div className='flex flex-col gap-0.5'>
+            <div className='flex items-center gap-2'>
+              <span className='text-sm font-medium'>{meta.label}</span>
+              {countProjects(fileTree) > 0 ? (
+                <span className='rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground'>
+                  {countProjects(fileTree)}
                 </span>
               ) : undefined}
             </div>
             {meta.key === 'webaccess' && webAccessState?.directoryName ? (
-              <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+              <span className='inline-flex items-center gap-1 text-xs text-muted-foreground'>
                 {webAccessState.directoryName} -{' '}
-                <Button variant="link" size="xs" className="h-auto p-0 text-xs" onClick={onChangeDirectory}>
+                <Button variant='link' size='xs' className='h-auto p-0 text-xs' onClick={onChangeDirectory}>
                   Change Directory
                 </Button>
               </span>
             ) : (
-              <span className="text-xs text-muted-foreground">{meta.description}</span>
+              <span className='text-xs text-muted-foreground'>{meta.description}</span>
             )}
           </div>
         </div>
-        <div className="flex items-center gap-1">
+        <div className='flex items-center gap-1'>
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
-                variant="ghost"
-                size="icon"
+                variant='ghost'
+                size='icon'
                 className={cn('size-7', isDefault && 'text-primary')}
                 disabled={isDisabled}
                 onClick={onSetDefault}
@@ -458,9 +452,9 @@ function BackendColumn({
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
-                variant="ghost"
-                size="icon"
-                className="size-7"
+                variant='ghost'
+                size='icon'
+                className='size-7'
                 disabled={isLoading || isDisabled}
                 onClick={onRefresh}
               >
@@ -483,19 +477,19 @@ function BackendColumn({
 
       {/* Unsupported banner */}
       {isDisabled ? (
-        <div className="flex flex-1 items-center justify-center rounded-md border border-dashed p-6 text-sm text-muted-foreground">
+        <div className='flex flex-1 items-center justify-center rounded-md border border-dashed p-6 text-sm text-muted-foreground'>
           Not supported in this browser
         </div>
       ) : (
-        <div className="min-h-0 flex-1 overflow-auto rounded-md border">
+        <div className='min-h-0 flex-1 overflow-auto rounded-md border'>
           {isLoading ? (
-            <div className="flex h-32 items-center justify-center">
-              <Loader className="size-6" />
+            <div className='flex h-32 items-center justify-center'>
+              <Loader className='size-6' />
             </div>
           ) : fileTree.length === 0 ? (
-            <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">No files found</div>
+            <div className='flex h-32 items-center justify-center text-sm text-muted-foreground'>No files found</div>
           ) : (
-            <Tree elements={fileTree} initialExpandedItems={findBuildsFolderIds(fileTree)}>
+            <Tree elements={fileTree} onExpand={onExpand}>
               {renderTree(fileTree, treeActionHandlers)}
             </Tree>
           )}
@@ -519,8 +513,8 @@ function WebAccessDirectoryPanel({
 }): React.JSX.Element | undefined {
   if (state.directoryName === undefined) {
     return (
-      <Button variant="outline" size="sm" className="gap-2" onClick={onConnect}>
-        <FolderOpen className="size-4" />
+      <Button variant='outline' size='sm' className='gap-2' onClick={onConnect}>
+        <FolderOpen className='size-4' />
         Connect Directory
       </Button>
     );
@@ -528,12 +522,12 @@ function WebAccessDirectoryPanel({
 
   if (state.needsPermission) {
     return (
-      <div className="border-amber-500/30 bg-amber-500/10 flex items-center justify-between gap-2 rounded-md border px-3 py-2">
-        <div className="flex items-center gap-2">
-          <FolderOpen className="text-amber-600 size-3.5 shrink-0" />
-          <span className="text-xs">{state.directoryName}</span>
+      <div className='border-amber-500/30 bg-amber-500/10 flex items-center justify-between gap-2 rounded-md border px-3 py-2'>
+        <div className='flex items-center gap-2'>
+          <FolderOpen className='text-amber-600 size-3.5 shrink-0' />
+          <span className='text-xs'>{state.directoryName}</span>
         </div>
-        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={onGrantAccess}>
+        <Button size='sm' variant='outline' className='h-7 text-xs' onClick={onGrantAccess}>
           Grant Access
         </Button>
       </div>
@@ -546,13 +540,14 @@ function WebAccessDirectoryPanel({
 // ============ Main Route Component ============
 
 export default function FilesRoute(): React.JSX.Element {
-  const [backendCookie, setBackendCookie] = useCookie(cookieName.filesystemBackend, 'indexeddb' as FilesystemBackend);
-  const { fileManagerRef, readFile, deleteFile, getZippedDirectory, readBackendFileTree } = useFileManager();
-  const { builds } = useBuilds();
+  const [backendCookie, setBackendCookie] = useCookie(cookieName.filesystemBackend, 'indexeddb' as FileSystemBackend);
+  const { fileManagerRef, readFile, deleteFile, getZippedDirectory, readShallowDirectory } = useFileManager();
+  const { projects } = useProjects();
 
-  // Per-column state
-  const [columnTrees, setColumnTrees] = useState<Record<string, TreeViewElement[]>>({});
-  const [columnLoading, setColumnLoading] = useState<Record<string, boolean>>({});
+  // Loaded directories per backend: backend → (directoryPath → FileTreeNode[])
+  const [loadedDirectories, setLoadedDirectories] = useState<Record<string, Map<string, FileTreeNode[]>>>({});
+  const [rootLoading, setRootLoading] = useState<Record<string, boolean>>({});
+  const inflightRef = useRef<Set<string>>(new Set());
   // WebAccess directory state
   const [webAccessState, setWebAccessState] = useState<WebAccessDirectoryState>({
     directoryName: undefined,
@@ -560,8 +555,8 @@ export default function FilesRoute(): React.JSX.Element {
     needsPermission: false,
   });
 
-  // Create a lookup map for builds by ID
-  const buildsMap = useMemo(() => new Map(builds.map((build) => [build.id, build])), [builds]);
+  // Create a lookup map for projects by ID
+  const projectsMap = useMemo(() => new Map(projects.map((project) => [project.id, project])), [projects]);
 
   // Check WebAccess handle status on mount
   useEffect(() => {
@@ -584,32 +579,115 @@ export default function FilesRoute(): React.JSX.Element {
     void checkWebAccess();
   }, []);
 
-  // Load a single backend's file tree
-  const loadColumnTree = useCallback(
-    async (backend: FilesystemBackend): Promise<void> => {
-      setColumnLoading((previous) => ({ ...previous, [backend]: true }));
+  // Load a directory lazily
+  const loadDirectory = useCallback(
+    async (backend: FileSystemBackend, directoryPath: string): Promise<void> => {
+      const inflightKey = `${backend}:${directoryPath}`;
+      if (inflightRef.current.has(inflightKey)) {
+        return;
+      }
+      inflightRef.current.add(inflightKey);
+
       try {
-        const nodes = await readBackendFileTree(backend);
-        const elements = toTreeViewElements(nodes);
-        setColumnTrees((previous) => ({ ...previous, [backend]: elements }));
+        const nodes = await readShallowDirectory(directoryPath, backend);
+        setLoadedDirectories((previous) => {
+          const backendDirectories = new Map(previous[backend] ?? []);
+          backendDirectories.set(directoryPath, nodes);
+          return { ...previous, [backend]: backendDirectories };
+        });
       } catch {
-        setColumnTrees((previous) => ({ ...previous, [backend]: [] }));
+        setLoadedDirectories((previous) => {
+          const backendDirectories = new Map(previous[backend] ?? []);
+          backendDirectories.set(directoryPath, []);
+          return { ...previous, [backend]: backendDirectories };
+        });
       } finally {
-        setColumnLoading((previous) => ({ ...previous, [backend]: false }));
+        inflightRef.current.delete(inflightKey);
       }
     },
-    [readBackendFileTree],
+    [readShallowDirectory],
+  );
+
+  // Build a tree from loaded directories
+  const projectTreeFromDirectories = useCallback(
+    (backend: FileSystemBackend): TreeViewElement[] => {
+      const directories = loadedDirectories[backend];
+      if (!directories) {
+        return [];
+      }
+
+      const buildSubtree = (nodes: FileTreeNode[]): TreeViewElement[] =>
+        nodes.map((node) => {
+          if (node.children !== undefined) {
+            const childEntries = directories.get(node.id);
+            return {
+              id: node.id,
+              name: node.name,
+              children: childEntries ? buildSubtree(childEntries) : [],
+            };
+          }
+          return { id: node.id, name: node.name };
+        });
+
+      const rootEntries = directories.get('/');
+      if (!rootEntries) {
+        return [];
+      }
+      return buildSubtree(rootEntries);
+    },
+    [loadedDirectories],
+  );
+
+  // Handle folder expansion for lazy loading
+  const handleExpand = useCallback(
+    (id: string, backend: FileSystemBackend) => {
+      const directories = loadedDirectories[backend];
+      if (directories?.has(id)) {
+        return;
+      }
+      void loadDirectory(backend, id);
+    },
+    [loadedDirectories, loadDirectory],
+  );
+
+  // Load root trees on mount
+  const loadColumnTree = useCallback(
+    async (backend: FileSystemBackend): Promise<void> => {
+      setRootLoading((previous) => ({ ...previous, [backend]: true }));
+      await loadDirectory(backend, '/');
+      setRootLoading((previous) => ({ ...previous, [backend]: false }));
+    },
+    [loadDirectory],
+  );
+
+  // Handle refresh: clear inflight tracking and re-fetch all loaded paths
+  const handleRefresh = useCallback(
+    (backend: FileSystemBackend) => {
+      // Clear inflight keys for this backend so they can be re-fetched
+      for (const key of inflightRef.current) {
+        if (key.startsWith(`${backend}:`)) {
+          inflightRef.current.delete(key);
+        }
+      }
+      const directories = loadedDirectories[backend];
+      if (!directories || directories.size === 0) {
+        void loadColumnTree(backend);
+        return;
+      }
+      for (const directoryPath of directories.keys()) {
+        void loadDirectory(backend, directoryPath);
+      }
+    },
+    [loadedDirectories, loadDirectory, loadColumnTree],
   );
 
   // Load all column trees on mount
   useEffect(() => {
     for (const column of backendColumns) {
       if (column.isSupported) {
-        // Skip webaccess if not connected
         if (column.key === 'webaccess' && !webAccessState.isConnected) {
           continue;
         }
-
         void loadColumnTree(column.key);
       }
     }
@@ -619,7 +697,7 @@ export default function FilesRoute(): React.JSX.Element {
 
   // Set default backend (just updates cookie, no directory picker prompt)
   const handleSetDefault = useCallback(
-    (backend: FilesystemBackend) => {
+    (backend: FileSystemBackend) => {
       setBackendCookie(backend);
     },
     [setBackendCookie],
@@ -639,9 +717,10 @@ export default function FilesRoute(): React.JSX.Element {
         isConnected: true,
         needsPermission: false,
       });
-      // Reload webaccess tree with the new directory
+      // Reload webaccess tree
+      setLoadedDirectories((previous) => ({ ...previous, webaccess: new Map() }));
       void loadColumnTree('webaccess');
-    } catch (error: unknown) {
+    } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') {
         return;
       }
@@ -664,6 +743,7 @@ export default function FilesRoute(): React.JSX.Element {
         isConnected: true,
         needsPermission: false,
       }));
+      setLoadedDirectories((previous) => ({ ...previous, webaccess: new Map() }));
       void loadColumnTree('webaccess');
     }
   }, [loadColumnTree]);
@@ -673,26 +753,25 @@ export default function FilesRoute(): React.JSX.Element {
     await handleConnectDirectory();
   }, [handleConnectDirectory]);
 
-  // Get rmdir function from the worker for recursive directory deletion
   const deleteDirectory = useCallback(
     async (path: string): Promise<void> => {
       const snapshot = fileManagerRef.getSnapshot();
-      const worker = snapshot.context.wrappedWorker;
-      if (!worker) {
+      const { proxy } = snapshot.context;
+      if (!proxy) {
         throw new Error('Worker not ready');
       }
 
-      const deleteRecursive = async (dirPath: string): Promise<void> => {
-        const entries = await worker.readdir(dirPath);
+      const deleteRecursive = async (directoryPath: string): Promise<void> => {
+        const entries = await proxy.readdir(directoryPath);
         for (const entry of entries) {
-          const fullPath = `${dirPath}/${entry}`.replace('//', '/');
-          // eslint-disable-next-line no-await-in-loop -- need sequential processing for correct deletion order
-          const stats = await worker.stat(fullPath);
-          // eslint-disable-next-line no-await-in-loop -- need sequential processing for correct deletion order
-          await (stats.type === 'dir' ? deleteRecursive(fullPath) : worker.unlink(fullPath));
+          const fullPath = joinPath(directoryPath, entry);
+          // oxlint-disable-next-line no-await-in-loop -- need sequential processing for correct deletion order
+          const stats = await proxy.stat(fullPath);
+          // oxlint-disable-next-line no-await-in-loop -- need sequential processing for correct deletion order
+          await (stats.type === 'dir' ? deleteRecursive(fullPath) : proxy.unlink(fullPath));
         }
 
-        await worker.rmdir(dirPath);
+        await proxy.rmdir(directoryPath);
       };
 
       await deleteRecursive(path);
@@ -700,18 +779,18 @@ export default function FilesRoute(): React.JSX.Element {
     [fileManagerRef],
   );
 
-  // Handle file deletion (refreshes all trees since we don't know which backend)
+  // Handle file deletion — invalidate parent directory in all backends
   const handleDeleteFile = useCallback(
     async (path: string) => {
       await deleteFile(path, { source: 'user' });
-      // Refresh all supported trees
+      const parentPath = parentDirectory(path);
       for (const column of backendColumns) {
         if (column.isSupported) {
-          void loadColumnTree(column.key);
+          void loadDirectory(column.key, parentPath);
         }
       }
     },
-    [deleteFile, loadColumnTree],
+    [deleteFile, loadDirectory],
   );
 
   // Handle file download
@@ -725,17 +804,18 @@ export default function FilesRoute(): React.JSX.Element {
     [readFile],
   );
 
-  // Handle folder deletion
+  // Handle folder deletion — invalidate parent directory
   const handleDeleteFolder = useCallback(
     async (path: string) => {
       await deleteDirectory(path);
+      const parentPath = parentDirectory(path);
       for (const column of backendColumns) {
         if (column.isSupported) {
-          void loadColumnTree(column.key);
+          void loadDirectory(column.key, parentPath);
         }
       }
     },
-    [deleteDirectory, loadColumnTree],
+    [deleteDirectory, loadDirectory],
   );
 
   // Handle folder download as ZIP
@@ -754,29 +834,29 @@ export default function FilesRoute(): React.JSX.Element {
     onDownloadFile: handleDownloadFile,
     onDeleteFolder: handleDeleteFolder,
     onDownloadFolderZip: handleDownloadFolderZip,
-    buildsMap,
+    projectsMap,
   };
 
   return (
-    <div className="flex h-full flex-col gap-4 px-6 py-8">
+    <div className='flex h-full flex-col gap-4 px-6 py-8'>
       {/* Header */}
-      <div className="flex items-center justify-between gap-4">
-        <h1 className="shrink-0 text-3xl font-medium tracking-tight">Files</h1>
+      <div className='flex items-center justify-between gap-4'>
+        <h1 className='shrink-0 text-3xl font-medium tracking-tight'>Files</h1>
       </div>
 
       {/* 3-column grid */}
-      <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[1fr] gap-4 overflow-hidden md:grid-cols-2">
+      <div className='grid min-h-0 flex-1 grid-cols-1 grid-rows-[1fr] gap-4 overflow-hidden md:grid-cols-3'>
         {backendColumns.map((column) => (
           <BackendColumn
             key={column.key}
             meta={column}
             isDefault={backendCookie === column.key}
             treeActionHandlers={treeActionHandlers}
-            fileTree={columnTrees[column.key] ?? []}
-            isLoading={columnLoading[column.key] ?? false}
+            fileTree={projectTreeFromDirectories(column.key)}
+            isLoading={rootLoading[column.key] ?? false}
             webAccessState={column.key === 'webaccess' ? webAccessState : undefined}
             onRefresh={() => {
-              void loadColumnTree(column.key);
+              handleRefresh(column.key);
             }}
             onSetDefault={() => {
               handleSetDefault(column.key);
@@ -784,6 +864,9 @@ export default function FilesRoute(): React.JSX.Element {
             onConnectDirectory={column.key === 'webaccess' ? handleConnectDirectory : undefined}
             onGrantAccess={column.key === 'webaccess' ? handleGrantAccess : undefined}
             onChangeDirectory={column.key === 'webaccess' ? handleChangeDirectory : undefined}
+            onExpand={(id) => {
+              handleExpand(id, column.key);
+            }}
           />
         ))}
       </div>

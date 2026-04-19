@@ -38,14 +38,16 @@ type PreviewGltfMeshProperties = {
  * - Uses a metallic MeshStandardMaterial instead of matcap
  * - Is optimized for showcase/preview scenarios
  *
- * @param gltfFile - The GLTF file to load
- * @param color - Material color (default: primary teal)
- * @param metalness - Material metalness (default: 0.7)
- * @param roughness - Material roughness (default: 0.2)
- * @param envMapIntensity - Environment map intensity (default: 1)
+ * @param props - The preview GLTF mesh properties
+ * @param props.gltfFile - The GLTF file to load
+ * @param props.color - Material color (default: primary teal)
+ * @param props.metalness - Material metalness (default: 0.7)
+ * @param props.roughness - Material roughness (default: 0.2)
+ * @param props.envMapIntensity - Environment map intensity (default: 1)
  */
 export function PreviewGltfMesh({
   gltfFile,
+  // oxlint-disable-next-line tau-lint/no-hardcoded-color -- Three.js material color
   color = '#14b8a6',
   metalness = 0.7,
   roughness = 0.2,
@@ -59,15 +61,7 @@ export function PreviewGltfMesh({
     const loadGltf = async (): Promise<void> => {
       try {
         const loader = new GLTFLoader();
-
-        if (typeof SharedArrayBuffer === 'function' && gltfFile.buffer instanceof SharedArrayBuffer) {
-          throw new TypeError('SharedArrayBuffer is not supported in <PreviewGltfMesh />');
-        }
-
-        const gltf = await loader.parseAsync(
-          gltfFile.buffer,
-          '', // Path (not needed for ArrayBuffer)
-        );
+        const gltf = await loader.parseAsync(gltfFile.buffer, '');
 
         // Apply metallic standard material to all meshes (no lines)
         const metallicMaterial = new THREE.MeshStandardMaterial({

@@ -19,6 +19,7 @@ export function MarkdownHyperlink({
   className,
   href,
   target: _target,
+  // oxlint-disable-next-line unicorn-js/prevent-abbreviations -- relative position shorthand
   rel: _rel,
   ...rest
 }: ComponentProps<'a'>): React.JSX.Element {
@@ -26,7 +27,7 @@ export function MarkdownHyperlink({
 
   if (isExternal && href) {
     return (
-      <ExternalLink href={href} className={className} arrowSize="xs" isArrowOnHoverOnly={false}>
+      <ExternalLink href={href} className={className} arrowSize='xs' isArrowOnHoverOnly={false}>
         {children}
       </ExternalLink>
     );
@@ -36,7 +37,11 @@ export function MarkdownHyperlink({
     <Link
       {...rest}
       to={href ?? ''}
-      className={cn(className, 'underline underline-offset-3 transition-all duration-200 hover:underline-offset-4')}
+      relative='path'
+      className={cn(
+        className,
+        'text-primary underline underline-offset-3 transition-all duration-200 hover:underline hover:underline-offset-4',
+      )}
     >
       {children}
     </Link>

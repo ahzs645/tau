@@ -147,9 +147,11 @@ export function SplitMorphingPoints({
   splitRatio = defaultAssemblySplitRatio,
   targetProgress,
   animationSpeed = 2,
+  /* oxlint-disable tau-lint/no-hardcoded-color -- Three.js point colors */
   sourceColor = '#5B8FD9',
   targetColorA = '#14b8a6',
   targetColorB = '#5B8FD9',
+  /* oxlint-enable tau-lint/no-hardcoded-color */
   pointSize = 2,
   explosionStrength = 2,
   opacity = 1,
@@ -281,8 +283,8 @@ export function SplitMorphingPoints({
 
   useFrame((state, delta) => {
     // Animate progress towards target
-    const progress = updateMorphAnimation(
-      {
+    const progress = updateMorphAnimation({
+      state: {
         progressRef: morphProgressRef,
         hasReachedTargetRef: morphHasReachedTargetRef,
         previousTargetRef: morphPreviousTargetRef,
@@ -290,10 +292,10 @@ export function SplitMorphingPoints({
       targetProgress,
       delta,
       animationSpeed,
-      () => {
-        onMorphComplete?.(0);
+      onComplete() {
+        onMorphComplete?.(sharedRotationRef?.current ?? 0);
       },
-    );
+    });
 
     // Notify parent of progress change (for animating assembly tilt)
     onProgressChange?.(progress);

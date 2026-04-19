@@ -1,61 +1,61 @@
 import type { PartialDeep } from 'type-fest';
 import deepmerge from 'deepmerge/index.js';
-import type { Build } from '@taucad/types';
+import type { Project } from '@taucad/types';
 import { idPrefix } from '@taucad/types/constants';
 import { generatePrefixedId } from '@taucad/utils/id';
 import type { StorageProvider } from '#types/storage.types.js';
 import { metaConfig } from '#constants/meta.constants.js';
 
 export class LocalStorageProvider implements StorageProvider {
-  private readonly buildsKey = `${metaConfig.databasePrefix}builds`;
+  private readonly projectsKey = `${metaConfig.databasePrefix}projects`;
 
-  public async createBuild(build: Omit<Build, 'id' | 'createdAt' | 'updatedAt'>): Promise<Build> {
-    const id = generatePrefixedId(idPrefix.build);
+  public async createProject(project: Omit<Project, 'id' | 'createdAt' | 'updatedAt'>): Promise<Project> {
+    const id = generatePrefixedId(idPrefix.project);
     const timestamp = Date.now();
-    const buildWithId = {
-      ...build,
+    const projectWithId = {
+      ...project,
       id,
       createdAt: timestamp,
       updatedAt: timestamp,
     };
-    const builds = this.getBuildsInternal();
-    builds.push(buildWithId);
-    this.saveBuilds(builds);
-    return buildWithId;
+    const projects = this.getProjectsInternal();
+    projects.push(projectWithId);
+    this.saveProjects(projects);
+    return projectWithId;
   }
 
-  public async updateBuild(
-    buildId: string,
-    update: PartialDeep<Build>,
+  public async updateProject(
+    projectId: string,
+    update: PartialDeep<Project>,
     options?: {
       /**
-       * Keys to ignore when merging the build
+       * Keys to ignore when merging the project
        */
       ignoreKeys?: string[];
     },
-  ): Promise<Build | undefined> {
-    const builds = this.getBuildsInternal();
-    const index = builds.findIndex((b) => b.id === buildId);
+  ): Promise<Project | undefined> {
+    const projects = this.getProjectsInternal();
+    const index = projects.findIndex((project) => project.id === projectId);
 
     if (index === -1) {
       return undefined;
     }
 
-    // If update contains an 'id' field matching buildId, treat it as a full build replacement
+    // If update contains an 'id' field matching projectId, treat it as a full project replacement
     // This is the new pattern from the parallel state machine refactor
-    const isBuild = 'id' in update && update.id === buildId;
+    const isProject = 'id' in update && update.id === projectId;
 
-    let updatedBuild: Build;
+    let updatedProject: Project;
 
-    if (isBuild) {
-      // Full build replacement - no merging needed
-      updatedBuild = update as Build;
+    if (isProject) {
+      // Full project replacement - no merging needed
+      updatedProject = update as Project;
     } else {
       // Partial update - use deepmerge for backward compatibility
       const mergeIgnoreKeys = new Set(options?.ignoreKeys ?? []);
 
-      updatedBuild = deepmerge(
-        builds[index]!,
+      updatedProject = deepmerge(
+        projects[index]!,
         { ...update, updatedAt: Date.now() },
         {
           customMerge(key) {
@@ -66,38 +66,38 @@ export class LocalStorageProvider implements StorageProvider {
             return undefined;
           },
         },
-      ) as Build;
+      ) as Project;
     }
 
-    builds[index] = updatedBuild;
-    this.saveBuilds(builds);
-    return updatedBuild;
+    projects[index] = updatedProject;
+    this.saveProjects(projects);
+    return updatedProject;
   }
 
-  public async getBuilds(): Promise<Build[]> {
-    return this.getBuildsInternal();
+  public async getProjects(): Promise<Project[]> {
+    return this.getProjectsInternal();
   }
 
-  public async getBuild(buildId: string): Promise<Build | undefined> {
-    const builds = this.getBuildsInternal();
-    return builds.find((b) => b.id === buildId);
+  public async getProject(projectId: string): Promise<Project | undefined> {
+    const projects = this.getProjectsInternal();
+    return projects.find((b) => b.id === projectId);
   }
 
-  public async deleteBuild(buildId: string): Promise<void> {
-    const builds = this.getBuildsInternal();
-    const index = builds.findIndex((b) => b.id === buildId);
+  public async deleteProject(projectId: string): Promise<void> {
+    const projects = this.getProjectsInternal();
+    const index = projects.findIndex((b) => b.id === projectId);
     if (index !== -1) {
-      builds.splice(index, 1);
-      this.saveBuilds(builds);
+      projects.splice(index, 1);
+      this.saveProjects(projects);
     }
   }
 
-  private getBuildsInternal(): Build[] {
-    const data = localStorage.getItem(this.buildsKey);
-    return data ? (JSON.parse(data) as Build[]) : [];
+  private getProjectsInternal(): Project[] {
+    const data = localStorage.getItem(this.projectsKey);
+    return data ? (JSON.parse(data) as Project[]) : [];
   }
 
-  private saveBuilds(builds: Build[]): void {
-    localStorage.setItem(this.buildsKey, JSON.stringify(builds));
+  private saveProjects(projects: Project[]): void {
+    localStorage.setItem(this.projectsKey, JSON.stringify(projects));
   }
 }

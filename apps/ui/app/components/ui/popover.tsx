@@ -3,11 +3,11 @@ import { Popover as PopoverPrimitive, Slot as SlotPrimitive } from 'radix-ui';
 import { cn } from '#utils/ui.utils.js';
 
 function Popover({ ...properties }: React.ComponentProps<typeof PopoverPrimitive.Root>): React.JSX.Element {
-  return <PopoverPrimitive.Root data-slot="popover" {...properties} />;
+  return <PopoverPrimitive.Root data-slot='popover' {...properties} />;
 }
 
 function PopoverTrigger({ ...properties }: React.ComponentProps<typeof PopoverPrimitive.Trigger>): React.JSX.Element {
-  return <PopoverPrimitive.Trigger data-slot="popover-trigger" {...properties} />;
+  return <PopoverPrimitive.Trigger data-slot='popover-trigger' {...properties} />;
 }
 
 function PopoverContent({
@@ -34,7 +34,7 @@ function PopoverContent({
   return (
     <Component>
       <PopoverPrimitive.Content
-        data-slot="popover-content"
+        data-slot='popover-content'
         align={align}
         sideOffset={sideOffset}
         className={cn(
@@ -48,7 +48,7 @@ function PopoverContent({
 }
 
 function PopoverAnchor({ ...properties }: React.ComponentProps<typeof PopoverPrimitive.Anchor>): React.JSX.Element {
-  return <PopoverPrimitive.Anchor data-slot="popover-anchor" {...properties} />;
+  return <PopoverPrimitive.Anchor data-slot='popover-anchor' {...properties} />;
 }
 
 export { Popover, PopoverTrigger, PopoverContent, PopoverAnchor };

@@ -30,7 +30,7 @@ export type KeyShortcutProperties = React.HTMLAttributes<HTMLSpanElement> &
  * Checks if a value is a string containing only alphanumeric characters
  */
 function isAlphanumericString(value: unknown): boolean {
-  return typeof value === 'string' && /^[a-zA-Z\d]+$/.test(value);
+  return typeof value === 'string' && /^[\dA-Za-z]+$/.test(value);
 }
 
 /**

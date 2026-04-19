@@ -8,20 +8,20 @@ import { z } from 'zod';
 
 // Define the schema for environment variables
 const environmentSchema = z.preprocess(
-  (env) => {
-    const rawEnv = env as Record<string, string | undefined>;
+  (environment) => {
+    const rawEnvironment = environment as Record<string, string | undefined>;
 
     // Extract base URL from NETLIFY_AI_GATEWAY_URL if TAU_FRONTEND_URL not set
     // NETLIFY_AI_GATEWAY_URL format: https://deploy-preview-XX--site.netlify.app/.netlify/ai
-    let frontendUrl = rawEnv['TAU_FRONTEND_URL'];
-    if (!frontendUrl && rawEnv['NETLIFY_AI_GATEWAY_URL']) {
+    let frontendUrl = rawEnvironment['TAU_FRONTEND_URL'];
+    if (!frontendUrl && rawEnvironment['NETLIFY_AI_GATEWAY_URL']) {
       // Use URL constructor to reliably extract origin (protocol + host)
-      const url = new URL(rawEnv['NETLIFY_AI_GATEWAY_URL']);
+      const url = new URL(rawEnvironment['NETLIFY_AI_GATEWAY_URL']);
       frontendUrl = url.origin;
     }
 
     return {
-      ...rawEnv,
+      ...rawEnvironment,
       // eslint-disable-next-line @typescript-eslint/naming-convention -- environment variable name
       TAU_FRONTEND_URL: frontendUrl,
     };
@@ -61,5 +61,7 @@ export const getEnvironment = async (): Promise<Environment> => {
 
 export type Environment = z.infer<typeof environmentSchema>;
 
-// eslint-disable-next-line @typescript-eslint/naming-convention, @typescript-eslint/no-unnecessary-condition -- easier to distinguish this constant with UPPER_CASE.
-export const ENV = globalThis.window ? globalThis.window.ENV : process.env;
+// eslint-disable-next-line @typescript-eslint/naming-convention -- easier to distinguish this constant with UPPER_CASE.
+export const ENV =
+  // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- globalThis.window can be undefined in SSR
+  globalThis.window ? globalThis.window.ENV : process.env;

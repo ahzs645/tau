@@ -26,22 +26,24 @@ type ValidatedConstants<T extends Record<string, string>> = {
  *
  * @returns The union of all values.
  *
- * @example
- * // ✅ Valid - compiles successfully
+ * @example <caption>Valid usage</caption>
+ * ```typescript
  * const headers = {
  *   requestId: 'request-id',
  *   userAgent: 'user-agent',
  * } as const;
  *
  * type HeaderValues = ConstantRecord<typeof headers>; // 'request-id' | 'user-agent'
+ * ```
  *
- * @example
- * // ❌ Invalid - shows red squiggly at declaration
+ * @example <caption>Invalid usage — compile error</caption>
+ * ```typescript
  * const badHeaders = {
  *   requestId: 'request-id',
  *   userAgent: 'User-Agent', // Will cause compile error
  * } as const;
  *
  * type BadHeaderValues = ConstantRecord<typeof badHeaders>; // Compile error
+ * ```
  */
 export type ConstantRecord<T extends ValidatedConstants<T> & Record<string, string>> = T[keyof T];

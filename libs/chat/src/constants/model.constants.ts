@@ -1,5 +1,6 @@
 /**
  * AI model providers.
+ * @public
  */
 export const modelProviders = [
   //
@@ -13,6 +14,7 @@ export const modelProviders = [
 
 /**
  * AI model families.
+ * @public
  */
 export const modelFamilies = [
   //

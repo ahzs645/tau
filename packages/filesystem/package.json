@@ -1,0 +1,65 @@
+{
+  "name": "@taucad/filesystem",
+  "version": "0.1.0",
+  "description": "Filesystem abstraction layer with watch-based reactivity for Tau",
+  "type": "module",
+  "private": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/taucad/tau.git",
+    "directory": "packages/filesystem"
+  },
+  "main": "./dist/cjs/index.cjs",
+  "types": "./dist/cjs/index.d.cts",
+  "module": "./dist/esm/index.js",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "keywords": [
+    "cad",
+    "filesystem",
+    "watch",
+    "reactive"
+  ],
+  "author": "Richard Fontein",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts",
+    "./providers": "./src/providers/index.ts"
+  },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "require": {
+          "types": "./dist/cjs/index.d.cts",
+          "default": "./dist/cjs/index.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/index.d.ts",
+          "default": "./dist/esm/index.js"
+        }
+      },
+      "./providers": {
+        "require": {
+          "types": "./dist/cjs/providers/index.d.cts",
+          "default": "./dist/cjs/providers/index.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/providers/index.d.ts",
+          "default": "./dist/esm/providers/index.js"
+        }
+      }
+    }
+  },
+  "imports": {
+    "#*": "./src/*"
+  },
+  "dependencies": {
+    "@taucad/memory": "workspace:*",
+    "@taucad/types": "workspace:*",
+    "@taucad/utils": "workspace:*",
+    "jszip": "^3.10.1"
+  }
+}

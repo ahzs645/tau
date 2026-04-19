@@ -6,8 +6,8 @@ type ComposeProperties = {
 export function Compose(props: ComposeProperties): React.ReactNode {
   const { components = [], children } = props;
 
-  // eslint-disable-next-line unicorn/no-array-reduce -- we want to compose the components from right to left.
-  return components.reduceRight((acc, Component) => {
-    return <Component>{acc}</Component>;
+  // oxlint-disable-next-line unicorn/no-array-reduce -- we want to compose the components from right to left.
+  return components.reduceRight((accumulator, Component) => {
+    return <Component>{accumulator}</Component>;
   }, children);
 }

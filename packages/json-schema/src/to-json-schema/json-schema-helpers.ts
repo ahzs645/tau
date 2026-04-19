@@ -4,6 +4,7 @@ type TypeChecker = (instance: unknown) => boolean;
 
 type FormatChecker = RegExp | ((input: string) => boolean);
 
+/** Mapping of JSON Schema type keywords to runtime type-checking predicates. */
 export const types: Record<string, TypeChecker> = {
   string(instance: unknown): boolean {
     return typeof instance === 'string';
@@ -43,18 +44,19 @@ export const types: Record<string, TypeChecker> = {
   },
 };
 
+/** Mapping of JSON Schema string format names to RegExp or predicate validators. */
 export const formatRegexps: Record<string, FormatChecker> = {
   'date-time':
-    /^\d{4}-(?:0\d|1[0-2])-(3[01]|0[1-9]|[12]\d)[tT ](2[0-4]|[01]\d):([0-5]\d):(60|[0-5]\d)(\.\d+)?([zZ]|[+-]([0-5]\d):(60|[0-5]\d))$/,
+    /^\d{4}-(?:0\d|1[0-2])-(3[01]|0[1-9]|[12]\d)[ Tt](2[0-4]|[01]\d):([0-5]\d):(60|[0-5]\d)(\.\d+)?([Zz]|[+-]([0-5]\d):(60|[0-5]\d))$/,
   date: /^\d{4}-(?:0\d|1[0-2])-(3[01]|0[1-9]|[12]\d)$/,
   time: /^(2[0-4]|[01]\d):([0-5]\d):(60|[0-5]\d)$/,
 
   email:
-    /^(?:[\w!#$%&'*+-/=?^`{|}~]+\.)*[\w!#$%&'*+-/=?^`{|}~]+@(?:(?:(?:[a-zA-Z\d](?:[a-zA-Z\d-](?!\.)){0,61}[a-zA-Z\d]?\.)+[a-zA-Z\d](?:[a-zA-Z\d-](?!$)){0,61}[a-zA-Z\d]?)|(?:\[(?:(?:[01]?\d{1,2}|2[0-4]\d|25[0-5])\.){3}(?:[01]?\d{1,2}|2[0-4]\d|25[0-5])]))$/,
+    /^(?:[\w!#$%&'*+-/=?^`{|}~]+\.)*[\w!#$%&'*+-/=?^`{|}~]+@(?:(?:(?:[\dA-Za-z](?:[\dA-Za-z-](?!\.)){0,61}[\dA-Za-z]?\.)+[\dA-Za-z](?:[\dA-Za-z-](?!$)){0,61}[\dA-Za-z]?)|(?:\[(?:(?:[01]?\d{1,2}|2[0-4]\d|25[0-5])\.){3}(?:[01]?\d{1,2}|2[0-4]\d|25[0-5])]))$/,
   'ip-address': /^(?:(?:25[0-5]|2[0-4]\d|[01]?\d{1,2})\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d{1,2})$/,
   // IPv6 regex - using a simpler pattern to avoid bundler parsing issues
   ipv6: /^(([\da-f]{1,4}:){7}[\da-f]{1,4}|([\da-f]{1,4}:){1,7}:|([\da-f]{1,4}:){1,6}:[\da-f]{1,4}|([\da-f]{1,4}:){1,5}(:[\da-f]{1,4}){1,2}|([\da-f]{1,4}:){1,4}(:[\da-f]{1,4}){1,3}|([\da-f]{1,4}:){1,3}(:[\da-f]{1,4}){1,4}|([\da-f]{1,4}:){1,2}(:[\da-f]{1,4}){1,5}|[\da-f]{1,4}:((:[\da-f]{1,4}){1,6})|:((:[\da-f]{1,4}){1,7}|:)|fe80:(:[\da-f]{0,4}){0,4}%[\da-z]+|::(ffff(:0{1,4}){0,1}:){0,1}((25[0-5]|(2[0-4]|1{0,1}\d){0,1}\d)\.){3}(25[0-5]|(2[0-4]|1{0,1}\d){0,1}\d)|([\da-f]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1{0,1}\d){0,1}\d)\.){3}(25[0-5]|(2[0-4]|1{0,1}\d){0,1}\d))$/i,
-  uri: /^[a-zA-Z][a-zA-Z\d+-.]*:\S*$/,
+  uri: /^[A-Za-z][\d+-.A-Za-z]*:\S*$/,
 
   color:
     /^(#?([\dA-Fa-f]{3}){1,2}\b|aqua|black|blue|fuchsia|gray|green|lime|maroon|navy|olive|orange|purple|red|silver|teal|white|yellow|(rgb\(\s*\b(\d|[1-9]\d|1\d\d|2[0-4]\d|25[0-5])\b\s*,\s*\b(\d|[1-9]\d|1\d\d|2[0-4]\d|25[0-5])\b\s*,\s*\b(\d|[1-9]\d|1\d\d|2[0-4]\d|25[0-5])\b\s*\))|(rgb\(\s*(\d?\d%|100%)+\s*,\s*(\d?\d%|100%)+\s*,\s*(\d?\d%|100%)+\s*\)))$/,
@@ -65,8 +67,8 @@ export const formatRegexps: Record<string, FormatChecker> = {
   'host-name':
     /^(?=.{1,255}$)[\dA-Za-z](?:(?:[\dA-Za-z]|-){0,61}[\dA-Za-z])?(?:\.[\dA-Za-z](?:(?:[\dA-Za-z]|-){0,61}[\dA-Za-z])?)*\.?$/,
 
-  alpha: /^[a-zA-Z]+$/,
-  alphanumeric: /^[a-zA-Z\d]+$/,
+  alpha: /^[A-Za-z]+$/,
+  alphanumeric: /^[\dA-Za-z]+$/,
   'utc-millisec'(input: string): boolean {
     return (
       typeof input === 'string' &&
@@ -77,7 +79,7 @@ export const formatRegexps: Record<string, FormatChecker> = {
   regex(input: string): boolean {
     let result = true;
     try {
-      // eslint-disable-next-line no-new -- Testing regex validity
+      // oxlint-disable-next-line no-new -- Testing regex validity
       new RegExp(input);
     } catch {
       result = false;
@@ -93,6 +95,13 @@ formatRegexps['regexp'] = formatRegexps['regex']!;
 formatRegexps['pattern'] = formatRegexps['regex']!;
 formatRegexps['ipv4'] = formatRegexps['ip-address']!;
 
+/**
+ * Tests whether a string value matches a recognized JSON Schema string format (date-time, email, uri, etc.).
+ *
+ * @param input - the value to test (non-string values always pass)
+ * @param format - the JSON Schema format name to validate against
+ * @returns `true` if the value matches the format or is not a string.
+ */
 export function isFormat(input: unknown, format: string): boolean {
   if (typeof input === 'string' && formatRegexps[format] !== undefined) {
     const formatChecker = formatRegexps[format];

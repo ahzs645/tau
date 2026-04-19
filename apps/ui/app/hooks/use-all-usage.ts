@@ -1,8 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { useMemo } from 'react';
-import type { Build } from '@taucad/types';
+import type { Project } from '@taucad/types';
 import type { Chat } from '@taucad/chat';
-import { useBuildManager } from '#hooks/use-build-manager.js';
+import { useProjectManager } from '#hooks/use-project-manager.js';
 import { useModels } from '#hooks/use-models.js';
 
 /**
@@ -14,8 +14,8 @@ export type UsageRecord = {
   model: string;
   modelName: string;
   provider: string;
-  buildId: string;
-  buildName: string;
+  projectId: string;
+  projectName: string;
   chatId: string;
   inputTokens: number;
   outputTokens: number;
@@ -29,13 +29,13 @@ export type UsageRecord = {
   totalCost: number;
 };
 
-type BuildWithChats = {
-  build: Build;
+type ProjectsWithChats = {
+  project: Project;
   chats: Chat[];
 };
 
 /**
- * Hook to aggregate all usage data across all builds and chats.
+ * Hook to aggregate all usage data across all projects and chats.
  * Extracts usage records from data-usage message parts and enriches them
  * with model display names and provider information.
  */
@@ -45,7 +45,7 @@ export function useAllUsage(): {
   error: Error | undefined;
   refetch: () => void;
 } {
-  const { getBuilds, getChatsForResource, isLoading: isBuildManagerLoading } = useBuildManager();
+  const { getProjects, getChatsForResource, isLoading: isProjectManagerLoading } = useProjectManager();
   const { data: models } = useModels();
 
   // Create a map for quick model lookup
@@ -63,21 +63,22 @@ export function useAllUsage(): {
     return map;
   }, [models]);
 
-  // Fetch all builds and their chats in a single query
+  // Fetch all projects and their chats in a single query
   const {
-    data: buildsWithChats = [],
+    data: projectsWithChats = [],
     isLoading: isDataLoading,
+    error: queryError,
     refetch,
   } = useQuery({
     queryKey: ['all-usage-data'],
-    async queryFn(): Promise<BuildWithChats[]> {
-      const builds = await getBuilds({ includeDeleted: false });
-      const results: BuildWithChats[] = [];
+    async queryFn(): Promise<ProjectsWithChats[]> {
+      const projects = await getProjects({ includeDeleted: false });
+      const results: ProjectsWithChats[] = [];
 
-      // Fetch chats for all builds in parallel
-      const chatsPromises = builds.map(async (build) => {
-        const chats = await getChatsForResource(build.id, { includeDeleted: false });
-        return { build, chats };
+      // Fetch chats for all projects in parallel
+      const chatsPromises = projects.map(async (project) => {
+        const chats = await getChatsForResource(project.id, { includeDeleted: false });
+        return { project, chats };
       });
 
       const settledResults = await Promise.all(chatsPromises);
@@ -85,19 +86,19 @@ export function useAllUsage(): {
 
       return results;
     },
-    enabled: !isBuildManagerLoading,
+    enabled: !isProjectManagerLoading,
     staleTime: 1000 * 60 * 5, // 5 minutes
   });
 
   // Extract and normalize usage records from all chats
   const records = useMemo((): UsageRecord[] => {
-    if (buildsWithChats.length === 0) {
+    if (projectsWithChats.length === 0) {
       return [];
     }
 
     const usageRecords: UsageRecord[] = [];
 
-    for (const { build, chats } of buildsWithChats) {
+    for (const { project, chats } of projectsWithChats) {
       for (const chat of chats) {
         // Extract usage parts from all messages in this chat
         const usageParts = chat.messages.flatMap((message) =>
@@ -116,8 +117,8 @@ export function useAllUsage(): {
             model: data.model,
             modelName: modelInfo?.name ?? data.model,
             provider: modelInfo?.provider ?? 'Unknown',
-            buildId: build.id,
-            buildName: build.name,
+            projectId: project.id,
+            projectName: project.name,
             chatId: chat.id,
             inputTokens: data.inputTokens,
             outputTokens: data.outputTokens,
@@ -138,18 +139,18 @@ export function useAllUsage(): {
     usageRecords.sort((a, b) => b.date.getTime() - a.date.getTime());
 
     return usageRecords;
-  }, [buildsWithChats, modelMap]);
+  }, [projectsWithChats, modelMap]);
 
   const handleRefetch = (): void => {
     void refetch();
   };
 
-  const isLoading = isBuildManagerLoading || isDataLoading;
+  const isLoading = isProjectManagerLoading || isDataLoading;
 
   return {
     records,
     isLoading,
-    error: undefined,
+    error: queryError instanceof Error ? queryError : undefined,
     refetch: handleRefetch,
   };
 }

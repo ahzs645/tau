@@ -128,16 +128,16 @@ export function ComboBoxResponsive<T>({
       <DrawerRoot open={open} onOpenChange={handleOpenChange}>
         <DrawerTrigger asChild>{children}</DrawerTrigger>
         <DrawerContent
-          aria-labelledby="drawer-title"
-          aria-describedby="drawer-description"
+          aria-labelledby='drawer-title'
+          aria-describedby='drawer-description'
           {...properties}
           {...drawerProperties}
-          className={cn(className, drawerProperties?.className)}
+          className={cn('[&_[data-slot=command]]:bg-transparent', className, drawerProperties?.className)}
         >
-          <DrawerTitle className="sr-only" id="drawer-title">
+          <DrawerTitle className='sr-only' id='drawer-title'>
             {title}
           </DrawerTitle>
-          <DrawerDescription className="sr-only" id="drawer-description">
+          <DrawerDescription className='sr-only' id='drawer-description'>
             {description}
           </DrawerDescription>
           <ItemList
@@ -232,13 +232,16 @@ function ItemList<T>({
   // Flatten all items from all groups for virtualization, including group headers
   const flattenedItems = React.useMemo((): FlatItem[] => {
     return groupedItems.flatMap((group) => [
-      { type: 'header' as const, groupName: group.name },
-      ...group.items.map((item) => ({
-        type: 'item' as const,
-        item,
-        groupName: group.name,
-        value: getValue(item),
-      })),
+      { type: 'header', groupName: group.name } as const,
+      ...group.items.map(
+        (item) =>
+          ({
+            type: 'item',
+            item,
+            groupName: group.name,
+            value: getValue(item),
+          }) as const,
+      ),
     ]);
   }, [groupedItems, getValue]);
 
@@ -280,7 +283,7 @@ function ItemList<T>({
       // Render group header
       if (itemData.type === 'header') {
         return (
-          <div key={`header-${itemData.groupName}`} className="px-2 py-1.5 text-xs font-medium text-muted-foreground">
+          <div key={`header-${itemData.groupName}`} className='px-2 py-1.5 text-xs font-medium text-muted-foreground'>
             {itemData.groupName}
           </div>
         );
@@ -326,16 +329,16 @@ function ItemList<T>({
               // absolute positioning used for virtualization. Use Header/Footer for vertical
               // spacing instead.
               components={{
-                List: (properties) => <div {...properties} className="px-1" />,
-                Header: () => <div className="h-1" />,
+                List: (properties) => <div {...properties} className='px-1' />,
+                Header: () => <div className='h-1' />,
                 Footer: isLoadingMore
                   ? () => (
-                      <div className="flex items-center gap-2 p-2 text-sm text-muted-foreground">
+                      <div className='flex items-center gap-2 p-2 text-sm text-muted-foreground'>
                         <Loader />
                         <span>Loading more...</span>
                       </div>
                     )
-                  : () => <div className="h-1" />,
+                  : () => <div className='h-1' />,
               }}
             />
           )}

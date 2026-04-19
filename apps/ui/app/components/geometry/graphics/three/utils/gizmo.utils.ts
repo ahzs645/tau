@@ -33,6 +33,7 @@ import {
  * silent no-op if the internal structure changes.
  */
 export function syncGizmoFov(gizmo: ViewportGizmo, cameraFovAngle: number): void {
+  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- accessing private _camera property; no public FOV API exists
   const internalCamera = (gizmo as unknown as { _camera: THREE.PerspectiveCamera })._camera;
   if (!(internalCamera instanceof THREE.PerspectiveCamera)) {
     return;
@@ -112,12 +113,17 @@ export function createGizmoRenderer(canvas: HTMLCanvasElement, size: number): TH
  * canvas from the DOM, and forces WebGL context loss to prevent GPU context
  * exhaustion.
  */
-export function disposeGizmoResources(
-  gizmo: ViewportGizmo,
-  renderer: THREE.WebGLRenderer,
-  canvas: HTMLCanvasElement,
-  handleChange: () => void,
-): void {
+export function disposeGizmoResources({
+  gizmo,
+  renderer,
+  canvas,
+  handleChange,
+}: {
+  gizmo: ViewportGizmo;
+  renderer: THREE.WebGLRenderer;
+  canvas: HTMLCanvasElement;
+  handleChange: () => void;
+}): void {
   gizmo.removeEventListener('change', handleChange);
   gizmo.dispose();
 

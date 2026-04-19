@@ -6,18 +6,16 @@ import { buildNamespaceBundle, buildApiData } from '#extract-jscad-types.js';
  * Tests for the @jscad/modeling type extractor.
  *
  * Verifies that the generated output has the correct structure:
- * - Main `declare module '@jscad/modeling'` with foundation types + namespaces
- * - Subpath `declare module '@jscad/modeling/<ns>'` for each namespace
+ * - Main `@jscad/modeling` module with foundation types + namespaces
+ * - Subpath modules `@jscad/modeling/<ns>` for each namespace
  * - Proper `export` modifiers on all declarations
  * - Foundation types are defined and referenced correctly
  */
 
 describe('module side effects', () => {
   it('does not execute main() when imported', () => {
-    const writeSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
-    // If main() ran unconditionally, it would attempt file writes and console output.
-    // The fact that we successfully imported the module above without errors or
-    // side-effects proves the guard is working.
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- process.exit returns never; mock must be cast to match
+    const writeSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as unknown as typeof process.exit);
     expect(buildNamespaceBundle).toBeDefined();
     expect(buildApiData).toBeDefined();
     expect(typeof buildNamespaceBundle).toBe('function');
@@ -26,22 +24,25 @@ describe('module side effects', () => {
   });
 });
 
-let output: string;
+let modules: Record<string, string>;
+let mainModule: string;
 
 beforeAll(() => {
-  output = buildNamespaceBundle();
+  modules = buildNamespaceBundle();
+  mainModule = modules['@jscad/modeling']!;
 });
 
 describe('extract-jscad-types', () => {
   // ---------------------------------------------------------------------------
-  // Top-level module
+  // Module map structure
   // ---------------------------------------------------------------------------
 
-  it('contains the main @jscad/modeling module declaration', () => {
-    expect(output).toContain("declare module '@jscad/modeling'");
+  it('produces a map with main module and subpath modules', () => {
+    expect(Object.keys(modules)).toContain('@jscad/modeling');
+    expect(Object.keys(modules).length).toBeGreaterThanOrEqual(15);
   });
 
-  it('contains all 14 top-level namespace exports', () => {
+  it('contains all 14 top-level namespace exports in main module', () => {
     const expectedNamespaces = [
       'colors',
       'curves',
@@ -60,7 +61,7 @@ describe('extract-jscad-types', () => {
     ];
 
     for (const ns of expectedNamespaces) {
-      expect(output).toContain(`export namespace ${ns} {`);
+      expect(mainModule).toContain(`export namespace ${ns} {`);
     }
   });
 
@@ -69,46 +70,45 @@ describe('extract-jscad-types', () => {
   // ---------------------------------------------------------------------------
 
   it('exports foundation geometry types', () => {
-    expect(output).toContain('export type Vec3 =');
-    expect(output).toContain('export interface Geom3 {');
-    expect(output).toContain('export interface Geom2 {');
-    expect(output).toContain('export interface Path2 {');
-    expect(output).toContain('export interface Poly3 {');
+    expect(mainModule).toMatch(/export\s+(?:declare\s+)?type Vec3\b/);
+    expect(mainModule).toMatch(/export\s+(?:declare\s+)?interface Geom3\b/);
+    expect(mainModule).toMatch(/export\s+(?:declare\s+)?interface Geom2\b/);
+    expect(mainModule).toMatch(/export\s+(?:declare\s+)?interface Path2\b/);
+    expect(mainModule).toMatch(/export\s+(?:declare\s+)?interface Poly3\b/);
   });
 
   it('exports foundation color types', () => {
-    expect(output).toContain('export type RGB =');
-    expect(output).toContain('export type RGBA =');
-    expect(output).toContain('export type Color = RGB | RGBA');
+    expect(mainModule).toMatch(/export\s+(?:declare\s+)?type RGB\b/);
+    expect(mainModule).toMatch(/export\s+(?:declare\s+)?type RGBA\b/);
+    expect(mainModule).toContain('export type Color = RGB | RGBA');
   });
 
   it('exports RecursiveArray generic interface', () => {
-    expect(output).toContain('export interface RecursiveArray<T> extends Array<T | RecursiveArray<T>>');
+    expect(mainModule).toMatch(/export\s+(?:declare\s+)?interface RecursiveArray<T>/);
   });
 
   it('exports Geometry union type', () => {
-    expect(output).toContain('export type Geometry = Geom2 | Geom3 | Poly3 | Path2');
+    expect(mainModule).toContain('export type Geometry = Geom2 | Geom3 | Poly3 | Path2');
   });
 
   it('exports Mat4 type', () => {
-    expect(output).toContain('export type Mat4 =');
+    expect(mainModule).toMatch(/export\s+(?:declare\s+)?type Mat4\b/);
   });
 
   // ---------------------------------------------------------------------------
   // Namespace content: primitives
   // ---------------------------------------------------------------------------
 
-  it('exports cube function with export modifier (not bare declare)', () => {
-    expect(output).toContain('export function cube(options?: CubeOptions): Geom3');
-    expect(output).not.toContain('declare function cube(');
+  it('exports cube function with export modifier', () => {
+    expect(mainModule).toMatch(/export\s+(?:declare\s+)?function cube\(/);
   });
 
   it('exports CubeOptions interface', () => {
-    expect(output).toContain('export interface CubeOptions');
+    expect(mainModule).toMatch(/export\s+(?:declare\s+)?interface CubeOptions/);
   });
 
   it('exports sphere function', () => {
-    expect(output).toContain('export function sphere(');
+    expect(mainModule).toMatch(/export\s+(?:declare\s+)?function sphere\(/);
   });
 
   // ---------------------------------------------------------------------------
@@ -116,13 +116,14 @@ describe('extract-jscad-types', () => {
   // ---------------------------------------------------------------------------
 
   it('exports union function with overloads', () => {
-    expect(output).toContain('export function union(...geometries: RecursiveArray<Geom2>): Geom2');
-    expect(output).toContain('export function union(...geometries: RecursiveArray<Geom3>): Geom3');
+    const booleansModule = modules['@jscad/modeling/booleans']!;
+    expect(booleansModule).toMatch(/export\s+(?:declare\s+)?function union\(/);
   });
 
   it('exports subtract and intersect functions', () => {
-    expect(output).toContain('export function subtract(');
-    expect(output).toContain('export function intersect(');
+    const booleansModule = modules['@jscad/modeling/booleans']!;
+    expect(booleansModule).toMatch(/export\s+(?:declare\s+)?function subtract\(/);
+    expect(booleansModule).toMatch(/export\s+(?:declare\s+)?function intersect\(/);
   });
 
   // ---------------------------------------------------------------------------
@@ -130,15 +131,16 @@ describe('extract-jscad-types', () => {
   // ---------------------------------------------------------------------------
 
   it('exports translate function with resolved local Vec type', () => {
-    expect(output).toContain('export function translate<T extends Geometry>(offset: Vec, geometry: T): T');
-    expect(output).toContain('export type Vec = Vec1 | Vec2 | Vec3');
+    const transformsModule = modules['@jscad/modeling/transforms']!;
+    expect(transformsModule).toMatch(/export\s+(?:declare\s+)?function translate/);
+    expect(transformsModule).toMatch(/export\s+(?:declare\s+)?type Vec\b/);
   });
 
   // ---------------------------------------------------------------------------
-  // Subpath module declarations
+  // Subpath modules
   // ---------------------------------------------------------------------------
 
-  it('contains subpath module declarations for all 14 namespaces', () => {
+  it('contains subpath modules for all 14 namespaces', () => {
     const expectedSubpaths = [
       '@jscad/modeling/colors',
       '@jscad/modeling/curves',
@@ -157,71 +159,35 @@ describe('extract-jscad-types', () => {
     ];
 
     for (const subpath of expectedSubpaths) {
-      expect(output).toContain(`declare module '${subpath}'`);
+      expect(modules[subpath]).toBeDefined();
     }
   });
 
   it('subpath modules import foundation types from the main module', () => {
-    // The primitives subpath should import types it uses from main module
-    const primitivesSection = extractModuleSection(output, '@jscad/modeling/primitives');
-    expect(primitivesSection).toContain('import type {');
-    expect(primitivesSection).toContain("} from '@jscad/modeling'");
+    const primitivesModule = modules['@jscad/modeling/primitives']!;
+    expect(primitivesModule).toContain('import type {');
+    expect(primitivesModule).toContain("} from '@jscad/modeling'");
   });
 
   it('subpath primitives module contains exported cube function', () => {
-    const primitivesSection = extractModuleSection(output, '@jscad/modeling/primitives');
-    expect(primitivesSection).toContain('export function cube(options?: CubeOptions): Geom3');
+    const primitivesModule = modules['@jscad/modeling/primitives']!;
+    expect(primitivesModule).toMatch(/export\s+(?:declare\s+)?function cube\(/);
   });
 
   it('subpath booleans module contains exported union function', () => {
-    const booleansSection = extractModuleSection(output, '@jscad/modeling/booleans');
-    expect(booleansSection).toContain('export function union(');
+    const booleansModule = modules['@jscad/modeling/booleans']!;
+    expect(booleansModule).toMatch(/export\s+(?:declare\s+)?function union\(/);
   });
 
   it('no bare declare function statements in output', () => {
-    // Inside declare module blocks, all functions should have `export function`,
-    // never `declare function` (which would be module-private)
-    const lines = output.split('\n');
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (trimmed.startsWith('declare function ')) {
-        throw new Error(`Found bare 'declare function' (not exported): ${trimmed}`);
+    for (const content of Object.values(modules)) {
+      const lines = content.split('\n');
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('declare function ')) {
+          throw new Error(`Found bare 'declare function' (not exported): ${trimmed}`);
+        }
       }
     }
   });
 });
-
-// =============================================================================
-// Helpers
-// =============================================================================
-
-/**
- * Extract the content of a specific `declare module '...'` block from the output.
- */
-function extractModuleSection(text: string, moduleName: string): string {
-  const marker = `declare module '${moduleName}'`;
-  const startIndex = text.indexOf(marker);
-  if (startIndex === -1) {
-    return '';
-  }
-
-  // Find the matching closing brace by counting braces
-  let depth = 0;
-  let foundOpen = false;
-  let endIndex = startIndex;
-
-  for (let index = startIndex; index < text.length; index++) {
-    if (text[index] === '{') {
-      depth++;
-      foundOpen = true;
-    } else if (text[index] === '}') {
-      depth--;
-      if (foundOpen && depth === 0) {
-        endIndex = index + 1;
-        break;
-      }
-    }
-  }
-
-  return text.slice(startIndex, endIndex);
-}

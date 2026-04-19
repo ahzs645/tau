@@ -1,9 +1,11 @@
+import { inflateRawSync } from 'node:zlib';
 import { expect, describe, it, beforeEach } from 'vitest';
 import type { InspectReport } from '@gltf-transform/functions';
+import type { ExportFile } from '@taucad/types';
 import { importFiles } from '#import.js';
-import { exportFiles, supportedExportFormats } from '#export.js';
-import type { SupportedExportFormat } from '#export.js';
-import type { File } from '#types.js';
+import { exportFiles } from '#export.js';
+import type { SupportedExportFormat } from '#formats.js';
+import { supportedExportFormats } from '#formats.js';
 import { loadFixture } from '#test.utils.js';
 import { getInspectReport } from '#gltf.utils.js';
 
@@ -70,7 +72,7 @@ const performRoundTripTest = async (
   glbData: Uint8Array<ArrayBuffer>,
   format: SupportedExportFormat,
 ): Promise<{
-  exportedFiles: File[];
+  exportedFiles: ExportFile[];
   roundTripGlbData: Uint8Array<ArrayBuffer>;
   comparison: InspectComparison;
 }> => {
@@ -97,10 +99,9 @@ const performRoundTripTest = async (
     };
   }
 
-  // Convert OutputFiles to InputFiles for re-import
-  const inputFiles: File[] = exportedFiles.map((file) => ({
+  const inputFiles = exportedFiles.map((file) => ({
     name: file.name,
-    data: file.data,
+    bytes: file.bytes,
   }));
 
   // Re-import the exported files
@@ -191,7 +192,7 @@ const assertPositionAttribute = (comparison: InspectComparison, shouldHave: bool
   expect(roundTrip.meshes.properties.length).toBeGreaterThan(0);
 
   const mesh = roundTrip.meshes.properties[0]!;
-  const hasPosition = mesh.attributes.some((attr) => attr.toLowerCase().includes('position'));
+  const hasPosition = mesh.attributes.some((attribute) => attribute.toLowerCase().includes('position'));
 
   if (shouldHave) {
     expect(hasPosition).toBe(true);
@@ -210,7 +211,7 @@ const assertNormalAttribute = (comparison: InspectComparison, shouldHave: boolea
   expect(roundTrip.meshes.properties.length).toBeGreaterThan(0);
 
   const mesh = roundTrip.meshes.properties[0]!;
-  const hasNormal = mesh.attributes.some((attr) => attr.toLowerCase().includes('normal'));
+  const hasNormal = mesh.attributes.some((attribute) => attribute.toLowerCase().includes('normal'));
 
   if (shouldHave) {
     expect(hasNormal).toBe(true);
@@ -230,7 +231,7 @@ const assertUvAttribute = (comparison: InspectComparison, shouldHave: boolean): 
 
   const mesh = roundTrip.meshes.properties[0]!;
   const hasUv = mesh.attributes.some(
-    (attr) => attr.toLowerCase().includes('texcoord') || attr.toLowerCase().includes('uv'),
+    (attribute) => attribute.toLowerCase().includes('texcoord') || attribute.toLowerCase().includes('uv'),
   );
 
   if (shouldHave) {
@@ -250,13 +251,13 @@ const assertAdditionalAttributeCount = (comparison: InspectComparison, expectedC
   expect(roundTrip.meshes.properties.length).toBeGreaterThan(0);
 
   const mesh = roundTrip.meshes.properties[0]!;
-  const standardAttributes = mesh.attributes.filter((attr) => {
-    const attrLower = attr.toLowerCase();
+  const standardAttributes = mesh.attributes.filter((attribute) => {
+    const attributeLower = attribute.toLowerCase();
     return (
-      attrLower.includes('position') ||
-      attrLower.includes('normal') ||
-      attrLower.includes('texcoord') ||
-      attrLower.includes('uv')
+      attributeLower.includes('position') ||
+      attributeLower.includes('normal') ||
+      attributeLower.includes('texcoord') ||
+      attributeLower.includes('uv')
     );
   });
 
@@ -372,16 +373,34 @@ const exportTestCases: ExportTestCase[] = [
     expectedFiles: {
       expectedNames: ['model.gltf', 'buffer.bin'],
     },
+    expectations: {
+      geometry: {
+        ...standardGeometryExpectations,
+        boundingBoxTolerance: 0.005 as number,
+      },
+    },
   }),
   createExportTestCase('glb', {
     expectedFiles: {
       expectedNames: ['model.glb'],
+    },
+    expectations: {
+      geometry: {
+        ...standardGeometryExpectations,
+        boundingBoxTolerance: 0.005 as number,
+      },
     },
   }),
 
   // Formats that add default materials
   createExportTestCase('dae', {
     expectations: {
+      materials: multiMaterialExpectations,
+    },
+  }),
+  createExportTestCase('3mf', {
+    expectations: {
+      geometry: { hasNormalAttribute: false },
       materials: multiMaterialExpectations,
     },
   }),
@@ -398,6 +417,9 @@ const exportTestCases: ExportTestCase[] = [
       materials: multiMaterialExpectations,
     },
   }),
+
+  createExportTestCase('usda'),
+  createExportTestCase('usdz'),
 
   // STP Format - CAD format with limited capabilities and may subdivide geometry
   createExportTestCase('step', {
@@ -429,7 +451,7 @@ describe('exportFiles', () => {
       }
 
       let glbData: Uint8Array<ArrayBuffer>;
-      let exportedFiles: File[];
+      let exportedFiles: ExportFile[];
       let roundTripGlbData: Uint8Array<ArrayBuffer>;
       let comparison: InspectComparison;
 
@@ -467,8 +489,8 @@ describe('exportFiles', () => {
       it('should have valid file data', () => {
         for (const file of exportedFiles) {
           expect(file.name).toBeTruthy();
-          expect(file.data).toBeInstanceOf(Uint8Array);
-          expect(file.data.length).toBeGreaterThan(0);
+          expect(file.bytes).toBeInstanceOf(Uint8Array);
+          expect(file.bytes.length).toBeGreaterThan(0);
         }
       });
 
@@ -553,3 +575,105 @@ describe('exportFiles', () => {
     await expect(exportFiles(emptyGlbData, 'glb')).rejects.toThrow('GLB data cannot be empty');
   });
 });
+
+// ============================================================================
+// 3MF Export Options Tests
+// ============================================================================
+
+/**
+ * Extract the `3D/3dmodel.model` XML from a 3MF ZIP archive (ExportFile bytes).
+ */
+const extract3mfModelXml = (bytes: Uint8Array<ArrayBuffer>): string => {
+  const buf = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let offset = 0;
+
+  while (offset + 30 <= buf.length) {
+    const sig = buf.readUInt32LE(offset);
+    if (sig !== 0x04_03_4b_50) {
+      break;
+    }
+
+    const compressionMethod = buf.readUInt16LE(offset + 8);
+    const compressedSize = buf.readUInt32LE(offset + 18);
+    const nameLength = buf.readUInt16LE(offset + 26);
+    const extraLength = buf.readUInt16LE(offset + 28);
+    const name = buf.toString('utf8', offset + 30, offset + 30 + nameLength);
+    const dataStart = offset + 30 + nameLength + extraLength;
+    const dataEnd = dataStart + compressedSize;
+
+    if (name === '3D/3dmodel.model' || name === '/3D/3dmodel.model') {
+      const raw = buf.subarray(dataStart, dataEnd);
+      if (compressionMethod === 8) {
+        return inflateRawSync(raw).toString('utf8');
+      }
+      return raw.toString('utf8');
+    }
+    offset = dataEnd;
+  }
+
+  throw new Error('3D/3dmodel.model not found in 3MF ZIP archive');
+};
+
+/* eslint-disable @typescript-eslint/naming-convention -- Assimp export property keys use CONSTANT_CASE */
+describe('3MF export options', () => {
+  let glbData: Uint8Array<ArrayBuffer>;
+
+  beforeEach(() => {
+    glbData = loadFixture('cube.glb');
+  });
+
+  it('should default to millimeter unit', async () => {
+    const files = await exportFiles(glbData, '3mf');
+    const xml = extract3mfModelXml(files[0]!.bytes);
+
+    expect(xml).toContain('unit="millimeter"');
+  });
+
+  it('should set centimeter unit via exportProperties', async () => {
+    const files = await exportFiles(glbData, '3mf', {
+      '3MF_EXPORT_UNIT': 'centimeter',
+    });
+    const xml = extract3mfModelXml(files[0]!.bytes);
+
+    expect(xml).toContain('unit="centimeter"');
+  });
+
+  it('should set inch unit via exportProperties', async () => {
+    const files = await exportFiles(glbData, '3mf', {
+      '3MF_EXPORT_UNIT': 'inch',
+    });
+    const xml = extract3mfModelXml(files[0]!.bytes);
+
+    expect(xml).toContain('unit="inch"');
+  });
+
+  it('should set Application metadata via exportProperties', async () => {
+    const files = await exportFiles(glbData, '3mf', {
+      '3MF_EXPORT_APPLICATION': 'PrusaSlicer 2.8',
+    });
+    const xml = extract3mfModelXml(files[0]!.bytes);
+
+    expect(xml).toContain('name="Application"');
+    expect(xml).toContain('PrusaSlicer 2.8');
+  });
+
+  it('should omit Application metadata when not specified', async () => {
+    const files = await exportFiles(glbData, '3mf');
+    const xml = extract3mfModelXml(files[0]!.bytes);
+
+    expect(xml).not.toContain('name="Application"');
+  });
+
+  it('should set both unit and application together', async () => {
+    const files = await exportFiles(glbData, '3mf', {
+      '3MF_EXPORT_UNIT': 'meter',
+      '3MF_EXPORT_APPLICATION': 'BambuStudio 1.9',
+    });
+    const xml = extract3mfModelXml(files[0]!.bytes);
+
+    expect(xml).toContain('unit="meter"');
+    expect(xml).toContain('name="Application"');
+    expect(xml).toContain('BambuStudio 1.9');
+  });
+});
+/* eslint-enable @typescript-eslint/naming-convention -- re-enable after 3MF tests */

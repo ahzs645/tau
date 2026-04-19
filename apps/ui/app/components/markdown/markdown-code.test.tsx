@@ -16,7 +16,7 @@ vi.mock('#components/ui/collapsible-code-block.js', () => ({
     readonly className: string;
   }) => (
     <div
-      data-testid="collapsible-code-block"
+      data-testid='collapsible-code-block'
       data-language={language}
       data-title={title}
       data-text={text}
@@ -37,7 +37,7 @@ vi.mock('#components/code/code-block.js', () => ({
     readonly children: React.ReactNode;
     readonly className?: string;
   }) => (
-    <code data-testid="inline-code" className={className} {...rest}>
+    <code data-testid='inline-code' className={className} {...rest}>
       {children}
     </code>
   ),
@@ -84,41 +84,41 @@ describe('extractLanguageFromClassName', () => {
 describe('MarkdownCode', () => {
   describe('code blocks (with language)', () => {
     it('renders CollapsibleCodeBlock when language class is present', () => {
-      render(<MarkdownCode className="language-typescript">const x = 1;</MarkdownCode>);
+      render(<MarkdownCode className='language-typescript'>const x = 1;</MarkdownCode>);
 
       expect(screen.getByTestId('collapsible-code-block')).toBeInTheDocument();
     });
 
     it('passes language to CollapsibleCodeBlock', () => {
-      render(<MarkdownCode className="language-python">print(&quot;hello&quot;)</MarkdownCode>);
+      render(<MarkdownCode className='language-python'>print(&quot;hello&quot;)</MarkdownCode>);
 
       const codeBlock = screen.getByTestId('collapsible-code-block');
       expect(codeBlock).toHaveAttribute('data-language', 'python');
     });
 
     it('passes language as title to CollapsibleCodeBlock', () => {
-      render(<MarkdownCode className="language-rust">fn main() {}</MarkdownCode>);
+      render(<MarkdownCode className='language-rust'>fn main() {}</MarkdownCode>);
 
       const codeBlock = screen.getByTestId('collapsible-code-block');
       expect(codeBlock).toHaveAttribute('data-title', 'rust');
     });
 
     it('passes text content to CollapsibleCodeBlock', () => {
-      render(<MarkdownCode className="language-javascript">console.log(&quot;test&quot;)</MarkdownCode>);
+      render(<MarkdownCode className='language-javascript'>console.log(&quot;test&quot;)</MarkdownCode>);
 
       const codeBlock = screen.getByTestId('collapsible-code-block');
       expect(codeBlock).toHaveAttribute('data-text', 'console.log("test")');
     });
 
     it('strips trailing newline from text', () => {
-      render(<MarkdownCode className="language-javascript">{'const x = 1;\n'}</MarkdownCode>);
+      render(<MarkdownCode className='language-javascript'>{'const x = 1;\n'}</MarkdownCode>);
 
       const codeBlock = screen.getByTestId('collapsible-code-block');
       expect(codeBlock).toHaveAttribute('data-text', 'const x = 1;');
     });
 
     it('passes className to CollapsibleCodeBlock', () => {
-      render(<MarkdownCode className="language-go custom-class">package main</MarkdownCode>);
+      render(<MarkdownCode className='language-go custom-class'>package main</MarkdownCode>);
 
       const codeBlock = screen.getByTestId('collapsible-code-block');
       expect(codeBlock).toHaveClass('language-go', 'custom-class');
@@ -133,7 +133,7 @@ describe('MarkdownCode', () => {
     });
 
     it('renders InlineCode with className that has no language prefix', () => {
-      render(<MarkdownCode className="some-class">inline code</MarkdownCode>);
+      render(<MarkdownCode className='some-class'>inline code</MarkdownCode>);
 
       expect(screen.getByTestId('inline-code')).toBeInTheDocument();
     });
@@ -145,14 +145,14 @@ describe('MarkdownCode', () => {
     });
 
     it('passes className to InlineCode', () => {
-      render(<MarkdownCode className="custom-inline-class">code</MarkdownCode>);
+      render(<MarkdownCode className='custom-inline-class'>code</MarkdownCode>);
 
       const inlineCode = screen.getByTestId('inline-code');
       expect(inlineCode).toHaveClass('custom-inline-class');
     });
 
     it('passes additional props to InlineCode', () => {
-      render(<MarkdownCode data-custom="value">code</MarkdownCode>);
+      render(<MarkdownCode data-custom='value'>code</MarkdownCode>);
 
       const inlineCode = screen.getByTestId('inline-code');
       expect(inlineCode).toHaveAttribute('data-custom', 'value');

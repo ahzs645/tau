@@ -31,7 +31,7 @@ function Badge({
   VariantProps<typeof badgeVariants> & { readonly asChild?: boolean }): React.JSX.Element {
   const Comp = asChild ? SlotPrimitive.Slot : 'span';
 
-  return <Comp data-slot="badge" className={cn(badgeVariants({ variant }), className)} {...properties} />;
+  return <Comp data-slot='badge' className={cn(badgeVariants({ variant }), className)} {...properties} />;
 }
 
 export { Badge, badgeVariants };

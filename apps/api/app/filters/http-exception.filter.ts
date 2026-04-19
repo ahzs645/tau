@@ -4,6 +4,7 @@ import type { ArgumentsHost, ExceptionFilter } from '@nestjs/common';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { ZodSerializationException, ZodValidationException } from 'nestjs-zod';
 import { ZodError } from 'zod';
+import { trace, SpanStatusCode, context as otelContext } from '@opentelemetry/api';
 import type { HttpErrorResponse } from '@taucad/types';
 import { httpHeader } from '#constants/http-header.constant.js';
 
@@ -12,9 +13,9 @@ export class HttpExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(HttpExceptionFilter.name);
 
   public catch(exception: unknown, host: ArgumentsHost): void {
-    const ctx = host.switchToHttp();
-    const response = ctx.getResponse<FastifyReply>();
-    const request = ctx.getRequest<FastifyRequest>();
+    const context = host.switchToHttp();
+    const response = context.getResponse<FastifyReply>();
+    const request = context.getRequest<FastifyRequest>();
 
     // Extract request ID: prefer header if present, otherwise use Fastify's generated ID
     const headerRequestId = request.headers[httpHeader.requestId] as string | undefined;
@@ -109,6 +110,14 @@ export class HttpExceptionFilter implements ExceptionFilter {
     // Log error details
     if (statusCode >= 500) {
       this.logger.error(exception, `Unhandled exception: ${errorResponse.error}`);
+
+      const span = trace.getSpan(otelContext.active());
+      if (span) {
+        span.setStatus({ code: SpanStatusCode.ERROR, message: errorResponse.error });
+        if (exception instanceof Error) {
+          span.recordException(exception);
+        }
+      }
     } else if (statusCode >= 400) {
       this.logger.warn(`Client error: ${errorResponse.error}`);
     }

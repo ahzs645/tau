@@ -57,16 +57,17 @@ export class ModuleResolver {
   }
 
   private async resolveRelative(specifier: string, fromPath: string): Promise<ResolveResult | undefined> {
-    const dir = fromPath.slice(0, Math.max(0, fromPath.lastIndexOf('/'))) || '';
-    const basePath = this.normalizePath(`${dir}/${specifier}`);
+    const directory = fromPath.slice(0, Math.max(0, fromPath.lastIndexOf('/'))) || '';
+    const basePath = this.normalizePath(`${directory}/${specifier}`);
 
     // Extension resolution order (common TypeScript project conventions)
     const extensions = ['', '.ts', '.tsx', '.js', '.jsx', '/index.ts', '/index.tsx', '/index.js', '/index.jsx'];
 
     // Try each extension until we find a match (sequential is intentional for short-circuit)
+    // oxlint-disable-next-line unicorn-js/prevent-abbreviations -- ext is conventional abbreviation for extension
     for (const ext of extensions) {
       const fullPath = basePath + ext;
-      // eslint-disable-next-line no-await-in-loop -- Sequential checks to short-circuit on first match
+      // oxlint-disable-next-line no-await-in-loop -- Sequential checks to short-circuit on first match
       if (await this.fileManager.exists(fullPath)) {
         return {
           resolvedPath: `/${fullPath}`,

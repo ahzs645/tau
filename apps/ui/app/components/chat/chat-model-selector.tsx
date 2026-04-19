@@ -67,10 +67,10 @@ export const ChatModelSelector = memo(function ({
       {...properties}
       className="data-[slot='popover-content']:w-[300px]"
       popoverProperties={properties.popoverProperties}
-      emptyListMessage="No models found."
-      searchPlaceHolder="Search models..."
-      title="Select a model"
-      description="Select the model to use for the chat. This will be used to generate a response."
+      emptyListMessage='No models found.'
+      searchPlaceHolder='Search models...'
+      title='Select a model'
+      description='Select the model to use for the chat. This will be used to generate a response.'
       groupedItems={[...providerModelsMap.entries()].map(([provider, models]) => ({
         name: provider,
         items: models,
@@ -78,14 +78,14 @@ export const ChatModelSelector = memo(function ({
       renderLabel={(item, selectedItem) => (
         <HoverCard>
           <HoverCardTrigger asChild>
-            <span className="flex w-full items-center justify-between">
-              <div className="flex items-center gap-2">
+            <span className='flex w-full items-center justify-between'>
+              <div className='flex items-center gap-2'>
                 <SvgIcon id={item.details.family} />
                 <span>{item.name}</span>
               </div>
-              <div className="flex items-center gap-2">
+              <div className='flex items-center gap-2'>
                 {item.details.parameterSize ? (
-                  <Badge variant="outline" className="bg-background">
+                  <Badge variant='outline' className='bg-background'>
                     {item.details.parameterSize}
                   </Badge>
                 ) : null}
@@ -93,22 +93,22 @@ export const ChatModelSelector = memo(function ({
               </div>
             </span>
           </HoverCardTrigger>
-          <HoverCardContent side="right" align="start" sideOffset={12} alignOffset={-4} className="w-72">
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <SvgIcon id={item.details.family} className="size-5 shrink-0" />
-                <h4 className="text-sm font-semibold">
+          <HoverCardContent side='right' align='start' sideOffset={12} alignOffset={-4} className='w-72'>
+            <div className='space-y-2'>
+              <div className='flex items-center gap-2'>
+                <SvgIcon id={item.details.family} className='size-5 shrink-0' />
+                <h4 className='text-sm font-semibold'>
                   {item.provider.name} {item.name}
                 </h4>
               </div>
-              {item.description ? <p className="text-sm text-muted-foreground">{item.description}</p> : null}
+              {item.description ? <p className='text-sm text-muted-foreground'>{item.description}</p> : null}
               {item.details.contextWindow ? (
-                <p className="text-xs text-muted-foreground">
+                <p className='text-xs text-muted-foreground'>
                   {formatContextWindow(item.details.contextWindow)} context window
                 </p>
               ) : null}
               {item.details.cost ? (
-                <p className="text-xs text-muted-foreground">
+                <p className='text-xs text-muted-foreground'>
                   Cost: {formatCost(item.details.cost.inputTokens)} input / {formatCost(item.details.cost.outputTokens)}{' '}
                   output per 1M tokens
                 </p>
@@ -118,7 +118,7 @@ export const ChatModelSelector = memo(function ({
         </HoverCard>
       )}
       getValue={(item) => item.id}
-      placeholder="Select a model"
+      placeholder='Select a model'
       defaultValue={selectedModel}
       isNested={isNested}
       onSelect={handleSelectModel}

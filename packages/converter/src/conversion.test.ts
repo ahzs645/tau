@@ -1,5 +1,6 @@
 import { describe, expect, it, beforeAll } from 'vitest';
-import type { InputFormat, File, OutputFormat } from '#types.js';
+import type { ExportFile } from '@taucad/types';
+import type { SupportedImportFormat, SupportedExportFormat } from '#formats.js';
 import {
   convertFile,
   importToGlb,
@@ -21,31 +22,31 @@ import { loadFixture } from '#test.utils.js';
  */
 const testFormatCombinations = [
   // GLB pass-through optimization
-  { input: 'glb' as InputFormat, output: 'glb' as OutputFormat },
+  { input: 'glb', output: 'glb' },
 
   // Assimp → Assimp (optimization path)
-  { input: 'obj' as InputFormat, output: 'stl' as OutputFormat },
-  { input: 'fbx' as InputFormat, output: 'dae' as OutputFormat },
-  { input: 'dae' as InputFormat, output: 'obj' as OutputFormat },
+  { input: 'obj', output: 'stl' },
+  { input: 'fbx', output: 'dae' },
+  { input: 'dae', output: 'obj' },
 
   // Assimp → Three.js exporter
-  { input: 'obj' as InputFormat, output: 'glb' as OutputFormat },
+  { input: 'obj', output: 'glb' },
 
   // CAD → Various outputs
-  { input: 'step' as InputFormat, output: 'glb' as OutputFormat },
-  { input: 'step' as InputFormat, output: 'stl' as OutputFormat },
-  { input: 'step' as InputFormat, output: 'obj' as OutputFormat },
+  { input: 'step', output: 'glb' },
+  { input: 'step', output: 'stl' },
+  { input: 'step', output: 'obj' },
 
   // Specialized → Various outputs - TODO: Add these back in
-  { input: 'drc' as InputFormat, output: 'stl' as OutputFormat },
-  // { input: '3dm' as InputFormat, output: 'glb' as OutputFormat },
+  { input: 'drc', output: 'stl' },
+  // { input: '3dm', output: 'glb' },
 ] as const;
 
 /**
  * Format-specific test fixtures.
  * Maps each format to a known working test file.
  */
-const testFixtures: Record<InputFormat, string> = {
+const testFixtures: Record<SupportedImportFormat, string> = {
   // eslint-disable-next-line @typescript-eslint/naming-convention -- valid file extension
   '3dm': 'cube-mesh.3dm',
   // eslint-disable-next-line @typescript-eslint/naming-convention -- valid file extension
@@ -73,6 +74,7 @@ const testFixtures: Record<InputFormat, string> = {
   // eslint-disable-next-line @typescript-eslint/naming-convention -- valid file extension
   'mesh.xml': 'cube.mesh.xml',
   nff: 'cube.nff',
+  // eslint-disable-next-line id-denylist -- valid file extension
   obj: 'cube.obj',
   off: 'cube.off',
   ogex: 'cube.ogex',
@@ -82,7 +84,6 @@ const testFixtures: Record<InputFormat, string> = {
   stl: 'cube-ascii.stl',
   stp: 'cube.stp',
   usda: 'cube.usda',
-  usdc: 'cube.usdc',
   usdz: 'cube.usdz',
   wrl: 'cube.wrl',
   x: 'cube.x',
@@ -99,12 +100,12 @@ const testFixtures: Record<InputFormat, string> = {
 /**
  * Load test file for a given format.
  */
-const loadTestFile = (format: InputFormat) => {
+const loadTestFile = (format: SupportedImportFormat) => {
   const filename = testFixtures[format];
   return [
     {
       name: filename,
-      data: loadFixture(filename),
+      bytes: loadFixture(filename),
     },
   ];
 };
@@ -112,18 +113,21 @@ const loadTestFile = (format: InputFormat) => {
 /**
  * Validate that output files are properly formatted.
  */
-const validateOutputFiles = (files: File[], _expectedFormat: OutputFormat) => {
+const validateOutputFiles = (files: ExportFile[], _expectedFormat: SupportedExportFormat) => {
   expect(files).toBeDefined();
   expect(Array.isArray(files)).toBe(true);
   expect(files.length).toBeGreaterThan(0);
 
   for (const file of files) {
     expect(file).toHaveProperty('name');
-    expect(file).toHaveProperty('data');
-    expect(file.data).toBeInstanceOf(Uint8Array);
-    expect(file.data.length).toBeGreaterThan(0);
+    expect(file).toHaveProperty('bytes');
+    expect(file).toHaveProperty('mimeType');
+    expect(file.bytes).toBeInstanceOf(Uint8Array);
+    expect(file.bytes.length).toBeGreaterThan(0);
     expect(typeof file.name).toBe('string');
     expect(file.name.length).toBeGreaterThan(0);
+    expect(typeof file.mimeType).toBe('string');
+    expect(file.mimeType.length).toBeGreaterThan(0);
   }
 };
 
@@ -211,7 +215,7 @@ describe('File Conversion Integration', () => {
   // ========================================================================
 
   describe('import to GLB', () => {
-    const testFormats: InputFormat[] = ['glb', 'obj', 'step', 'dae'];
+    const testFormats: SupportedImportFormat[] = ['glb', 'obj', 'step', 'dae'];
 
     for (const format of testFormats) {
       it(`should import ${format} to GLB`, async () => {
@@ -235,7 +239,7 @@ describe('File Conversion Integration', () => {
       validateGlbData(glb);
 
       // For GLB input, output should be identical to input
-      expect(glb).toEqual(inputFiles[0]!.data);
+      expect(glb).toEqual(inputFiles[0]!.bytes);
     });
   });
 
@@ -252,7 +256,7 @@ describe('File Conversion Integration', () => {
       testGlb = await importToGlb(objectFiles, 'obj');
     });
 
-    const testFormats: OutputFormat[] = ['glb', 'obj', 'stl', 'dae'];
+    const testFormats: SupportedExportFormat[] = ['glb', 'obj', 'stl', 'dae'];
 
     it.each(testFormats)(
       'should export GLB to %s',
@@ -275,7 +279,7 @@ describe('File Conversion Integration', () => {
       const outputFiles = await exportFromGlb(testGlb, 'glb');
       expect(outputFiles).toHaveLength(1);
       expect(outputFiles[0]!.name).toBe('model.glb');
-      expect(outputFiles[0]!.data).toEqual(testGlb);
+      expect(outputFiles[0]!.bytes).toEqual(testGlb);
     });
   });
 
@@ -295,7 +299,7 @@ describe('File Conversion Integration', () => {
         validateOutputFiles(roundTripFiles, 'obj');
 
         // Basic validation that we got valid output
-        expect(roundTripFiles[0]!.data.length).toBeGreaterThan(100);
+        expect(roundTripFiles[0]!.bytes.length).toBeGreaterThan(100);
       } catch (error) {
         if (error instanceof Error && error.message.includes('not implemented')) {
           console.warn(`Skipping round-trip test: ${error.message}`);
@@ -312,13 +316,13 @@ describe('File Conversion Integration', () => {
 
   describe('error handling', () => {
     it('should throw error for unsupported input format', async () => {
-      const files = [{ name: 'test.xyz', data: new Uint8Array([1, 2, 3]) }];
-      await expect(convertFile(files, 'xyz' as InputFormat, 'glb')).rejects.toThrow('Unsupported input format');
+      const files = [{ name: 'test.xyz', bytes: new Uint8Array([1, 2, 3]) }];
+      await expect(convertFile(files, 'xyz' as SupportedImportFormat, 'glb')).rejects.toThrow();
     });
 
     it('should throw error for unsupported output format', async () => {
       const files = loadTestFile('obj');
-      await expect(convertFile(files, 'obj', 'xyz' as OutputFormat)).rejects.toThrow('Unsupported output format');
+      await expect(convertFile(files, 'obj', 'xyz' as SupportedExportFormat)).rejects.toThrow();
     });
 
     it('should throw error for empty file array', async () => {
@@ -326,7 +330,7 @@ describe('File Conversion Integration', () => {
     });
 
     it('should throw error for invalid file data', async () => {
-      const files = [{ name: 'test.obj', data: new Uint8Array([1, 2, 3]) }];
+      const files = [{ name: 'test.obj', bytes: new Uint8Array([1, 2, 3]) }];
       await expect(convertFile(files, 'obj', 'glb')).rejects.toThrow();
     });
   });

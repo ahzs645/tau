@@ -9,7 +9,7 @@ import {
   closeAllPanelsInGroup,
   copyPathToClipboard,
 } from '#components/panes/tab-context-menu-actions.js';
-import { useBuild } from '#hooks/use-build.js';
+import { useProject } from '#hooks/use-project.js';
 import { withTabContextMenu } from '#components/panes/with-tab-context-menu.js';
 
 type ViewerPanelParameters = {
@@ -25,7 +25,7 @@ type ViewerPanelParameters = {
  */
 function ViewerTabContextMenu(properties: IDockviewPanelHeaderProps): React.JSX.Element {
   const { api, containerApi } = properties;
-  const { editorRef } = useBuild();
+  const { editorRef } = useProject();
 
   const entryFile = (properties.params as ViewerPanelParameters | undefined)?.entryFile;
 

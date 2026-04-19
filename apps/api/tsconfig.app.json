@@ -11,22 +11,5 @@
     "erasableSyntaxOnly": false // Incompatible with NestJS dependency injection.
   },
   "include": ["app/**/*.ts"],
-  "exclude": ["app/**/*.spec.ts", "app/**/*.test.ts"],
-  "references": [
-    {
-      "path": "../../libs/utils/tsconfig.lib.json"
-    },
-    {
-      "path": "../../libs/chat/tsconfig.lib.json"
-    },
-    {
-      "path": "../../libs/api-extractor/tsconfig.lib.json"
-    },
-    {
-      "path": "../../libs/tau-examples/tsconfig.lib.json"
-    },
-    {
-      "path": "../../libs/types/tsconfig.lib.json"
-    }
-  ]
+  "exclude": ["app/**/*.spec.ts", "app/**/*.test.ts"]
 }

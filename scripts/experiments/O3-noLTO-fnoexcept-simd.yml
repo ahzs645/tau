@@ -1,0 +1,26 @@
+name: 'v8-O3-noLTO-noexcept-simd'
+description: 'R1 experiment: No_Exception define eliminates all Raise_if macro paths + SIMD + wasm-opt O4'
+
+compilation:
+  optimization: '-O3'
+  lto: false
+  exceptions: 'none'
+  threading: 'single-threaded'
+  defines: ['OCCT_NO_DUMP', 'No_Exception']
+  undefines: ['OCC_CONVERT_SIGNALS']
+
+linking:
+  yaml: 'custom_build_single_v8.yml'
+  wasmOptLevel: '-O4'
+
+optimizations:
+  closure: true
+  evalCtors: true
+  evalCtorsLevel: 2
+  converge: true
+  patchDump: true
+  simd: true
+  bigint: true
+
+benchmark:
+  iterations: 50

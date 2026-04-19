@@ -19,6 +19,7 @@ RUN corepack enable
 WORKDIR /app
 COPY pnpm-lock.yaml ./
 COPY patches/ ./patches/
+COPY tarballs/ ./tarballs/
 RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store pnpm fetch --frozen-lockfile
 COPY package.json ./
 COPY . .
@@ -34,5 +35,6 @@ FROM base
 WORKDIR /app
 COPY --from=pruned /app/pruned /app
 ENV NODE_ENV="production"
-EXPOSE 3000
+ENV NODE_OPTIONS="--import /app/dist/telemetry/otel.js"
+EXPOSE 3000 9464
 CMD [ "node", "/app/dist/main.js" ]

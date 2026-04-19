@@ -1,0 +1,6 @@
+{
+  "name": "@taucad/workspace-plugin",
+  "type": "module",
+  "private": true,
+  "generators": "./generators.json"
+}

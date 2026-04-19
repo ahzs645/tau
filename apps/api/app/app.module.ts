@@ -9,6 +9,7 @@ import { getEnvironment } from '#config/environment.config.js';
 import { ApiModule } from '#api/api.module.js';
 import { LoggerModule } from '#logger/logger.module.js';
 import { RedisModule } from '#redis/redis.module.js';
+import { TelemetryModule } from '#telemetry/telemetry.module.js';
 import { RequestIdMiddleware } from '#middlewares/request-id.middleware.js';
 import { HttpExceptionFilter } from '#filters/http-exception.filter.js';
 
@@ -16,7 +17,8 @@ import { HttpExceptionFilter } from '#filters/http-exception.filter.js';
   imports: [
     ApiModule,
     DatabaseModule,
-    RedisModule, // @Global() - makes RedisService available everywhere
+    TelemetryModule, // @Global() — must precede RedisModule (RedisService depends on MetricsService)
+    RedisModule, // @Global() — makes RedisService available everywhere
     AuthModule.forRootAsync(),
     ConfigModule.forRoot({ validate: getEnvironment, isGlobal: true }),
     LoggerModule,

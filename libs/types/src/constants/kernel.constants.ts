@@ -57,6 +57,28 @@ export default function main(p = defaultParams) {}
     features: ['Exact geometry', 'TypeScript API', 'CAD operations', 'STEP export'],
   },
   {
+    id: 'manifold',
+    name: 'Manifold',
+    dimensions: [2, 3],
+    language: 'typescript',
+    description: 'Fast mesh-focused CAD with robust booleans',
+    mainFile: 'main.ts',
+    backendProvider: 'manifold',
+    longDescription:
+      'Manifold is a high-performance geometry kernel focused on topological robustness and mesh-first workflows. It is ideal for boolean-heavy modeling, procedural generation, and browser-native CAD experiences.',
+    emptyCode: `import { Manifold } from 'manifold-3d/manifoldCAD';
+
+export const defaultParams = { size: 20 };
+
+export default function main(p = defaultParams) {
+  return Manifold.cube([p.size, p.size, p.size], true);
+}
+`,
+    recommended: 'Procedural & Mesh-First CAD',
+    tags: ['TypeScript', 'Robust Booleans', 'Mesh Kernel', 'WASM', 'Browser-Native'],
+    features: ['Fast booleans', 'Robust topology', 'WASM runtime', 'GLTF-native scene output'],
+  },
+  {
     id: 'zoo',
     name: 'Zoo (KCL)',
     dimensions: [3],
@@ -103,6 +125,39 @@ export default function main(p = defaultParams) {
       'ES module architecture',
     ],
   },
+  {
+    id: 'opencascadejs',
+    name: 'OpenCascade',
+    dimensions: [2, 3],
+    language: 'typescript',
+    description: 'Direct OpenCASCADE API for advanced CAD',
+    mainFile: 'main.ts',
+    backendProvider: 'opencascade',
+    longDescription:
+      'Direct access to the OpenCASCADE Technology (OCCT) kernel via opencascade.js. Full control over BRep operations, precise geometry, and advanced CAD algorithms without abstraction layers.',
+    emptyCode: `import { BRepPrimAPI_MakeBox } from 'opencascade.js';
+
+export const defaultParams = { width: 20, height: 20, depth: 20 };
+
+export default function main(p = defaultParams) {
+  const box = new BRepPrimAPI_MakeBox(p.width, p.height, p.depth);
+  try {
+    return box.Shape();
+  } finally {
+    box.delete();
+  }
+}
+`,
+    recommended: 'Advanced CAD & Full Kernel Access',
+    tags: ['OpenCASCADE', 'BRep', 'TypeScript', 'WASM', 'Precision'],
+    features: [
+      'Full OpenCascade API access',
+      'BRep kernel',
+      'STEP/STL export',
+      'Advanced boolean operations',
+      'Precise tolerancing',
+    ],
+  },
 ] as const satisfies KernelConfiguration[];
 
 export type KernelId = (typeof kernelConfigurations)[number]['id'];
@@ -113,11 +168,11 @@ export const kernelProviders = kernelConfigurations.map((option) => option.id) a
 
 export const backendProviders = kernelConfigurations.map((option) => option.backendProvider) as [KernelBackendProvider];
 
-// eslint-disable-next-line unicorn/no-array-reduce -- we know the keys are unique
+// oxlint-disable-next-line unicorn/no-array-reduce -- we know the keys are unique
 export const languageFromKernel = kernelConfigurations.reduce(
-  (acc, option: KernelConfiguration) => {
-    acc[option.id as KernelId] = option.language;
-    return acc;
+  (accumulator, option: KernelConfiguration) => {
+    accumulator[option.id as KernelId] = option.language;
+    return accumulator;
   },
   {} as Record<KernelId, CodeLanguage>,
 );

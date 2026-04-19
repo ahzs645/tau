@@ -5,60 +5,60 @@ import { useLocation } from 'react-router';
 import type { UIMatch } from 'react-router';
 import { useCommandPaletteItems } from '#components/layout/command-palette.js';
 import type { CommandPaletteItem } from '#components/layout/command-palette.js';
-import { useBuilds } from '#hooks/use-builds.js';
+import { useProjects } from '#hooks/use-projects.js';
 import { useAuthLinks } from '#hooks/use-auth-links.js';
 import { openSettingsDialog } from '#hooks/use-settings-dialog.js';
 
 export function RootCommandPaletteItems({ match }: { readonly match: UIMatch }): undefined {
   const { data: authData } = useAuthenticate({ enabled: false });
-  const { builds } = useBuilds();
+  const { projects } = useProjects();
   const { signIn, signOut } = useAuthLinks();
   const location = useLocation();
 
-  // Extract current build ID from pathname (e.g., /builds/abc123)
-  const currentBuildId = location.pathname.startsWith('/builds/') ? location.pathname.split('/')[2] : undefined;
+  // Extract current project ID from pathname (e.g., /projects/abc123)
+  const currentProjectId = location.pathname.startsWith('/projects/') ? location.pathname.split('/')[2] : undefined;
 
-  // Filter out current build, sort by most recent, and take first 5
-  const recentBuilds = useMemo(
+  // Filter out current project, sort by most recent, and take first 5
+  const recentProjects = useMemo(
     () =>
-      builds
-        .filter((build) => build.id !== currentBuildId)
+      projects
+        .filter((project) => project.id !== currentProjectId)
         .sort((a, b) => b.updatedAt - a.updatedAt)
         .slice(0, 5),
-    [builds, currentBuildId],
+    [projects, currentProjectId],
   );
 
   useCommandPaletteItems(
     match.id,
     (): CommandPaletteItem[] => [
       {
-        id: 'new-build-from-prompt',
-        label: 'New build (from chat)',
-        group: 'Builds',
+        id: 'new-project-from-prompt',
+        label: 'New project (from chat)',
+        group: 'Projects',
         icon: <MessageCircle />,
         link: '/',
         shortcut: '⌃N',
       },
       {
-        id: 'new-build-from-code',
-        label: 'New build (from code)',
-        group: 'Builds',
+        id: 'new-project-from-code',
+        label: 'New project (from code)',
+        group: 'Projects',
         icon: <Code2 />,
-        link: '/builds/new',
+        link: '/projects/new',
       },
       {
-        id: 'all-builds',
-        label: 'All builds',
-        group: 'Builds',
+        id: 'all-projects',
+        label: 'All projects',
+        group: 'Projects',
         icon: <List />,
-        link: '/builds/library',
+        link: '/projects/library',
       },
-      ...recentBuilds.map((build) => ({
-        id: `recent-build-${build.id}`,
-        label: build.name,
+      ...recentProjects.map((project) => ({
+        id: `recent-project-${project.id}`,
+        label: project.name,
         group: 'Recent',
         icon: <History />,
-        link: `/builds/${build.id}`,
+        link: `/projects/${project.id}`,
       })),
       {
         id: 'open-settings',
@@ -87,7 +87,7 @@ export function RootCommandPaletteItems({ match }: { readonly match: UIMatch }):
         visible: Boolean(authData),
       },
     ],
-    [authData, recentBuilds, signIn, signOut],
+    [authData, recentProjects, signIn, signOut],
   );
 
   return undefined;

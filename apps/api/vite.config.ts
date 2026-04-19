@@ -5,7 +5,8 @@ import { defineConfig } from 'vite';
 import { nxViteTsPaths } from '@nx/vite/plugins/nx-tsconfig-paths.plugin';
 import { viteStaticCopy } from 'vite-plugin-static-copy';
 import { VitePluginNode as vitePluginNode } from 'vite-plugin-node';
-import swc from 'unplugin-swc';
+import { oxcRuntimeEsm } from '@taucad/vite/oxc-runtime-esm';
+import { tsModuleUrlServePlugin } from '@taucad/vite/ts-module-url';
 import { corsBaseConfiguration } from '#constants/cors.constant.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -28,6 +29,8 @@ export default defineConfig(({ mode }) => {
       },
     },
     plugins: [
+      oxcRuntimeEsm(),
+      tsModuleUrlServePlugin(),
       nxViteTsPaths(),
       viteStaticCopy({
         targets: [
@@ -38,33 +41,14 @@ export default defineConfig(({ mode }) => {
         ],
       }),
       ...(isTest
-        ? [
-            // Use SWC for proper decorator and metadata support in tests
-            swc.vite(),
-          ]
+        ? []
         : [
-            // Only include vite-plugin-node for non-test mode
             vitePluginNode({
-              // Nodejs native Request adapter
-              // currently this plugin support 'express', 'nest', 'koa' and 'fastify' out of box,
-              // you can also pass a function if you are using other frameworks, see Custom Adapter section
               adapter: 'nest',
-              // Tell the plugin where is your project entry
               appPath: './app/main.ts',
               outputFormat: 'module',
-              // Optional, default: 'viteNodeApp'
-              // the name of named export of you app from the appPath file
               exportName: 'viteNodeApp',
-              // Optional, default: false
-              // if true, the app will be initialized on plugin boot
               initAppOnBoot: true,
-              // Optional, default: 'esbuild'
-              // The TypeScript compiler you want to use
-              // by default this plugin is using vite default ts compiler which is esbuild
-              // 'swc' compiler is supported to use as well for frameworks
-              // like Nestjs (esbuild dont support 'emitDecoratorMetadata' yet)
-              // you need to INSTALL `@swc/core` as dev dependency if you want to use swc
-              tsCompiler: 'swc',
             }),
           ]),
     ],

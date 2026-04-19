@@ -26,6 +26,7 @@ RUN corepack enable
 WORKDIR /app
 COPY pnpm-lock.yaml ./
 COPY patches/ ./patches/
+COPY tarballs/ ./tarballs/
 RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store pnpm fetch --frozen-lockfile
 COPY package.json ./
 COPY . .

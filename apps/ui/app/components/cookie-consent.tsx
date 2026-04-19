@@ -77,21 +77,21 @@ export function CookiePreferencesDialog({
           <DialogTitle>Cookie preferences</DialogTitle>
           <DialogDescription>
             We use cookies to analyze site usage and improve your experience.{' '}
-            <Link to="/legal/privacy" className="underline hover:text-foreground">
+            <Link to='/legal/privacy' className='underline hover:text-foreground'>
               Learn more
             </Link>
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex flex-col gap-4">
+        <div className='flex flex-col gap-4'>
           {/* Essential cookies - always enabled */}
-          <div className="flex items-start gap-3">
-            <Checkbox checked disabled id="essential" className="mt-0.5" />
-            <div className="flex flex-col gap-1">
-              <Label htmlFor="essential" className="font-medium">
+          <div className='flex items-start gap-3'>
+            <Checkbox checked disabled id='essential' className='mt-0.5' />
+            <div className='flex flex-col gap-1'>
+              <Label htmlFor='essential' className='font-medium'>
                 Essential Cookies
               </Label>
-              <p className="text-sm text-muted-foreground">
+              <p className='text-sm text-muted-foreground'>
                 Enable basic functions like page navigation and access to secure areas of the website. Without these
                 cookies, the website cannot function properly.
               </p>
@@ -101,20 +101,20 @@ export function CookiePreferencesDialog({
           <Separator />
 
           {/* Product analytics - toggleable */}
-          <div className="flex items-start gap-3">
+          <div className='flex items-start gap-3'>
             <Checkbox
               checked={analyticsEnabled}
-              id="analytics"
-              className="mt-0.5"
+              id='analytics'
+              className='mt-0.5'
               onCheckedChange={(checked) => {
                 setAnalyticsEnabled(checked === true);
               }}
             />
-            <div className="flex flex-col gap-1">
-              <Label htmlFor="analytics" className="font-medium">
+            <div className='flex flex-col gap-1'>
+              <Label htmlFor='analytics' className='font-medium'>
                 Analytics
               </Label>
-              <p className="text-sm text-muted-foreground">
+              <p className='text-sm text-muted-foreground'>
                 Cookies used to collect information about how you use the website. This data helps us improve the site
                 and your experience.
               </p>
@@ -123,7 +123,7 @@ export function CookiePreferencesDialog({
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={handleCancel}>
+          <Button variant='outline' onClick={handleCancel}>
             Cancel
           </Button>
           <Button onClick={handleSaveSettings}>Save settings</Button>
@@ -198,24 +198,24 @@ export function CookieConsent(): React.JSX.Element | undefined {
   return (
     <>
       {/* Cookie consent banner */}
-      <div className="fixed right-2 bottom-2 z-50 max-w-sm animate-in duration-300 fade-in slide-in-from-bottom-4 max-sm:left-2">
-        <div className="flex flex-col gap-2 rounded-lg border bg-card p-4 shadow-md">
-          <div className="flex items-start justify-between">
-            <h3 className="font-semibold">Cookies</h3>
-            <CookieIcon className="size-4 shrink-0 text-muted-foreground" />
+      <div className='fixed right-2 bottom-2 z-50 max-w-sm animate-in duration-300 fade-in slide-in-from-bottom-4 max-sm:left-2'>
+        <div className='flex flex-col gap-2 rounded-lg border bg-card p-4 shadow-md'>
+          <div className='flex items-start justify-between'>
+            <h3 className='font-semibold'>Cookies</h3>
+            <CookieIcon className='size-4 shrink-0 text-muted-foreground' />
           </div>
-          <p className="text-sm text-muted-foreground">
+          <p className='text-sm text-muted-foreground'>
             We use cookies to analyze site usage and improve your experience.
           </p>
-          <div className="flex items-center justify-between">
-            <Button variant="link" size="sm" className="-mb-2 -ml-3" onClick={handleManage}>
+          <div className='flex items-center justify-between'>
+            <Button variant='link' size='sm' className='-mb-2 -ml-3' onClick={handleManage}>
               Manage
             </Button>
-            <div className="flex items-center gap-2">
-              <Button variant="outline" size="sm" onClick={handleDecline}>
+            <div className='flex items-center gap-2'>
+              <Button variant='outline' size='sm' onClick={handleDecline}>
                 Decline
               </Button>
-              <Button size="sm" onClick={handleAccept}>
+              <Button size='sm' onClick={handleAccept}>
                 Accept
               </Button>
             </div>

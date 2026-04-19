@@ -25,12 +25,12 @@ export const RoundedRectangleGeometry = ({
   let y: number;
 
   // Generate contour points
-  for (let j = 0; j < n; j++) {
-    qu = Math.trunc((4 * j) / n) + 1; // Quadrant  qu: 1..4
+  for (let index = 0; index < n; index++) {
+    qu = Math.trunc((4 * index) / n) + 1; // Quadrant  qu: 1..4
     sgx = qu === 1 || qu === 4 ? 1 : -1; // Signum left/right
     sgy = qu < 3 ? 1 : -1; // Signum  top / bottom
-    x = sgx * (width / 2 - radius) + radius * Math.cos((pi2 * (j - qu + 1)) / (n - 4)); // Corner center + circle
-    y = sgy * (height / 2 - radius) + radius * Math.sin((pi2 * (j - qu + 1)) / (n - 4));
+    x = sgx * (width / 2 - radius) + radius * Math.cos((pi2 * (index - qu + 1)) / (n - 4)); // Corner center + circle
+    y = sgy * (height / 2 - radius) + radius * Math.sin((pi2 * (index - qu + 1)) / (n - 4));
 
     points.push(new Vector2(x, y));
   }

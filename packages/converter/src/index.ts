@@ -1,6 +1,6 @@
-// eslint-disable-next-line @typescript-eslint/triple-slash-reference -- ensuring package consumers have access to the types
+// oxlint-disable-next-line @typescript-eslint/triple-slash-reference -- ensuring package consumers have access to the types
 /// <reference path="./types/assimpjs.d.ts" />
-// eslint-disable-next-line @typescript-eslint/triple-slash-reference -- ensuring package consumers have access to the types
+// oxlint-disable-next-line @typescript-eslint/triple-slash-reference -- ensuring package consumers have access to the types
 /// <reference path="./types/occt-import-js.d.ts" />
 
 // Main conversion functions
@@ -15,11 +15,29 @@ export {
 } from '#conversion.js';
 
 // Direct access to import and export pipelines
-export { importFiles, supportedImportFormats } from '#import.js';
-export { exportFiles, supportedExportFormats } from '#export.js';
+export { importFiles } from '#import.js';
+export { exportFiles } from '#export.js';
 
-// Format metadata
-export { formatConfigurations } from '#constants/format-names.constants.js';
+// Format metadata (lightweight, no loader dependencies)
+export { supportedImportFormats, supportedExportFormats } from '#formats.js';
+
+// Format metadata (re-exported from @taucad/types)
+export { formatConfigurations } from '@taucad/types/constants';
+
+// Transform utilities for downstream consumers (e.g. runtime middleware)
+export {
+  createCoordinateTransform,
+  createScalingTransform,
+  createReverseCoordinateTransform,
+  createReverseScalingTransform,
+} from '#gltf.transforms.js';
+
+// Gltf-transform I/O utilities for downstream consumers (e.g. runtime middleware)
+export { createNodeIo } from '#gltf.utils.js';
+export { allExtensions } from '#gltf.extensions.js';
+
+// File resolver for on-demand sidecar asset loading
+export type { FileResolver } from '#file-resolver.js';
 
 // Types
-export type { InputFormat, OutputFormat, File, Format } from '#types.js';
+export type { SupportedImportFormat, SupportedExportFormat } from '#formats.js';

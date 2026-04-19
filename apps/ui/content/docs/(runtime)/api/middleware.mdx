@@ -1,0 +1,52 @@
+---
+title: Middleware API
+description: defineMiddleware and built-in middleware factories for caching, transforms, and edge detection.
+icon: lucide:layers
+---
+
+# Middleware API
+
+Use the middleware API when extending kernel behavior with caching, coordinate transforms, or geometry post-processing. Middleware wraps kernel operations in an onion-model pipeline.
+
+## Types
+
+<auto-type-table path='./props/middleware.ts' name='MiddlewareState' />
+
+<auto-type-table path='./props/middleware.ts' name='KernelMiddlewareRuntime' />
+
+<auto-type-table path='./props/middleware.ts' name='MiddlewarePlugin' />
+
+## defineMiddleware
+
+`defineMiddleware` creates a middleware instance from a configuration object. Provide optional wrap hooks: `wrapGetParameters`, `wrapCreateGeometry`, `wrapExportGeometry`. Each hook receives `(input, handler, runtime)` where `runtime` is `KernelMiddlewareRuntime`.
+
+## Built-in Factories
+
+| Factory                     | Purpose                                           |
+| --------------------------- | ------------------------------------------------- |
+| `parameterCache()`          | Cache parameter definitions by dependency hash    |
+| `geometryCache()`           | Cache geometry output by dependency hash          |
+| `gltfCoordinateTransform()` | Apply coordinate system transforms to glTF output |
+| `gltfEdgeDetection()`       | Add edge geometry to glTF meshes                  |
+
+## Usage
+
+```typescript
+import { createRuntimeClient, fromMemoryFS } from '@taucad/runtime';
+import { replicad } from '@taucad/runtime/kernels';
+import { esbuild } from '@taucad/runtime/bundler';
+import { parameterCache, geometryCache, gltfCoordinateTransform, gltfEdgeDetection } from '@taucad/runtime/middleware';
+
+const client = createRuntimeClient({
+  kernels: [replicad()],
+  bundlers: [esbuild()],
+  fileSystem: fromMemoryFS(),
+  middleware: [parameterCache(), geometryCache(), gltfCoordinateTransform(), gltfEdgeDetection()],
+});
+```
+
+## Related
+
+- [Use Middleware](../guides/using-middleware)
+- [Create Custom Middleware](../guides/custom-middleware)
+- [Middleware Model](../concepts/middleware-model)

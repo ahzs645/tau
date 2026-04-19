@@ -1,4 +1,4 @@
-/* eslint-disable complexity -- draco3d uses c++ style */
+/* oxlint-disable complexity -- draco3d uses c++ style */
 // Copyright 2016 The Draco Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -16,8 +16,8 @@
 // Pure gltf-transform implementation for Draco decoding
 
 /* eslint-disable @typescript-eslint/naming-convention -- draco3d uses c++ style */
-/* eslint-disable max-params -- draco3d uses c++ style */
-/* eslint-disable new-cap -- draco3d uses c++ style */
+/* oxlint-disable max-params -- draco3d uses c++ style */
+/* oxlint-disable new-cap -- draco3d uses c++ style */
 
 import type { Attribute, Decoder, DecoderBuffer, DecoderModule, DracoArray, Mesh, PointCloud } from 'draco3dgltf';
 import draco3d from 'draco3dgltf';
@@ -57,6 +57,9 @@ type DecodedDracoData = {
   isPointCloud: boolean;
 };
 
+/**
+ * Decodes Draco-compressed mesh buffers and produces standard glTF Documents for downstream processing.
+ */
 export class GltfDracoDecoder {
   public verbosity = 0;
   private decoderModule!: DecoderModule;
@@ -75,15 +78,33 @@ export class GltfDracoDecoder {
     uv: Float32Array,
   };
 
+  /**
+   * Loads the Draco WASM decoder module. Must be called once before any `decodeDracoFile` call.
+   */
   public async initialize(): Promise<void> {
-    this.decoderModule = await draco3d.createDecoderModule();
+    this.decoderModule = await draco3d.createDecoderModule({
+      locateFile: () => new URL('../../assets/draco3d/gltf/draco_decoder_gltf.wasm', import.meta.url).href,
+    });
   }
 
+  /**
+   * Controls diagnostic output volume during decoding (0 = silent, higher = more verbose).
+   *
+   * @param level - verbosity level (0 = silent, higher = more output)
+   * @returns This decoder instance for chaining.
+   */
   public setVerbosity(level: number): this {
     this.verbosity = level;
     return this;
   }
 
+  /**
+   * Assembles a complete glTF Document from decoded geometry, including mesh, material, and scene hierarchy.
+   *
+   * @param decodedData - the decoded Draco geometry attributes and optional indices
+   * @returns A glTF Document containing the assembled scene.
+   * @throws Error if the position attribute is missing
+   */
   public async createGltfDocument(decodedData: DecodedDracoData): Promise<Document> {
     const document = new Document();
     const root = document.getRoot();
@@ -173,7 +194,7 @@ export class GltfDracoDecoder {
     } else {
       // Mesh material
       material.setBaseColorFactor([...cadMaterialDefaults.baseColorFactor]);
-      material.setMetallicFactor(cadMaterialDefaults.metallicFactor);
+      material.setMetallicFactor(cadMaterialDefaults.metalnessFactor);
       material.setRoughnessFactor(cadMaterialDefaults.roughnessFactor);
     }
 
@@ -190,6 +211,15 @@ export class GltfDracoDecoder {
     return document;
   }
 
+  /**
+   * Decodes a Draco-encoded buffer into raw geometry attributes (positions, normals, UVs) and optional indices.
+   *
+   * @param rawBuffer - the raw Draco-compressed ArrayBuffer
+   * @param attributeUniqueIdMap - optional mapping of attribute names to Draco unique IDs
+   * @param attributeTypeMap - optional mapping of attribute names to typed-array constructors
+   * @returns The decoded geometry data with attribute arrays and optional index buffer.
+   * @throws Error if the geometry type is unknown, decoding fails, or no position attribute exists
+   */
   public async decodeDracoFile(
     rawBuffer: ArrayBuffer,
     attributeUniqueIdMap?: Record<string, number>,

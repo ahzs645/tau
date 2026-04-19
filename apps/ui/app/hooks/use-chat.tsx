@@ -10,8 +10,8 @@
 
 import { useChat } from '@ai-sdk/react';
 import { useActorRef, useSelector } from '@xstate/react';
-import { fromPromise } from 'xstate';
 import { createContext, useContext, useEffect, useRef, useMemo, useCallback } from 'react';
+import { fromSafeAsync } from '#lib/xstate.lib.js';
 import type { MyUIMessage } from '@taucad/chat';
 import { DefaultChatTransport } from 'ai';
 import { generatePrefixedId } from '@taucad/utils/id';
@@ -23,7 +23,8 @@ import { useChats } from '#hooks/use-chats.js';
 import { inspect } from '#machines/inspector.js';
 import { ENV } from '#environment.config.js';
 import { parseErrorForPersistence } from '#utils/error.utils.js';
-import { finalizeInterruptedToolParts } from '#utils/chat.utils.js';
+import { extractMimeTypeFromDataUrl, finalizeInterruptedToolParts } from '#utils/chat.utils.js';
+import type { ChatMode } from '#routes/projects_.$id/chat-mode-selector.js';
 
 type UseChatReturn = ReturnType<typeof useChat<MyUIMessage>>;
 
@@ -68,25 +69,25 @@ export function ChatProvider({
   // and processed in onFinish after the old request fully completes.
   const pendingMessageRef = useRef<PendingMessage | undefined>(undefined);
 
-  // Create draft machine with provided actors (like use-build.tsx pattern)
+  // Create draft machine with provided actors (like use-project.tsx pattern)
   const draftActorRef = useActorRef(
     draftMachine.provide({
       actors: {
-        persistDraftActor: fromPromise(async ({ input }) => {
+        persistDraftActor: fromSafeAsync(async ({ input }) => {
           await updateChat(input.chatId, { draft: input.draft }, { ignoreKeys: ['draft'] });
         }),
-        persistEditDraftActor: fromPromise(async ({ input }) => {
+        persistEditDraftActor: fromSafeAsync(async ({ input }) => {
           await updateChat(
             input.chatId,
             { messageEdits: { [input.messageId]: input.draft } },
             { ignoreKeys: ['messageEdits'] },
           );
         }),
-        clearMessageEditActor: fromPromise(async ({ input }) => {
+        clearMessageEditActor: fromSafeAsync(async ({ input }) => {
           const loadedChat = await getChat(input.chatId);
           if (loadedChat?.messageEdits?.[input.messageId]) {
             const updatedEdits = { ...loadedChat.messageEdits };
-            // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- need to remove message edit
+            // oxlint-disable-next-line @typescript-eslint/no-dynamic-delete -- need to remove message edit
             delete updatedEdits[input.messageId];
             await updateChat(input.chatId, { messageEdits: updatedEdits }, { ignoreKeys: ['messageEdits'] });
           }
@@ -107,41 +108,32 @@ export function ChatProvider({
   const persistenceActorRef = useActorRef(
     chatPersistenceMachine.provide({
       actors: {
-        loadChatActor: fromPromise(async ({ input }) => {
+        loadChatActor: fromSafeAsync(async ({ input }) => {
           const loadedChat = await getChat(input.chatId);
 
-          // Set messages directly in the actor (no React effect needed)
           if (loadedChat) {
             setMessagesRef.current?.(loadedChat.messages);
             initializeDraftRef.current?.(loadedChat);
 
-            // Check if last message needs AI response (pending user message).
-            // This happens when the user creates a message (i.e. on home page) and the
-            // AI response is not yet generated.
             const lastMessage = loadedChat.messages.at(-1);
             if (lastMessage?.role === 'user' && lastMessage.metadata?.status === 'pending') {
               void regenerateRef.current?.();
 
-              // Strip stale error — we're auto-regenerating so the previous error is
-              // outdated. A fresh error will be set if regeneration fails; cleared on
-              // success via onFinish. This prevents a UI flash of the old error.
-              return { ...loadedChat, error: undefined };
+              return { type: 'chatRetrieved', chat: { ...loadedChat, error: undefined } };
             }
           } else {
-            // New chat - clear messages
             setMessagesRef.current?.([]);
           }
 
-          // Return the chat - the machine's onDone action will extract persistedError
-          return loadedChat;
+          return { type: 'chatRetrieved', chat: loadedChat };
         }),
-        persistMessagesActor: fromPromise(async ({ input }) => {
+        persistMessagesActor: fromSafeAsync(async ({ input }) => {
           await updateChat(input.chatId, { messages: input.messages }, { ignoreKeys: ['messages'] });
         }),
-        persistErrorActor: fromPromise(async ({ input }) => {
+        persistErrorActor: fromSafeAsync(async ({ input }) => {
           await updateChat(input.chatId, { error: input.error }, { ignoreKeys: ['error'] });
         }),
-        clearErrorActor: fromPromise(async ({ input }) => {
+        clearErrorActor: fromSafeAsync(async ({ input }) => {
           await updateChat(input.chatId, { error: undefined }, { ignoreKeys: ['error'] });
         }),
       },
@@ -179,7 +171,10 @@ export function ChatProvider({
           const newMessages = [...sanitizedMessages, pendingMessage as MyUIMessage];
 
           setMessagesRef.current?.(newMessages);
-          persistenceActorRef.send({ type: 'queuePersist', messages: newMessages });
+          persistenceActorRef.send({
+            type: 'queuePersist',
+            messages: newMessages,
+          });
 
           // Defer to next microtask so the old makeRequest's finally block
           // (which nulls activeResponse) completes before we start a new one.
@@ -203,7 +198,10 @@ export function ChatProvider({
           }
 
           setMessagesRef.current?.(sanitizedMessages);
-          persistenceActorRef.send({ type: 'queuePersist', messages: sanitizedMessages });
+          persistenceActorRef.send({
+            type: 'queuePersist',
+            messages: sanitizedMessages,
+          });
         }
 
         return;
@@ -214,7 +212,10 @@ export function ChatProvider({
         // so partial AI output survives reload and is available on retry.
         const sanitizedMessages = finalizeInterruptedToolParts(messages);
         setMessagesRef.current?.(sanitizedMessages);
-        persistenceActorRef.send({ type: 'queuePersist', messages: sanitizedMessages });
+        persistenceActorRef.send({
+          type: 'queuePersist',
+          messages: sanitizedMessages,
+        });
         // Error itself is already persisted via the onError callback
         return;
       }
@@ -229,7 +230,10 @@ export function ChatProvider({
       persistenceActorRef.send({ type: 'handleError', error });
       // Parse and persist the error for display after page reload
       const normalizedError = parseErrorForPersistence(error);
-      persistenceActorRef.send({ type: 'setPersistedError', error: normalizedError });
+      persistenceActorRef.send({
+        type: 'setPersistedError',
+        error: normalizedError,
+      });
     },
   });
 
@@ -314,6 +318,7 @@ type CombinedChatState = {
   draftText: string;
   draftImages: string[];
   draftToolChoice: string | string[];
+  draftMode: ChatMode;
   messageEdits: Record<string, MyUIMessage>;
   activeEditMessageId: string | undefined;
   editDraftText: string;
@@ -365,6 +370,7 @@ export function useChatSelector<T>(selector: (state: CombinedChatState) => T): T
       draftText: draftContext.draftText,
       draftImages: draftContext.draftImages,
       draftToolChoice: draftContext.draftToolChoice,
+      draftMode: draftContext.draftMode as ChatMode,
       messageEdits: draftContext.messageEdits,
       activeEditMessageId: draftContext.activeEditMessageId,
       editDraftText: draftContext.editDraftText,
@@ -386,6 +392,7 @@ export function useChatActions(): {
   addDraftImage: (image: string) => void;
   removeDraftImage: (index: number) => void;
   setDraftToolChoice: (toolChoice: string | string[]) => void;
+  setDraftMode: (mode: string) => void;
   clearDraft: () => void;
   startEditingMessage: (messageId: string) => void;
   exitEditMode: () => void;
@@ -393,6 +400,7 @@ export function useChatActions(): {
   addEditDraftImage: (image: string) => void;
   removeEditDraftImage: (index: number) => void;
   clearMessageEdit: (messageId: string) => void;
+  // oxlint-disable-next-line max-params -- callback signature shared across chat components; refactoring would require updating many call sites
   editMessage: (messageId: string, content: string, model: string, metadata?: unknown, imageUrls?: string[]) => void;
   retryMessage: (messageId: string, modelId?: string) => void;
 } {
@@ -446,6 +454,12 @@ export function useChatActions(): {
       setDraftToolChoice(toolChoice: string | string[]) {
         draftActorRef.send({ type: 'setDraftToolChoice', toolChoice });
       },
+      setDraftMode(mode: string) {
+        draftActorRef.send({
+          type: 'setDraftMode',
+          mode: mode as 'agent' | 'plan',
+        });
+      },
       clearDraft() {
         draftActorRef.send({ type: 'clearDraft' });
       },
@@ -453,7 +467,11 @@ export function useChatActions(): {
       // Edit actions (via XState)
       startEditingMessage(messageId: string) {
         const originalMessage = chat.messages.find((m) => m.id === messageId);
-        draftActorRef.send({ type: 'startEditingMessage', messageId, originalMessage });
+        draftActorRef.send({
+          type: 'startEditingMessage',
+          messageId,
+          originalMessage,
+        });
       },
       exitEditMode() {
         draftActorRef.send({ type: 'exitEditMode' });
@@ -472,6 +490,7 @@ export function useChatActions(): {
       },
 
       // Edit and retry - uses both useChat and draft machine
+      // oxlint-disable-next-line max-params -- matches the callback signature used across chat components
       editMessage(messageId: string, content: string, model: string, _metadata?: unknown, imageUrls?: string[]) {
         // Clear the edit from draft machine
         draftActorRef.send({ type: 'clearMessageEdit', messageId });
@@ -488,7 +507,14 @@ export function useChatActions(): {
           role: 'user',
           parts: [
             { type: 'text', text: content },
-            ...(imageUrls?.map((url) => ({ type: 'file' as const, url, mediaType: 'image/png' as const })) ?? []),
+            ...(imageUrls?.map(
+              (url) =>
+                ({
+                  type: 'file',
+                  url,
+                  mediaType: extractMimeTypeFromDataUrl(url),
+                }) as const,
+            ) ?? []),
           ],
           metadata: {
             createdAt: Date.now(),
@@ -516,7 +542,10 @@ export function useChatActions(): {
           // Update the previous message with the new model
           const updatedMessages = [
             ...chat.messages.slice(0, sliceIndex),
-            { ...previousMessage, metadata: { ...previousMessage.metadata, model: modelId } },
+            {
+              ...previousMessage,
+              metadata: { ...previousMessage.metadata, model: modelId },
+            },
           ];
           chat.setMessages(updatedMessages);
         } else {

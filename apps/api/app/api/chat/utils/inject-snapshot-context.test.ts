@@ -48,9 +48,8 @@ describe('injectSnapshotContext', () => {
       const contextPart = result[0]?.parts[0] as { type: 'text'; text: string };
       const originalPart = result[0]?.parts[1] as { type: 'text'; text: string };
 
-      // Should have editor_context wrapper
-      expect(contextPart.text).toContain('<editor_context>');
-      expect(contextPart.text).toContain('</editor_context>');
+      expect(contextPart.text).toContain('<system-reminder>');
+      expect(contextPart.text).toContain('</system-reminder>');
 
       // Should have active file
       expect(contextPart.text).toContain('<active_file>');
@@ -196,10 +195,13 @@ describe('injectSnapshotContext', () => {
       expect(result).toHaveLength(3);
       // First message should be unchanged
       expect(result[0]?.parts).toHaveLength(1);
+      // oxlint-disable-next-line no-unsafe-optional-chaining -- test assertion with preceding length check
       expect((result[0]?.parts[0] as { type: 'text'; text: string }).text).toBe('First question');
       // Last user message should have context prepended as first part
       expect(result[2]?.parts).toHaveLength(2);
-      expect((result[2]?.parts[0] as { type: 'text'; text: string }).text).toContain('<editor_context>');
+      // oxlint-disable-next-line no-unsafe-optional-chaining -- test assertion with preceding length check
+      expect((result[2]?.parts[0] as { type: 'text'; text: string }).text).toContain('<system-reminder>');
+      // oxlint-disable-next-line no-unsafe-optional-chaining -- test assertion with preceding length check
       expect((result[2]?.parts[1] as { type: 'text'; text: string }).text).toBe('Second question');
     });
 
@@ -231,8 +233,10 @@ describe('injectSnapshotContext', () => {
       // Context prepended as first part, then original parts follow
       expect(result[0]?.parts).toHaveLength(3);
       expect(result[0]?.parts[0]).toHaveProperty('type', 'text');
-      expect((result[0]?.parts[0] as { type: 'text'; text: string }).text).toContain('<editor_context>');
+      // oxlint-disable-next-line no-unsafe-optional-chaining -- test assertion with preceding length check
+      expect((result[0]?.parts[0] as { type: 'text'; text: string }).text).toContain('<system-reminder>');
       expect(result[0]?.parts[1]).toHaveProperty('type', 'text');
+      // oxlint-disable-next-line no-unsafe-optional-chaining -- test assertion with preceding length check
       expect((result[0]?.parts[1] as { type: 'text'; text: string }).text).toBe('Check this image');
       expect(result[0]?.parts[2]).toHaveProperty('type', 'file');
     });
@@ -252,8 +256,11 @@ describe('injectSnapshotContext', () => {
 
       // Context is only in the first part, original parts are unchanged
       expect(result[0]?.parts).toHaveLength(3);
-      expect((result[0]?.parts[0] as { type: 'text'; text: string }).text).toContain('<editor_context>');
+      // oxlint-disable-next-line no-unsafe-optional-chaining -- test assertion with preceding length check
+      expect((result[0]?.parts[0] as { type: 'text'; text: string }).text).toContain('<system-reminder>');
+      // oxlint-disable-next-line no-unsafe-optional-chaining -- test assertion with preceding length check
       expect((result[0]?.parts[1] as { type: 'text'; text: string }).text).toBe('Part one');
+      // oxlint-disable-next-line no-unsafe-optional-chaining -- test assertion with preceding length check
       expect((result[0]?.parts[2] as { type: 'text'; text: string }).text).toBe('Part two');
     });
 
@@ -287,10 +294,29 @@ describe('injectSnapshotContext', () => {
       // Context prepended as first part, then original file part
       expect(result[0]?.parts).toHaveLength(2);
       expect(result[0]?.parts[0]).toHaveProperty('type', 'text');
-      expect((result[0]?.parts[0] as { type: 'text'; text: string }).text).toContain('<editor_context>');
+      // oxlint-disable-next-line no-unsafe-optional-chaining -- test assertion with preceding length check
+      expect((result[0]?.parts[0] as { type: 'text'; text: string }).text).toContain('<system-reminder>');
+      // oxlint-disable-next-line no-unsafe-optional-chaining -- test assertion with preceding length check
       expect((result[0]?.parts[0] as { type: 'text'; text: string }).text).toContain('<active_file>');
+      // oxlint-disable-next-line no-unsafe-optional-chaining -- test assertion with preceding length check
       expect((result[0]?.parts[0] as { type: 'text'; text: string }).text).toContain('<project_layout>');
       expect(result[0]?.parts[1]).toHaveProperty('type', 'file');
+    });
+  });
+
+  // ===================================================================
+  // R11: Universal <system-reminder> container (Finding 11)
+  // ===================================================================
+
+  describe('R11: universal system-reminder container', () => {
+    it('should wrap editor context in <system-reminder> tags', () => {
+      const messages = [createUserMessage('Hello')];
+      const result = injectSnapshotContext(messages, fullSnapshot);
+      const contextPart = result[0]?.parts[0] as { type: 'text'; text: string };
+
+      expect(contextPart.text).toContain('<system-reminder>');
+      expect(contextPart.text).toContain('</system-reminder>');
+      expect(contextPart.text).not.toContain('<editor_context>');
     });
   });
 
@@ -323,14 +349,14 @@ describe('injectSnapshotContext', () => {
       expect(contextPart.text).toContain('Files currently open in the editor tabs: a.scad, b.scad, c.scad');
     });
 
-    it('should wrap all context in editor_context tags', () => {
+    it('should wrap all context in system-reminder tags', () => {
       const messages = [createUserMessage('Hello')];
 
       const result = injectSnapshotContext(messages, fullSnapshot);
       const contextPart = result[0]?.parts[0] as { type: 'text'; text: string };
 
-      expect(contextPart.text).toMatch(/^<editor_context>\n/);
-      expect(contextPart.text).toMatch(/<\/editor_context>\n\n$/);
+      expect(contextPart.text).toMatch(/^<system-reminder>\n/);
+      expect(contextPart.text).toMatch(/<\/system-reminder>\n\n$/);
     });
 
     it('should end context part with double newline', () => {
@@ -340,7 +366,7 @@ describe('injectSnapshotContext', () => {
       const contextPart = result[0]?.parts[0] as { type: 'text'; text: string };
       const originalPart = result[0]?.parts[1] as { type: 'text'; text: string };
 
-      expect(contextPart.text).toMatch(/<\/editor_context>\n\n$/);
+      expect(contextPart.text).toMatch(/<\/system-reminder>\n\n$/);
       expect(originalPart.text).toBe('My question');
     });
 
@@ -381,11 +407,11 @@ describe('injectSnapshotContext', () => {
       const result = injectSnapshotContext(messages, snapshot);
       const contextPart = result[0]?.parts[0] as { type: 'text'; text: string };
 
-      const libIndex = contextPart.text.indexOf('lib/');
-      const mainIndex = contextPart.text.indexOf('main.scad');
+      const libraryIndex = contextPart.text.indexOf('lib/');
+      const mainFileIndex = contextPart.text.indexOf('main.scad');
 
       // Directory should come before file
-      expect(libIndex).toBeLessThan(mainIndex);
+      expect(libraryIndex).toBeLessThan(mainFileIndex);
     });
 
     it('should show empty message for empty fileTree', () => {

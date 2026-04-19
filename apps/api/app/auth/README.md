@@ -9,7 +9,7 @@ The auth module follows the pattern from the [Ultimate NestJS Boilerplate](https
 ## Architecture
 
 - **AuthModule**: Main module with `forRootAsync()` for global auth setup
-- **AuthService**: Handles auth-related database operations and utilities  
+- **AuthService**: Handles auth-related database operations and utilities
 - **BetterAuthService**: Provides access to BetterAuth API
 - **AuthGuard**: Global guard for protecting routes (REST, GraphQL, WebSocket)
 - **Public Decorator**: Marks routes as publicly accessible
@@ -26,7 +26,7 @@ The `AuthGuard` automatically protects all routes unless marked as public:
 export class UsersController {
   @Get()
   findAll() {} // Requires authentication
-  
+
   @Public()
   @Get('public')
   publicEndpoint() {} // Public access
@@ -42,12 +42,9 @@ Uses the DatabaseService to ensure consistent connection handling:
 @Injectable()
 export class AuthService {
   constructor(private readonly databaseService: DatabaseService) {}
-  
+
   async findUserByEmail(email: string) {
-    return await this.databaseService.database
-      .select({ id: user.id })
-      .from(user)
-      .where(eq(user.email, email));
+    return await this.databaseService.database.select({ id: user.id }).from(user).where(eq(user.email, email));
   }
 }
 ```
@@ -111,7 +108,7 @@ export class ApiController {
   protected(@Request() req) {
     return { user: req.user };
   }
-  
+
   // Public route
   @Public()
   @Get('public')
@@ -130,11 +127,11 @@ export class UserService {
     private readonly authService: AuthService,
     private readonly betterAuthService: BetterAuthService,
   ) {}
-  
+
   async findUser(email: string) {
     return this.authService.findUserByEmail(email);
   }
-  
+
   async getSession(headers: any) {
     return this.betterAuthService.api.getSession({ headers });
   }
@@ -146,7 +143,7 @@ export class UserService {
 BetterAuth automatically provides these endpoints at `/api/auth/*`:
 
 - `POST /api/auth/sign-up` - User registration
-- `POST /api/auth/sign-in/email` - Email/password login  
+- `POST /api/auth/sign-in/email` - Email/password login
 - `POST /api/auth/sign-out` - Sign out
 - `GET /api/auth/session` - Get current session
 - OAuth routes for GitHub, etc.
@@ -174,4 +171,4 @@ The auth module integrates seamlessly with your database module:
 - Migrations run automatically on startup
 - Schema is defined in `database/auth-schema.ts`
 
-This ensures your auth system and application database are always in sync. 
+This ensures your auth system and application database are always in sync.

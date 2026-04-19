@@ -18,28 +18,35 @@ export function baseOptions(): Omit<DocsLayoutProps, 'tree'> {
       className: cn(
         // Transition
         'transition-[padding] duration-200 ease-linear',
-        // Positions the search modal below the header.
-        '[--fd-tocnav-height:calc(var(--header-height))]!',
         // Set the sidebar width to account for both the app sidebar and the docs sidebar.
         'md:[--fd-sidebar-width:calc(var(--sidebar-width-current)+var(--docs-sidebar-width-current))]!',
         // Always account for the docs sidebar width on desktop to ensure the page doesn't shift on docs sidebar open/close.
         'xl:[--fd-sidebar-width:calc(var(--sidebar-width-current)+var(--docs-sidebar-width))]!',
 
-        // Mobile ToC Navigation Styles
-        '[&_#nd-tocnav]:border',
-        '[&_#nd-tocnav]:rounded-md',
-        '[&_#nd-tocnav]:bg-sidebar',
-        '[&_#nd-tocnav]:mx-2',
-        // We want to keep the full page width on mobile, but only shrink the tocnav width via margins.
-        '[&_#nd-tocnav]:ml-[calc(var(--docs-sidebar-toggle-width-current)+var(--spacing)*4)]',
-        'md:[&_#nd-tocnav]:ml-[calc(var(--docs-sidebar-toggle-width-current)+var(--spacing)*2)]',
-        '[&_#nd-tocnav]:transition-[top,left,width] [&_#nd-tocnav]:duration-200 [&_#nd-tocnav]:ease-linear',
-        '[&_#nd-tocnav>button]:px-2',
-        '[&_#nd-tocnav>button]:h-7.5',
+        // Banner height accounts for the app header at all breakpoints so fumadocs
+        // sticky elements (toc-popover, sidebar, toc panel) position below it.
+        '[--fd-banner-height:var(--header-height)]',
+
+        // Mobile ToC Popover Styles (data-toc-popover replaces old #nd-tocnav)
+        '[&_[data-toc-popover]]:w-fit',
+        '[&_[data-toc-popover]]:ml-auto',
+        '[&_[data-toc-popover]]:mr-2',
+        '[&_[data-toc-popover]]:border',
+        '[&_[data-toc-popover]]:rounded-md',
+        '[&_[data-toc-popover]]:overflow-hidden',
+        '[&_[data-toc-popover]]:bg-muted',
+        '[&_[data-toc-popover]]:h-auto!',
+        '[&_[data-toc-popover]]:transition-[top,left,width] [&_[data-toc-popover]]:duration-200 [&_[data-toc-popover]]:ease-linear',
+        '[&_[data-toc-popover]_header]:border-b-0',
+        '[&_[data-toc-popover-trigger]]:px-2',
+        '[&_[data-toc-popover-trigger]]:h-7',
+        '[&_[data-toc-popover-trigger]]:text-xs',
+
+        // Top padding on page content so it clears the fixed hamburger + toc-popover
+        '[&_#nd-page]:pt-14!',
 
         // Desktop ToC Styles
         'xl:[--fd-toc-width:var(--docs-sidebar-width)]!',
-        'xl:[--fd-banner-height:calc(var(--header-height)-(var(--spacing)*2))]',
         '[&_#nd-toc]:border',
         '[&_#nd-toc]:rounded-md',
         '[&_#nd-toc]:bg-sidebar',

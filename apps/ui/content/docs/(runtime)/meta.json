@@ -1,0 +1,45 @@
+{
+  "title": "Runtime",
+  "description": "Multi-kernel CAD runtime for browser and Node.js",
+  "icon": "Blocks",
+  "root": true,
+  "pages": [
+    "index",
+
+    "---Getting Started---",
+    "getting-started/installation",
+    "getting-started/quick-start",
+    "getting-started/your-first-kernel",
+
+    "---Guides---",
+    "guides/choosing-a-kernel",
+    "guides/using-middleware",
+    "guides/custom-kernel",
+    "guides/custom-middleware",
+    "guides/filesystem-setup",
+    "guides/bundler-configuration",
+    "guides/error-handling",
+    "guides/testing-kernels",
+
+    "---Concepts---",
+    "concepts/architecture",
+    "concepts/plugin-system",
+    "concepts/middleware-model",
+    "concepts/kernel-selection",
+    "concepts/render-lifecycle",
+    "concepts/worker-model",
+
+    "---API Reference---",
+    "api/client",
+    "api/kernels",
+    "api/middleware",
+    "api/bundler",
+    "api/filesystem",
+    "api/types",
+    "api/testing",
+    "api/transport",
+
+    "---Reference---",
+    "reference/replicad"
+  ]
+}

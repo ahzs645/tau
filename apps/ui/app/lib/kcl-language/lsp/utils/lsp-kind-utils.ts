@@ -6,122 +6,49 @@ import type * as Monaco from 'monaco-editor';
 import type * as LSP from 'vscode-languageserver-protocol';
 
 /**
+ * Build a map from LSP CompletionItemKind (1-25) to Monaco CompletionItemKind.
+ */
+const buildCompletionKindMap = (monaco: typeof Monaco): ReadonlyMap<number, Monaco.languages.CompletionItemKind> =>
+  new Map<number, Monaco.languages.CompletionItemKind>([
+    [1, monaco.languages.CompletionItemKind.Text],
+    [2, monaco.languages.CompletionItemKind.Method],
+    [3, monaco.languages.CompletionItemKind.Function],
+    [4, monaco.languages.CompletionItemKind.Constructor],
+    [5, monaco.languages.CompletionItemKind.Field],
+    [6, monaco.languages.CompletionItemKind.Variable],
+    [7, monaco.languages.CompletionItemKind.Class],
+    [8, monaco.languages.CompletionItemKind.Interface],
+    [9, monaco.languages.CompletionItemKind.Module],
+    [10, monaco.languages.CompletionItemKind.Property],
+    [11, monaco.languages.CompletionItemKind.Unit],
+    [12, monaco.languages.CompletionItemKind.Value],
+    [13, monaco.languages.CompletionItemKind.Enum],
+    [14, monaco.languages.CompletionItemKind.Keyword],
+    [15, monaco.languages.CompletionItemKind.Snippet],
+    [16, monaco.languages.CompletionItemKind.Color],
+    [17, monaco.languages.CompletionItemKind.File],
+    [18, monaco.languages.CompletionItemKind.Reference],
+    [19, monaco.languages.CompletionItemKind.Folder],
+    [20, monaco.languages.CompletionItemKind.EnumMember],
+    [21, monaco.languages.CompletionItemKind.Constant],
+    [22, monaco.languages.CompletionItemKind.Struct],
+    [23, monaco.languages.CompletionItemKind.Event],
+    [24, monaco.languages.CompletionItemKind.Operator],
+    [25, monaco.languages.CompletionItemKind.TypeParameter],
+  ]);
+
+let completionKindMap: ReadonlyMap<number, Monaco.languages.CompletionItemKind> | undefined;
+
+/**
  * Convert LSP CompletionItemKind to Monaco CompletionItemKind.
  */
 export function lspToMonacoCompletionKind(
   monaco: typeof Monaco,
   kind?: LSP.CompletionItemKind,
 ): Monaco.languages.CompletionItemKind {
-  if (kind === undefined) {
-    return monaco.languages.CompletionItemKind.Text;
-  }
+  completionKindMap ??= buildCompletionKindMap(monaco);
 
-  // LSP CompletionItemKind values: 1-25
-  switch (kind) {
-    case 1: {
-      return monaco.languages.CompletionItemKind.Text;
-    }
-
-    case 2: {
-      return monaco.languages.CompletionItemKind.Method;
-    }
-
-    case 3: {
-      return monaco.languages.CompletionItemKind.Function;
-    }
-
-    case 4: {
-      return monaco.languages.CompletionItemKind.Constructor;
-    }
-
-    case 5: {
-      return monaco.languages.CompletionItemKind.Field;
-    }
-
-    case 6: {
-      return monaco.languages.CompletionItemKind.Variable;
-    }
-
-    case 7: {
-      return monaco.languages.CompletionItemKind.Class;
-    }
-
-    case 8: {
-      return monaco.languages.CompletionItemKind.Interface;
-    }
-
-    case 9: {
-      return monaco.languages.CompletionItemKind.Module;
-    }
-
-    case 10: {
-      return monaco.languages.CompletionItemKind.Property;
-    }
-
-    case 11: {
-      return monaco.languages.CompletionItemKind.Unit;
-    }
-
-    case 12: {
-      return monaco.languages.CompletionItemKind.Value;
-    }
-
-    case 13: {
-      return monaco.languages.CompletionItemKind.Enum;
-    }
-
-    case 14: {
-      return monaco.languages.CompletionItemKind.Keyword;
-    }
-
-    case 15: {
-      return monaco.languages.CompletionItemKind.Snippet;
-    }
-
-    case 16: {
-      return monaco.languages.CompletionItemKind.Color;
-    }
-
-    case 17: {
-      return monaco.languages.CompletionItemKind.File;
-    }
-
-    case 18: {
-      return monaco.languages.CompletionItemKind.Reference;
-    }
-
-    case 19: {
-      return monaco.languages.CompletionItemKind.Folder;
-    }
-
-    case 20: {
-      return monaco.languages.CompletionItemKind.EnumMember;
-    }
-
-    case 21: {
-      return monaco.languages.CompletionItemKind.Constant;
-    }
-
-    case 22: {
-      return monaco.languages.CompletionItemKind.Struct;
-    }
-
-    case 23: {
-      return monaco.languages.CompletionItemKind.Event;
-    }
-
-    case 24: {
-      return monaco.languages.CompletionItemKind.Operator;
-    }
-
-    case 25: {
-      return monaco.languages.CompletionItemKind.TypeParameter;
-    }
-
-    default: {
-      return monaco.languages.CompletionItemKind.Text;
-    }
-  }
+  return completionKindMap.get(kind ?? -1) ?? monaco.languages.CompletionItemKind.Text;
 }
 
 /**

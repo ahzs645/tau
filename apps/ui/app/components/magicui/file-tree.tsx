@@ -1,6 +1,6 @@
 import { Accordion as AccordionPrimitive } from 'radix-ui';
 import { FolderIcon, FolderOpenIcon } from 'lucide-react';
-import React, { createContext, useCallback, useContext, useEffect, useState, useMemo } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '#components/ui/button.js';
 import { FileExtensionIcon } from '#components/icons/file-extension-icon.js';
 import { cn } from '#utils/ui.utils.js';
@@ -47,6 +47,7 @@ type TreeViewProps = {
   readonly openIcon?: React.ReactNode;
   readonly closeIcon?: React.ReactNode;
   readonly dir?: 'rtl' | 'ltr';
+  readonly onExpand?: (id: string) => void;
 } & TreeViewComponentProps;
 
 function Tree({
@@ -59,10 +60,28 @@ function Tree({
   openIcon,
   closeIcon,
   dir,
+  onExpand,
   ...props
 }: React.PropsWithChildren<TreeViewProps> & React.HTMLAttributes<HTMLDivElement>): React.JSX.Element {
   const [selectedId, setSelectedId] = useState<string | undefined>(initialSelectedId);
   const [expandedItems, setExpandedItems] = useState<string[] | undefined>(initialExpandedItems);
+  const previousExpandedRef = useRef<string[] | undefined>(undefined);
+
+  useEffect(() => {
+    const current = expandedItems ?? [];
+    const previous = previousExpandedRef.current ?? [];
+
+    if (previousExpandedRef.current === undefined) {
+      previousExpandedRef.current = current;
+      return;
+    }
+
+    const newlyExpanded = current.filter((id) => !previous.includes(id));
+    for (const id of newlyExpanded) {
+      onExpand?.(id);
+    }
+    previousExpandedRef.current = current;
+  }, [expandedItems, onExpand]);
 
   const selectItem = useCallback((id: string) => {
     setSelectedId(id);
@@ -137,10 +156,10 @@ function Tree({
       <div className={cn('size-full overflow-y-auto p-1', className)}>
         <AccordionPrimitive.Root
           {...props}
-          type="multiple"
+          type='multiple'
           defaultValue={expandedItems}
           value={expandedItems}
-          className="flex w-full flex-col"
+          className='flex w-full flex-col'
           dir={dir as Direction}
           onValueChange={(value) => {
             setExpandedItems((previous) => [...(previous ?? []), value[0]!]);
@@ -191,7 +210,7 @@ function Folder({
   const { direction, handleExpand, expandedItems, indicator, setExpandedItems, openIcon, closeIcon } = useTree();
 
   return (
-    <AccordionPrimitive.Item {...props} value={value} className="relative flex h-full flex-col overflow-hidden">
+    <AccordionPrimitive.Item {...props} value={value} className='relative flex h-full flex-col overflow-hidden'>
       <div
         className={cn(
           'group relative flex h-7 w-full items-center justify-between gap-2 px-2 text-sm',
@@ -206,25 +225,25 @@ function Folder({
         )}
       >
         <AccordionPrimitive.Trigger
-          className="flex min-w-0 flex-1 items-center gap-2"
+          className='flex min-w-0 flex-1 items-center gap-2'
           disabled={!isSelectable}
           onClick={() => {
             handleExpand(value);
           }}
         >
           {expandedItems?.includes(value)
-            ? (openIcon ?? <FolderOpenIcon className="size-4 shrink-0 text-muted-foreground" />)
-            : (closeIcon ?? <FolderIcon className="size-4 shrink-0 text-muted-foreground" />)}
-          <span className="truncate text-muted-foreground group-hover:text-foreground">{element}</span>
+            ? (openIcon ?? <FolderOpenIcon className='size-4 shrink-0 text-muted-foreground' />)
+            : (closeIcon ?? <FolderIcon className='size-4 shrink-0 text-muted-foreground' />)}
+          <span className='truncate text-muted-foreground group-hover:text-foreground'>{element}</span>
         </AccordionPrimitive.Trigger>
-        <span className="text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-foreground">{actions}</span>
+        <span className='text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-foreground'>{actions}</span>
       </div>
-      <AccordionPrimitive.Content className="relative h-full overflow-hidden text-sm data-[state=closed]:animate-accordion-up data-[state=open]:animate-accordion-down">
-        {element && indicator ? <TreeIndicator aria-hidden="true" /> : undefined}
+      <AccordionPrimitive.Content className='relative h-full overflow-hidden text-sm data-[state=closed]:animate-accordion-up data-[state=open]:animate-accordion-down'>
+        {element && indicator ? <TreeIndicator aria-hidden='true' /> : undefined}
         <AccordionPrimitive.Root
           dir={direction}
-          type="multiple"
-          className="ml-5 flex flex-col rtl:mr-5"
+          type='multiple'
+          className='ml-5 flex flex-col rtl:mr-5'
           defaultValue={expandedItems}
           value={expandedItems}
           onValueChange={(value) => {
@@ -278,18 +297,18 @@ function File({
       )}
     >
       <button
-        type="button"
+        type='button'
         disabled={!isSelectable}
-        className="flex min-w-0 flex-1 items-center gap-2"
+        className='flex min-w-0 flex-1 items-center gap-2'
         onClick={() => {
           selectItem(value);
         }}
         {...props}
       >
-        {fileIcon ?? <FileExtensionIcon filename={filename} className="size-4 shrink-0" />}
-        <span className="truncate text-muted-foreground group-hover:text-foreground">{children}</span>
+        {fileIcon ?? <FileExtensionIcon filename={filename} className='size-4 shrink-0' />}
+        <span className='truncate text-muted-foreground group-hover:text-foreground'>{children}</span>
       </button>
-      <span className="text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-foreground">{actions}</span>
+      <span className='text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-foreground'>{actions}</span>
     </div>
   );
 }
@@ -337,8 +356,8 @@ function CollapseButton({
 
   return (
     <Button
-      variant="ghost"
-      className="absolute right-2 bottom-1 h-7 w-fit p-1"
+      variant='ghost'
+      className='absolute right-2 bottom-1 h-7 w-fit p-1'
       onClick={
         expandedItems && expandedItems.length > 0
           ? closeAll
@@ -349,7 +368,7 @@ function CollapseButton({
       {...props}
     >
       {children}
-      <span className="sr-only">Toggle</span>
+      <span className='sr-only'>Toggle</span>
     </Button>
   );
 }

@@ -54,7 +54,9 @@ export function BorderBeam({
   size = 50,
   delay = 0,
   duration = 6,
+  // oxlint-disable-next-line tau-lint/no-hardcoded-color -- decorative default
   colorFrom = '#ffaa40',
+  // oxlint-disable-next-line tau-lint/no-hardcoded-color -- decorative default
   colorTo = '#9c40ff',
   transition,
   style,
@@ -64,7 +66,7 @@ export function BorderBeam({
 }: BorderBeamProps): React.JSX.Element {
   return (
     <div
-      className="pointer-events-none absolute inset-0 rounded-[inherit] border-(length:--border-beam-width) border-transparent [mask-image:linear-gradient(transparent,transparent),linear-gradient(#000,#000)] [mask-composite:intersect] [mask-clip:padding-box,border-box]"
+      className='pointer-events-none absolute inset-0 rounded-[inherit] border-(length:--border-beam-width) border-transparent [mask-image:linear-gradient(transparent,transparent),linear-gradient(#000,#000)] [mask-composite:intersect] [mask-clip:padding-box,border-box]'
       style={
         {
           '--border-beam-width': `${borderWidth}px`,

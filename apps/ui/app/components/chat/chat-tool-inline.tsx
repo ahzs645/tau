@@ -56,17 +56,17 @@ export function ChatToolInline({
     >
       {isLoading ? (
         <>
-          <LoaderCircle className="size-3 shrink-0 animate-spin text-inherit" />
-          <AnimatedShinyText className="truncate">{children}</AnimatedShinyText>
+          <LoaderCircle className='size-3 shrink-0 animate-spin text-inherit' />
+          <AnimatedShinyText className='truncate'>{children}</AnimatedShinyText>
         </>
       ) : (
         <>
           {image ? (
-            <img src={image.src} alt={image.alt} className="size-3 shrink-0 rounded-full" />
+            <img src={image.src} alt={image.alt} className='size-3 shrink-0 rounded-full' />
           ) : Icon ? (
             <Icon className={cn('size-3 shrink-0', isError ? 'text-destructive' : 'text-muted-foreground')} />
           ) : undefined}
-          <span className="truncate">{children}</span>
+          <span className='truncate'>{children}</span>
         </>
       )}
     </Badge>

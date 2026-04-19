@@ -4,18 +4,24 @@ import * as THREE from 'three';
  * Computes a quaternion that rotates an object around a given axis to face the camera.
  * This creates a billboard effect constrained to rotation around a single axis.
  *
- * @param axis - The axis to rotate around (should be normalized)
- * @param position - The position of the object in world space
- * @param camera - The camera to face towards
- * @param referenceUp - Optional reference "up" vector perpendicular to the axis (default: best perpendicular to axis)
+ * @param root0 - The rotation parameters
+ * @param root0.axis - The axis to rotate around (should be normalized)
+ * @param root0.position - The position of the object in world space
+ * @param root0.camera - The camera to face towards
+ * @param root0.referenceUp - Optional reference "up" vector perpendicular to the axis (default: best perpendicular to axis)
  * @returns Quaternion representing the rotation around the axis
  */
-export function computeAxisRotationForCamera(
-  axis: THREE.Vector3,
-  position: THREE.Vector3,
-  camera: THREE.Camera,
-  referenceUp?: THREE.Vector3,
-): THREE.Quaternion {
+export function computeAxisRotationForCamera({
+  axis,
+  position,
+  camera,
+  referenceUp,
+}: {
+  axis: THREE.Vector3;
+  position: THREE.Vector3;
+  camera: THREE.Camera;
+  referenceUp?: THREE.Vector3;
+}): THREE.Quaternion {
   // Calculate direction from object to camera
   const eyeDirection = new THREE.Vector3();
   eyeDirection.subVectors(camera.position, position).normalize();

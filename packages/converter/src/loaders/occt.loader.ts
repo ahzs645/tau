@@ -1,20 +1,25 @@
-/* eslint-disable new-cap -- External library uses PascalCase method names */
+/* oxlint-disable new-cap -- External library uses PascalCase method names */
 import { Document, NodeIO } from '@gltf-transform/core';
 import occtimportjs from 'occt-import-js';
 import type { ImportResult as OcctImportResult } from 'occt-import-js';
 import { cadMaterialDefaults } from '@taucad/types/constants';
-import type { InputFormat, File } from '#types.js';
+import type { FileExtension, FileInput } from '@taucad/types';
+import { createReverseCoordinateTransform } from '#gltf.transforms.js';
 import { BaseLoader } from '#loaders/base.loader.js';
 
 type OcctOptions = {
-  format: InputFormat;
+  format: FileExtension;
 };
 
+/**
+ * Loader for OCCT-based CAD formats (STEP, IGES, BREP) using occt-import-js.
+ */
+// oxlint-disable-next-line typescript/no-unnecessary-type-arguments -- ensuring future API changes are picked up automatically
 export class OcctLoader extends BaseLoader<OcctImportResult, OcctOptions> {
   private readonly io = new NodeIO();
 
-  protected async parseAsync(files: File[], options: OcctOptions): Promise<OcctImportResult> {
-    const { data } = this.findPrimaryFile(files);
+  protected async parseAsync(files: FileInput[], options: OcctOptions): Promise<OcctImportResult> {
+    const { bytes } = this.findPrimaryFile(files);
 
     const occt = await occtimportjs({
       print() {
@@ -38,18 +43,18 @@ export class OcctLoader extends BaseLoader<OcctImportResult, OcctOptions> {
     switch (options.format) {
       case 'step':
       case 'stp': {
-        result = occt.ReadStepFile(data, undefined);
+        result = occt.ReadStepFile(bytes, undefined);
         break;
       }
 
       case 'iges':
       case 'igs': {
-        result = occt.ReadIgesFile(data, undefined);
+        result = occt.ReadIgesFile(bytes, undefined);
         break;
       }
 
       case 'brep': {
-        result = occt.ReadBrepFile(data, undefined);
+        result = occt.ReadBrepFile(bytes, undefined);
         break;
       }
 
@@ -99,7 +104,7 @@ export class OcctLoader extends BaseLoader<OcctImportResult, OcctOptions> {
           .createMaterial()
           .setBaseColorFactor([red, green, blue, 1])
           .setRoughnessFactor(cadMaterialDefaults.roughnessFactor)
-          .setMetallicFactor(cadMaterialDefaults.metallicFactor)
+          .setMetallicFactor(cadMaterialDefaults.metalnessFactor)
           .setDoubleSided(true)
           .setName(`Material_${meshData.name || 'Default'}`);
         primitive.setMaterial(material);
@@ -108,7 +113,7 @@ export class OcctLoader extends BaseLoader<OcctImportResult, OcctOptions> {
           .createMaterial()
           .setBaseColorFactor([...cadMaterialDefaults.baseColorFactor])
           .setRoughnessFactor(cadMaterialDefaults.roughnessFactor)
-          .setMetallicFactor(cadMaterialDefaults.metallicFactor)
+          .setMetallicFactor(cadMaterialDefaults.metalnessFactor)
           .setDoubleSided(true)
           .setName('Material_Default');
         primitive.setMaterial(material);
@@ -127,6 +132,8 @@ export class OcctLoader extends BaseLoader<OcctImportResult, OcctOptions> {
 
       scene.addChild(node);
     }
+
+    await document.transform(createReverseCoordinateTransform());
 
     const glb = await this.io.writeBinary(document);
     return glb;

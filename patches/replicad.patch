@@ -1,8 +1,7 @@
 diff --git a/dist/replicad.d.ts b/dist/replicad.d.ts
-index 6307f486c39a1a838bf71a3a0f0231a200c0e15e..fe355e743e88c5077a8e76983e22669c2d35f266 100644
 --- a/dist/replicad.d.ts
 +++ b/dist/replicad.d.ts
-@@ -2002,14 +2002,14 @@ export declare class Sketches {
+@@ -2144,12 +2144,12 @@
          extrusionProfile?: ExtrusionProfile;
          twistAngle?: number;
          origin?: Point;
@@ -17,5 +16,3 @@ index 6307f486c39a1a838bf71a3a0f0231a200c0e15e..fe355e743e88c5077a8e76983e22669c
 -    }): AnyShape;
 +    }): Shape3D;
  }
- 
- /**

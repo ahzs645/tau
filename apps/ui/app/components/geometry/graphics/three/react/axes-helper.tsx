@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Line } from '@react-three/drei';
 import React, { Fragment } from 'react';
+import { sceneTag, sceneTagData } from '#components/geometry/graphics/three/utils/scene-tags.js';
 
 type CustomAxesHelperProps = {
   /**
@@ -37,9 +38,11 @@ type CustomAxesHelperProps = {
 
 export function AxesHelper({
   size = 50_000,
+  /* oxlint-disable tau-lint/no-hardcoded-color -- Three.js axis colors */
   xAxisColor = 'rgb(125, 56, 50)',
   yAxisColor = 'rgb(64, 115, 63)',
   zAxisColor = 'rgb(37, 78, 136)',
+  /* oxlint-enable tau-lint/no-hardcoded-color */
   thickness = 1.25,
   hoverThickness = 2,
 }: CustomAxesHelperProps): React.JSX.Element {
@@ -47,34 +50,35 @@ export function AxesHelper({
 
   // Static axis definitions - only recreated when size or colors change, NOT on hover
   const axes = React.useMemo(
-    () => [
-      {
-        id: 'x' as const,
-        origin: new THREE.Vector3(0, 0, 0),
-        negativeEnd: new THREE.Vector3(-size, 0, 0),
-        positiveEnd: new THREE.Vector3(size, 0, 0),
-        color: xAxisColor,
-      },
-      {
-        id: 'y' as const,
-        origin: new THREE.Vector3(0, 0, 0),
-        negativeEnd: new THREE.Vector3(0, -size, 0),
-        positiveEnd: new THREE.Vector3(0, size, 0),
-        color: yAxisColor,
-      },
-      {
-        id: 'z' as const,
-        origin: new THREE.Vector3(0, 0, 0),
-        negativeEnd: new THREE.Vector3(0, 0, -size),
-        positiveEnd: new THREE.Vector3(0, 0, size),
-        color: zAxisColor,
-      },
-    ],
+    () =>
+      [
+        {
+          id: 'x',
+          origin: new THREE.Vector3(0, 0, 0),
+          negativeEnd: new THREE.Vector3(-size, 0, 0),
+          positiveEnd: new THREE.Vector3(size, 0, 0),
+          color: xAxisColor,
+        },
+        {
+          id: 'y',
+          origin: new THREE.Vector3(0, 0, 0),
+          negativeEnd: new THREE.Vector3(0, -size, 0),
+          positiveEnd: new THREE.Vector3(0, size, 0),
+          color: yAxisColor,
+        },
+        {
+          id: 'z',
+          origin: new THREE.Vector3(0, 0, 0),
+          negativeEnd: new THREE.Vector3(0, 0, -size),
+          positiveEnd: new THREE.Vector3(0, 0, size),
+          color: zAxisColor,
+        },
+      ] as const,
     [size, xAxisColor, yAxisColor, zAxisColor],
   );
 
   return (
-    <group userData={{ isPreviewOnly: true }}>
+    <group userData={sceneTagData(sceneTag.previewOnly)}>
       {axes.map((axis) => {
         const isHovered = hoveredAxis === axis.id;
         const points = [isHovered ? axis.negativeEnd : axis.origin, axis.positiveEnd];

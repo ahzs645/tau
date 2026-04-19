@@ -16,14 +16,14 @@ the SVG sprite, all svg props are passed through to the `<svg>` element.
 For example, to render the `kcl` icon, use:
 
 ```tsx
-<SvgIcon id="kcl" />
+<SvgIcon id='kcl' />
 ```
 
 ## Raw Icons
 
 The `raw` directory contains the raw SVG icons. Simply add the SVG files to this directory and
 they will be automatically picked up by the SVG sprite generator, with the filename being the icon
-name used with `<SvgIcon id={iconName} />`. 
+name used with `<SvgIcon id={iconName} />`.
 
 ## Generated Icons
 

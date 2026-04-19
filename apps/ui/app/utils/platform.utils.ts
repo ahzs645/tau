@@ -51,7 +51,7 @@ export function detectPlatform(): DetectedPlatform {
   // Falls back to the deprecated navigator.platform for Firefox/Safari.
   const { userAgentData } = navigator as NavigatorWithUaData;
 
-  // eslint-disable-next-line @typescript-eslint/no-deprecated -- Required fallback for Firefox/Safari
+  // oxlint-disable-next-line @typescript-eslint/no-deprecated -- Required fallback for Firefox/Safari
   const platform = userAgentData?.platform ?? navigator.platform;
 
   return /mac|iphone|ipad|ipod/i.test(platform) ? 'mac' : 'other';

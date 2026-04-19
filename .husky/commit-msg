@@ -1,0 +1,33 @@
+COMMIT_MSG_FILE="$1"
+COMMIT_MSG=$(head -1 "$COMMIT_MSG_FILE")
+
+# Extract scope from conventional commit format: type(scope): description
+SCOPE=$(echo "$COMMIT_MSG" | sed -n 's/^[a-z]*(\([^)]*\))!*:.*/\1/p')
+
+# No scope or non-conventional format — skip validation
+[ -z "$SCOPE" ] && exit 0
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+# Build valid scopes list from project.json files
+VALID_SCOPES="root"
+for project_json in "$REPO_ROOT"/apps/*/project.json "$REPO_ROOT"/packages/*/project.json "$REPO_ROOT"/libs/*/project.json "$REPO_ROOT"/tools/*/project.json "$REPO_ROOT"/scripts/project.json; do
+  [ -f "$project_json" ] || continue
+  name=$(node -e "console.log(require('$project_json').name || '')" 2>/dev/null)
+  [ -n "$name" ] && VALID_SCOPES="$VALID_SCOPES $name"
+done
+
+# Check if scope is valid
+for valid in $VALID_SCOPES; do
+  [ "$SCOPE" = "$valid" ] && exit 0
+done
+
+echo ""
+echo "ERROR: Invalid commit scope '$SCOPE'"
+echo ""
+echo "Valid scopes: [$VALID_SCOPES]"
+echo ""
+echo "The scope must match a project name from project.json files."
+echo "Use 'root' for changes not under apps/, packages/, or libs/."
+echo ""
+exit 1

@@ -30,6 +30,7 @@ export function createCompletionProvider(
   return {
     triggerCharacters: ['.', '|', '('],
 
+    // oxlint-disable-next-line max-params -- Monaco editor API contract
     async provideCompletionItems(
       model: Monaco.editor.ITextModel,
       position: Monaco.Position,
@@ -160,7 +161,9 @@ export function createCompletionProvider(
       _token: Monaco.CancellationToken,
     ): Promise<Monaco.languages.CompletionItem> {
       // If we have original LSP item data, resolve it
-      const extendedItem = item as Monaco.languages.CompletionItem & { data?: LSP.CompletionItem };
+      const extendedItem = item as Monaco.languages.CompletionItem & {
+        data?: LSP.CompletionItem;
+      };
       const lspItem = extendedItem.data;
       if (lspItem) {
         try {
@@ -234,6 +237,7 @@ type SymbolCompletionOptions = {
 /**
  * Convert a KCL symbol to a Monaco completion item.
  */
+// oxlint-disable-next-line max-params -- 4th param is already an options object
 function convertSymbolToCompletion(
   monaco: typeof Monaco,
   symbol: KclSymbol,

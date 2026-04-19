@@ -1,3 +1,4 @@
+// oxlint-disable max-lines -- test file
 /* eslint-disable @typescript-eslint/naming-convention -- Monaco API */
 /**
  * TypeAcquisitionService Tests
@@ -16,7 +17,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type * as Monaco from 'monaco-editor';
-import { TypeAcquisitionService } from '#lib/type-acquisition-service.js';
+import { TypeAcquisitionService, generateStubDeclarations } from '#lib/type-acquisition-service.js';
 import type { StaticTypeDefinition } from '#lib/type-acquisition-service.js';
 
 // =============================================================================
@@ -152,6 +153,7 @@ function createMockMonaco(): {
   };
 
   return {
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- mock proxy type not assignable to Monaco
     monaco: monaco as unknown as typeof Monaco & MockMonaco,
     fireModelCreate(model: MockMonacoModel): void {
       for (const listener of modelCreateListeners) {
@@ -172,20 +174,23 @@ function createMockMonaco(): {
 
 // Mock the entire module to avoid WASM initialization in tests
 vi.mock('es-module-lexer', () => {
+  type MockImport = { n: string; s: number; e: number; ss: number; se: number; d: number };
+  type MockExport = { s: number; e: number; ls: number; le: number; n: string; ln: string };
+
   let initialized = false;
   return {
-    // eslint-disable-next-line promise/prefer-await-to-then -- test setup
+    // oxlint-disable-next-line promise/prefer-await-to-then -- test setup
     init: Promise.resolve().then(() => {
       initialized = true;
     }),
-    parse(code: string): [Array<{ n: string; s: number; e: number; ss: number; se: number; d: number }>] {
+    parse(code: string): [MockImport[], MockExport[]] {
       if (!initialized) {
         throw new Error('es-module-lexer not initialized');
       }
 
       // Simple regex-based import parser for tests
-      const imports: Array<{ n: string; s: number; e: number; ss: number; se: number; d: number }> = [];
-      const importRegex = /import\s+(?:.*?\s+from\s+)?['"]([^'"]+)['"]/g;
+      const imports: MockImport[] = [];
+      const importRegex = /import\s+(?:.*?\s+from\s+)?["']([^"']+)["']/g;
       let match;
 
       while ((match = importRegex.exec(code)) !== null) {
@@ -201,7 +206,47 @@ vi.mock('es-module-lexer', () => {
         });
       }
 
-      return [imports];
+      // Simple regex-based export parser for tests
+      // Handles: export { local as name, ... } and export default
+      const exports: MockExport[] = [];
+      const namedExportRegex = /(\w+)\s+as\s+(\w+)/g;
+      const exportBlockRegex = /export\s*{([^}]+)}/g;
+      let blockMatch;
+
+      while ((blockMatch = exportBlockRegex.exec(code)) !== null) {
+        const block = blockMatch[1]!;
+        let namedMatch;
+        while ((namedMatch = namedExportRegex.exec(block)) !== null) {
+          const localName = namedMatch[1]!;
+          const exportedName = namedMatch[2]!;
+          const nameStart = blockMatch.index + blockMatch[0].indexOf(exportedName, namedMatch.index);
+          exports.push({
+            s: nameStart,
+            e: nameStart + exportedName.length,
+            ls: nameStart - exportedName.length - 4,
+            le: nameStart - 4,
+            n: exportedName,
+            ln: localName,
+          });
+        }
+      }
+
+      // Handle export default
+      const defaultRegex = /export\s+default\s/g;
+      let defaultMatch;
+      while ((defaultMatch = defaultRegex.exec(code)) !== null) {
+        const nameStart = defaultMatch.index + defaultMatch[0].indexOf('default');
+        exports.push({
+          s: nameStart,
+          e: nameStart + 7,
+          ls: -1,
+          le: -1,
+          n: 'default',
+          ln: '',
+        });
+      }
+
+      return [imports, exports];
     },
   };
 });
@@ -466,7 +511,7 @@ describe('TypeAcquisitionService', () => {
       // Should fetch 'lodash' not 'lodash/debounce'
       expect(mockFetch).toHaveBeenCalledWith(
         'https://esm.sh/lodash',
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
     });
@@ -493,7 +538,7 @@ describe('TypeAcquisitionService', () => {
 
       expect(mockFetch).toHaveBeenCalledWith(
         'https://esm.sh/@jscad/modeling',
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
     });
@@ -613,7 +658,7 @@ describe('TypeAcquisitionService', () => {
 
       expect(mockFetch).toHaveBeenCalledWith(
         'https://esm.sh/lodash',
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
     });
@@ -647,7 +692,7 @@ describe('TypeAcquisitionService', () => {
       expect(mockFetch).toHaveBeenNthCalledWith(
         2,
         'https://esm.sh/v135/lodash@4.17.21/index.d.ts',
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
     });
@@ -721,7 +766,7 @@ describe('TypeAcquisitionService', () => {
 
       // Session change
       mockFetch.mockClear();
-      service.onBuildSessionChange();
+      service.onProjectSessionChange();
 
       // Re-trigger scan
       vi.advanceTimersByTime(100); // RequestIdleCallback deferred
@@ -773,7 +818,7 @@ describe('TypeAcquisitionService', () => {
       expect(mockFetch).toHaveBeenCalledTimes(1);
 
       // Change session
-      service.onBuildSessionChange();
+      service.onProjectSessionChange();
 
       // Resolve the stale fetch
       resolveFetch?.({
@@ -818,7 +863,7 @@ describe('TypeAcquisitionService', () => {
         .value as MockDisposable;
 
       // Session change
-      service.onBuildSessionChange();
+      service.onProjectSessionChange();
 
       expect(tsDisposable.dispose).toHaveBeenCalled();
       expect(jsDisposable.dispose).toHaveBeenCalled();
@@ -828,7 +873,7 @@ describe('TypeAcquisitionService', () => {
       const tsDisposable = mockMonaco.monaco.typescript.typescriptDefaults.addExtraLib.mock.results[0]!
         .value as MockDisposable;
 
-      service.onBuildSessionChange();
+      service.onProjectSessionChange();
 
       // Static type disposable should NOT be disposed
       expect(tsDisposable.dispose).not.toHaveBeenCalled();
@@ -852,7 +897,7 @@ describe('TypeAcquisitionService', () => {
 
       expect(mockFetch).toHaveBeenCalledWith(
         expect.any(String),
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
     });
@@ -917,7 +962,7 @@ describe('TypeAcquisitionService', () => {
 
       // Session change to clear acquiredTypes (but failedPackages timestamp remains)
       mockFetch.mockClear();
-      service.onBuildSessionChange();
+      service.onProjectSessionChange();
 
       // Advance past retry delay
       vi.advanceTimersByTime(61_000);
@@ -925,7 +970,7 @@ describe('TypeAcquisitionService', () => {
       vi.advanceTimersByTime(600);
       await vi.advanceTimersByTimeAsync(10);
 
-      // FailedPackages was cleared by onBuildSessionChange, so it should retry
+      // FailedPackages was cleared by onProjectSessionChange, so it should retry
       expect(mockFetch).toHaveBeenCalled();
     });
   });
@@ -1022,7 +1067,7 @@ describe('TypeAcquisitionService', () => {
         ok: true,
         headers: { get: () => null },
       });
-      service.onBuildSessionChange();
+      service.onProjectSessionChange();
 
       // Retry should work immediately (AbortError doesn't count as failure)
       fireContentChange();
@@ -1072,7 +1117,7 @@ describe('TypeAcquisitionService', () => {
       // Should have fetched types for the package
       expect(mockFetch).toHaveBeenCalledWith(
         'https://esm.sh/replicad-decorate',
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
     });
@@ -1172,7 +1217,7 @@ describe('TypeAcquisitionService', () => {
       expect(mockFetch).toHaveBeenCalledTimes(1);
       expect(mockFetch).toHaveBeenCalledWith(
         'https://esm.sh/replicad-decorate',
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
     });
@@ -1200,7 +1245,7 @@ describe('TypeAcquisitionService', () => {
 
       expect(mockFetch).toHaveBeenCalledWith(
         'https://esm.sh/@jscad/modeling',
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
     });
@@ -1285,7 +1330,7 @@ describe('TypeAcquisitionService', () => {
       expect(cdnUrlCall).toBeDefined();
 
       // Session change should dispose CDN alias libs
-      service.onBuildSessionChange();
+      service.onProjectSessionChange();
 
       // The CDN URL lib disposable should have been disposed
       const cdnUrlCallIndex = tsDefaults.addExtraLib.mock.calls.indexOf(cdnUrlCall!);
@@ -1323,7 +1368,7 @@ describe('TypeAcquisitionService', () => {
       // Should have fetched types for the package via esm.sh
       expect(mockFetch).toHaveBeenCalledWith(
         'https://esm.sh/qrcode-generator',
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expected AbortSignal
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
 
@@ -1340,6 +1385,330 @@ describe('TypeAcquisitionService', () => {
         expect.stringContaining("declare module 'qrcode-generator'"),
         'file:///node_modules/qrcode-generator/index.d.ts',
       );
+    });
+  });
+
+  // =========================================================================
+  // Stub type generation (JS-only packages)
+  // =========================================================================
+
+  describe('stub type generation', () => {
+    beforeEach(() => {
+      service.initialize(mockMonaco.monaco, { staticTypes: [] });
+    });
+
+    it('should generate stub types when X-TypeScript-Types header is missing but X-ESM-Path is present', async () => {
+      const jsSource = 'var a=1,b=2;export{a as addGrid,b as addHoneycomb};';
+      const mockFetch = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          headers: {
+            get: (header: string) => (header === 'X-ESM-Path' ? '/pkg@1.0.0/es2022/pkg.mjs' : null),
+          },
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          text: async () => jsSource,
+        });
+      vi.stubGlobal('fetch', mockFetch);
+
+      const { model } = createMockModel({
+        content: "import { addGrid } from 'pure-js-pkg';",
+      });
+      mockMonaco.monaco._addModel(model);
+
+      service.startWatching();
+      vi.advanceTimersByTime(600);
+      await vi.advanceTimersByTimeAsync(50);
+
+      // Should have fetched the actual module source via X-ESM-Path
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      expect(mockFetch).toHaveBeenNthCalledWith(
+        2,
+        'https://esm.sh/pkg@1.0.0/es2022/pkg.mjs',
+        expect.objectContaining({ signal: expect.any(AbortSignal) as AbortSignal }),
+      );
+
+      // Should inject stub types
+      const tsDefaults = mockMonaco.monaco.typescript.typescriptDefaults;
+      expect(tsDefaults.addExtraLib).toHaveBeenCalledWith(
+        expect.stringContaining("declare module 'pure-js-pkg'"),
+        'file:///node_modules/pure-js-pkg/index.d.ts',
+      );
+
+      // Stub should contain the export names
+      const call = tsDefaults.addExtraLib.mock.calls.find(
+        (c: unknown[]) => typeof c[0] === 'string' && c[0].includes("declare module 'pure-js-pkg'"),
+      );
+      expect(call).toBeDefined();
+      const content = call![0] as string;
+      expect(content).toContain('export const addGrid: any;');
+      expect(content).toContain('export const addHoneycomb: any;');
+    });
+
+    it('should handle default exports in stub types', async () => {
+      const jsSource = 'var a=1;export default a;export{a as named};';
+      const mockFetch = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          headers: {
+            get: (header: string) => (header === 'X-ESM-Path' ? '/pkg@1.0.0/es2022/pkg.mjs' : null),
+          },
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          text: async () => jsSource,
+        });
+      vi.stubGlobal('fetch', mockFetch);
+
+      const { model } = createMockModel({
+        content: "import pkg from 'default-export-pkg';",
+      });
+      mockMonaco.monaco._addModel(model);
+
+      service.startWatching();
+      vi.advanceTimersByTime(600);
+      await vi.advanceTimersByTimeAsync(50);
+
+      const tsDefaults = mockMonaco.monaco.typescript.typescriptDefaults;
+      const call = tsDefaults.addExtraLib.mock.calls.find(
+        (c: unknown[]) => typeof c[0] === 'string' && c[0].includes("declare module 'default-export-pkg'"),
+      );
+      expect(call).toBeDefined();
+      const content = call![0] as string;
+      expect(content).toContain('export default _default;');
+      expect(content).toContain('export const named: any;');
+    });
+
+    it('should fall back to entry module body when X-ESM-Path is missing', async () => {
+      const jsSource = 'var x=1;export{x as myExport};';
+      const mockFetch = vi.fn().mockResolvedValueOnce({
+        ok: true,
+        headers: { get: () => null },
+        text: async () => jsSource,
+      });
+      vi.stubGlobal('fetch', mockFetch);
+
+      const { model } = createMockModel({
+        content: "import { myExport } from 'no-path-pkg';",
+      });
+      mockMonaco.monaco._addModel(model);
+
+      service.startWatching();
+      vi.advanceTimersByTime(600);
+      await vi.advanceTimersByTimeAsync(50);
+
+      // Only one fetch (no X-ESM-Path to follow)
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+
+      const tsDefaults = mockMonaco.monaco.typescript.typescriptDefaults;
+      const call = tsDefaults.addExtraLib.mock.calls.find(
+        (c: unknown[]) => typeof c[0] === 'string' && c[0].includes("declare module 'no-path-pkg'"),
+      );
+      expect(call).toBeDefined();
+      expect(call![0] as string).toContain('export const myExport: any;');
+    });
+
+    it('should mark as acquired without injection when no exports found', async () => {
+      const jsSource = 'console.log("side effect only");';
+      const mockFetch = vi.fn().mockResolvedValueOnce({
+        ok: true,
+        headers: { get: () => null },
+        text: async () => jsSource,
+      });
+      vi.stubGlobal('fetch', mockFetch);
+
+      const { model, fireContentChange } = createMockModel({
+        content: "import 'side-effect-pkg';",
+      });
+      mockMonaco.monaco._addModel(model);
+
+      service.startWatching();
+      vi.advanceTimersByTime(600);
+      await vi.advanceTimersByTimeAsync(50);
+
+      // No types should be injected
+      const tsDefaults = mockMonaco.monaco.typescript.typescriptDefaults;
+      expect(tsDefaults.addExtraLib).not.toHaveBeenCalled();
+
+      // Should not re-fetch on subsequent scans
+      mockFetch.mockClear();
+      fireContentChange();
+      vi.advanceTimersByTime(600);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('should cache stub types across sessions', async () => {
+      const jsSource = 'var a=1;export{a as cachedExport};';
+      const mockFetch = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          headers: {
+            get: (header: string) => (header === 'X-ESM-Path' ? '/pkg@1.0.0/es2022/pkg.mjs' : null),
+          },
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          text: async () => jsSource,
+        });
+      vi.stubGlobal('fetch', mockFetch);
+
+      const { model, fireContentChange } = createMockModel({
+        content: "import { cachedExport } from 'cached-stub-pkg';",
+      });
+      mockMonaco.monaco._addModel(model);
+
+      service.startWatching();
+      vi.advanceTimersByTime(600);
+      await vi.advanceTimersByTimeAsync(50);
+
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+
+      // Session change
+      mockFetch.mockClear();
+      service.onProjectSessionChange();
+
+      // Re-trigger scan
+      vi.advanceTimersByTime(100);
+      fireContentChange();
+      vi.advanceTimersByTime(600);
+      await vi.advanceTimersByTimeAsync(50);
+
+      // Should NOT fetch again (cached)
+      expect(mockFetch).not.toHaveBeenCalled();
+
+      // But should re-inject
+      const tsDefaults = mockMonaco.monaco.typescript.typescriptDefaults;
+      expect(tsDefaults.addExtraLib).toHaveBeenCalledWith(
+        expect.stringContaining("declare module 'cached-stub-pkg'"),
+        'file:///node_modules/cached-stub-pkg/index.d.ts',
+      );
+    });
+
+    it('should inject stub types for CDN URL imports of typeless packages', async () => {
+      const jsSource = 'var a=1;export{a as cdnExport};';
+      const mockFetch = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          headers: {
+            get: (header: string) => (header === 'X-ESM-Path' ? '/pkg@1.0.0/es2022/pkg.mjs' : null),
+          },
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          text: async () => jsSource,
+        });
+      vi.stubGlobal('fetch', mockFetch);
+
+      const cdnUrl = 'https://cdn.jsdelivr.net/npm/cdn-js-pkg/dist/index.js';
+      const { model } = createMockModel({
+        content: `import { cdnExport } from '${cdnUrl}';`,
+      });
+      mockMonaco.monaco._addModel(model);
+
+      service.startWatching();
+      vi.advanceTimersByTime(600);
+      await vi.advanceTimersByTimeAsync(50);
+
+      const tsDefaults = mockMonaco.monaco.typescript.typescriptDefaults;
+
+      // Should inject under the CDN URL
+      expect(tsDefaults.addExtraLib).toHaveBeenCalledWith(
+        expect.stringContaining(`declare module '${cdnUrl}'`),
+        expect.any(String),
+      );
+
+      // Should also inject under the bare package name
+      expect(tsDefaults.addExtraLib).toHaveBeenCalledWith(
+        expect.stringContaining("declare module 'cdn-js-pkg'"),
+        'file:///node_modules/cdn-js-pkg/index.d.ts',
+      );
+    });
+
+    it('should respect epoch during stub generation', async () => {
+      let resolveSourceFetch: ((value: unknown) => void) | undefined;
+      const mockFetch = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          headers: {
+            get: (header: string) => (header === 'X-ESM-Path' ? '/pkg@1.0.0/es2022/pkg.mjs' : null),
+          },
+        })
+        .mockImplementationOnce(
+          async () =>
+            new Promise((resolve) => {
+              resolveSourceFetch = resolve;
+            }),
+        );
+      vi.stubGlobal('fetch', mockFetch);
+
+      const { model } = createMockModel({
+        content: "import { fn } from 'epoch-pkg';",
+      });
+      mockMonaco.monaco._addModel(model);
+
+      service.startWatching();
+      vi.advanceTimersByTime(600);
+      await vi.advanceTimersByTimeAsync(50);
+
+      // Source fetch is in-flight -- change session
+      service.onProjectSessionChange();
+
+      // Resolve the stale source fetch
+      resolveSourceFetch?.({
+        ok: true,
+        text: async () => 'var a=1;export{a as fn};',
+      });
+      await vi.advanceTimersByTimeAsync(50);
+
+      // Types should NOT have been injected (epoch mismatch)
+      const tsDefaults = mockMonaco.monaco.typescript.typescriptDefaults;
+      const epochCall = tsDefaults.addExtraLib.mock.calls.find(
+        (c: unknown[]) => typeof c[0] === 'string' && c[0].includes("declare module 'epoch-pkg'"),
+      );
+      expect(epochCall).toBeUndefined();
+    });
+
+    it('should mark as acquired when X-ESM-Path fetch fails', async () => {
+      const mockFetch = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          headers: {
+            get: (header: string) => (header === 'X-ESM-Path' ? '/pkg@1.0.0/es2022/pkg.mjs' : null),
+          },
+        })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 404,
+        });
+      vi.stubGlobal('fetch', mockFetch);
+
+      const { model, fireContentChange } = createMockModel({
+        content: "import { fn } from 'missing-source-pkg';",
+      });
+      mockMonaco.monaco._addModel(model);
+
+      service.startWatching();
+      vi.advanceTimersByTime(600);
+      await vi.advanceTimersByTimeAsync(50);
+
+      // No types should be injected
+      const tsDefaults = mockMonaco.monaco.typescript.typescriptDefaults;
+      expect(tsDefaults.addExtraLib).not.toHaveBeenCalled();
+
+      // Should not re-fetch
+      mockFetch.mockClear();
+      fireContentChange();
+      vi.advanceTimersByTime(600);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(mockFetch).not.toHaveBeenCalled();
     });
   });
 
@@ -1411,5 +1780,44 @@ describe('TypeAcquisitionService', () => {
       // Advance past debounce -- should not trigger errors
       vi.advanceTimersByTime(1000);
     });
+  });
+});
+
+// =============================================================================
+// generateStubDeclarations
+// =============================================================================
+
+describe('generateStubDeclarations', () => {
+  const jsdoc = '  /** This package does not provide type declarations. Exported as `any`. */';
+
+  it('should generate export const declarations with JSDoc for named exports', () => {
+    const result = generateStubDeclarations(['addGrid', 'addHoneycomb']);
+    expect(result).toBe([jsdoc, '  export const addGrid: any;', jsdoc, '  export const addHoneycomb: any;'].join('\n'));
+  });
+
+  it('should generate export default with JSDoc for default export', () => {
+    const result = generateStubDeclarations(['default']);
+    expect(result).toContain(jsdoc);
+    expect(result).toContain('const _default: any;');
+    expect(result).toContain('export default _default;');
+  });
+
+  it('should handle mix of named and default exports', () => {
+    const result = generateStubDeclarations(['foo', 'default', 'bar']);
+    expect(result).toContain('export const foo: any;');
+    expect(result).toContain('export const bar: any;');
+    expect(result).toContain('export default _default;');
+    expect(result).not.toContain('export const default');
+  });
+
+  it('should include JSDoc on every export', () => {
+    const result = generateStubDeclarations(['a', 'b']);
+    const jsdocCount = result.split(jsdoc).length - 1;
+    expect(jsdocCount).toBe(2);
+  });
+
+  it('should return empty string for empty export list', () => {
+    const result = generateStubDeclarations([]);
+    expect(result).toBe('');
   });
 });

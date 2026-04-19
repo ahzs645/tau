@@ -1,0 +1,19 @@
+{
+  "name": "@taucad/scripts",
+  "version": "0.0.0",
+  "description": "Tau workspace scripts and CLI tools",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "repos": "./dist/repos.mjs"
+  },
+  "dependencies": {
+    "@inkjs/ui": "catalog:",
+    "ink": "catalog:",
+    "js-yaml": "catalog:",
+    "react": "catalog:"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "catalog:"
+  }
+}

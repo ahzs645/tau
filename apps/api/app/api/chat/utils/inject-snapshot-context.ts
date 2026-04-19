@@ -1,12 +1,6 @@
 import type { UIMessage } from 'ai';
 import type { ChatSnapshot } from '@taucad/chat';
-
-type FileTreeEntry = {
-  path: string;
-  name: string;
-  type: 'file' | 'dir';
-  size: number;
-};
+import type { FileTreeEntry } from '@taucad/types';
 
 type TreeNode = {
   name: string;
@@ -80,7 +74,9 @@ function renderTree(node: TreeNode, indent = ''): string {
 
   // Sort children: directories first, then files, alphabetically within each group
   const sortedChildren = [...node.children.entries()].sort((a, b) => {
+    // oxlint-disable-next-line unicorn-js/prevent-abbreviations -- short name used in sort comparator
     const aIsDir = a[1].type === 'dir';
+    // oxlint-disable-next-line unicorn-js/prevent-abbreviations -- short name used in sort comparator
     const bIsDir = b[1].type === 'dir';
     if (aIsDir !== bIsDir) {
       return aIsDir ? -1 : 1;
@@ -118,7 +114,7 @@ function renderTree(node: TreeNode, indent = ''): string {
  *   - main.scad (5KB)
  * ```
  */
-function generateFilesystemSnapshot(entries: FileTreeEntry[], rootPath = '/project/'): string {
+function generateFileSystemSnapshot(entries: FileTreeEntry[], rootPath = '/project/'): string {
   if (entries.length === 0) {
     return `${rootPath}\n  (empty)`;
   }
@@ -174,7 +170,7 @@ Files currently open in the editor tabs: ${fileList}
 
   // Add filesystem context - generate tree from file entries
   if (snapshot.fileTree && snapshot.fileTree.length > 0) {
-    const filesystemSnapshot = generateFilesystemSnapshot(snapshot.fileTree);
+    const filesystemSnapshot = generateFileSystemSnapshot(snapshot.fileTree);
     contextParts.push(`<project_layout>
 Below is a snapshot of the current project's file structure:
 
@@ -187,15 +183,14 @@ ${filesystemSnapshot}
     return messages;
   }
 
-  // Wrap all context in editor_context tags
-  const editorContext = `<editor_context>
+  const editorContext = `<system-reminder>
 ${contextParts.join('\n\n')}
-</editor_context>
+</system-reminder>
 
 `;
 
   // Prepend a new text part with the editor context at the beginning
-  const contextPart = { type: 'text' as const, text: editorContext };
+  const contextPart = { type: 'text', text: editorContext };
   const updatedParts = [contextPart, ...lastUserMessage.parts];
 
   return [

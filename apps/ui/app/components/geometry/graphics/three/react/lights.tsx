@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useDeferredValue, useRef } from 'react';
 import type * as THREE from 'three';
 import { useThree, useFrame } from '@react-three/fiber';
 import { Environment, Lightformer } from '@react-three/drei';
@@ -9,8 +9,11 @@ import {
   environmentBaseIntensity,
   defaultHeadlampConfig,
   lightingUserDataKeys,
+  darkModeIntensityScale,
+  darkModeAmbientBoost,
 } from '#components/geometry/graphics/three/utils/lights.utils.js';
 import type { SceneLightingConfig } from '#components/geometry/graphics/three/utils/lights.utils.js';
+import { Theme, useTheme } from '#hooks/use-theme.js';
 
 /** Environment cubemap resolution (px). Higher = sharper specular reflections. */
 const envResolution = 512;
@@ -77,13 +80,19 @@ export function Lights({
   const { camera, scene } = useThree();
   const cameraLightReference = useRef<THREE.DirectionalLight>(null);
   const ambientReference = useRef<THREE.AmbientLight>(null);
+  const { theme } = useTheme();
+  const isDark = theme === Theme.DARK;
 
   // Clamp sceneRadius to avoid zero/tiny values before geometry loads
-  const r = Math.max(sceneRadius, 1);
+  const clampedSceneRadius = Math.max(sceneRadius, 1);
 
   // Keep clamped radius accessible in useFrame without re-subscribing
-  const radiusRef = useRef(r);
-  radiusRef.current = r;
+  const radiusRef = useRef(clampedSceneRadius);
+  radiusRef.current = clampedSceneRadius;
+
+  // Theme-based intensity factors (1.0 in light mode, reduced in dark mode)
+  const themeIntensityScale = isDark ? darkModeIntensityScale : 1;
+  const themeAmbientBoost = isDark ? darkModeAmbientBoost : 1;
 
   // Per-frame updates delegated to the shared applyLightingForCamera utility.
   // This ensures the live renderer and the offline screenshot renderer apply
@@ -94,6 +103,7 @@ export function Lights({
     scene.userData[lightingUserDataKeys.config] = {
       sceneRadius: radiusRef.current,
       upDirection,
+      themeIntensityScale,
     } satisfies SceneLightingConfig;
 
     applyLightingForCamera({
@@ -108,11 +118,15 @@ export function Lights({
         ambientIntensity: ambientBaseIntensity,
         environmentIntensity: environmentBaseIntensity,
         headlampConfig: defaultHeadlampConfig,
+        themeIntensityScale,
+        themeAmbientBoost,
       },
     });
   });
 
-  const showEnvironment = !enableMatcap && (environmentPreset === 'studio' || environmentPreset === 'neutral');
+  const showEnvironment = useDeferredValue(
+    !enableMatcap && (environmentPreset === 'studio' || environmentPreset === 'neutral'),
+  );
 
   return (
     <>
@@ -127,12 +141,12 @@ export function Lights({
       <directionalLight
         ref={cameraLightReference}
         intensity={headlampBaseIntensity}
-        color="white"
+        color='white'
         userData={{ [lightingUserDataKeys.headlamp]: true }}
       />
 
       {showEnvironment ? (
-        <Environment resolution={envResolution}>
+        <Environment resolution={envResolution} near={clampedSceneRadius * 0.01} far={clampedSceneRadius * 20}>
           {environmentPreset === 'studio' ? (
             <>
               {/* ── Key panel (right-upper in camera space) ── */}
@@ -140,43 +154,43 @@ export function Lights({
                   camera with moderate upward offset. Creates the NE-bright
                   gradient (NNE, ENE lit) while keeping NNW dark. */}
               <Lightformer
-                form="rect"
+                form='rect'
                 intensity={studioKeyIntensity}
-                position={[r * 4, r * 1.5, r]}
+                position={[clampedSceneRadius * 4, clampedSceneRadius * 1.5, clampedSceneRadius]}
                 rotation={[Math.PI / 8, -Math.PI / 3, 0]}
-                scale={[r * 4, r * 4, 1]}
+                scale={[clampedSceneRadius * 4, clampedSceneRadius * 4, 1]}
               />
               {/* ── Left-upper fill (left-upper in camera space) ── */}
               {/* Illuminates left-facing L sections (WNW = NW-left) that the
                   rightward key cannot reach. Env_x dominant negative with moderate
                   +env_y so WNW (env_y=0.38) gets more than WSW (env_y=-0.38). */}
               <Lightformer
-                form="rect"
+                form='rect'
                 intensity={studioLeftFillIntensity}
-                position={[-r * 3, r, r * 0.5]}
+                position={[-clampedSceneRadius * 3, clampedSceneRadius, clampedSceneRadius * 0.5]}
                 rotation={[Math.PI / 8, Math.PI / 3, 0]}
-                scale={[r * 4, r * 4, 1]}
+                scale={[clampedSceneRadius * 4, clampedSceneRadius * 4, 1]}
               />
               {/* ── Top panel (overhead in camera space) ── */}
               {/* Reduced overhead accent — kept low to avoid over-brightening
                   NNW (D section) which has high env_y normal component. */}
               <Lightformer
-                form="rect"
+                form='rect'
                 intensity={studioTopIntensity}
-                position={[0, r * 3, 0]}
+                position={[0, clampedSceneRadius * 3, 0]}
                 rotation={[Math.PI / 2, 0, 0]}
-                scale={[r * 3, r * 3, 1]}
+                scale={[clampedSceneRadius * 3, clampedSceneRadius * 3, 1]}
               />
               {/* ── Ground panel (below-right in camera space) ── */}
               {/* Bright ground for bottom-view luminosity. Offset in +X so that
                   the bottom-face specular shifts toward the right (matching the
                   asymmetric rig's "brighter on right" pattern). */}
               <Lightformer
-                form="rect"
+                form='rect'
                 intensity={studioGroundIntensity}
-                position={[r * 2, -r * 3, 0]}
+                position={[clampedSceneRadius * 2, -clampedSceneRadius * 3, 0]}
                 rotation={[-Math.PI / 2, 0, 0]}
-                scale={[r * 6, r * 6, 1]}
+                scale={[clampedSceneRadius * 6, clampedSceneRadius * 6, 1]}
               />
               {/* ── Specular highlight panel (upper-right in camera space) ── */}
               {/* Positioned in the (+X, -Y, +Z) octant to create a focused specular
@@ -187,28 +201,28 @@ export function Lights({
                   top-right corner. Negligible contribution to front/side face
                   speculars (~61° from front reflection direction). */}
               <Lightformer
-                form="rect"
+                form='rect'
                 intensity={studioBackFillIntensity}
-                position={[r * 2, -r * 3, r * 4]}
-                scale={[r * 2, r * 2, 1]}
+                position={[clampedSceneRadius * 2, -clampedSceneRadius * 3, clampedSceneRadius * 4]}
+                scale={[clampedSceneRadius * 2, clampedSceneRadius * 2, 1]}
               />
             </>
           ) : (
             <>
               {/* Neutral preset: reduced intensity, minimal reflections */}
               <Lightformer
-                form="rect"
+                form='rect'
                 intensity={neutralKeyIntensity}
-                position={[0, r * 3, 0]}
+                position={[0, clampedSceneRadius * 3, 0]}
                 rotation={[Math.PI / 2, 0, 0]}
-                scale={[r * 6, r * 6, 1]}
+                scale={[clampedSceneRadius * 6, clampedSceneRadius * 6, 1]}
               />
               <Lightformer
-                form="rect"
+                form='rect'
                 intensity={neutralGroundIntensity}
-                position={[0, -r * 3, 0]}
+                position={[0, -clampedSceneRadius * 3, 0]}
                 rotation={[-Math.PI / 2, 0, 0]}
-                scale={[r * 6, r * 6, 1]}
+                scale={[clampedSceneRadius * 6, clampedSceneRadius * 6, 1]}
               />
             </>
           )}
@@ -216,14 +230,18 @@ export function Lights({
       ) : null}
 
       {/* Soft preset: hemisphere + ambient only, no environment map */}
-      {!enableMatcap && environmentPreset === 'soft' ? <hemisphereLight args={['#ffffff', '#444444', 0.8]} /> : null}
+      {!enableMatcap && environmentPreset === 'soft' ? (
+        // oxlint-disable-next-line tau-lint/no-hardcoded-color -- Three.js light color
+        <hemisphereLight args={['#ffffff', '#444444', 0.8 * themeIntensityScale]} />
+      ) : null}
 
       {/* Performance preset: minimal lights, no environment (equivalent to legacy setup) */}
       {!enableMatcap && environmentPreset === 'performance' ? (
         <>
-          <hemisphereLight args={['#ffffff', '#444444', 1]} />
-          <directionalLight color="white" intensity={2} position={[-1, -3, 5]} />
-          <directionalLight color="white" intensity={2} position={[1, 3, 5]} />
+          {/* oxlint-disable-next-line tau-lint/no-hardcoded-color -- Three.js light color */}
+          <hemisphereLight args={['#ffffff', '#444444', themeIntensityScale]} />
+          <directionalLight color='white' intensity={2 * themeIntensityScale} position={[-1, -3, 5]} />
+          <directionalLight color='white' intensity={2 * themeIntensityScale} position={[1, 3, 5]} />
         </>
       ) : null}
     </>

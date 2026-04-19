@@ -12,7 +12,7 @@ type ControlsProto = {
 export type TransformControlsProps = Omit<ThreeElement<typeof TransformControlsImpl>, 'ref' | 'args'> &
   Omit<ThreeElements['group'], 'ref'> & {
     readonly object?: THREE.Object3D | React.RefObject<THREE.Object3D>;
-    // eslint-disable-next-line react/boolean-prop-naming -- copied verbatim, keeping the same API intentionally here.
+    // oxlint-disable-next-line react-js/boolean-prop-naming -- third-party component prop
     readonly enabled?: boolean;
     readonly axis?: string | undefined;
     readonly domElement?: HTMLElement;
@@ -22,11 +22,11 @@ export type TransformControlsProps = Omit<ThreeElement<typeof TransformControlsI
     readonly scaleSnap?: number | undefined;
     readonly space?: 'world' | 'local';
     readonly size?: number;
-    // eslint-disable-next-line react/boolean-prop-naming -- copied verbatim, keeping the same API intentionally here.
+    // oxlint-disable-next-line react-js/boolean-prop-naming -- third-party component prop
     readonly showX?: boolean;
-    // eslint-disable-next-line react/boolean-prop-naming -- copied verbatim, keeping the same API intentionally here.
+    // oxlint-disable-next-line react-js/boolean-prop-naming -- third-party component prop
     readonly showY?: boolean;
-    // eslint-disable-next-line react/boolean-prop-naming -- copied verbatim, keeping the same API intentionally here.
+    // oxlint-disable-next-line react-js/boolean-prop-naming -- third-party component prop
     readonly showZ?: boolean;
     readonly children?: React.ReactElement<THREE.Object3D>;
     readonly camera?: THREE.Camera;
@@ -66,7 +66,8 @@ export const TransformControls: ForwardRefComponent<TransformControlsProps, Tran
       },
       ref,
     ) => {
-      const defaultControls = useThree((state) => state.controls) as unknown as ControlsProto | undefined;
+      const rawControls = useThree((state) => state.controls);
+      const defaultControls = rawControls && 'enabled' in rawControls ? (rawControls as ControlsProto) : undefined;
       const gl = useThree((state) => state.gl);
       const events = useThree((state) => state.events);
       const defaultCamera = useThree((state) => state.camera);

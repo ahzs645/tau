@@ -23,11 +23,10 @@ import type {
 } from 'rhino3dm';
 import rhino3dm from 'rhino3dm';
 import { cadMaterialDefaults } from '@taucad/types/constants';
+import type { FileInput } from '@taucad/types';
 import { BaseLoader } from '#loaders/base.loader.js';
-import type { BaseLoaderOptions } from '#loaders/base.loader.js';
-import type { File } from '#types.js';
 import { createNodeIo } from '#gltf.utils.js';
-import { createCoordinateTransform, createScalingTransform } from '#gltf.transforms.js';
+import { createReverseCoordinateTransform } from '#gltf.transforms.js';
 
 // Type for rhino3dm geometry JSON structure
 type RhinoGeometryJson = {
@@ -41,55 +40,52 @@ type RhinoGeometryJson = {
   };
 };
 
-type ThreeDmLoaderOptions = {
-  transformYtoZup?: boolean;
-  scaleMetersToMillimeters?: boolean;
-} & BaseLoaderOptions;
+type RhinoConversionContext = {
+  rhinoFile: File3dm;
+  document: Document;
+  buffer: GltfBuffer;
+};
 
 /**
  * Loader for 3dm files using gltf-transform directly (no Three.js dependency).
  */
-export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
+export class ThreeDmLoader extends BaseLoader<Document> {
   private rhino!: RhinoModule;
   private readonly instanceIdToDefinition = new Map<string, InstanceDefinition>();
   private readonly instanceIdToObject = new Map<string, File3dmObject>();
 
-  protected async parseAsync(files: File[], _options: ThreeDmLoaderOptions): Promise<Document> {
+  protected async parseAsync(files: FileInput[]): Promise<Document> {
     await this.initializeRhino();
 
-    const { data } = this.findPrimaryFile(files);
+    const { bytes: data } = this.findPrimaryFile(files);
 
     // Parse the 3dm file using rhino3dm
-    const doc = this.rhino.File3dm.fromByteArray(data);
+    const rhinoFile = this.rhino.File3dm.fromByteArray(data);
 
     // Create gltf-transform document
     const document = new Document();
     const scene = document.createScene();
     const buffer = document.createBuffer();
+    const context: RhinoConversionContext = { rhinoFile, document, buffer };
 
     // Initialize instance maps
-    this.initInstanceMaps(doc);
+    this.initInstanceMaps(rhinoFile);
 
     // Process all objects
-    const objects = doc.objects();
+    const objects = rhinoFile.objects();
     for (let i = 0; i < objects.count; i++) {
       const rhinoObject = objects.get(i);
-      this.processRhinoObject(doc, rhinoObject, [], scene, document, buffer);
+      this.processRhinoObject(rhinoObject, { transformationStack: [], parentNode: scene }, context);
     }
 
     return document;
   }
 
-  protected async mapToGlb(document: Document, options: ThreeDmLoaderOptions): Promise<Uint8Array<ArrayBuffer>> {
+  protected async mapToGlb(document: Document): Promise<Uint8Array<ArrayBuffer>> {
     const io = await createNodeIo();
 
-    // Apply transformations
-    await document.transform(
-      createCoordinateTransform(options.transformYtoZup ?? false),
-      createScalingTransform(options.scaleMetersToMillimeters ?? false),
-    );
+    await document.transform(createReverseCoordinateTransform());
 
-    // Export to GLB
     const glb = await io.writeBinary(document);
     return glb;
   }
@@ -112,14 +108,16 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
 
   /**
    * Initialize instance maps by cataloging all instance definition objects and definitions
+   *
+   * @param rhinoFile - the parsed 3dm file to extract instance definitions from
    */
-  private initInstanceMaps(doc: File3dm): void {
+  private initInstanceMaps(rhinoFile: File3dm): void {
     // Clear previous maps
     this.instanceIdToDefinition.clear();
     this.instanceIdToObject.clear();
 
     // Map all instance definition objects
-    const objects = doc.objects();
+    const objects = rhinoFile.objects();
     for (let i = 0; i < objects.count; i++) {
       const rhinoObject = objects.get(i);
       const attributes = rhinoObject.attributes();
@@ -129,7 +127,7 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
     }
 
     // Map all instance definitions
-    const instanceDefinitions = doc.instanceDefinitions();
+    const instanceDefinitions = rhinoFile.instanceDefinitions();
     for (let i = 0; i < instanceDefinitions.count; i++) {
       const instanceDefinition = instanceDefinitions.get(i);
       this.instanceIdToDefinition.set(instanceDefinition.id, instanceDefinition);
@@ -138,15 +136,18 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
 
   /**
    * Process a Rhino object recursively, handling instances with transformation stack
+   *
+   * @param rhinoObject - the rhino file object to process
+   * @param options - the transformation stack and parent node for placement
+   * @param context - the shared conversion context
    */
   private processRhinoObject(
-    doc: File3dm,
     rhinoObject: File3dmObject,
-    transformationStack: number[][],
-    parentNode: Scene | Node,
-    document: Document,
-    buffer: GltfBuffer,
+    options: { transformationStack: number[][]; parentNode: Scene | Node },
+    context: RhinoConversionContext,
   ): void {
+    const { transformationStack, parentNode } = options;
+    const { rhinoFile } = context;
     const geometry = rhinoObject.geometry();
     const attributes = rhinoObject.attributes();
     const { objectType } = geometry;
@@ -176,13 +177,17 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
         for (const instanceObjectId of instanceObjectIds) {
           if (this.instanceIdToObject.has(instanceObjectId)) {
             const instanceObject = this.instanceIdToObject.get(instanceObjectId);
-            this.processRhinoObject(doc, instanceObject!, newTransformationStack, parentNode, document, buffer);
+            this.processRhinoObject(
+              instanceObject!,
+              { transformationStack: newTransformationStack, parentNode },
+              context,
+            );
           }
         }
       }
     } else {
       // Process regular geometry (Mesh, Extrusion, Brep, etc.)
-      const result = this.createObject(geometry, attributes, doc, document, buffer);
+      const result = this.createObject(geometry, attributes, context);
       if (result) {
         const { node } = result;
 
@@ -195,7 +200,7 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
 
         // Set layer visibility (only for objects not in transformation stack)
         if (transformationStack.length === 0) {
-          const layers = doc.layers();
+          const layers = rhinoFile.layers();
           if (attributes.layerIndex >= 0 && attributes.layerIndex < layers.count) {
             const layer = layers.get(attributes.layerIndex);
             // Store visibility in extras since gltf-transform nodes don't have direct visibility
@@ -212,52 +217,55 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
 
   /**
    * Create gltf-transform objects from Rhino geometry
+   *
+   * @param geometry - the rhino geometry to convert
+   * @param attributes - the object attributes for material and metadata
+   * @param context - the shared conversion context
+   * @returns the created mesh and node, or undefined for unsupported types
    */
   private createObject(
     geometry: GeometryBase,
     attributes: ObjectAttributes,
-    doc: File3dm,
-    document: Document,
-    buffer: GltfBuffer,
+    context: RhinoConversionContext,
   ): { mesh: Mesh; node: Node } | undefined {
     // Get object type name
     const { objectType } = geometry;
 
     switch (objectType) {
       case this.rhino.ObjectType.Mesh: {
-        return this.createMeshFromRhino(geometry as RhinoMesh, attributes, doc, document, buffer);
+        return this.createMeshFromRhino(geometry as RhinoMesh, attributes, context);
       }
 
       case this.rhino.ObjectType.Brep: {
-        return this.createBrepAsMesh(geometry as Brep, attributes, doc, document, buffer);
+        return this.createBrepAsMesh(geometry as Brep, attributes, context);
       }
 
       case this.rhino.ObjectType.Extrusion: {
-        return this.createExtrusionAsMesh(geometry as Extrusion, attributes, doc, document, buffer);
+        return this.createExtrusionAsMesh(geometry as Extrusion, attributes, context);
       }
 
       case this.rhino.ObjectType.Point: {
-        return this.createPointAsPoints(geometry as Point, attributes, doc, document, buffer);
+        return this.createPointAsPoints(geometry as Point, attributes, context);
       }
 
       case this.rhino.ObjectType.PointSet: {
-        return this.createPointSetAsPoints(geometry as PointCloud, attributes, doc, document, buffer);
+        return this.createPointSetAsPoints(geometry as PointCloud, attributes, context);
       }
 
       case this.rhino.ObjectType.Curve: {
-        return this.createCurveAsLine(geometry as Curve, attributes, doc, document, buffer);
+        return this.createCurveAsLine(geometry as Curve, attributes, context);
       }
 
       case this.rhino.ObjectType.TextDot: {
-        return this.createTextDotAsPoints(geometry as TextDot, attributes, doc, document, buffer);
+        return this.createTextDotAsPoints(geometry as TextDot, attributes, context);
       }
 
       case this.rhino.ObjectType.Light: {
-        return this.createLightAsPoints(geometry as Light, attributes, document, buffer);
+        return this.createLightAsPoints(geometry as Light, attributes, context);
       }
 
       case this.rhino.ObjectType.SubD: {
-        return this.createSubdAsMesh(geometry as SubD, attributes, doc, document, buffer);
+        return this.createSubdAsMesh(geometry as SubD, attributes, context);
       }
 
       case this.rhino.ObjectType.InstanceReference: {
@@ -274,14 +282,18 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
 
   /**
    * Create gltf-transform mesh from Rhino Mesh
+   *
+   * @param geometry - Rhino Mesh instance to convert (vertex positions, normals, faces)
+   * @param attributes - the object attributes for material and metadata
+   * @param context - the shared conversion context
+   * @returns the configured glTF mesh and scene node with material and layer metadata applied
    */
   private createMeshFromRhino(
     geometry: RhinoMesh,
     attributes: ObjectAttributes,
-    doc: File3dm,
-    document: Document,
-    buffer: GltfBuffer,
+    context: RhinoConversionContext,
   ): { mesh: Mesh; node: Node } {
+    const { rhinoFile, document, buffer } = context;
     const threeGeometry = geometry.toThreejsJSON() as RhinoGeometryJson;
 
     // Extract vertex data
@@ -318,7 +330,7 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
     }
 
     // Create material
-    const material = this.createGltfMaterial(attributes, doc, document);
+    const material = this.createGltfMaterial(attributes, rhinoFile, document);
     primitive.setMaterial(material);
 
     // Create mesh and node
@@ -326,7 +338,7 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
     const node = document.createNode().setMesh(mesh);
 
     // Set metadata
-    const metadata = this.extractObjectMetadata('Mesh', attributes, doc);
+    const metadata = this.extractObjectMetadata('Mesh', attributes, rhinoFile);
     node.setExtras(metadata);
 
     if (attributes.name) {
@@ -339,13 +351,16 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
 
   /**
    * Create gltf-transform mesh from Rhino BREP by converting faces to mesh
+   *
+   * @param geometry - the rhino BREP geometry
+   * @param attributes - the object attributes for material and metadata
+   * @param context - the shared conversion context
+   * @returns the created mesh and node
    */
   private createBrepAsMesh(
     geometry: Brep,
     attributes: ObjectAttributes,
-    doc: File3dm,
-    document: Document,
-    buffer: GltfBuffer,
+    context: RhinoConversionContext,
   ): { mesh: Mesh; node: Node } {
     const faces = geometry.faces();
     const mesh = new this.rhino.Mesh();
@@ -353,7 +368,7 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
     // Try to convert each face to mesh
     for (let faceIndex = 0; faceIndex < faces.count; faceIndex++) {
       const face = faces.get(faceIndex);
-      // eslint-disable-next-line @typescript-eslint/no-restricted-types -- can be null.
+      // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- can be null.
       const faceMesh = face.getMesh(this.rhino.MeshType.Any) as RhinoMesh | null;
 
       if (faceMesh) {
@@ -367,20 +382,23 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
     }
 
     mesh.compact();
-    return this.createMeshFromRhino(mesh, attributes, doc, document, buffer);
+    return this.createMeshFromRhino(mesh, attributes, context);
   }
 
   /**
    * Create gltf-transform mesh from Rhino Extrusion
+   *
+   * @param geometry - the rhino extrusion geometry
+   * @param attributes - the object attributes for material and metadata
+   * @param context - the shared conversion context
+   * @returns the created mesh and node
    */
   private createExtrusionAsMesh(
     geometry: Extrusion,
     attributes: ObjectAttributes,
-    doc: File3dm,
-    document: Document,
-    buffer: GltfBuffer,
+    context: RhinoConversionContext,
   ): { mesh: Mesh; node: Node } {
-    // eslint-disable-next-line @typescript-eslint/no-restricted-types -- can be null.
+    // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- can be null.
     const mesh = geometry.getMesh(this.rhino.MeshType.Any) as RhinoMesh | null;
 
     if (!mesh) {
@@ -388,22 +406,25 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
       throw new Error('Extrusion geometry is not supported for conversion.');
     }
 
-    return this.createMeshFromRhino(mesh, attributes, doc, document, buffer);
+    return this.createMeshFromRhino(mesh, attributes, context);
   }
 
   /**
    * Create gltf-transform mesh from Rhino SubD
+   *
+   * @param geometry - the rhino SubD geometry
+   * @param attributes - the object attributes for material and metadata
+   * @param context - the shared conversion context
+   * @returns the created mesh and node
    */
   private createSubdAsMesh(
     geometry: SubD,
     attributes: ObjectAttributes,
-    doc: File3dm,
-    document: Document,
-    buffer: GltfBuffer,
+    context: RhinoConversionContext,
   ): { mesh: Mesh; node: Node } {
     geometry.subdivide();
     // @ts-expect-error -- createFromSubDControlNet has incorrect type.
-    // eslint-disable-next-line @typescript-eslint/no-restricted-types -- can be null.
+    // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- can be null.
     const mesh = this.rhino.Mesh.createFromSubDControlNet(geometry) as RhinoMesh | null;
 
     if (!mesh) {
@@ -411,23 +432,33 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
       throw new Error('Failed to create mesh from SubD control net');
     }
 
-    return this.createMeshFromRhino(mesh, attributes, doc, document, buffer);
+    return this.createMeshFromRhino(mesh, attributes, context);
   }
 
   /**
    * Create gltf-transform points from Rhino Point
+   *
+   * @param geometry - the rhino point geometry
+   * @param attributes - the object attributes for material and metadata
+   * @param context - the shared conversion context
+   * @returns the created mesh and node
    */
   private createPointAsPoints(
     geometry: Point,
     attributes: ObjectAttributes,
-    doc: File3dm,
-    document: Document,
-    buffer: GltfBuffer,
+    context: RhinoConversionContext,
   ): { mesh: Mesh; node: Node } {
+    const { rhinoFile, document, buffer } = context;
     const point = geometry.location;
     const positions = new Float32Array([point[0]!, point[1]!, point[2]!]);
 
-    const drawColor = (attributes.drawColor as (doc: File3dm) => { r: number; g: number; b: number })(doc);
+    const drawColor = (
+      attributes.drawColor as (file: File3dm) => {
+        r: number;
+        g: number;
+        b: number;
+      }
+    )(rhinoFile);
     const colors = new Float32Array([drawColor.r / 255, drawColor.g / 255, drawColor.b / 255]);
 
     // Create accessors
@@ -450,7 +481,7 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
     const node = document.createNode().setMesh(mesh);
 
     // Set metadata
-    const metadata = this.extractObjectMetadata('Point', attributes, doc);
+    const metadata = this.extractObjectMetadata('Point', attributes, rhinoFile);
     node.setExtras(metadata);
 
     if (attributes.name) {
@@ -463,14 +494,18 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
 
   /**
    * Create gltf-transform points from Rhino PointSet
+   *
+   * @param geometry - the rhino point cloud geometry
+   * @param attributes - the object attributes for material and metadata
+   * @param context - the shared conversion context
+   * @returns the created mesh and node
    */
   private createPointSetAsPoints(
     geometry: PointCloud,
     attributes: ObjectAttributes,
-    doc: File3dm,
-    document: Document,
-    buffer: GltfBuffer,
+    context: RhinoConversionContext,
   ): { mesh: Mesh; node: Node } {
+    const { rhinoFile, document, buffer } = context;
     const threeGeometry = geometry.toThreejsJSON() as RhinoGeometryJson;
 
     const positions = new Float32Array(threeGeometry.data.attributes.position.array);
@@ -493,7 +528,7 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
 
       material = document.createMaterial().setBaseColorFactor([1, 1, 1, 1]).setDoubleSided(true);
     } else {
-      const color = this.extractColor(attributes, doc);
+      const color = this.extractColor(attributes, rhinoFile);
       material = document.createMaterial().setBaseColorFactor([color.r, color.g, color.b, 1]).setDoubleSided(true);
     }
 
@@ -517,14 +552,18 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
 
   /**
    * Create gltf-transform line from Rhino Curve
+   *
+   * @param geometry - the rhino curve geometry
+   * @param attributes - the object attributes for material and metadata
+   * @param context - the shared conversion context
+   * @returns the created mesh and node
    */
   private createCurveAsLine(
     geometry: Curve,
     attributes: ObjectAttributes,
-    doc: File3dm,
-    document: Document,
-    buffer: GltfBuffer,
+    context: RhinoConversionContext,
   ): { mesh: Mesh; node: Node } {
+    const { rhinoFile, document, buffer } = context;
     const pts = this.curveToPoints(geometry, 100);
     const positions = new Float32Array(pts.length * 3);
 
@@ -544,7 +583,7 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
       .setAttribute('POSITION', positionAccessor);
 
     // Create material with color
-    const color = this.extractColor(attributes, doc);
+    const color = this.extractColor(attributes, rhinoFile);
     const material = document.createMaterial().setBaseColorFactor([color.r, color.g, color.b, 1]).setDoubleSided(true);
     primitive.setMaterial(material);
 
@@ -566,14 +605,18 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
 
   /**
    * Create gltf-transform points from Rhino TextDot (store text in metadata)
+   *
+   * @param geometry - the rhino text dot geometry
+   * @param attributes - the object attributes for material and metadata
+   * @param context - the shared conversion context
+   * @returns the created mesh and node
    */
   private createTextDotAsPoints(
     geometry: TextDot,
     attributes: ObjectAttributes,
-    doc: File3dm,
-    document: Document,
-    buffer: GltfBuffer,
+    context: RhinoConversionContext,
   ): { mesh: Mesh; node: Node } {
+    const { rhinoFile, document, buffer } = context;
     const { point } = geometry;
     const positions = new Float32Array([point[0]!, point[1]!, point[2]!]);
 
@@ -586,7 +629,7 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
       .setAttribute('POSITION', positionAccessor);
 
     // Create material with color
-    const color = this.extractColor(attributes, doc);
+    const color = this.extractColor(attributes, rhinoFile);
     const material = document.createMaterial().setBaseColorFactor([color.r, color.g, color.b, 1]).setDoubleSided(true);
     primitive.setMaterial(material);
 
@@ -611,13 +654,18 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
 
   /**
    * Create gltf-transform points from Rhino Light (lights represented as colored points with metadata)
+   *
+   * @param geometry - the rhino light geometry
+   * @param attributes - the object attributes for metadata
+   * @param context - the shared conversion context
+   * @returns the created mesh and node
    */
   private createLightAsPoints(
     geometry: Light,
     attributes: ObjectAttributes,
-    document: Document,
-    buffer: GltfBuffer,
+    context: RhinoConversionContext,
   ): { mesh: Mesh; node: Node } {
+    const { document, buffer } = context;
     const { location } = geometry;
     const positions = new Float32Array([location[0]!, location[1]!, location[2]!]);
 
@@ -642,6 +690,7 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
     const node = document.createNode().setMesh(mesh);
 
     // Set metadata including light properties
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- rhino3dm LightStyle enum has .name at runtime but not in types
     const lightStyle = geometry.lightStyle as unknown as { name: string };
     const metadata = this.extractObjectMetadata('Light', attributes);
     metadata['lightStyle'] = lightStyle.name;
@@ -674,6 +723,9 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
 
   /**
    * Compose transformation stack by multiplying matrices in order
+   *
+   * @param transformationStack - the ordered stack of 4x4 transformation matrices
+   * @returns the composed 4x4 matrix as a 16-element tuple
    */
   private composeTransformationStack(
     transformationStack: number[][],
@@ -726,6 +778,10 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
 
   /**
    * Multiply two 4x4 matrices (column-major order)
+   *
+   * @param a - the left-hand matrix
+   * @param b - the right-hand matrix
+   * @returns the product matrix
    */
   private multiplyMatrices(a: number[], b: number[]): number[] {
     const result = Array.from({ length: 16 }).fill(0) as number[];
@@ -743,6 +799,10 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
 
   /**
    * Convert curve to points array (simplified)
+   *
+   * @param curve - the rhino curve to sample
+   * @param pointLimit - the maximum number of sample points
+   * @returns the array of sampled 3D points
    */
   private curveToPoints(curve: Curve, pointLimit: number): number[][] {
     const pointCount = Math.min(pointLimit, 100);
@@ -765,10 +825,15 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
 
   /**
    * Create gltf-transform material from Rhino attributes and document
+   *
+   * @param attributes - the object attributes containing material index
+   * @param rhinoFile - the parsed 3dm file to look up materials
+   * @param document - the glTF document to create the material in
+   * @returns the created glTF material
    */
-  private createGltfMaterial(attributes: ObjectAttributes, doc: File3dm, document: Document): Material {
+  private createGltfMaterial(attributes: ObjectAttributes, rhinoFile: File3dm, document: Document): Material {
     // Try to get material from document
-    const materials = doc.materials();
+    const materials = rhinoFile.materials();
     let rhinoMaterial: RhinoMaterial | undefined;
 
     if (attributes.materialIndex >= 0 && attributes.materialIndex < materials.count) {
@@ -780,20 +845,25 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
     }
 
     // Fallback to object draw color
-    const color = this.extractColor(attributes, doc);
+    const color = this.extractColor(attributes, rhinoFile);
     return document
       .createMaterial()
       .setBaseColorFactor([color.r, color.g, color.b, 1])
-      .setMetallicFactor(cadMaterialDefaults.metallicFactor)
+      .setMetallicFactor(cadMaterialDefaults.metalnessFactor)
       .setRoughnessFactor(cadMaterialDefaults.roughnessFactor)
       .setDoubleSided(true);
   }
 
   /**
    * Create gltf-transform material from Rhino Material
+   *
+   * @param rhinoMaterial - the rhino material to convert
+   * @param document - the glTF document to create the material in
+   * @returns the created glTF material
    */
   private createMaterialFromRhinoMaterial(rhinoMaterial: RhinoMaterial, document: Document): Material {
     // Check if it's a PBR material
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- rhino3dm Material and PhysicallyBasedMaterial are structurally disjoint
     const pbrMaterial = rhinoMaterial as unknown as PhysicallyBasedMaterial;
 
     if (pbrMaterial.supported) {
@@ -801,8 +871,18 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
     }
 
     // Create standard material from basic Rhino material
-    const diffuseColor = rhinoMaterial.diffuseColor as unknown as { r: number; g: number; b: number };
-    const specularColor = rhinoMaterial.specularColor as unknown as { r: number; g: number; b: number };
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- rhino3dm types declare diffuseColor as number[] but runtime returns {r,g,b}
+    const diffuseColor = rhinoMaterial.diffuseColor as unknown as {
+      r: number;
+      g: number;
+      b: number;
+    };
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- rhino3dm types declare specularColor as number[] but runtime returns {r,g,b}
+    const specularColor = rhinoMaterial.specularColor as unknown as {
+      r: number;
+      g: number;
+      b: number;
+    };
 
     const material = document
       .createMaterial()
@@ -826,9 +906,17 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
 
   /**
    * Create gltf-transform PBR material from Rhino PBR material
+   *
+   * @param pbrMaterial - the rhino PBR material to convert
+   * @param document - the glTF document to create the material in
+   * @returns the created glTF PBR material
    */
   private createPbrMaterial(pbrMaterial: PhysicallyBasedMaterial, document: Document): Material {
-    const baseColor = pbrMaterial.baseColor as unknown as { r: number; g: number; b: number };
+    const baseColor = pbrMaterial.baseColor as {
+      r: number;
+      g: number;
+      b: number;
+    };
 
     const material = document
       .createMaterial()
@@ -841,13 +929,15 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
       material.setAlphaMode('BLEND');
     }
 
-    // Set emission (if available in the PBR material)
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- rhino3dm types lack emission property on PhysicallyBasedMaterial
     const { emission } = pbrMaterial as unknown as { emission?: number };
     if (emission && emission > 0) {
-      const { emissionColor } = pbrMaterial as unknown as { emissionColor?: { r: number; g: number; b: number } };
-      if (emissionColor) {
-        material.setEmissiveFactor([emissionColor.r / 255, emissionColor.g / 255, emissionColor.b / 255]);
-      }
+      const emissionColor = pbrMaterial.emissionColor as {
+        r: number;
+        g: number;
+        b: number;
+      };
+      material.setEmissiveFactor([emissionColor.r / 255, emissionColor.g / 255, emissionColor.b / 255]);
     }
 
     return material;
@@ -855,10 +945,18 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
 
   /**
    * Extract color from attributes
+   *
+   * @param attributes - the object attributes to extract the draw color from
+   * @param rhinoFile - the parsed 3dm file used to resolve the draw color
+   * @returns the normalized RGB color values (0–1 range)
    */
-  private extractColor(attributes: ObjectAttributes, doc: File3dm): { r: number; g: number; b: number } {
-    // @ts-expect-error -- rhino3dm types are not correct.
-    const drawColor = attributes.drawColor(doc) as { r: number; g: number; b: number };
+  private extractColor(attributes: ObjectAttributes, rhinoFile: File3dm): { r: number; g: number; b: number } {
+    // @ts-expect-error -- rhino3dm types declare drawColor() with no params but runtime accepts File3dm
+    const drawColor = attributes.drawColor(rhinoFile) as {
+      r: number;
+      g: number;
+      b: number;
+    };
     return {
       r: drawColor.r / 255,
       g: drawColor.g / 255,
@@ -868,11 +966,16 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
 
   /**
    * Extract comprehensive metadata from Rhino object attributes
+   *
+   * @param objectType - the geometry type name
+   * @param attributes - the object attributes to extract metadata from
+   * @param rhinoFile - the optional parsed 3dm file for layer info
+   * @returns the metadata record for node extras
    */
   private extractObjectMetadata(
     objectType: string,
     attributes: ObjectAttributes,
-    doc?: File3dm,
+    rhinoFile?: File3dm,
   ): Record<string, unknown> {
     const metadata: Record<string, unknown> = {
       objectType,
@@ -910,8 +1013,8 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
     }
 
     // Add layer information if document is available
-    if (doc && attributes.layerIndex >= 0) {
-      const layers = doc.layers();
+    if (rhinoFile && attributes.layerIndex >= 0) {
+      const layers = rhinoFile.layers();
       if (attributes.layerIndex < layers.count) {
         const layer = layers.get(attributes.layerIndex);
         metadata['layer'] = this.extractLayerInfo(layer);
@@ -923,6 +1026,9 @@ export class ThreeDmLoader extends BaseLoader<Document, ThreeDmLoaderOptions> {
 
   /**
    * Extract layer information
+   *
+   * @param layer - the rhino layer to extract info from
+   * @returns the layer properties record
    */
   private extractLayerInfo(layer: Layer): Record<string, unknown> {
     return {

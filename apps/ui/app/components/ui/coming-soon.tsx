@@ -39,7 +39,7 @@ export function ComingSoon({
   asChild = false,
 }: ComingSoonProperties): React.JSX.Element {
   return (
-    <Badge asChild={asChild} variant="outline" className={cn(comingSoonVariants({ variant, size, className }))}>
+    <Badge asChild={asChild} variant='outline' className={cn(comingSoonVariants({ variant, size, className }))}>
       coming soon
     </Badge>
   );

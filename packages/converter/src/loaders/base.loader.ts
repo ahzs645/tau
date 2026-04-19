@@ -1,7 +1,10 @@
-import type { InputFormat, File } from '#types.js';
+import type { FileExtension, FileInput } from '@taucad/types';
 
+/**
+ * Options shared by all format loaders, carrying the file extension that identifies the input format.
+ */
 export type BaseLoaderOptions = {
-  format: InputFormat;
+  format: FileExtension;
 };
 
 /**
@@ -21,6 +24,7 @@ export abstract class BaseLoader<ParseResult = unknown, Options extends BaseLoad
    * Initialize the loader with options.
    *
    * @param options - The options passed to the loader. These are specific to each loader implementation.
+   * @returns This loader instance for chaining.
    */
   public initialize(options: Options): this {
     this.options = options;
@@ -34,7 +38,7 @@ export abstract class BaseLoader<ParseResult = unknown, Options extends BaseLoad
    * @param options - Optional runtime options that may override initialization options.
    * @returns A promise that resolves to GLB data as Uint8Array.
    */
-  public async loadAsync(files: File[], options?: Partial<Options>): Promise<Uint8Array<ArrayBuffer>> {
+  public async loadAsync(files: FileInput[], options?: Partial<Options>): Promise<Uint8Array<ArrayBuffer>> {
     const mergedOptions = this.mergeOptions(options);
     const parseResult = await this.parseAsync(files, mergedOptions);
     return this.mapToGlb(parseResult, mergedOptions);
@@ -82,7 +86,7 @@ export abstract class BaseLoader<ParseResult = unknown, Options extends BaseLoad
       try {
         const result = parser();
         resolve(result);
-      } catch (error: unknown) {
+      } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
         reject(new Error(`Failed to parse with ${this.constructor.name}: ${errorMessage}`));
       }
@@ -97,7 +101,7 @@ export abstract class BaseLoader<ParseResult = unknown, Options extends BaseLoad
    * @returns The primary file for this format.
    * @throws Error if no suitable file is found.
    */
-  protected findPrimaryFile(files: File[]): File {
+  protected findPrimaryFile(files: FileInput[]): FileInput {
     return this.requireFileByExtension(files, this.options.format);
   }
 
@@ -108,7 +112,7 @@ export abstract class BaseLoader<ParseResult = unknown, Options extends BaseLoad
    * @param extension - The file extension to look for (with or without dot).
    * @returns The first file matching the extension, or undefined if not found.
    */
-  protected findFileByExtension(files: File[], extension: string): File | undefined {
+  protected findFileByExtension(files: FileInput[], extension: string): FileInput | undefined {
     const normalizedExtension = extension.startsWith('.') ? extension.slice(1) : extension;
     return files.find((file) => {
       const fileExtension = file.name.split('.').pop()?.toLowerCase();
@@ -124,7 +128,7 @@ export abstract class BaseLoader<ParseResult = unknown, Options extends BaseLoad
    * @returns The first file matching the extension.
    * @throws Error if no file with the extension is found.
    */
-  protected requireFileByExtension(files: File[], extension: string): File {
+  protected requireFileByExtension(files: FileInput[], extension: string): FileInput {
     const file = this.findFileByExtension(files, extension);
     if (!file) {
       const normalizedExtension = extension.startsWith('.') ? extension : `.${extension}`;
@@ -140,10 +144,10 @@ export abstract class BaseLoader<ParseResult = unknown, Options extends BaseLoad
    * @param files - The input files to map.
    * @returns A map with filename as key and file data as value.
    */
-  protected createFileMap(files: File[]): Map<string, Uint8Array<ArrayBuffer>> {
+  protected createFileMap(files: FileInput[]): Map<string, Uint8Array<ArrayBuffer>> {
     const fileMap = new Map<string, Uint8Array<ArrayBuffer>>();
     for (const file of files) {
-      fileMap.set(file.name, file.data);
+      fileMap.set(file.name, file.bytes);
     }
 
     return fileMap;
@@ -156,7 +160,7 @@ export abstract class BaseLoader<ParseResult = unknown, Options extends BaseLoad
    * @param options - The merged options for parsing.
    * @returns A promise that resolves to the intermediate parse result.
    */
-  protected abstract parseAsync(files: File[], options: Options): Promise<ParseResult>;
+  protected abstract parseAsync(files: FileInput[], options: Options): Promise<ParseResult>;
 
   /**
    * Map the parse result to GLB data.

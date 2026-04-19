@@ -77,7 +77,10 @@ export function useCameraFraming(
    * significantly relative to the last committed scene radius.
    */
   useLayoutEffect(() => {
-    const changeRatio = sceneRadius === undefined ? 0 : Math.abs((geometryRadius - sceneRadius) / sceneRadius);
+    const changeRatio =
+      sceneRadius === undefined || sceneRadius === 0
+        ? Infinity
+        : Math.abs((geometryRadius - sceneRadius) / sceneRadius);
     const isSignificantChange = sceneRadius === undefined ? true : changeRatio > significantRadiusChangeRatio;
 
     if (isSignificantChange) {

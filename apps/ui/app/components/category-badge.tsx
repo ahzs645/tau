@@ -22,8 +22,8 @@ export function CategoryBadge({ category }: { readonly category: EngineeringDisc
 
   return (
     <div className={cn('flex items-center gap-1.5', colors[category])}>
-      <Icon className="size-4" />
-      <span className="capitalize">{category}</span>
+      <Icon className='size-4' />
+      <span className='capitalize'>{category}</span>
     </div>
   );
 }

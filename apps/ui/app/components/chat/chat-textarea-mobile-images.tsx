@@ -22,10 +22,10 @@ export const ChatTextareaMobileImages = memo(function ({
   }
 
   return (
-    <div className="flex flex-wrap gap-1">
+    <div className='flex flex-wrap gap-1'>
       {images.map((image, index) => (
-        // eslint-disable-next-line react/no-array-index-key -- unique key for each image
-        <div key={`image-${index}-${image}`} className="relative">
+        // oxlint-disable-next-line react/no-array-index-key -- unique key for each image
+        <div key={`image-${index}-${image}`} className='relative'>
           {/* Thumbnail - tap to open dialog */}
           <ImagePreview
             src={image}
@@ -33,14 +33,14 @@ export const ChatTextareaMobileImages = memo(function ({
             dialogProps={{ [focusTrapAttribute]: focusTrapAttribute }}
           >
             <ImagePreviewTrigger>
-              <div className="size-8 overflow-hidden rounded-xs border focus:ring-2 focus:ring-primary focus:outline-none">
-                <ImagePreviewImage className="size-full object-cover" />
+              <div className='size-8 overflow-hidden rounded-xs border focus:ring-2 focus:ring-primary focus:outline-none'>
+                <ImagePreviewImage className='size-full object-cover' />
               </div>
             </ImagePreviewTrigger>
           </ImagePreview>
           {/* Remove button */}
           <button
-            type="button"
+            type='button'
             className={cn(
               'absolute -top-1 -right-1 flex size-4 items-center justify-center',
               'rounded-full border bg-background text-muted-foreground',
@@ -51,7 +51,7 @@ export const ChatTextareaMobileImages = memo(function ({
               onRemoveImage(index);
             }}
           >
-            <X className="size-3" />
+            <X className='size-3' />
           </button>
         </div>
       ))}

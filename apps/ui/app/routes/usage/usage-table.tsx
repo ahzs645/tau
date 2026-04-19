@@ -49,21 +49,21 @@ export function UsageTable({
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center justify-between">
+        <div className='flex items-center justify-between'>
           <div>
             <CardTitle>{title}</CardTitle>
-            {description ? <CardDescription className="mt-1">{description}</CardDescription> : undefined}
+            {description ? <CardDescription className='mt-1'>{description}</CardDescription> : undefined}
           </div>
-          <div className="flex items-center gap-2">
-            <DataTableSearch table={table} placeholder="Search usage..." containerClassName="max-w-sm" />
+          <div className='flex items-center gap-2'>
+            <DataTableSearch table={table} placeholder='Search usage...' containerClassName='max-w-sm' />
             <DataTableSortingDropdown table={table} />
             <DataTableColumnVisibilityDropdown table={table} />
           </div>
         </div>
       </CardHeader>
       <CardContent>
-        <DataTableVirtualized table={table} columns={columns} emptyMessage="No usage data found." height={height} />
-        <div className="mt-2 text-sm text-muted-foreground">
+        <DataTableVirtualized table={table} columns={columns} emptyMessage='No usage data found.' height={height} />
+        <div className='mt-2 text-sm text-muted-foreground'>
           Showing {table.getFilteredRowModel().rows.length} of {records.length} records
         </div>
       </CardContent>

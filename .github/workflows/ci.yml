@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]  # Only run on pushes to main branch
+    branches: [main] # Only run on pushes to main branch
   pull_request:
     # Run CI on all pull requests
 
@@ -18,8 +18,80 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' && github.actor != 'dependabot[bot]' }}
 
 jobs:
-  main:
-    name: Main
+  formatting:
+    name: Check formatting
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Nx Environment
+        uses: ./.github/actions/setup-nx
+
+      - name: Check formatting
+        # TODO: replace with `pnpm dlx oxfmt@catalog: --check` once pnpm/pnpm#10594 is fixed
+        # NOTE: awk extraction is fragile — it assumes oxfmt appears as a top-level catalog
+        # entry in pnpm-workspace.yaml. If the YAML structure changes (e.g. nested catalogs,
+        # renamed keys), this will silently break. A more robust alternative would be to read
+        # the version from a dedicated file or package.json field.
+        run: |
+          version=$(awk '/^  oxfmt:/{gsub(/["'"'"']/, "", $2); print $2}' pnpm-workspace.yaml)
+          pnpm dlx "oxfmt@${version}" --check
+
+  docs:
+    name: Validate docs frontmatter
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Nx Environment
+        uses: ./.github/actions/setup-nx
+
+      - name: Validate frontmatter
+        run: pnpm docs:validate
+
+  project-names:
+    name: Validate project names
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Nx Environment
+        uses: ./.github/actions/setup-nx
+
+      - name: Validate project names
+        run: pnpm projects:validate
+
+  license-deps:
+    name: Validate license-deps
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Nx Environment
+        uses: ./.github/actions/setup-nx
+
+      - name: Validate license-deps
+        run: pnpm license-deps:validate
+
+  knip:
+    name: Dead code analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Nx Environment
+        uses: ./.github/actions/setup-nx
+
+      - name: Run Knip
+        run: pnpm knip
+
+  affected:
+    name: Run affected tasks
     runs-on: ubuntu-latest
     environment: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' && 'production' || null }}
     permissions: # Required for nrwl/nx-set-shas to read workflow runs
@@ -28,10 +100,9 @@ jobs:
       pull-requests: 'read'
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
-        # filter: tree:0  # Uncomment if using large repos (>200-500MB of files)
 
       - name: Setup Nx Environment
         uses: ./.github/actions/setup-nx
@@ -45,7 +116,27 @@ jobs:
       # Nx Affected runs only tasks affected by the changes in this PR/commit
       # Learn more: https://nx.dev/ci/features/affected
       - name: Run affected tasks
-        run: pnpm nx affected -t lint test build typecheck
+        run: pnpm nx affected -t lint test build typecheck size
+
+  size-report:
+    name: Bundle size report
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Nx Environment
+        uses: ./.github/actions/setup-nx
+
+      - name: Check bundle sizes
+        uses: andresz1/size-limit-action@94bc357df29c36c8f8d50ea497c3e225c3c95d1d # v1.8.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          build_script: 'size:build'
+          package_manager: pnpm
 
   # Check what changed to determine what to deploy
   changes:
@@ -60,7 +151,7 @@ jobs:
       affected_apps: ${{ steps.affected.outputs.apps }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
 
@@ -81,7 +172,7 @@ jobs:
   # This prevents OOM errors during Docker/Depot builds for memory-intensive UI builds
   deploy-api-staging:
     name: Deploy API (Staging)
-    needs: [main, changes]
+    needs: [formatting, affected, changes]
     if: contains(fromJSON(needs.changes.outputs.affected_apps), 'api')
     uses: ./.github/workflows/deploy.yml
     with:
@@ -91,7 +182,7 @@ jobs:
 
   deploy-ui-staging:
     name: Deploy UI (Staging)
-    needs: [main, changes]
+    needs: [formatting, affected, changes]
     if: contains(fromJSON(needs.changes.outputs.affected_apps), 'ui')
     uses: ./.github/workflows/deploy.yml
     with:

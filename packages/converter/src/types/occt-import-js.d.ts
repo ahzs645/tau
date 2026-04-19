@@ -190,12 +190,14 @@ declare module 'occt-import-js' {
     ReadIgesFile(content: Uint8Array<ArrayBuffer>, parameters: TriangulationParameters | undefined): ImportResult;
   };
 
-  // eslint-disable-next-line @typescript-eslint/consistent-type-imports -- Required to keep module as ambient type definition
+  // oxlint-disable-next-line @typescript-eslint/consistent-type-imports -- Required to keep module as ambient type definition
   type EmscriptenModuleConfig = import('#types/emscripten.d.ts').EmscriptenModuleConfig;
 
   /**
-   * Factory function that returns a Promise resolving to the OCCT Import JS interface
-   * @param config - Optional Emscripten module configuration
+   * Factory function that returns a Promise resolving to the OCCT Import JS interface.
+   *
+   * @param config - optional Emscripten module configuration
+   * @returns A promise that resolves to the initialized OCCT import interface.
    */
   export default function occtimportjs(config?: EmscriptenModuleConfig): Promise<OcctImportJs>;
 }

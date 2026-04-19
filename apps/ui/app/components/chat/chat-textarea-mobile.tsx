@@ -1,5 +1,5 @@
 import { memo, useState } from 'react';
-import { Plus, CircuitBoard, Wrench, Paperclip, ChevronRight } from 'lucide-react';
+import { Plus, Wrench, Paperclip, ChevronRight } from 'lucide-react';
 import type { ToolSelection } from '@taucad/chat';
 import { kernelConfigurations } from '@taucad/types/constants';
 import { Button } from '#components/ui/button.js';
@@ -11,7 +11,6 @@ import { ChatModelSelector } from '#components/chat/chat-model-selector.js';
 import { ChatKernelSelector } from '#components/chat/chat-kernel-selector.js';
 import { ChatToolSelector } from '#components/chat/chat-tool-selector.js';
 import { ChatContextActions } from '#components/chat/chat-context-actions.js';
-import { ChatTextareaContextMenu } from '#components/chat/chat-textarea-context-menu.js';
 import { ChatTextareaMobileImages } from '#components/chat/chat-textarea-mobile-images.js';
 import { ChatTextareaSubmitButton } from '#components/chat/chat-textarea-submit-button.js';
 import { focusTrapAttribute } from '#components/chat/chat-textarea-types.js';
@@ -47,11 +46,11 @@ type ChatTextareaMobileProperties = {
   readonly formattedCancelKeyCombination: string;
 
   // Refs
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- React ref object
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- React ref object
   readonly textareaReference: React.RefObject<HTMLTextAreaElement | null>;
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- React ref object
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- React ref object
   readonly fileInputReference: React.RefObject<HTMLInputElement | null>;
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- React ref object
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- React ref object
   readonly containerReference: React.RefObject<HTMLDivElement | null>;
 
   // Handlers
@@ -178,7 +177,7 @@ export const ChatTextareaMobile = memo(function ({
         'relative flex size-full flex-row items-end gap-1 border bg-background',
         'overflow-hidden',
         'shadow-md',
-        'focus-within:border-primary',
+        'focus-within:border-primary/50',
         'h-auto min-h-9 p-1.25 md:min-h-10',
         className,
         'rounded-2xl',
@@ -190,20 +189,20 @@ export const ChatTextareaMobile = memo(function ({
         <DrawerTrigger asChild>
           <Button
             data-chat-textarea-focustrap={focusTrapAttribute}
-            variant="outline"
-            size="icon"
-            className="size-7 shrink-0 rounded-full border-none text-muted-foreground not-dark:bg-muted hover:text-foreground"
+            variant='outline'
+            size='icon'
+            className='size-7 shrink-0 rounded-full border-none text-muted-foreground not-dark:bg-muted hover:text-foreground'
           >
-            <Plus className="size-5" />
+            <Plus className='size-5' />
           </Button>
         </DrawerTrigger>
         <DrawerContent data-chat-textarea-focustrap={focusTrapAttribute}>
-          <DrawerTitle className="sr-only">Chat Options</DrawerTitle>
-          <DrawerDescription className="sr-only">Configure chat settings and add context</DrawerDescription>
-          <Command className="bg-transparent">
-            <CommandList className="max-h-none">
+          <DrawerTitle className='sr-only'>Chat Options</DrawerTitle>
+          <DrawerDescription className='sr-only'>Configure chat settings and add context</DrawerDescription>
+          <Command className='bg-transparent'>
+            <CommandList className='max-h-none'>
               {/* Settings Group */}
-              <CommandGroup heading="Settings">
+              <CommandGroup heading='Settings'>
                 {/* Model Selector */}
                 <ChatModelSelector
                   isNested
@@ -216,15 +215,15 @@ export const ChatTextareaMobile = memo(function ({
                 >
                   {() => (
                     <div className={menuItemClassName}>
-                      <span className="flex w-full items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <CircuitBoard className="size-4" />
-                          <div className="flex flex-col items-start">
+                      <span className='flex w-full items-center justify-between'>
+                        <div className='flex items-center gap-2'>
+                          <SvgIcon id={selectedModel?.details.family ?? 'anthropic'} className='size-4 grayscale' />
+                          <div className='flex flex-col items-start'>
                             <span>{selectedModel?.name ?? 'Select model'}</span>
-                            <span className="text-xs text-muted-foreground">AI model for responses</span>
+                            <span className='text-xs text-muted-foreground'>AI model for responses</span>
                           </div>
                         </div>
-                        <ChevronRight className="size-4 text-muted-foreground" />
+                        <ChevronRight className='size-4 text-muted-foreground' />
                       </span>
                     </div>
                   )}
@@ -243,15 +242,15 @@ export const ChatTextareaMobile = memo(function ({
                   >
                     {({ selectedKernel: kernel }) => (
                       <div className={menuItemClassName}>
-                        <span className="flex w-full items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <SvgIcon id={kernel?.id ?? selectedKernel?.id ?? 'openscad'} className="size-4" />
-                            <div className="flex flex-col items-start">
+                        <span className='flex w-full items-center justify-between'>
+                          <div className='flex items-center gap-2'>
+                            <SvgIcon id={kernel?.id ?? selectedKernel?.id ?? 'openscad'} className='size-4 grayscale' />
+                            <div className='flex flex-col items-start'>
                               <span>{kernel?.name ?? selectedKernel?.name ?? 'OpenSCAD'}</span>
-                              <span className="text-xs text-muted-foreground">CAD kernel for code execution</span>
+                              <span className='text-xs text-muted-foreground'>CAD kernel for code execution</span>
                             </div>
                           </div>
-                          <ChevronRight className="size-4 text-muted-foreground" />
+                          <ChevronRight className='size-4 text-muted-foreground' />
                         </span>
                       </div>
                     )}
@@ -265,15 +264,15 @@ export const ChatTextareaMobile = memo(function ({
                       // Tool selector hidden for now until it's hooked up in backend.
                       className={cn(menuItemClassName, 'hidden')}
                     >
-                      <span className="flex w-full items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <Wrench className="size-4" />
-                          <div className="flex flex-col items-start">
+                      <span className='flex w-full items-center justify-between'>
+                        <div className='flex items-center gap-2'>
+                          <Wrench className='size-4' />
+                          <div className='flex flex-col items-start'>
                             <span>{getToolModeLabel(selectedToolChoice)}</span>
-                            <span className="text-xs text-muted-foreground">Tool usage mode</span>
+                            <span className='text-xs text-muted-foreground'>Tool usage mode</span>
                           </div>
                         </div>
-                        <ChevronRight className="size-4 text-muted-foreground" />
+                        <ChevronRight className='size-4 text-muted-foreground' />
                       </span>
                     </div>
                   )}
@@ -281,15 +280,15 @@ export const ChatTextareaMobile = memo(function ({
               </CommandGroup>
 
               {/* Actions Group */}
-              <CommandGroup heading="Actions">
+              <CommandGroup heading='Actions'>
                 {/* Upload Image */}
-                <CommandItem value="upload-image" onSelect={handleDrawerFileSelect}>
-                  <span className="flex w-full items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Paperclip className="size-4" />
-                      <div className="flex flex-col items-start">
+                <CommandItem value='upload-image' onSelect={handleDrawerFileSelect}>
+                  <span className='flex w-full items-center justify-between'>
+                    <div className='flex items-center gap-2'>
+                      <Paperclip className='size-4' />
+                      <div className='flex flex-col items-start'>
                         <span>Upload image</span>
-                        <span className="text-xs text-muted-foreground">Attach an image to your message</span>
+                        <span className='text-xs text-muted-foreground'>Attach an image to your message</span>
                       </div>
                     </div>
                   </span>
@@ -333,11 +332,11 @@ export const ChatTextareaMobile = memo(function ({
          * and textarea in the same grid cell. The hidden div expands naturally with
          * content, and the textarea inherits that height via the grid.
          */}
-        <div className="grid max-h-48">
+        <div className='grid max-h-48'>
           {/* Hidden div that expands naturally with content - drives the grid cell size */}
           <div
-            className="invisible py-0.5 text-base wrap-break-word whitespace-pre-wrap [grid-area:1/1]"
-            aria-hidden="true"
+            className='invisible py-0.5 text-base wrap-break-word whitespace-pre-wrap [grid-area:1/1]'
+            aria-hidden='true'
           >
             {inputText || 'A'}
           </div>
@@ -352,34 +351,38 @@ export const ChatTextareaMobile = memo(function ({
             rows={1}
             autoFocus={enableAutoFocus}
             value={inputText}
-            placeholder="Ask Tau to build anything..."
+            placeholder='Ask Tau to build anything...'
             onChange={handleTextChange}
             onKeyDown={handleTextareaKeyDown}
           />
         </div>
       </div>
 
-      {/* Context Menu */}
+      {/* Context Menu (inline popover for @ mentions) */}
       {showContextMenu ? (
-        <ChatTextareaContextMenu
-          searchQuery={contextSearchQuery}
-          selectedIndex={selectedMenuIndex}
-          onSelectedIndexChange={setSelectedMenuIndex}
-          onAddImage={handleContextImageAdd}
-          onAddText={handleContextMenuSelect}
-          onClose={() => {
-            setShowContextMenu(false);
-            setAtSymbolPosition(-1);
-            setContextSearchQuery('');
-            setSelectedMenuIndex(0);
-          }}
-        />
+        <div className='absolute bottom-full left-0 z-50 mb-1 w-full rounded-md border bg-popover p-1 shadow-md'>
+          <ChatContextActions
+            asPopoverMenu
+            searchQuery={contextSearchQuery}
+            selectedIndex={selectedMenuIndex}
+            onSelectedIndexChange={setSelectedMenuIndex}
+            addImage={handleContextImageAdd}
+            addText={handleContextMenuSelect}
+            onSelectItem={handleContextMenuSelect}
+            onClose={() => {
+              setShowContextMenu(false);
+              setAtSymbolPosition(-1);
+              setContextSearchQuery('');
+              setSelectedMenuIndex(0);
+            }}
+          />
+        </div>
       ) : null}
 
       {/* Drag and drop feedback */}
       {isDragging ? (
-        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-md bg-primary/10 backdrop-blur-xs">
-          <p className="rounded-md bg-background/50 px-2 font-medium text-primary">Add image(s)</p>
+        <div className='pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-md bg-primary/10 backdrop-blur-xs'>
+          <p className='rounded-md bg-background/50 px-2 font-medium text-primary'>Add image(s)</p>
         </div>
       ) : null}
 
@@ -387,9 +390,9 @@ export const ChatTextareaMobile = memo(function ({
       <input
         ref={fileInputReference}
         multiple
-        type="file"
-        accept="image/*"
-        className="hidden"
+        type='file'
+        accept='image/*'
+        className='hidden'
         onChange={handleFileChange}
       />
 

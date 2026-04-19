@@ -4,33 +4,6 @@
   "include": [],
   "references": [
     {
-      "path": "../../packages/json-schema"
-    },
-    {
-      "path": "../../libs/api-extractor"
-    },
-    {
-      "path": "../../libs/utils"
-    },
-    {
-      "path": "../../packages/kernels"
-    },
-    {
-      "path": "../../libs/tau-examples"
-    },
-    {
-      "path": "../../packages/converter"
-    },
-    {
-      "path": "../../libs/units"
-    },
-    {
-      "path": "../../libs/chat"
-    },
-    {
-      "path": "../../libs/types"
-    },
-    {
       "path": "./tsconfig.app.json"
     },
     {

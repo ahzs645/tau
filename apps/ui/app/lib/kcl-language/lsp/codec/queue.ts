@@ -55,30 +55,30 @@ export class Queue<T> {
     return this.promises.length - this.resolvers.length;
   }
 
-  public async next(): Promise<IteratorResult<T, never>> {
+  public async next(): Promise<IteratorResult<T, void>> {
     log.debug('next() called');
     const value = await this.dequeue();
     log.debug('next() returning value');
     return { done: false, value };
   }
 
-  public async return_(): Promise<IteratorResult<T, never>> {
+  public async return_(): Promise<IteratorResult<T, void>> {
     log.debug('return_() called');
     this.close();
-    return { done: true as const, value: undefined as never };
+    return { done: true, value: undefined };
   }
 
-  public async throw_(error: Error): Promise<IteratorResult<T, never>> {
+  public async throw_(error: Error): Promise<IteratorResult<T, void>> {
     log.debug('throw_() called');
     throw error;
   }
 
-  public [Symbol.asyncIterator](): AsyncGenerator<T, never, void> {
+  public [Symbol.asyncIterator](): AsyncGenerator<T, void, void> {
     log.debug('[Symbol.asyncIterator] called');
     return {
       next: async () => this.next(),
-      return: async () => ({ done: true as const, value: undefined as never }),
-      throw: async () => ({ done: true as const, value: undefined as never }),
+      return: async () => ({ done: true, value: undefined }),
+      throw: async () => ({ done: true, value: undefined }),
       [Symbol.asyncIterator]: () => this[Symbol.asyncIterator](),
       [Symbol.asyncDispose]: async () => {
         this.close();

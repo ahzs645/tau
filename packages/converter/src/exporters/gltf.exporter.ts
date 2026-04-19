@@ -1,7 +1,8 @@
 import { NodeIO } from '@gltf-transform/core';
+import { mimeTypes } from '@taucad/types/constants';
+import type { ExportFile } from '@taucad/types';
 import { createReverseCoordinateTransform, createReverseScalingTransform } from '#gltf.transforms.js';
 import { BaseExporter } from '#exporters/base.exporter.js';
-import type { File } from '#types.js';
 import { allExtensions } from '#gltf.extensions.js';
 
 type GltfExporterOptions = {
@@ -20,7 +21,18 @@ export class GltfExporter extends BaseExporter<GltfExporterOptions> {
     this.io = new NodeIO().registerExtensions(allExtensions);
   }
 
-  public async parseAsync(glbData: Uint8Array<ArrayBuffer>, options?: Partial<GltfExporterOptions>): Promise<File[]> {
+  /**
+   * Parses GLB data and exports it as glTF (JSON + .bin) or binary GLB, depending on configuration.
+   *
+   * @param glbData - the raw GLB buffer to convert
+   * @param options - optional overrides for binary/text output mode
+   * @returns An array of exported files (single GLB or GLTF JSON + binary resources).
+   * @throws Error if the GLB data is empty or processing fails
+   */
+  public async parseAsync(
+    glbData: Uint8Array<ArrayBuffer>,
+    options?: Partial<GltfExporterOptions>,
+  ): Promise<ExportFile[]> {
     if (glbData.length === 0) {
       throw new Error('GLB data cannot be empty');
     }
@@ -48,7 +60,7 @@ export class GltfExporter extends BaseExporter<GltfExporterOptions> {
       // GLTF format - write as GLTF JSON
       const gltfResult = await this.io.writeJSON(document);
 
-      const outputFiles: File[] = [];
+      const outputFiles: ExportFile[] = [];
 
       // Main GLTF JSON file
       const jsonString = JSON.stringify(gltfResult.json, null, 2);
@@ -58,10 +70,10 @@ export class GltfExporter extends BaseExporter<GltfExporterOptions> {
       // Add binary buffer files if present
       for (const [uri, data] of Object.entries(gltfResult.resources)) {
         if (data instanceof ArrayBuffer || data instanceof Uint8Array) {
-          // Use the URI directly as the filename to ensure consistency
           outputFiles.push({
             name: uri,
-            data,
+            bytes: new Uint8Array(data),
+            mimeType: mimeTypes.glb,
           });
         }
       }

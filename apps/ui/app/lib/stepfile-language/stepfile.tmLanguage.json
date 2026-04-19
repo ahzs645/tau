@@ -28,7 +28,6 @@
       "name": "constant.numeric.step",
       "match": "[-+]?\\d+(\\.\\d+)?"
     }
-
   ],
   "repository": {
     "keywords": {
@@ -41,7 +40,6 @@
           "name": "keyword.other.step",
           "match": "\\b(HEADER|header|ENDSEC|endsec|DATA|data)\\b"
         }
-
       ]
     },
     "variables": {

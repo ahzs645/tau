@@ -74,10 +74,10 @@ describe('usePanzoomReset', () => {
       renderHook(() => usePanzoomReset({ panzoomRef, containerRef }));
 
       expect(mockSend).toHaveBeenCalledTimes(1);
-      expect(mockSend).toHaveBeenCalledWith({
-        type: 'registerReset',
-        reset: expect.any(Function) as unknown as () => void,
-      });
+      expect(mockSend).toHaveBeenCalledWith(
+        // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- expect.any() returns AsymmetricMatcher typed as any
+        { type: 'registerReset', reset: expect.any(Function) },
+      );
     });
 
     it('only registers once across rerenders', () => {

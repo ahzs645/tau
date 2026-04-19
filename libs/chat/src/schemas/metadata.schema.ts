@@ -1,14 +1,16 @@
+// oxlint-disable-next-line eslint-plugin-import/no-named-as-default -- standard zod default import
 import z from 'zod';
-import type { FileTreeEntry } from '@taucad/types';
 import { kernelProviders, manufacturingMethods, engineeringDisciplines } from '@taucad/types/constants';
 import { toolNames, toolModes } from '#constants/tool.constants.js';
 import { messageStatuses } from '#constants/message.constants.js';
+import { chatModes } from '#constants/chat-mode.constants.js';
+import { contextPayloadSchema } from '#schemas/context-payload.schema.js';
 
 /**
  * Schema for a file entry in the project filesystem.
  * Constrained to match the FileTreeEntry type from @taucad/types.
  */
-const fileTreeEntrySchema: z.ZodType<FileTreeEntry> = z.object({
+const fileTreeEntrySchema = z.object({
   path: z.string(),
   name: z.string(),
   type: z.enum(['file', 'dir']),
@@ -18,6 +20,7 @@ const fileTreeEntrySchema: z.ZodType<FileTreeEntry> = z.object({
 /**
  * Schema for the editor context snapshot.
  * Provides the LLM with awareness of what the user is currently working on.
+ * @public
  */
 export const snapshotSchema = z.object({
   /** Array of file entries representing the project filesystem */
@@ -40,6 +43,7 @@ export const snapshotSchema = z.object({
     .optional(),
 });
 
+/** @public */
 export const messageMetadataSchema = z.object({
   toolChoice: z
     .union([
@@ -59,4 +63,10 @@ export const messageMetadataSchema = z.object({
    * Provides the LLM with awareness of what the user is currently working on.
    */
   snapshot: snapshotSchema.optional(),
+  /** Chat mode: agent (default) or plan */
+  mode: z.enum(chatModes).optional(),
+  /** Whether testing tools (test_model, edit_tests) are enabled */
+  testingEnabled: z.boolean().optional(),
+  /** Client-assembled context payload (skills catalog + AGENTS.md memory) */
+  contextPayload: contextPayloadSchema.optional(),
 });

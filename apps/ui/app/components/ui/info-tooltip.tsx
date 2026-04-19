@@ -18,7 +18,7 @@ export function InfoTooltip({
             className,
           )}
         >
-          <Info className="size-4" />
+          <Info className='size-4' />
         </span>
       </TooltipTrigger>
       <TooltipContent>{children}</TooltipContent>

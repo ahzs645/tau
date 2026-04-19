@@ -1,8 +1,9 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSelector } from '@xstate/react';
 import type { ChatSnapshot } from '@taucad/chat';
-import { useBuild } from '#hooks/use-build.js';
-import { useFileTree } from '#hooks/use-file-manager.js';
+import type { FileTreeEntry } from '@taucad/types';
+import { useProject } from '#hooks/use-project.js';
+import { useFileManager } from '#hooks/use-file-manager.js';
 import { useCookie } from '#hooks/use-cookie.js';
 import { cookieName } from '#constants/cookie.constants.js';
 
@@ -11,7 +12,7 @@ import { cookieName } from '#constants/cookie.constants.js';
  * This provides the LLM with awareness of what the user is currently working on.
  *
  * The snapshot includes:
- * - fileTree: Array of file entries representing the project filesystem
+ * - fileTree: Complete project file tree via `getCachedFileItems()` (memoized, invalidated on tree change)
  * - activeFile: The file currently being rendered by the CAD engine
  * - openFiles: The files currently open in editor tabs
  *
@@ -20,14 +21,35 @@ import { cookieName } from '#constants/cookie.constants.js';
  * @returns ChatSnapshot object or undefined if no context is enabled/available
  */
 export function useChatSnapshot(): ChatSnapshot | undefined {
-  // Get the editor ref from build context (may not be available outside build pages)
-  const buildContext = useBuild({ enableNoContext: true });
-  const editorRef = buildContext?.editorRef;
+  const projectContext = useProject({ enableNoContext: true });
+  const editorRef = projectContext?.editorRef;
+  const { treeService } = useFileManager();
 
-  // Get file tree data
-  const fileTree = useFileTree();
+  const [fileTree, setFileTree] = useState<FileTreeEntry[] | undefined>();
 
-  // Get editor state from editor machine
+  useEffect(() => {
+    if (!treeService) {
+      return;
+    }
+
+    const sync = (): void => {
+      const items = treeService.getCachedFileItems();
+      setFileTree(
+        items.map((item) => ({
+          path: item.path,
+          name: item.path.split('/').pop() ?? item.path,
+          type: 'file',
+          size: item.size,
+        })),
+      );
+    };
+
+    sync();
+    const unsubscribe = treeService.subscribeTree(sync);
+
+    return unsubscribe;
+  }, [treeService]);
+
   const editorState = useSelector(
     editorRef,
     (state) => {
@@ -40,28 +62,23 @@ export function useChatSnapshot(): ChatSnapshot | undefined {
         openFiles: state.context.openFiles,
       };
     },
-    // Equality function to prevent unnecessary re-renders
     (previous, next) =>
       previous.activeFilePath === next.activeFilePath &&
       previous.openFiles.length === next.openFiles.length &&
       previous.openFiles.every((file, index) => file.path === next.openFiles[index]?.path),
   );
 
-  // Read user preferences from cookies (default to true for all)
-  const [includeFilesystem] = useCookie(cookieName.chatCtxFs, true);
+  const [includeFileSystem] = useCookie(cookieName.chatCtxFs, true);
   const [includeActiveFile] = useCookie(cookieName.chatCtxActive, true);
   const [includeOpenFiles] = useCookie(cookieName.chatCtxOpen, true);
 
-  // Build the snapshot based on user preferences
   return useMemo((): ChatSnapshot | undefined => {
     const snapshot: ChatSnapshot = {};
 
-    // Add file tree if enabled and available
-    if (includeFilesystem && fileTree) {
+    if (includeFileSystem && fileTree) {
       snapshot.fileTree = fileTree;
     }
 
-    // Add active file if enabled and available
     if (includeActiveFile && editorState.activeFilePath) {
       snapshot.activeFile = {
         path: editorState.activeFilePath,
@@ -69,7 +86,6 @@ export function useChatSnapshot(): ChatSnapshot | undefined {
       };
     }
 
-    // Add open files if enabled and available
     if (includeOpenFiles && editorState.openFiles.length > 0) {
       snapshot.openFiles = editorState.openFiles.map((file) => ({
         path: file.path,
@@ -77,14 +93,13 @@ export function useChatSnapshot(): ChatSnapshot | undefined {
       }));
     }
 
-    // Return undefined if no context is included
     if (Object.keys(snapshot).length === 0) {
       return undefined;
     }
 
     return snapshot;
   }, [
-    includeFilesystem,
+    includeFileSystem,
     fileTree,
     includeActiveFile,
     editorState.activeFilePath,

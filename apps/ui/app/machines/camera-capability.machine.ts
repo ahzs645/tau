@@ -9,7 +9,10 @@ type CameraCapabilityContext = {
 
 // Event types
 type CameraCapabilityEvent =
-  | { type: 'registerReset'; reset: (options?: { enableConfiguredAngles?: boolean }) => void }
+  | {
+      type: 'registerReset';
+      reset: (options?: { enableConfiguredAngles?: boolean }) => void;
+    }
   | { type: 'reset'; options?: { enableConfiguredAngles?: boolean } }
   | { type: 'cameraResetCompleted' }
   | { type: 'cameraResetFailed'; error: unknown };
@@ -27,17 +30,20 @@ type CameraCapabilityInput = {
  */
 export const cameraCapabilityMachine = setup({
   types: {
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate config
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate config
     context: {} as CameraCapabilityContext,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate config
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate config
     events: {} as CameraCapabilityEvent,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate config
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate config
     input: {} as CameraCapabilityInput,
   },
   actors: {
     resetCamera: fromCallback<
       { type: 'cameraResetCompleted' },
-      { options?: { enableConfiguredAngles?: boolean }; reset: CameraCapabilityContext['resetFunction'] }
+      {
+        options?: { enableConfiguredAngles?: boolean };
+        reset: CameraCapabilityContext['resetFunction'];
+      }
     >(({ input, sendBack }) => {
       const { reset, options } = input;
 
@@ -53,13 +59,15 @@ export const cameraCapabilityMachine = setup({
   actions: {
     registerWithGraphics: enqueueActions(({ enqueue, context, event, self }) => {
       assertEvent(event, 'registerReset');
-      context.resetFunction = event.reset;
+      enqueue.assign({ resetFunction: () => event.reset });
       enqueue.sendTo(context.graphicsRef, {
         type: 'registerCameraCapability',
         actorRef: self,
       });
     }),
-    unregisterFromGraphics: sendTo(({ context }) => context.graphicsRef, { type: 'unregisterCameraCapability' }),
+    unregisterFromGraphics: sendTo(({ context }) => context.graphicsRef, {
+      type: 'unregisterCameraCapability',
+    }),
     forwardResult: sendTo(
       ({ context }) => context.graphicsRef,
       ({ event }) => event,

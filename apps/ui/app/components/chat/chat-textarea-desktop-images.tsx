@@ -23,34 +23,34 @@ export const ChatTextareaDesktopImages = memo(function ({
   }
 
   return (
-    <div className="absolute top-3 right-3 left-3 flex flex-wrap gap-1">
+    <div className='absolute top-3 right-3 left-3 flex flex-wrap gap-1'>
       {images.map((image, index) => (
         <div
-          // eslint-disable-next-line react/no-array-index-key -- unique key for each image
+          // oxlint-disable-next-line react/no-array-index-key -- unique key for each image
           key={`image-${index}-${image}`}
-          className="group/image-item relative text-muted-foreground hover:text-foreground"
+          className='group/image-item relative text-muted-foreground hover:text-foreground'
         >
-          <ImagePreview src={image} alt="Uploaded" dialogProps={{ [focusTrapAttribute]: focusTrapAttribute }}>
+          <ImagePreview src={image} alt='Uploaded' dialogProps={{ [focusTrapAttribute]: focusTrapAttribute }}>
             <ImagePreviewTrigger>
-              <div className="flex h-6 cursor-pointer items-center justify-center overflow-hidden rounded-xs border bg-background hover:bg-accent/50">
-                <ImagePreviewImage className="size-6 border-r object-cover" />
-                <span className="px-1 text-xs">Image</span>
+              <div className='flex h-6 cursor-pointer items-center justify-center overflow-hidden rounded-xs border bg-background hover:bg-accent'>
+                <ImagePreviewImage className='size-6 border-r object-cover' />
+                <span className='px-1 text-xs'>Image</span>
               </div>
             </ImagePreviewTrigger>
           </ImagePreview>
           <Button
-            size="icon"
+            size='icon'
             className={cn(
               'absolute top-1/2 left-0 z-10 size-6 -translate-y-1/2 rounded-none rounded-l-xs border border-r-0',
               'hidden group-hover/image-item:flex',
             )}
-            aria-label="Remove image"
-            type="button"
+            aria-label='Remove image'
+            type='button'
             onClick={() => {
               onRemoveImage(index);
             }}
           >
-            <X className="size-3! stroke-2" />
+            <X className='size-3! stroke-2' />
           </Button>
         </div>
       ))}

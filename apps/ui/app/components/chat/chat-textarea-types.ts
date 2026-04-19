@@ -5,6 +5,7 @@ import { useModels } from '#hooks/use-models.js';
 import type { KeyCombination } from '#utils/keys.utils.js';
 import { toast } from '#components/ui/sonner.js';
 import { useKeybinding } from '#hooks/use-keyboard.js';
+import { resizeImageForChat } from '#utils/resize-image.js';
 
 /**
  * IMPORTANT NOTE:
@@ -54,7 +55,7 @@ export type ChatTextareaProperties = {
   }: {
     content: string;
     model: string;
-    metadata?: { toolChoice?: ToolSelection };
+    metadata?: { toolChoice?: ToolSelection; mode?: 'agent' | 'plan' };
     imageUrls?: string[];
   }) => Promise<void>;
   readonly onEscapePressed?: () => void;
@@ -101,11 +102,11 @@ export function useChatTextareaLogic({
   formattedCancelKeyCombination: string;
 
   // Refs
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- React ref object
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- React ref object
   textareaReference: React.RefObject<HTMLTextAreaElement | null>;
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- React ref object
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- React ref object
   fileInputReference: React.RefObject<HTMLInputElement | null>;
-  // eslint-disable-next-line @typescript-eslint/no-restricted-types -- React ref object
+  // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- React ref object
   containerReference: React.RefObject<HTMLDivElement | null>;
 
   // Handlers
@@ -150,6 +151,7 @@ export function useChatTextareaLogic({
   const selectedToolChoice = useChatSelector((state) =>
     mode === 'main' ? (state.draftToolChoice as ToolSelection) : 'auto',
   );
+  const selectedMode = useChatSelector((state) => (mode === 'main' ? (state.draftMode as 'agent' | 'plan') : 'agent'));
 
   const {
     stop,
@@ -196,32 +198,46 @@ export function useChatTextareaLogic({
     [mode, removeDraftImage, removeEditDraftImage],
   );
 
-  const handleSubmit = async (): Promise<void> => {
-    // If there is no text or images, do not submit
-    if ((inputText.trim().length === 0 && images.length === 0) || isSubmitting) {
+  // Refs for stable handleSubmit — prevents re-render cascades through memo'd children
+  const inputTextRef = useRef(inputText);
+  inputTextRef.current = inputText;
+  const imagesRef = useRef(images);
+  imagesRef.current = images;
+  const isSubmittingRef = useRef(isSubmitting);
+  isSubmittingRef.current = isSubmitting;
+  const onSubmitRef = useRef(onSubmit);
+  onSubmitRef.current = onSubmit;
+  const selectedModelRef = useRef(selectedModel);
+  selectedModelRef.current = selectedModel;
+  const selectedToolChoiceRef = useRef(selectedToolChoice);
+  selectedToolChoiceRef.current = selectedToolChoice;
+  const selectedModeRef = useRef(selectedMode);
+  selectedModeRef.current = selectedMode;
+
+  const handleSubmit = useCallback(async (): Promise<void> => {
+    if ((inputTextRef.current.trim().length === 0 && imagesRef.current.length === 0) || isSubmittingRef.current) {
       return;
     }
 
     setIsSubmitting(true);
     try {
-      // The useChat hook will handle cancelling any ongoing stream
-      await onSubmit({
-        content: inputText,
-        model: selectedModel?.id ?? '',
+      await onSubmitRef.current({
+        content: inputTextRef.current,
+        model: selectedModelRef.current?.id ?? '',
         metadata: {
-          toolChoice: selectedToolChoice,
+          toolChoice: selectedToolChoiceRef.current,
+          mode: selectedModeRef.current,
         },
-        imageUrls: images,
+        imageUrls: imagesRef.current,
       });
-      // Draft will be cleared by the machine's submit action
     } finally {
       setIsSubmitting(false);
     }
-  };
+  }, []);
 
-  const handleCancelClick = (): void => {
+  const handleCancelClick = useCallback((): void => {
     stop();
-  };
+  }, [stop]);
 
   // Register keyboard shortcut for cancellation
   const { formattedKeyCombination: formattedCancelKeyCombination } = useKeybinding(
@@ -233,37 +249,45 @@ export function useChatTextareaLogic({
     },
   );
 
-  const handleTextareaKeyDown = (event: React.KeyboardEvent): void => {
-    if (showContextMenu && (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter')) {
-      // Let the ChatContextActions component handle these keys
-      return;
-    }
+  const showContextMenuRef = useRef(showContextMenu);
+  showContextMenuRef.current = showContextMenu;
+  const onEscapePressedRef = useRef(onEscapePressed);
+  onEscapePressedRef.current = onEscapePressed;
 
-    if (showContextMenu && event.key === 'Escape') {
-      // Close the context menu if it's open
-      event.preventDefault();
-      setShowContextMenu(false);
-      setAtSymbolPosition(-1);
-      setSelectedMenuIndex(0);
-      return;
-    }
+  const handleTextareaKeyDown = useCallback(
+    (event: React.KeyboardEvent): void => {
+      if (
+        showContextMenuRef.current &&
+        (event.key === 'ArrowDown' || event.key === 'ArrowUp' || event.key === 'Enter')
+      ) {
+        return;
+      }
 
-    if (event.key === 'Enter' && !event.shiftKey) {
-      event.preventDefault();
-      void handleSubmit();
-    } else if (
-      event.key === 'Backspace' &&
-      textareaReference.current?.selectionStart === 0 &&
-      textareaReference.current.selectionEnd === 0 &&
-      images.length > 0
-    ) {
-      // Delete the last image when backspace is pressed at the beginning of the textarea
-      event.preventDefault();
-      removeImage(images.length - 1);
-    } else if (event.key === 'Escape') {
-      onEscapePressed?.();
-    }
-  };
+      if (showContextMenuRef.current && event.key === 'Escape') {
+        event.preventDefault();
+        setShowContextMenu(false);
+        setAtSymbolPosition(-1);
+        setSelectedMenuIndex(0);
+        return;
+      }
+
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        void handleSubmit();
+      } else if (
+        event.key === 'Backspace' &&
+        textareaReference.current?.selectionStart === 0 &&
+        textareaReference.current.selectionEnd === 0 &&
+        imagesRef.current.length > 0
+      ) {
+        event.preventDefault();
+        removeImage(imagesRef.current.length - 1);
+      } else if (event.key === 'Escape') {
+        onEscapePressedRef.current?.();
+      }
+    },
+    [handleSubmit, removeImage],
+  );
 
   const handleDragOver = useCallback((event: React.DragEvent): void => {
     event.preventDefault();
@@ -283,9 +307,11 @@ export function useChatTextareaLogic({
         for (const file of event.dataTransfer.files) {
           if (file.type.startsWith('image/')) {
             try {
-              // eslint-disable-next-line no-await-in-loop -- reading files sequentially
+              // oxlint-disable-next-line no-await-in-loop -- reading files sequentially
               const dataUrl = await readFileAsDataUrl(file);
-              addImage(dataUrl);
+              // oxlint-disable-next-line no-await-in-loop -- must resize before adding
+              const resized = await resizeImageForChat(dataUrl);
+              addImage(resized);
             } catch {
               toast.error('Failed to read image');
             }
@@ -303,24 +329,19 @@ export function useChatTextareaLogic({
   }, []);
 
   const handleFileChange = useCallback(
-    (event: React.ChangeEvent<HTMLInputElement>): void => {
+    async (event: React.ChangeEvent<HTMLInputElement>): Promise<void> => {
       if (event.target.files && event.target.files.length > 0) {
         for (const file of event.target.files) {
           if (file.type.startsWith('image/')) {
-            const reader = new FileReader();
-            const handleLoad = (readerEvent: ProgressEvent<FileReader>): void => {
-              if (readerEvent.target?.result && typeof readerEvent.target.result === 'string') {
-                const { result } = readerEvent.target;
-                if (result !== '') {
-                  addImage(result);
-                }
-              }
-
-              reader.removeEventListener('load', handleLoad);
-            };
-
-            reader.addEventListener('load', handleLoad);
-            reader.readAsDataURL(file);
+            try {
+              // oxlint-disable-next-line no-await-in-loop -- reading files sequentially
+              const dataUrl = await readFileAsDataUrl(file);
+              // oxlint-disable-next-line no-await-in-loop -- must resize before adding
+              const resized = await resizeImageForChat(dataUrl);
+              addImage(resized);
+            } catch {
+              toast.error('Failed to process image');
+            }
           }
         }
 
@@ -347,7 +368,7 @@ export function useChatTextareaLogic({
    * Handle paste event to add images to the chat
    */
   const handlePaste = useCallback(
-    (event: ClipboardEvent): void => {
+    async (event: ClipboardEvent): Promise<void> => {
       // Check if the textarea is the active element or its ancestor contains focus
       const isTextareaFocused =
         document.activeElement === textareaReference.current ||
@@ -366,20 +387,15 @@ export function useChatTextareaLogic({
         if (item.type.startsWith('image/')) {
           const file = item.getAsFile();
           if (file) {
-            const reader = new FileReader();
-            const handleLoad = (readerEvent: ProgressEvent<FileReader>): void => {
-              if (readerEvent.target?.result && typeof readerEvent.target.result === 'string') {
-                const { result } = readerEvent.target;
-                if (result !== '') {
-                  addImage(result);
-                }
-              }
-
-              reader.removeEventListener('load', handleLoad);
-            };
-
-            reader.addEventListener('load', handleLoad);
-            reader.readAsDataURL(file);
+            try {
+              // oxlint-disable-next-line no-await-in-loop -- reading files sequentially
+              const dataUrl = await readFileAsDataUrl(file);
+              // oxlint-disable-next-line no-await-in-loop -- must resize before adding
+              const resized = await resizeImageForChat(dataUrl);
+              addImage(resized);
+            } catch {
+              toast.error('Failed to process image');
+            }
           }
         }
       }
@@ -514,10 +530,10 @@ export function useChatTextareaLogic({
   }, [enableAutoFocus, focusInput]);
 
   useEffect(() => {
-    // Add paste event listener to the document
+    if (!textareaReference.current) {
+      return;
+    }
     document.addEventListener('paste', handlePaste);
-
-    // Cleanup function
     return () => {
       document.removeEventListener('paste', handlePaste);
     };
@@ -541,14 +557,11 @@ export function useChatTextareaLogic({
     };
   }, [showContextMenu]);
 
-  const handlePointerDown = (event: React.MouseEvent<HTMLDivElement>): void => {
-    // Only prevent default when clicking outside the textarea
-    // This allows cursor positioning within the textarea while preventing
-    // focus changes when clicking on the container padding/margins
+  const handlePointerDown = useCallback((event: React.MouseEvent<HTMLDivElement>): void => {
     if (event.target !== textareaReference.current) {
       event.preventDefault();
     }
-  };
+  }, []);
 
   const handleTextareaBlur = useCallback((): void => {
     // Use requestAnimationFrame to check focus after the browser has finished

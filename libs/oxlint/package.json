@@ -1,0 +1,17 @@
+{
+  "name": "@taucad/oxlint",
+  "version": "0.1.0",
+  "description": "Shared oxlint plugins and lint configurations for the Tau monorepo",
+  "type": "module",
+  "private": true,
+  "exports": {
+    "./tau-lint": {
+      "import": "./src/tau-lint.js",
+      "default": "./src/tau-lint.js"
+    },
+    "./mdx-parser": {
+      "import": "./src/mdx-parser.js",
+      "default": "./src/mdx-parser.js"
+    }
+  }
+}

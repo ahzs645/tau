@@ -29,6 +29,7 @@ pnpm extract-replicad-api
 ```
 
 This will:
+
 1. Parse the replicad type definitions
 2. Analyze usage patterns from build examples
 3. Categorize and rank APIs by importance
@@ -68,6 +69,7 @@ Each API is classified with:
 ### Core APIs
 
 Core APIs are those identified as most essential based on:
+
 - Frequency of use in build examples
 - Fundamental importance for 3D modeling
 - Common patterns in user code
@@ -75,6 +77,7 @@ Core APIs are those identified as most essential based on:
 ### Usage-Based Ranking
 
 APIs are ranked by actual usage in real build examples, helping identify:
+
 - Most practical functions for users
 - Common workflows and patterns
 - Essential vs. advanced functionality
@@ -124,17 +127,20 @@ You can customize the extraction by modifying:
 ## Output Format
 
 ### Markdown Documentation
+
 - Organized by category
 - Usage indicators (🌟 for core, 📊 for usage count)
 - TypeScript signatures
 - Table of contents
 
 ### TypeScript Definitions
+
 - Clean, organized type definitions
 - Grouped by category
 - Only includes frequently used APIs
 
 ### JSON Data
+
 - Structured data for programmatic access
 - Metadata about extraction
 - Full API details with classifications
@@ -142,8 +148,9 @@ You can customize the extraction by modifying:
 ## Future Enhancements
 
 Potential improvements:
+
 - Integration with LSP for real-time suggestions
 - Usage analytics from larger codebases
 - API deprecation tracking
 - Performance impact analysis
-- Community usage patterns 
+- Community usage patterns

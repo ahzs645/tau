@@ -78,7 +78,7 @@ export function GitConnectorContent({ gitRef }: GitConnectorContentProperties): 
   }, []);
 
   return (
-    <div className="flex flex-1 flex-col overflow-hidden">
+    <div className='flex flex-1 flex-col overflow-hidden'>
       {step === 'check-auth' && <CheckingAuth />}
       {step === 'login' && <LoginPrompt />}
       {step === 'request-scopes' && <RequestScopes onGrant={handleRequestScopes} />}
@@ -98,9 +98,9 @@ export function GitConnectorContent({ gitRef }: GitConnectorContentProperties): 
 
 function CheckingAuth(): React.JSX.Element {
   return (
-    <div className="flex flex-col items-center justify-center gap-4 py-12">
-      <Loader className="size-8 text-muted-foreground" />
-      <p className="text-sm text-muted-foreground">Checking authentication...</p>
+    <div className='flex flex-col items-center justify-center gap-4 py-12'>
+      <Loader className='size-8 text-muted-foreground' />
+      <p className='text-sm text-muted-foreground'>Checking authentication...</p>
     </div>
   );
 }
@@ -109,22 +109,22 @@ function LoginPrompt(): React.JSX.Element {
   const { signIn } = useAuthLinks();
 
   return (
-    <div className="flex flex-col gap-6">
-      <div className="rounded-md border bg-muted/30 p-4">
-        <h4 className="text-lg font-semibold">Sign in with GitHub</h4>
-        <p className="mt-2 text-sm text-muted-foreground">
+    <div className='flex flex-col gap-6'>
+      <div className='rounded-md border bg-muted/30 p-4'>
+        <h4 className='text-lg font-semibold'>Sign in with GitHub</h4>
+        <p className='mt-2 text-sm text-muted-foreground'>
           To use Git integration, you need to sign in with your GitHub account.
         </p>
       </div>
-      <div className="flex flex-col gap-3">
-        <p className="text-sm font-medium">What you&apos;ll need:</p>
-        <ul className="ml-4 space-y-2 text-sm text-muted-foreground">
-          <li className="list-disc">A GitHub account</li>
-          <li className="list-disc">Permission to access your repositories</li>
+      <div className='flex flex-col gap-3'>
+        <p className='text-sm font-medium'>What you&apos;ll need:</p>
+        <ul className='ml-4 space-y-2 text-sm text-muted-foreground'>
+          <li className='list-disc'>A GitHub account</li>
+          <li className='list-disc'>Permission to access your repositories</li>
         </ul>
       </div>
-      <div className="flex gap-2">
-        <Button asChild className="w-full">
+      <div className='flex gap-2'>
+        <Button asChild className='w-full'>
           <Link to={signIn}>Sign in with GitHub</Link>
         </Button>
       </div>
@@ -138,22 +138,22 @@ type RequestScopesProperties = {
 
 function RequestScopes({ onGrant }: RequestScopesProperties): React.JSX.Element {
   return (
-    <div className="flex flex-col gap-6">
-      <div className="rounded-md border bg-muted/30 p-4">
-        <h4 className="text-lg font-semibold">Grant Repository Access</h4>
-        <p className="mt-2 text-sm text-muted-foreground">
+    <div className='flex flex-col gap-6'>
+      <div className='rounded-md border bg-muted/30 p-4'>
+        <h4 className='text-lg font-semibold'>Grant Repository Access</h4>
+        <p className='mt-2 text-sm text-muted-foreground'>
           To enable Git synchronization, we need additional permissions to access your GitHub repositories.
         </p>
       </div>
 
-      <div className="space-y-4 rounded-md border p-4">
-        <h4 className="text-sm font-semibold">Requested Permissions:</h4>
-        <ul className="space-y-3">
-          <li className="flex gap-3">
-            <span className="text-green-500 font-mono text-xs">✓</span>
-            <div className="flex-1">
-              <p className="text-sm font-medium">Repository Access (repo)</p>
-              <p className="text-xs text-muted-foreground">
+      <div className='space-y-4 rounded-md border p-4'>
+        <h4 className='text-sm font-semibold'>Requested Permissions:</h4>
+        <ul className='space-y-3'>
+          <li className='flex gap-3'>
+            <span className='text-green-500 font-mono text-xs'>✓</span>
+            <div className='flex-1'>
+              <p className='text-sm font-medium'>Repository Access (repo)</p>
+              <p className='text-xs text-muted-foreground'>
                 Read and write access to your repositories for version control operations
               </p>
             </div>
@@ -161,15 +161,15 @@ function RequestScopes({ onGrant }: RequestScopesProperties): React.JSX.Element 
         </ul>
       </div>
 
-      <div className="border-yellow-500/50 bg-yellow-500/10 rounded-md border p-4">
-        <p className="text-yellow-600 text-sm">
+      <div className='border-yellow-500/50 bg-yellow-500/10 rounded-md border p-4'>
+        <p className='text-yellow-600 text-sm'>
           <strong>Note:</strong> A popup window will open for you to authorize these permissions. Please allow popups
           for this site if prompted.
         </p>
       </div>
 
-      <div className="flex gap-2">
-        <Button className="flex-1" onClick={onGrant}>
+      <div className='flex gap-2'>
+        <Button className='flex-1' onClick={onGrant}>
           Grant Access
         </Button>
       </div>
@@ -184,31 +184,31 @@ type ErrorStateProperties = {
 
 function ErrorState({ message, onRetry }: ErrorStateProperties): React.JSX.Element {
   return (
-    <div className="flex flex-col gap-6">
-      <div className="rounded-md border border-destructive/50 bg-destructive/10 p-4">
-        <h4 className="text-lg font-semibold text-destructive">Connection Failed</h4>
-        <p className="mt-2 text-sm text-destructive/80">{message}</p>
+    <div className='flex flex-col gap-6'>
+      <div className='rounded-md border border-destructive/50 bg-destructive/10 p-4'>
+        <h4 className='text-lg font-semibold text-destructive'>Connection Failed</h4>
+        <p className='mt-2 text-sm text-destructive/80'>{message}</p>
       </div>
 
-      <div className="space-y-3 rounded-md border bg-muted/30 p-4">
-        <h4 className="text-sm font-semibold">Troubleshooting Steps:</h4>
-        <ul className="ml-4 space-y-2 text-sm text-muted-foreground">
-          <li className="list-disc">
+      <div className='space-y-3 rounded-md border bg-muted/30 p-4'>
+        <h4 className='text-sm font-semibold'>Troubleshooting Steps:</h4>
+        <ul className='ml-4 space-y-2 text-sm text-muted-foreground'>
+          <li className='list-disc'>
             <strong>Not signed in?</strong> Sign in to your GitHub account first
           </li>
-          <li className="list-disc">
+          <li className='list-disc'>
             <strong>No GitHub account linked?</strong> Link your GitHub account in Settings
           </li>
-          <li className="list-disc">
+          <li className='list-disc'>
             <strong>Popup blocked?</strong> Allow popups for this site and try again
           </li>
-          <li className="list-disc">
+          <li className='list-disc'>
             <strong>Network error?</strong> Check your internet connection
           </li>
         </ul>
       </div>
 
-      <div className="flex gap-2">
+      <div className='flex gap-2'>
         <Button onClick={onRetry}>Try Again</Button>
       </div>
     </div>

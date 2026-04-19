@@ -27,7 +27,7 @@ Use this tool when you need to:
  */
 function addLineNumbers(content: string, startLine: number): string {
   const lines = content.split('\n');
-  return lines.map((line, idx) => `${startLine + idx}|${line}`).join('\n');
+  return lines.map((line, index) => `${startLine + index}|${line}`).join('\n');
 }
 
 export const readFileTool: ChatTool<
@@ -39,15 +39,24 @@ export const readFileTool: ChatTool<
   const { chatRpcService, thread_id: chatId } = runtime.configurable as ChatRpcConfigurable;
   const { toolCallId } = runtime;
 
-  const result = await chatRpcService.sendRpcRequest(chatId, toolCallId, rpcName.readFile, args);
+  const result = await chatRpcService.sendRpcRequest({
+    chatId,
+    toolCallId,
+    rpcName: rpcName.readFile,
+    args,
+  });
 
   // Assert RPC success - throws ToolError for any infrastructure or client error
-  assertRpcSuccess(result, toolName.readFile, toolCallId, (error) => {
-    if (error.errorCode === 'FILE_NOT_FOUND') {
-      return `File not found`;
-    }
+  assertRpcSuccess(result, {
+    toolName: toolName.readFile,
+    toolCallId,
+    clientErrorMessage(error) {
+      if (error.errorCode === 'FILE_NOT_FOUND') {
+        return `File not found`;
+      }
 
-    return `Cannot read file`;
+      return `Cannot read file`;
+    },
   });
 
   // Add line numbers to the raw content for LLM display

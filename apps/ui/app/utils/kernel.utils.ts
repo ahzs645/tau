@@ -1,4 +1,4 @@
-import type { KernelProvider } from '@taucad/types';
+import type { KernelProvider } from '@taucad/runtime';
 import { kernelConfigurations } from '@taucad/types/constants';
 import type { KernelConfiguration } from '@taucad/types/constants';
 
@@ -28,8 +28,8 @@ export function getEmptyCode(kernelId: KernelProvider): string {
 
 /**
  * Format kernel names as a readable list with the specified conjunction.
- * @example formatKernelList('or') // "OpenSCAD, Replicad, Zoo, or JSCAD"
- * @example formatKernelList('and') // "OpenSCAD, Replicad, Zoo, and JSCAD"
+ * @example formatKernelList('or') // "OpenSCAD, Replicad, Manifold, Zoo, or JSCAD"
+ * @example formatKernelList('and') // "OpenSCAD, Replicad, Manifold, Zoo, and JSCAD"
  */
 export function formatKernelList(conjunction: 'and' | 'or' = 'and'): string {
   const names = kernelConfigurations.map((k) => k.name);

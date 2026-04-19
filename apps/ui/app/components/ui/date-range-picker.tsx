@@ -13,22 +13,18 @@ export type DateRangePreset = {
 };
 
 /**
- * Default presets for common date ranges.
+ * Creates fresh date range presets for common ranges.
+ * Called lazily so "Last 7 days" etc. are relative to when the picker is used,
+ * not when the module was imported.
  */
-export const defaultDateRangePresets: DateRangePreset[] = [
-  {
-    label: 'Last 7 days',
-    value: { from: subDays(new Date(), 7), to: new Date() },
-  },
-  {
-    label: 'Last 30 days',
-    value: { from: subDays(new Date(), 30), to: new Date() },
-  },
-  {
-    label: 'Last 90 days',
-    value: { from: subDays(new Date(), 90), to: new Date() },
-  },
-];
+export function createDefaultDateRangePresets(): DateRangePreset[] {
+  const now = new Date();
+  return [
+    { label: 'Last 7 days', value: { from: subDays(now, 7), to: now } },
+    { label: 'Last 30 days', value: { from: subDays(now, 30), to: now } },
+    { label: 'Last 90 days', value: { from: subDays(now, 90), to: now } },
+  ];
+}
 
 type DateRangePickerProps = {
   /**
@@ -68,13 +64,15 @@ type DateRangePickerProps = {
 export function DateRangePicker({
   value,
   onChange,
-  presets = defaultDateRangePresets,
+  presets,
   withPresets = false,
   placeholder = 'Pick a date range',
   className,
   align = 'start',
   isDisabled = false,
 }: DateRangePickerProps): React.JSX.Element {
+  const resolvedPresets = presets ?? createDefaultDateRangePresets();
+
   // Support both controlled and uncontrolled modes
   const [internalDate, setInternalDate] = React.useState<DateRange | undefined>(undefined);
   const date = value ?? internalDate;
@@ -88,11 +86,11 @@ export function DateRangePicker({
     <Popover>
       <PopoverTrigger asChild>
         <Button
-          variant="outline"
+          variant='outline'
           disabled={isDisabled}
           className={cn('justify-start px-2.5 font-normal', !date && 'text-muted-foreground', className)}
         >
-          <CalendarIcon className="mr-2 size-4" />
+          <CalendarIcon className='mr-2 size-4' />
           {date?.from ? (
             date.to ? (
               <>
@@ -106,16 +104,16 @@ export function DateRangePicker({
           )}
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-auto p-0" align={align}>
-        {withPresets && presets.length > 0 ? (
-          <div className="flex flex-col gap-2 border-b p-3">
-            <div className="flex flex-wrap gap-2">
-              {presets.map((preset) => (
+      <PopoverContent className='w-auto p-0' align={align}>
+        {withPresets && resolvedPresets.length > 0 ? (
+          <div className='flex flex-col gap-2 border-b p-3'>
+            <div className='flex flex-wrap gap-2'>
+              {resolvedPresets.map((preset) => (
                 <Button
                   key={preset.label}
-                  variant="outline"
-                  size="sm"
-                  className="h-7 text-xs"
+                  variant='outline'
+                  size='sm'
+                  className='h-7 text-xs'
                   onClick={() => {
                     handlePresetClick(preset);
                   }}
@@ -124,9 +122,9 @@ export function DateRangePicker({
                 </Button>
               ))}
               <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 text-xs text-muted-foreground"
+                variant='ghost'
+                size='sm'
+                className='h-7 text-xs text-muted-foreground'
                 onClick={() => {
                   setDate(undefined);
                 }}
@@ -137,7 +135,7 @@ export function DateRangePicker({
           </div>
         ) : undefined}
         <Calendar
-          mode="range"
+          mode='range'
           defaultMonth={date?.from}
           selected={date}
           numberOfMonths={2}

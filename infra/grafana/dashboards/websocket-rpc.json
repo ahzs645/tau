@@ -1,0 +1,159 @@
+{
+  "uid": "tau-websocket-rpc",
+  "title": "WebSocket / RPC",
+  "tags": ["tau", "websocket", "rpc", "red"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "service",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(up, service_name)",
+        "current": { "text": "tau-api", "value": "tau-api" },
+        "includeAll": false,
+        "refresh": 1
+      },
+      {
+        "name": "instance",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(up{service_name=\"$service\"}, instance)",
+        "current": { "text": "All", "value": "$__all" },
+        "includeAll": true,
+        "allValue": ".*",
+        "refresh": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "title": "Active WS Connections",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [{ "expr": "ws_connections_active{service_name=~\"$service\"}" }],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "title": "Active RPC Calls",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "targets": [{ "expr": "rpc_server_active_calls{service_name=~\"$service\"}" }],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "title": "Disconnection Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 4, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "rate(ws_disconnections_total{service_name=~\"$service\"}[5m])",
+          "legendFormat": "connections/s"
+        }
+      ]
+    },
+    {
+      "title": "RPC Call Rate by Method",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "targets": [
+        {
+          "expr": "sum(rate(rpc_server_call_duration_count{service_name=~\"$service\"}[5m])) by (rpc_method)",
+          "legendFormat": "{{rpc_method}}"
+        }
+      ]
+    },
+    {
+      "title": "RPC Latency (p50 / p95 / p99)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(rpc_server_call_duration_bucket{service_name=~\"$service\"}[5m])) by (le))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(rpc_server_call_duration_bucket{service_name=~\"$service\"}[5m])) by (le))",
+          "legendFormat": "p95"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(rpc_server_call_duration_bucket{service_name=~\"$service\"}[5m])) by (le))",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" } }
+    },
+    {
+      "title": "RPC Error Rate by Method",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "targets": [
+        {
+          "expr": "sum(rate(rpc_server_call_duration_count{service_name=~\"$service\",rpc_status=\"error\"}[5m])) by (rpc_method, error_type)",
+          "legendFormat": "{{rpc_method}} ({{error_type}})"
+        }
+      ]
+    },
+    {
+      "title": "Disconnections by Reason",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "targets": [
+        {
+          "expr": "sum(rate(ws_disconnections_total{service_name=~\"$service\",ws_close_reason!=\"\"}[5m])) by (ws_close_reason)",
+          "legendFormat": "{{ws_close_reason}}"
+        }
+      ]
+    },
+    {
+      "title": "WS Message Size (p95)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(ws_message_size_bucket{service_name=~\"$service\"}[5m])) by (le, rpc_method))",
+          "legendFormat": "{{rpc_method}}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes" } }
+    },
+    {
+      "title": "SSE Active Connections",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "targets": [
+        {
+          "expr": "sse_connections_active{service_name=~\"$service\"}",
+          "legendFormat": "active"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "title": "Error Logs",
+      "type": "logs",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 100 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [{ "expr": "{service_name=~\"$service\"} |= \"level\" | json | level = \"error\"", "refId": "A" }],
+      "options": {
+        "showTime": true,
+        "showLabels": true,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "sortOrder": "Descending"
+      }
+    },
+    {
+      "title": "Recent Traces",
+      "type": "traces",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 108 },
+      "datasource": { "type": "tempo", "uid": "tempo" },
+      "targets": [{ "query": "{resource.service.name=~\"$service\"}", "refId": "A", "queryType": "traceqlSearch" }]
+    }
+  ],
+  "schemaVersion": 39
+}

@@ -42,34 +42,5 @@
     "app/**/*.spec.js",
     "app/**/*.test.jsx",
     "app/**/*.spec.jsx"
-  ],
-  "references": [
-    {
-      "path": "../../packages/json-schema/tsconfig.lib.json"
-    },
-    {
-      "path": "../../libs/api-extractor/tsconfig.lib.json"
-    },
-    {
-      "path": "../../libs/utils/tsconfig.lib.json"
-    },
-    {
-      "path": "../../packages/kernels/tsconfig.lib.json"
-    },
-    {
-      "path": "../../libs/tau-examples/tsconfig.lib.json"
-    },
-    {
-      "path": "../../packages/converter/tsconfig.lib.json"
-    },
-    {
-      "path": "../../libs/units/tsconfig.lib.json"
-    },
-    {
-      "path": "../../libs/chat/tsconfig.lib.json"
-    },
-    {
-      "path": "../../libs/types/tsconfig.lib.json"
-    }
   ]
 }

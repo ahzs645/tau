@@ -1,45 +1,25 @@
 /**
- * Emscripten Module configuration for controlling runtime behavior
+ * Emscripten Module configuration for controlling runtime behavior.
  */
 export type EmscriptenModuleConfig = {
-  /**
-   * Function to handle stdout output from the WASM module
-   * @param message - The message to be printed
-   */
+  /** Callback invoked for stdout output from the WASM module. */
   print?: (message: string) => void;
 
-  /**
-   * Function to handle stderr output from the WASM module
-   * @param message - The error message to be printed
-   */
+  /** Callback invoked for stderr output from the WASM module. */
   printErr?: (message: string) => void;
 
-  /**
-   * Custom ArrayBuffer or SharedArrayBuffer to use as memory
-   */
+  /** Custom ArrayBuffer or SharedArrayBuffer to use as WASM linear memory. */
   buffer?: ArrayBuffer | SharedArrayBuffer;
 
-  /**
-   * Custom WebAssembly.Memory to use
-   */
+  /** Custom WebAssembly.Memory instance to use. */
   wasmMemory?: WebAssembly.Memory;
 
-  /**
-   * Function to locate files (WASM, data files, etc.)
-   * @param path - Relative path to the file
-   * @param prefix - Path prefix (directory of the main JS file)
-   * @returns The actual URL to load the file from
-   */
+  /** Resolves the URL for a WASM or data file given its relative path and directory prefix. */
   locateFile?: (path: string, prefix: string) => string;
 
-  /**
-   * Function called when the runtime is fully initialized
-   */
+  /** Callback invoked when the Emscripten runtime is fully initialized. */
   onRuntimeInitialized?: () => void;
 
-  /**
-   * Function called on abnormal program termination
-   * @param what - Description of what went wrong
-   */
+  /** Callback invoked on abnormal program termination. */
   onAbort?: (what: unknown) => void;
 };

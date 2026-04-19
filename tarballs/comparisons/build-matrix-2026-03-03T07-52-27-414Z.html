@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WASM Build Matrix Report</title>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #1F2937; background: #F9FAFB; padding: 2rem; max-width: 1400px; margin: 0 auto; }
+  h1 { font-size: 1.75rem; margin-bottom: 0.5rem; }
+  h2 { font-size: 1.25rem; margin: 2rem 0 1rem; border-bottom: 1px solid #E5E7EB; padding-bottom: 0.5rem; }
+  .meta { color: #6B7280; font-size: 0.875rem; margin-bottom: 1.5rem; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 1.5rem; font-size: 0.8rem; }
+  th, td { padding: 0.4rem 0.6rem; text-align: left; border-bottom: 1px solid #E5E7EB; }
+  th { background: #F3F4F6; font-weight: 600; color: #374151; position: sticky; top: 0; }
+  tr:hover { background: #F9FAFB; }
+  .chart-container { margin: 1.5rem 0; overflow-x: auto; }
+  code { background: #F3F4F6; padding: 1px 4px; border-radius: 3px; font-size: 0.8rem; }
+  .section { margin: 2rem 0; }
+  .legend { display: flex; gap: 1rem; margin: 0.5rem 0; font-size: 0.75rem; color: #6B7280; }
+  .legend-item { display: flex; align-items: center; gap: 4px; }
+  .legend-swatch { width: 12px; height: 12px; border-radius: 2px; }
+  .footer { margin-top: 3rem; color: #9CA3AF; font-size: 0.75rem; border-top: 1px solid #E5E7EB; padding-top: 1rem; }
+  .explanation { color: #6B7280; font-size: 0.8rem; margin: 0.5rem 0 1rem; line-height: 1.5; max-width: 80ch; }
+  .sortable-th { cursor: pointer; user-select: none; }
+  .sortable-th:hover { background: #E5E7EB; }
+  .sort-arrow { font-size: 0.65rem; margin-left: 3px; opacity: 0.5; }
+  .filter-bar { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.75rem 0 1rem; }
+  .filter-btn { padding: 0.3rem 0.7rem; border: 1px solid #D1D5DB; border-radius: 6px; background: white; font-size: 0.75rem; cursor: pointer; transition: all 0.15s; }
+  .filter-btn:hover { border-color: #9CA3AF; }
+  .filter-btn.active { background: #3B82F6; color: white; border-color: #3B82F6; }
+  .compile-flags { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.7rem; display: inline-block; }
+  .compile-flags:hover { white-space: normal; overflow: visible; }
+  .pareto-star { fill: #F59E0B; stroke: #D97706; stroke-width: 1; }
+  .ref-th { background: #DBEAFE !important; }
+  .heatmap-th { cursor: pointer; user-select: none; transition: background 0.15s; }
+  .heatmap-th:hover { background: #E5E7EB; }
+</style>
+<script>window.__DATA__={"experiments":[{"name":"v762-npm-single","shortName":"v762-npm-single","wasmSizeBytes":10800306,"optimization":"unknown","lto":false,"exceptions":"none","threading":"","wasmOptLevel":"","emccCompileFlags":[],"boundSymbols":0,"emscripten":"unknown","medians":{"box":23.60656249999988,"cylinder":20.971271,"sphere":47.02802099999997,"fuse-two-boxes":35.714270499999884,"cut-cylinder-from-box":29.348437500000045,"n-body-fuse":80.41687500000035,"box-fillet-all":56.70643749999999,"box-chamfer-all":43.6830829999999,"sketch-extrude":19.450229000000036,"sketch-revolve":22.62281249999978,"multi-hole-plate":283.4041040000002,"tray":43.11270799999875,"birdhouse":285.55129149999993,"bottle":395.0250619999997,"gridfinity-box":312.16762500000186,"vase":298.4213540000019,"cycloidal-gear":972.7724584999996,"deep-boolean-chain":224.03066649999892},"categories":{"box":"primitives","cylinder":"primitives","sphere":"primitives","fuse-two-boxes":"booleans","cut-cylinder-from-box":"booleans","n-body-fuse":"booleans","box-fillet-all":"fillets","box-chamfer-all":"fillets","sketch-extrude":"extrusions","sketch-revolve":"extrusions","multi-hole-plate":"complex","tray":"examples","birdhouse":"examples","bottle":"examples","gridfinity-box":"examples","vase":"examples","cycloidal-gear":"examples","deep-boolean-chain":"stress"}},{"name":"v8-tier1-removed","shortName":"v8-tier1-removed","wasmSizeBytes":19063280,"optimization":"-O0","lto":false,"exceptions":"wasm-native","threading":"single-threaded","wasmOptLevel":"-O3","emccCompileFlags":["-O0","-fwasm-exceptions"],"boundSymbols":231,"emscripten":"5.0.1","medians":{"box":32.564437500000054,"cylinder":22.11102050000011,"sphere":32.872958500000095,"fuse-two-boxes":31.170958500000097,"cut-cylinder-from-box":24.34412499999985,"n-body-fuse":61.982708499999944,"box-fillet-all":45.396125499999926,"box-chamfer-all":39.71470850000014,"sketch-extrude":16.870374999999967,"sketch-revolve":19.496229000000312,"multi-hole-plate":250.6930000000002,"tray":45.281270499999664,"birdhouse":273.2161669999996,"bottle":340.6715210000002,"gridfinity-box":271.86566700000185,"vase":184.47579199999927,"cycloidal-gear":698.0725204999999,"deep-boolean-chain":118.1160830000008},"categories":{"box":"primitives","cylinder":"primitives","sphere":"primitives","fuse-two-boxes":"booleans","cut-cylinder-from-box":"booleans","n-body-fuse":"booleans","box-fillet-all":"fillets","box-chamfer-all":"fillets","sketch-extrude":"extrusions","sketch-revolve":"extrusions","multi-hole-plate":"complex","tray":"examples","birdhouse":"examples","bottle":"examples","gridfinity-box":"examples","vase":"examples","cycloidal-gear":"examples","deep-boolean-chain":"stress"}},{"name":"v8-O3-noLTO-single","shortName":"v8-O3-noLTO-single","wasmSizeBytes":20164519,"optimization":"-O3","lto":false,"exceptions":"none","threading":"single-threaded","wasmOptLevel":"-O3","emccCompileFlags":["-O3","-sDISABLE_EXCEPTION_CATCHING=1"],"boundSymbols":229,"emscripten":"5.0.1","medians":{"box":37.06818749999991,"cylinder":22.879166499999883,"sphere":32.57835450000016,"fuse-two-boxes":36.04818750000004,"cut-cylinder-from-box":25.936561999999867,"n-body-fuse":57.91616649999992,"box-fillet-all":44.06562550000035,"box-chamfer-all":38.418937500000084,"sketch-extrude":18.380021000000397,"sketch-revolve":21.380562499999996,"multi-hole-plate":215.815333,"tray":44.411833499999375,"birdhouse":226.93716699999914,"bottle":283.82752100000016,"gridfinity-box":233.937687499998,"vase":175.94141649999983,"cycloidal-gear":563.3894369999998,"deep-boolean-chain":102.70968800000082},"categories":{"box":"primitives","cylinder":"primitives","sphere":"primitives","fuse-two-boxes":"booleans","cut-cylinder-from-box":"booleans","n-body-fuse":"booleans","box-fillet-all":"fillets","box-chamfer-all":"fillets","sketch-extrude":"extrusions","sketch-revolve":"extrusions","multi-hole-plate":"complex","tray":"examples","birdhouse":"examples","bottle":"examples","gridfinity-box":"examples","vase":"examples","cycloidal-gear":"examples","deep-boolean-chain":"stress"}}],"benchmarks":["box","cylinder","sphere","fuse-two-boxes","cut-cylinder-from-box","n-body-fuse","box-fillet-all","box-chamfer-all","sketch-extrude","sketch-revolve","multi-hole-plate","tray","birdhouse","bottle","gridfinity-box","vase","cycloidal-gear","deep-boolean-chain"],"categories":["booleans","complex","examples","extrusions","fillets","primitives","stress"]};</script>
+<script>
+document.addEventListener('alpine:init', function() {
+  var D = window.__DATA__;
+  Alpine.store('data', D);
+  Alpine.store('filter', { category: 'all' });
+
+  window._fmt = {
+    mb: function(bytes) { return (bytes / (1024 * 1024)).toFixed(2) + ' MB'; },
+    ms: function(v) { if (v < 1) return (v * 1000).toFixed(0) + 'µs'; if (v >= 1000) return (v / 1000).toFixed(2) + 's'; return v.toFixed(1) + 'ms'; },
+    pct: function(v) { return (v > 0 ? '+' : '') + v.toFixed(1) + '%'; },
+    deltaColor: function(d) {
+      if (d === null) return '';
+      var a = Math.abs(d);
+      if (a < 2) return '#F9FAFB';
+      if (d < -10) return '#D1FAE5';
+      if (d < 0) return '#ECFDF5';
+      return d > 10 ? '#FEE2E2' : '#FEF2F2';
+    },
+    deltaTextColor: function(d) {
+      if (d === null) return '#6B7280';
+      if (Math.abs(d) < 2) return '#6B7280';
+      return d < 0 ? '#10B981' : '#EF4444';
+    },
+    totalTime: function(exp, category) {
+      var vals = Object.keys(exp.medians)
+        .filter(function(b) { return category === 'all' || exp.categories[b] === category; })
+        .map(function(b) { return exp.medians[b]; })
+        .filter(function(v) { return v > 0; });
+      if (vals.length === 0) return 0;
+      return vals.reduce(function(a, b) { return a + b; }, 0);
+    }
+  };
+
+  Alpine.data('configMatrix', function() {
+    return {
+      sortCol: null,
+      sortAsc: true,
+
+      toggleSort: function(col) {
+        if (this.sortCol === col) { this.sortAsc = !this.sortAsc; }
+        else { this.sortCol = col; this.sortAsc = true; }
+      },
+
+      sortArrow: function(col) {
+        if (this.sortCol !== col) return '▲▼';
+        return this.sortAsc ? '▲' : '▼';
+      },
+
+      tt: function(exp) {
+        return _fmt.totalTime(exp, this.$store.filter.category);
+      },
+
+      getValue: function(exp, col) {
+        switch (col) {
+          case 'name': return exp.shortName;
+          case 'optimization': return exp.optimization;
+          case 'lto': return exp.lto ? 'Yes' : 'No';
+          case 'exceptions': return exp.exceptions;
+          case 'threading': return exp.threading;
+          case 'wasmOptLevel': return exp.wasmOptLevel;
+          case 'flags': return exp.emccCompileFlags.join(' ');
+          case 'symbols': return exp.boundSymbols || 0;
+          case 'emscripten': return exp.emscripten;
+          case 'wasmSize': return exp.wasmSizeBytes;
+          case 'totalTime': return this.tt(exp);
+          case 'sizeDelta': { var d = this.sizeDelta(exp); return d !== null ? d : 0; }
+          case 'speedDelta': { var d = this.speedDelta(exp); return d !== null ? d : 0; }
+          default: return '';
+        }
+      },
+
+      sorted: function() {
+        var exps = this.$store.data.experiments.slice();
+        if (!this.sortCol) return exps;
+        var col = this.sortCol;
+        var dir = this.sortAsc ? 1 : -1;
+        var self = this;
+        return exps.sort(function(a, b) {
+          var va = self.getValue(a, col);
+          var vb = self.getValue(b, col);
+          if (typeof va === 'string') return dir * va.localeCompare(vb);
+          return dir * ((va || 0) - (vb || 0));
+        });
+      },
+
+      sizeDelta: function(exp) {
+        var bl = this.$store.data.baseline;
+        if (!bl || bl.wasmSizeBytes === 0) return null;
+        return ((exp.wasmSizeBytes - bl.wasmSizeBytes) / bl.wasmSizeBytes) * 100;
+      },
+
+      speedDelta: function(exp) {
+        var bl = this.$store.data.baseline;
+        if (!bl) return null;
+        var blTt = _fmt.totalTime(bl, this.$store.filter.category);
+        if (blTt === 0) return null;
+        return ((this.tt(exp) - blTt) / blTt) * 100;
+      },
+
+      benchWins: function(exp) {
+        var bl = this.$store.data.baseline;
+        if (!bl) return { faster: 0, slower: 0 };
+        var cat = this.$store.filter.category;
+        var faster = 0; var slower = 0;
+        var benchmarks = Object.keys(exp.medians);
+        for (var i = 0; i < benchmarks.length; i++) {
+          var b = benchmarks[i];
+          if (cat !== 'all' && exp.categories[b] !== cat) continue;
+          var refVal = bl.medians[b];
+          var expVal = exp.medians[b];
+          if (!refVal || !expVal) continue;
+          var d = ((expVal - refVal) / refVal) * 100;
+          if (d < -2) faster++;
+          else if (d > 2) slower++;
+        }
+        return { faster: faster, slower: slower };
+      }
+    };
+  });
+
+  Alpine.data('heatmap', function() {
+    return {
+      refIndex: -1,
+      display: 'both',
+
+      setRef: function(idx) {
+        this.refIndex = (this.refIndex === idx) ? -1 : idx;
+      },
+
+      ref: function() {
+        if (this.refIndex >= 0) return this.$store.data.experiments[this.refIndex];
+        return this.$store.data.baseline || this.$store.data.experiments[0];
+      },
+
+      refLabel: function() {
+        var r = this.ref();
+        return r ? r.shortName : '';
+      },
+
+      isRef: function(idx) {
+        if (this.refIndex >= 0) return idx === this.refIndex;
+        return false;
+      },
+
+      refTime: function(bench) {
+        var r = this.ref();
+        if (!r || r.medians[bench] === undefined) return null;
+        return r.medians[bench];
+      },
+
+      expTime: function(exp, bench) {
+        if (exp.medians[bench] === undefined) return null;
+        return exp.medians[bench];
+      },
+
+      delta: function(exp, bench) {
+        var r = this.ref();
+        if (!r || !r.medians[bench]) return null;
+        var refVal = r.medians[bench];
+        var expVal = exp.medians[bench];
+        if (expVal === undefined || refVal === 0) return null;
+        return ((expVal - refVal) / refVal) * 100;
+      },
+
+      showPct: function() { return this.display === 'both' || this.display === 'percentage'; },
+      showTime: function() { return this.display === 'both' || this.display === 'time'; },
+
+      cellText: function(exp, bench) {
+        var d = this.delta(exp, bench);
+        var t = this.expTime(exp, bench);
+        if (d === null && t === null) return '—';
+        var parts = [];
+        if (this.showPct() && d !== null) parts.push(_fmt.pct(d));
+        if (this.showTime() && t !== null) parts.push(_fmt.ms(t));
+        return parts.join(' ');
+      },
+
+      benchmarks: function() {
+        var cat = this.$store.filter.category;
+        var exps = this.$store.data.experiments;
+        return this.$store.data.benchmarks.filter(function(b) {
+          if (cat === 'all') return true;
+          for (var i = 0; i < exps.length; i++) {
+            if (exps[i].categories[b] === cat) return true;
+          }
+          return false;
+        });
+      }
+    };
+  });
+});
+</script>
+</head>
+<body>
+  <h1>WASM Build Matrix Report</h1>
+  <p class="meta">Generated 2026-03-03T07:52:27.415Z &bull; 3 experiments</p>
+
+  <div class="section">
+    <h2>Size vs Speed</h2>
+    <p class="explanation">Each point represents a build experiment. The ideal position is the <strong>lower-left corner</strong> (smaller binary AND faster execution). Experiments marked with a ★ star lie on the <strong>Pareto frontier</strong> &mdash; no other experiment is both smaller AND faster. The dashed gold line connects these optimal points. Any experiment above or to the right of the frontier is &ldquo;dominated&rdquo; by at least one frontier experiment.</p>
+    <div class="chart-container">
+      <svg xmlns="http://www.w3.org/2000/svg" width="700" height="400" viewBox="0 0 700 400">
+    <rect width="700" height="400" fill="white" rx="8"/>
+    <line x1="70" y1="20" x2="70" y2="350" stroke="#F3F4F6" stroke-width="1"/>
+<text x="70" y="368" text-anchor="middle" font-size="10" fill="#9CA3AF">9.8</text>
+<line x1="191.99999999999997" y1="20" x2="191.99999999999997" y2="350" stroke="#F3F4F6" stroke-width="1"/>
+<text x="191.99999999999997" y="368" text-anchor="middle" font-size="10" fill="#9CA3AF">11.9</text>
+<line x1="313.99999999999994" y1="20" x2="313.99999999999994" y2="350" stroke="#F3F4F6" stroke-width="1"/>
+<text x="313.99999999999994" y="368" text-anchor="middle" font-size="10" fill="#9CA3AF">13.9</text>
+<line x1="436.00000000000006" y1="20" x2="436.00000000000006" y2="350" stroke="#F3F4F6" stroke-width="1"/>
+<text x="436.00000000000006" y="368" text-anchor="middle" font-size="10" fill="#9CA3AF">16.0</text>
+<line x1="558.0000000000001" y1="20" x2="558.0000000000001" y2="350" stroke="#F3F4F6" stroke-width="1"/>
+<text x="558.0000000000001" y="368" text-anchor="middle" font-size="10" fill="#9CA3AF">18.1</text>
+<line x1="680" y1="20" x2="680" y2="350" stroke="#F3F4F6" stroke-width="1"/>
+<text x="680" y="368" text-anchor="middle" font-size="10" fill="#9CA3AF">20.2</text>
+<line x1="70" y1="350" x2="680" y2="350" stroke="#F3F4F6" stroke-width="1"/>
+<text x="62" y="354" text-anchor="end" font-size="10" fill="#9CA3AF">1963.5</text>
+<line x1="70" y1="284" x2="680" y2="284" stroke="#F3F4F6" stroke-width="1"/>
+<text x="62" y="288" text-anchor="end" font-size="10" fill="#9CA3AF">2273.5</text>
+<line x1="70" y1="218" x2="680" y2="218" stroke="#F3F4F6" stroke-width="1"/>
+<text x="62" y="222" text-anchor="end" font-size="10" fill="#9CA3AF">2583.5</text>
+<line x1="70" y1="151.99999999999994" x2="680" y2="151.99999999999994" stroke="#F3F4F6" stroke-width="1"/>
+<text x="62" y="155.99999999999994" text-anchor="end" font-size="10" fill="#9CA3AF">2893.5</text>
+<line x1="70" y1="86.00000000000006" x2="680" y2="86.00000000000006" stroke="#F3F4F6" stroke-width="1"/>
+<text x="62" y="90.00000000000006" text-anchor="end" font-size="10" fill="#9CA3AF">3203.4</text>
+<line x1="70" y1="20" x2="680" y2="20" stroke="#F3F4F6" stroke-width="1"/>
+<text x="62" y="24" text-anchor="end" font-size="10" fill="#9CA3AF">3513.4</text>
+    
+    <line x1="70" y1="20" x2="70" y2="350" stroke="#D1D5DB" stroke-width="1"/>
+    <line x1="70" y1="350" x2="680" y2="350" stroke="#D1D5DB" stroke-width="1"/>
+    <text x="375" y="395" text-anchor="middle" font-size="12" fill="#6B7280">WASM Size (MB)</text>
+    <text x="15" y="185" text-anchor="middle" font-size="12" fill="#6B7280" transform="rotate(-90, 15, 185)">Total Wall Time (ms)</text>
+  
+    <path d="M 100.18654882333188 88.00380064987388 L 562.0821063694266 88.00380064987388 L 562.0821063694266 233.87141338363972 L 623.640741540795 233.87141338363972 L 623.640741540795 303.5509103168208" fill="none" stroke="#F59E0B" stroke-width="2" stroke-dasharray="6 3" opacity="0.6"/>
+    <circle cx="100.18654882333188" cy="88.00380064987388" r="6" fill="#3B82F6" stroke="white" stroke-width="2"/><polygon points="100.18654882333188,78.00380064987388 94.18654882333188,86.00380064987388 96.18654882333188,96.00380064987388 104.18654882333188,96.00380064987388 106.18654882333188,86.00380064987388" class="pareto-star"/><text x="110.18654882333188" y="92.00380064987388" font-size="10" fill="#374151">v762-npm-single ★</text><circle cx="562.0821063694266" cy="233.87141338363972" r="6" fill="#10B981" stroke="white" stroke-width="2"/><polygon points="562.0821063694266,223.87141338363972 556.0821063694266,231.87141338363972 558.0821063694266,241.87141338363972 566.0821063694266,241.87141338363972 568.0821063694266,231.87141338363972" class="pareto-star"/><text x="572.0821063694266" y="237.87141338363972" font-size="10" fill="#374151">v8-tier1-removed ★</text><circle cx="623.640741540795" cy="303.5509103168208" r="6" fill="#F59E0B" stroke="white" stroke-width="2"/><polygon points="623.640741540795,293.5509103168208 617.640741540795,301.5509103168208 619.640741540795,311.5509103168208 627.640741540795,311.5509103168208 629.640741540795,301.5509103168208" class="pareto-star"/><text x="633.640741540795" y="307.5509103168208" font-size="10" fill="#374151">v8-O3-noLTO-single ★</text>
+  </svg>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Configuration Matrix</h2>
+    <p class="explanation">Click any column header to sort. <strong>WASM Size</strong> is the post-optimization binary size. <strong>Total Time</strong> is the sum of all benchmark median times &mdash; it represents the total wall-clock time to execute the entire suite. Use the category filter below to recalculate the Total Time for a subset of benchmarks.</p>
+    <div x-data="configMatrix()">
+      <div class="filter-bar">
+        <button class="filter-btn" :class="{ 'active': $store.filter.category === 'all' }" @click="$store.filter.category = 'all'">All</button>
+        <template x-for="cat in $store.data.categories" :key="cat">
+          <button class="filter-btn" :class="{ 'active': $store.filter.category === cat }" @click="$store.filter.category = cat" x-text="cat"></button>
+        </template>
+      </div>
+      <table id="config-matrix">
+        <thead>
+          <tr>
+            <th class="sortable-th" @click="toggleSort('name')">Experiment <span class="sort-arrow" x-text="sortArrow('name')"></span></th>
+            <th class="sortable-th" @click="toggleSort('optimization')">Compile <span class="sort-arrow" x-text="sortArrow('optimization')"></span></th>
+            <th class="sortable-th" @click="toggleSort('lto')">LTO <span class="sort-arrow" x-text="sortArrow('lto')"></span></th>
+            <th class="sortable-th" @click="toggleSort('exceptions')">Exceptions <span class="sort-arrow" x-text="sortArrow('exceptions')"></span></th>
+            <th class="sortable-th" @click="toggleSort('threading')">Threading <span class="sort-arrow" x-text="sortArrow('threading')"></span></th>
+            <th class="sortable-th" @click="toggleSort('wasmOptLevel')">wasm-opt <span class="sort-arrow" x-text="sortArrow('wasmOptLevel')"></span></th>
+            <th class="sortable-th" @click="toggleSort('flags')">Compile Flags <span class="sort-arrow" x-text="sortArrow('flags')"></span></th>
+            <th class="sortable-th" @click="toggleSort('symbols')">Symbols <span class="sort-arrow" x-text="sortArrow('symbols')"></span></th>
+            <th class="sortable-th" @click="toggleSort('emscripten')">Emscripten <span class="sort-arrow" x-text="sortArrow('emscripten')"></span></th>
+            <th class="sortable-th" @click="toggleSort('wasmSize')">WASM Size <span class="sort-arrow" x-text="sortArrow('wasmSize')"></span></th>
+            <th class="sortable-th" @click="toggleSort('totalTime')">Total Time <span class="sort-arrow" x-text="sortArrow('totalTime')"></span></th>
+            <th class="sortable-th" @click="toggleSort('sizeDelta')">Size Δ <span class="sort-arrow" x-text="sortArrow('sizeDelta')"></span></th>
+            <th class="sortable-th" @click="toggleSort('speedDelta')">Time Δ <span class="sort-arrow" x-text="sortArrow('speedDelta')"></span></th>
+            <th>Faster / Slower</th>
+          </tr>
+        </thead>
+        <tbody>
+          <template x-for="exp in sorted()" :key="exp.name">
+            <tr>
+              <td><strong x-text="exp.shortName"></strong></td>
+              <td><code x-text="exp.optimization"></code></td>
+              <td x-text="exp.lto ? 'Yes' : 'No'"></td>
+              <td x-text="exp.exceptions"></td>
+              <td x-text="exp.threading"></td>
+              <td><code x-text="exp.wasmOptLevel || '—'"></code></td>
+              <td :title="exp.emccCompileFlags.join(' ')"><span class="compile-flags" x-text="exp.emccCompileFlags.length > 0 ? exp.emccCompileFlags.join(' ') : '—'"></span></td>
+              <td x-text="exp.boundSymbols !== null ? exp.boundSymbols : '—'"></td>
+              <td x-text="exp.emscripten || '—'"></td>
+              <td x-text="exp.wasmSizeBytes > 0 ? _fmt.mb(exp.wasmSizeBytes) : '—'"></td>
+              <td x-text="tt(exp) > 0 ? _fmt.ms(tt(exp)) : '—'"></td>
+              <td :style="'color:' + _fmt.deltaTextColor(sizeDelta(exp))" x-text="sizeDelta(exp) !== null ? _fmt.pct(sizeDelta(exp)) : '—'"></td>
+              <td :style="'color:' + _fmt.deltaTextColor(speedDelta(exp))" x-text="speedDelta(exp) !== null ? _fmt.pct(speedDelta(exp)) : '—'"></td>
+              <td><span style="color:#10B981" x-text="benchWins(exp).faster + '↑'"></span> / <span style="color:#EF4444" x-text="benchWins(exp).slower + '↓'"></span></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+    <p class="explanation"><strong>Delta columns:</strong> <strong>Size &Delta;</strong> compares WASM binary size (positive = larger). <strong>Time &Delta;</strong> compares total wall-clock execution time (positive = slower). <strong>Faster/Slower</strong> shows how many individual benchmarks improved (&gt;2% faster) vs regressed (&gt;2% slower) compared to the baseline. <span style="color:#10B981">Green = improvement</span>, <span style="color:#EF4444">red = regression</span>. Deltas within &plusmn;2% are shown in gray.</p>
+  </div>
+
+  <div class="section">
+    <h2>Per-Benchmark Heatmap</h2>
+    <div x-data="heatmap()">
+      <p class="explanation">Each cell shows the change in median time relative to the reference. <span style="color:#10B981">Green = faster</span>, <span style="color:#EF4444">red = slower</span>. <strong>Click any experiment column header</strong> to set it as the reference. Currently comparing against: <strong x-text="refLabel()"></strong></p>
+      <div style="display:flex;align-items:center;gap:1.5rem;margin:0.75rem 0 1rem;flex-wrap:wrap">
+        <div class="legend" style="margin:0">
+          <span class="legend-item"><span class="legend-swatch" style="background:#D1FAE5"></span> &gt;10% faster</span>
+          <span class="legend-item"><span class="legend-swatch" style="background:#ECFDF5"></span> 2-10% faster</span>
+          <span class="legend-item"><span class="legend-swatch" style="background:#F9FAFB"></span> Within 2%</span>
+          <span class="legend-item"><span class="legend-swatch" style="background:#FEF2F2"></span> 2-10% slower</span>
+          <span class="legend-item"><span class="legend-swatch" style="background:#FEE2E2"></span> &gt;10% slower</span>
+        </div>
+        <div class="filter-bar" style="margin:0">
+          <button class="filter-btn" :class="{ 'active': display === 'both' }" @click="display = 'both'">Both</button>
+          <button class="filter-btn" :class="{ 'active': display === 'time' }" @click="display = 'time'">Time</button>
+          <button class="filter-btn" :class="{ 'active': display === 'percentage' }" @click="display = 'percentage'">Percentage</button>
+        </div>
+      </div>
+      <div style="overflow-x:auto">
+        <table id="heatmap-table">
+          <thead>
+            <tr>
+              <th>Benchmark</th>
+              <th class="ref-th" style="text-align:center" x-text="refLabel() + ' (ref)'"></th>
+              <template x-for="(exp, idx) in $store.data.experiments" :key="exp.name">
+                <th class="heatmap-th" :class="{ 'ref-th': isRef(idx) }" @click="setRef(idx)" x-text="exp.shortName"></th>
+              </template>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="bench in benchmarks()" :key="bench">
+              <tr>
+                <td><strong x-text="bench"></strong></td>
+                <td style="text-align:center;font-size:0.8rem;background:#F3F4F6;font-weight:500" x-text="refTime(bench) !== null ? _fmt.ms(refTime(bench)) : '—'"></td>
+                <template x-for="(exp, idx) in $store.data.experiments" :key="exp.name + '-' + bench">
+                  <td style="text-align:center;font-size:0.8rem"
+                      :style="'background:' + _fmt.deltaColor(delta(exp, bench))"
+                      x-text="cellText(exp, bench)"></td>
+                </template>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <h2>Size Breakdown</h2>
+    <div class="legend">
+      <span class="legend-item"><span class="legend-swatch" style="background:#3B82F6"></span> Post wasm-opt</span>
+      <span class="legend-item"><span class="legend-swatch" style="background:#E5E7EB"></span> Pre wasm-opt</span>
+    </div>
+    <div class="chart-container">
+      <svg xmlns="http://www.w3.org/2000/svg" width="320" height="400" viewBox="0 0 320 400">
+    <rect width="320" height="400" fill="white" rx="8"/>
+    <line x1="60" y1="320" x2="300" y2="320" stroke="#F3F4F6"/><text x="52" y="324" text-anchor="end" font-size="9" fill="#9CA3AF">0.00 MB</text><line x1="60" y1="260" x2="300" y2="260" stroke="#F3F4F6"/><text x="52" y="264" text-anchor="end" font-size="9" fill="#9CA3AF">3.85 MB</text><line x1="60" y1="200" x2="300" y2="200" stroke="#F3F4F6"/><text x="52" y="204" text-anchor="end" font-size="9" fill="#9CA3AF">7.69 MB</text><line x1="60" y1="140" x2="300" y2="140" stroke="#F3F4F6"/><text x="52" y="144" text-anchor="end" font-size="9" fill="#9CA3AF">11.54 MB</text><line x1="60" y1="80.00000000000003" x2="300" y2="80.00000000000003" stroke="#F3F4F6"/><text x="52" y="84.00000000000003" text-anchor="end" font-size="9" fill="#9CA3AF">15.38 MB</text><line x1="60" y1="20" x2="300" y2="20" stroke="#F3F4F6"/><text x="52" y="24" text-anchor="end" font-size="9" fill="#9CA3AF">19.23 MB</text>
+    <line x1="60" y1="20" x2="60" y2="320" stroke="#D1D5DB"/>
+    <rect x="60" y="159.3171788526173" width="60" height="160.6828211473827" fill="#3B82F6" rx="4"/><text x="90" y="153.3171788526173" text-anchor="middle" font-size="10" fill="#374151">10.30 MB</text><text x="90" y="336" text-anchor="middle" font-size="9" fill="#6B7280" transform="rotate(30, 90, 336)">v762-npm-single</text><rect x="140" y="36.31909494097033" width="60" height="283.68090505902967" fill="#E5E7EB" rx="4"/><rect x="140" y="36.38381257693277" width="60" height="283.61618742306723" fill="#3B82F6" rx="4"/><text x="170" y="30.38381257693277" text-anchor="middle" font-size="10" fill="#374151">18.18 MB</text><text x="170" y="336" text-anchor="middle" font-size="9" fill="#6B7280" transform="rotate(30, 170, 336)">v8-tier1-removed</text><text x="170" y="18.38381257693277" text-anchor="middle" font-size="8" fill="#10B981">-0.0%</text><rect x="220" y="19.93647257343457" width="60" height="300.06352742656543" fill="#E5E7EB" rx="4"/><rect x="220" y="20" width="60" height="300" fill="#3B82F6" rx="4"/><text x="250" y="14" text-anchor="middle" font-size="10" fill="#374151">19.23 MB</text><text x="250" y="336" text-anchor="middle" font-size="9" fill="#6B7280" transform="rotate(30, 250, 336)">v8-O3-noLTO-single</text><text x="250" y="2" text-anchor="middle" font-size="8" fill="#10B981">-0.0%</text>
+  </svg>
+    </div>
+  </div>
+
+  <div class="footer">
+    Generated by Tau WASM Build Matrix Reporter &bull; 3 experiments &bull; 2026-03-03T07:52:27.415Z
+  </div>
+</body>
+</html>

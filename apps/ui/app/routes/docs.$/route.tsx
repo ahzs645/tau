@@ -17,7 +17,7 @@ import { DocsSidebarProvider } from '#routes/docs.$/docs-sidebar.js';
 import { getMdxComponents } from '#routes/docs.$/docs-mdx.js';
 import { cn } from '#utils/ui.utils.js';
 
-// eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types -- loaders are inferred types by design.
+// oxlint-disable-next-line @typescript-eslint/explicit-module-boundary-types -- loaders are inferred types by design.
 export async function loader({ params }: Route.LoaderArgs) {
   const path = params['*'];
 
@@ -27,7 +27,7 @@ export async function loader({ params }: Route.LoaderArgs) {
     const redirectUrl = `/llms.mdx/${pathWithoutExtension}`;
     // Ideally this would be a URL rewrite to preserve the path, but that's not possible with react-router 7.
     // @see https://fumadocs.dev/docs/ui/llms
-    // eslint-disable-next-line @typescript-eslint/only-throw-error -- this is the react-router pattern.
+    // oxlint-disable-next-line @typescript-eslint/only-throw-error -- this is the react-router pattern.
     throw new Response(undefined, {
       status: 302,
       headers: {
@@ -39,7 +39,7 @@ export async function loader({ params }: Route.LoaderArgs) {
   const slugs = path.split('/').filter((v) => v.length > 0);
   const page = source.getPage(slugs);
   if (!page) {
-    // eslint-disable-next-line @typescript-eslint/only-throw-error -- this is the react-router pattern.
+    // oxlint-disable-next-line @typescript-eslint/only-throw-error -- this is the react-router pattern.
     throw new Response('Not found', { status: 404 });
   }
 
@@ -87,7 +87,7 @@ export const handle: Handle = {
         .join(' ');
 
       breadcrumbs.push(
-        <Button key={`breadcrumb-${index}`} asChild variant="ghost">
+        <Button key={`breadcrumb-${index}`} asChild variant='ghost'>
           <Link to={accumulatedPath}>{displayName}</Link>
         </Button>,
       );
@@ -106,24 +106,19 @@ const clientLoader = browserCollections.docs.createClientLoader({
       <DocsPage
         toc={toc}
         full={false}
+        className='max-w-[770px] gap-4 max-sm:pb-16'
         tableOfContent={{
           enabled: true,
           single: false,
           style: 'clerk',
           footer: <DocsPageActions />,
         }}
-        article={{
-          className: 'max-sm:pb-16 max-w-[770px]',
-        }}
-        container={{
-          className: '[&>article]:gap-4',
-        }}
         breadcrumb={{
           enabled: true,
         }}
       >
         <title>{frontmatter.title}</title>
-        <meta name="description" content={frontmatter.description} />
+        <meta name='description' content={frontmatter.description} />
         <DocsTitle>{frontmatter.title}</DocsTitle>
         <DocsDescription>{frontmatter.description}</DocsDescription>
         <DocsBody
@@ -152,14 +147,13 @@ const clientLoader = browserCollections.docs.createClientLoader({
 
 export default function Page(props: Route.ComponentProps): React.ReactNode {
   const { tree, path } = props.loaderData;
-  const Content = clientLoader.getComponent(path);
 
   return (
     <DocsSidebarProvider>
       <ReactRouterProvider>
         <RootProvider theme={{ enabled: false }}>
           <DocsLayout {...baseOptions()} tree={tree as PageTree.Root}>
-            <Content />
+            {clientLoader.useContent(path)}
           </DocsLayout>
         </RootProvider>
       </ReactRouterProvider>

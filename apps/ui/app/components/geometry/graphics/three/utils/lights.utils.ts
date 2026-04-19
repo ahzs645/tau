@@ -31,6 +31,15 @@ export const headlampBaseIntensity = 0.8;
  */
 export const environmentBaseIntensity = 0.9;
 
+// ── Dark-mode theme constants ──────────────────────────────────────────────
+// ~30% luminance reduction matches typical dark-mode surround adaptation.
+
+/** Overall intensity multiplier applied to all lights in dark mode. */
+export const darkModeIntensityScale = 0.5;
+
+/** Ambient floor boost in dark mode to prevent shadows from becoming unreadably dark. */
+export const darkModeAmbientBoost = 1.15;
+
 // ── Headlamp configuration ─────────────────────────────────────────────────
 
 export type HeadlampConfig = {
@@ -66,6 +75,8 @@ export const lightingUserDataKeys = {
 export type SceneLightingConfig = {
   sceneRadius: number;
   upDirection: 'x' | 'y' | 'z';
+  /** Theme intensity scale persisted for screenshot system consumption. */
+  themeIntensityScale?: number;
 };
 
 // ── Combined config for applyLightingForCamera ─────────────────────────────
@@ -77,6 +88,10 @@ export type LightingConfig = {
   ambientIntensity: number;
   environmentIntensity: number;
   headlampConfig: HeadlampConfig;
+  /** Theme-based overall intensity scale (1.0 for light, ~0.7 for dark). */
+  themeIntensityScale?: number;
+  /** Theme-based ambient floor boost to prevent crushed shadows (1.0 for light, ~1.15 for dark). */
+  themeAmbientBoost?: number;
 };
 
 // ── Pure functions ─────────────────────────────────────────────────────────
@@ -177,18 +192,24 @@ export function computeEnvironmentRotation(
  * highlight remains biased toward screen upper-right. The target is placed
  * forward of the camera with slight lower-left skew.
  *
- * @param cameraPosition - The camera's world position.
- * @param cameraMatrixWorld - The camera's world matrix (used for basis vectors).
- * @param sceneRadius - The bounding sphere radius of the scene.
- * @param config - Offset multipliers for headlamp placement.
+ * @param root0 - The headlamp transform parameters
+ * @param root0.cameraPosition - The camera's world position.
+ * @param root0.cameraMatrixWorld - The camera's world matrix (used for basis vectors).
+ * @param root0.sceneRadius - The bounding sphere radius of the scene.
+ * @param root0.config - Offset multipliers for headlamp placement.
  * @returns The world-space position and target position for the headlamp.
  */
-export function computeHeadlampTransform(
-  cameraPosition: THREE.Vector3,
-  cameraMatrixWorld: THREE.Matrix4,
-  sceneRadius: number,
-  config: HeadlampConfig,
-): { position: THREE.Vector3; targetPosition: THREE.Vector3 } {
+export function computeHeadlampTransform({
+  cameraPosition,
+  cameraMatrixWorld,
+  sceneRadius,
+  config,
+}: {
+  cameraPosition: THREE.Vector3;
+  cameraMatrixWorld: THREE.Matrix4;
+  sceneRadius: number;
+  config: HeadlampConfig;
+}): { position: THREE.Vector3; targetPosition: THREE.Vector3 } {
   // Camera basis vectors in world space:
   // - column 0: camera-right (+X local)
   // - column 1: camera-up (+Y local)
@@ -240,17 +261,22 @@ export type ApplyLightingOptions = {
  *
  * It performs:
  * 1. FOV-dependent intensity compensation
- * 2. Camera-locked environment rotation
- * 3. Headlamp positioning (if headlamp provided)
- * 4. Ambient intensity update (if ambient light provided)
+ * 2. Theme-based intensity scaling (dark mode dims all lights uniformly)
+ * 3. Camera-locked environment rotation
+ * 4. Headlamp positioning (if headlamp provided)
+ * 5. Ambient intensity update (if ambient light provided)
  */
 export function applyLightingForCamera({ scene, camera, headlamp, ambient, config }: ApplyLightingOptions): void {
   // FOV compensation
   const currentFov = (camera as THREE.PerspectiveCamera).fov;
   const compensation = calculateFovLightingCompensation(currentFov);
 
+  // Theme scaling (applied after FOV compensation to preserve lighting ratios)
+  const themeScale = config.themeIntensityScale ?? 1;
+  const themeAmbientBoost = config.themeAmbientBoost ?? 1;
+
   // Environment intensity
-  scene.environmentIntensity = config.environmentIntensity * compensation.envFactor;
+  scene.environmentIntensity = config.environmentIntensity * compensation.envFactor * themeScale;
 
   // Camera-locked environment rotation
   const quaternion = new THREE.Quaternion();
@@ -258,21 +284,21 @@ export function applyLightingForCamera({ scene, camera, headlamp, ambient, confi
   const rotation = computeEnvironmentRotation(quaternion, config.upDirection);
   scene.environmentRotation.copy(rotation);
 
-  // Ambient intensity with FOV compensation
+  // Ambient intensity with FOV compensation + theme boost
   if (ambient) {
-    ambient.intensity = config.ambientIntensity * compensation.ambientFactor;
+    ambient.intensity = config.ambientIntensity * compensation.ambientFactor * themeScale * themeAmbientBoost;
   }
 
-  // Headlamp positioning with FOV compensation
+  // Headlamp positioning with FOV compensation + theme scaling
   if (headlamp) {
-    headlamp.intensity = config.headlampIntensity * compensation.headlampFactor;
+    headlamp.intensity = config.headlampIntensity * compensation.headlampFactor * themeScale;
 
-    const transform = computeHeadlampTransform(
-      camera.position,
-      camera.matrixWorld,
-      config.sceneRadius,
-      config.headlampConfig,
-    );
+    const transform = computeHeadlampTransform({
+      cameraPosition: camera.position,
+      cameraMatrixWorld: camera.matrixWorld,
+      sceneRadius: config.sceneRadius,
+      config: config.headlampConfig,
+    });
 
     headlamp.position.copy(transform.position);
     headlamp.target.position.copy(transform.targetPosition);

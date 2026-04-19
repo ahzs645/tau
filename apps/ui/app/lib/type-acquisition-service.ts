@@ -23,7 +23,7 @@
  */
 
 import type * as Monaco from 'monaco-editor';
-import { getAllImports } from '#lib/javascript-import-parser.js';
+import { getAllImports, parseExportNames } from '#lib/javascript-import-parser.js';
 import { isBareSpecifier, extractPackageFromCdnUrl } from '#utils/import.utils.js';
 
 // =============================================================================
@@ -61,10 +61,10 @@ const jsTsLanguages = new Set(['typescript', 'javascript', 'typescriptreact', 'j
 
 // eslint-disable-next-line @typescript-eslint/naming-convention -- toggle to enable debug logging
 const ATA_DEBUG = false;
-function ataLog(...arguments_: unknown[]): void {
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag toggled manually
+function ataLog(...args: unknown[]): void {
+  // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- debug flag toggled manually
   if (ATA_DEBUG) {
-    console.log('[ATA]', ...arguments_);
+    console.log('[ATA]', ...args);
   }
 }
 
@@ -160,10 +160,10 @@ export class TypeAcquisitionService {
   }
 
   /**
-   * Handle a build session change. Clears dynamic types and re-scans models.
+   * Handle a project session change. Clears dynamic types and re-scans models.
    * Static types persist across sessions.
    */
-  public onBuildSessionChange(): void {
+  public onProjectSessionChange(): void {
     // Increment epoch to invalidate in-flight fetches
     this.sessionEpoch++;
 
@@ -182,8 +182,8 @@ export class TypeAcquisitionService {
 
     // Reset tracking (keep builtinTypePackages)
     this.acquiredTypes.clear();
-    for (const pkg of this.builtinTypePackages) {
-      this.acquiredTypes.add(pkg);
+    for (const packageName of this.builtinTypePackages) {
+      this.acquiredTypes.add(packageName);
     }
 
     this.pendingFetches.clear();
@@ -427,8 +427,8 @@ export class TypeAcquisitionService {
 
       const typesUrl = moduleResponse.headers.get('X-TypeScript-Types');
       if (!typesUrl) {
-        // No types available -- mark as acquired to prevent re-scanning
-        this.acquiredTypes.add(packageName);
+        // No .d.ts types available -- try generating stub types from JS exports
+        await this.generateStubTypes(packageName, moduleResponse, { epoch, signal });
         return;
       }
 
@@ -456,7 +456,7 @@ export class TypeAcquisitionService {
       this.failedPackages.delete(packageName);
 
       ataLog('fetched:', packageName, `(${typesContent.length} chars)`);
-    } catch (error: unknown) {
+    } catch (error) {
       // Don't record AbortError as a failure (it's intentional)
       if (error instanceof DOMException && error.name === 'AbortError') {
         return;
@@ -470,6 +470,60 @@ export class TypeAcquisitionService {
       // Add to acquiredTypes to prevent immediate re-scan spam
       this.acquiredTypes.add(packageName);
     }
+  }
+
+  /**
+   * Fallback for packages without `.d.ts` types: fetch the JS module source,
+   * extract export names via es-module-lexer, and generate stub declarations
+   * so that imports resolve (typed as `any`) instead of erroring.
+   */
+  private async generateStubTypes(
+    packageName: string,
+    moduleResponse: Response,
+    { epoch, signal }: { epoch: number; signal: AbortSignal | undefined },
+  ): Promise<void> {
+    // The X-ESM-Path header points to the actual bundled module (bypasses the
+    // thin entry re-export wrapper where `export *` yields no named exports).
+    const esmPath = moduleResponse.headers.get('X-ESM-Path');
+
+    let jsSource: string;
+
+    if (esmPath) {
+      const sourceResponse = await fetch(`${esmShBase}${esmPath}`, { signal });
+
+      if (this.sessionEpoch !== epoch) {
+        return;
+      }
+
+      if (!sourceResponse.ok) {
+        this.acquiredTypes.add(packageName);
+        return;
+      }
+
+      jsSource = await sourceResponse.text();
+    } else {
+      // No X-ESM-Path -- try parsing the entry module body directly
+      jsSource = await moduleResponse.text();
+    }
+
+    if (this.sessionEpoch !== epoch) {
+      return;
+    }
+
+    const exportNames = await parseExportNames(jsSource);
+
+    if (exportNames.length === 0) {
+      this.acquiredTypes.add(packageName);
+      return;
+    }
+
+    const stubContent = generateStubDeclarations(exportNames);
+
+    this.fetchCache.set(packageName, stubContent);
+    this.injectDynamicTypes(packageName, stubContent);
+    this.failedPackages.delete(packageName);
+
+    ataLog('stub types:', packageName, `(${exportNames.length} exports)`);
   }
 
   /** Track a CDN URL as an alias for a package name. */
@@ -561,4 +615,32 @@ function extractPackageName(specifier: string): string | undefined {
   // Unscoped package: name or name/subpath
   const slashIndex = specifier.indexOf('/');
   return slashIndex === -1 ? specifier : specifier.slice(0, slashIndex);
+}
+
+/**
+ * Generate stub `.d.ts` content from a list of export names.
+ *
+ * All exports are typed as `any` -- this suppresses "Cannot find module" errors
+ * and provides autocomplete for export names without pretending to know the types.
+ *
+ * @param exportNames - Array of export names (e.g., ['addGrid', 'default'])
+ * @returns `.d.ts` content suitable for wrapping in `declare module`
+ */
+const stubJsdoc = '  /** This package does not provide type declarations. Exported as `any`. */';
+
+export function generateStubDeclarations(exportNames: string[]): string {
+  const lines: string[] = [];
+
+  for (const name of exportNames) {
+    if (name === 'default') {
+      lines.push(stubJsdoc);
+      lines.push('  const _default: any;');
+      lines.push('  export default _default;');
+    } else {
+      lines.push(stubJsdoc);
+      lines.push(`  export const ${name}: any;`);
+    }
+  }
+
+  return lines.join('\n');
 }

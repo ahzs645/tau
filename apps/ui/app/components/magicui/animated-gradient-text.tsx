@@ -11,7 +11,9 @@ export function AnimatedGradientText({
   children,
   className,
   speed = 1,
+  // oxlint-disable-next-line tau-lint/no-hardcoded-color -- decorative default
   colorFrom = '#ffaa40',
+  // oxlint-disable-next-line tau-lint/no-hardcoded-color -- decorative default
   colorTo = '#9c40ff',
   ...props
 }: AnimatedGradientTextProps): React.JSX.Element {

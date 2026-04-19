@@ -20,6 +20,8 @@ const createCopyTarget = (configFilePath: string): CreateNodesResult | undefined
     return join('{projectRoot}', to).replaceAll('\\', '/');
   });
 
+  const copyAssetsDependsOn = { dependsOn: ['copy-assets', '^copy-assets'] };
+
   return {
     projects: {
       [projectRoot]: {
@@ -27,18 +29,15 @@ const createCopyTarget = (configFilePath: string): CreateNodesResult | undefined
           'copy-assets': {
             executor: 'nx:run-commands',
             outputs,
-            cache: true,
+            cache: false,
             options: {
-              command: 'pnpm copy-files-from-to',
+              command: 'pnpm copy-files-from-to --when-file-exists overwrite',
               cwd: projectRoot,
             },
-            inputs: [
-              '{projectRoot}/copy-files-from-to.cjson',
-              {
-                externalDependencies: ['copy-files-from-to'],
-              },
-            ],
           },
+          build: copyAssetsDependsOn,
+          dev: copyAssetsDependsOn,
+          test: copyAssetsDependsOn,
         },
       },
     },
@@ -47,7 +46,7 @@ const createCopyTarget = (configFilePath: string): CreateNodesResult | undefined
 
 export const createNodesV2: CreateNodesV2 = [
   '**/copy-files-from-to.cjson',
-  // eslint-disable-next-line @typescript-eslint/explicit-module-boundary-types -- not necessary as already has an explicit return type
+  // oxlint-disable-next-line @typescript-eslint/explicit-module-boundary-types -- not necessary as already has an explicit return type
   (configFiles, _options) => {
     const results: Array<[string, CreateNodesResult]> = [];
 

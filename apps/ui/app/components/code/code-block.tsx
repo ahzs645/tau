@@ -78,7 +78,7 @@ type CodeBlockTitleProps = ComponentProps<'div'> & VariantProps<typeof codeBlock
  */
 export function CodeBlock({ children, variant = 'standard', className, ...rest }: CodeBlockProps): React.JSX.Element {
   return (
-    <div {...rest} data-slot="codeblock" className={cn(codeBlockVariants({ variant, className }))}>
+    <div {...rest} data-slot='codeblock' className={cn(codeBlockVariants({ variant, className }))}>
       {children}
     </div>
   );
@@ -89,7 +89,7 @@ export function CodeBlock({ children, variant = 'standard', className, ...rest }
  */
 export function CodeBlockHeader({ variant, className, children, ...rest }: CodeBlockHeaderProps): React.JSX.Element {
   return (
-    <div {...rest} data-slot="codeblock-header" className={cn(codeBlockHeaderVariants({ variant, className }))}>
+    <div {...rest} data-slot='codeblock-header' className={cn(codeBlockHeaderVariants({ variant, className }))}>
       {children}
     </div>
   );
@@ -100,7 +100,7 @@ export function CodeBlockHeader({ variant, className, children, ...rest }: CodeB
  */
 export function CodeBlockTitle({ variant, className, children, ...rest }: CodeBlockTitleProps): React.JSX.Element {
   return (
-    <div {...rest} data-slot="codeblock-title" className={cn(codeBlockTitleVariants({ variant, className }))}>
+    <div {...rest} data-slot='codeblock-title' className={cn(codeBlockTitleVariants({ variant, className }))}>
       {children}
     </div>
   );
@@ -119,7 +119,7 @@ export function CodeBlockAction({
   return (
     <div
       {...rest}
-      data-slot="codeblock-action"
+      data-slot='codeblock-action'
       className={cn(codeBlockActionVariants({ variant, visibility, className }))}
     >
       {children}
@@ -132,7 +132,7 @@ export function CodeBlockAction({
  */
 export function CodeBlockContent({ children, className, ...rest }: ComponentProps<'div'>): React.JSX.Element {
   return (
-    <div {...rest} data-slot="codeblock-content" className={cn('overflow-x-auto p-2', className)}>
+    <div {...rest} data-slot='codeblock-content' className={cn('overflow-x-auto p-2', className)}>
       {children}
     </div>
   );
@@ -143,7 +143,7 @@ type PreProps = ComponentProps<'pre'> & {
 };
 
 export function Pre({ children, language, className, ...rest }: PreProps): React.JSX.Element {
-  // eslint-disable-next-line @typescript-eslint/no-base-to-string -- Convert children to string
+  // oxlint-disable-next-line @typescript-eslint/no-base-to-string -- Convert children to string
   const text = String(children).replace(/\n$/, '');
 
   // Render with syntax highlighting if language is detected
@@ -163,7 +163,7 @@ export function InlineCode({ children, className, ...rest }: ComponentProps<'cod
   return (
     <code
       {...rest}
-      data-slot="inline-code"
+      data-slot='inline-code'
       className={cn(
         className,
         'rounded-xs border bg-neutral/10 px-1 py-0 font-normal text-foreground/80 before:content-none after:content-none',

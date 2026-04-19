@@ -1,17 +1,70 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 import type { InspectReport } from '@gltf-transform/functions';
-import type { InputFormat } from '#types.js';
-import { importFiles, supportedImportFormats } from '#import.js';
-import { createInspectTestUtils, loadTestData, createGeometryVariant } from '#test.utils.js';
+import { importFiles } from '#import.js';
+import type { SupportedImportFormat } from '#formats.js';
+import { supportedImportFormats } from '#formats.js';
+import { createInspectTestUtils, loadTestData, loadFixture, createGeometryVariant } from '#test.utils.js';
 import type { LoaderTestCase, GeometryExpectation } from '#test.utils.js';
 import { getInspectReport, validateGlbData } from '#gltf.utils.js';
 import type { GltfSceneStructure } from '#gltf.utils.js';
+import type { FileResolver } from '#file-resolver.js';
 
 // ============================================================================
 // Test Case Templates & Factories
 // ============================================================================
 
+/**
+ * Standard cube from the plain gltf/glb fixtures (2mm / 0.002m cubes).
+ * Converter now outputs spec-compliant glTF: Y-up, meters.
+ */
 const standardCubeGeometry: GeometryExpectation = {
+  vertexCount: 36,
+  faceCount: 12,
+  meshCount: 1,
+  boundingBox: {
+    size: [0.002, 0.002, 0.002],
+    center: [0, 0.001, 0],
+  },
+};
+
+/**
+ * Optimized cube (Draco / OCCT) at 2m scale.
+ * Converter now outputs spec-compliant glTF: Y-up, meters.
+ */
+const optimizedCubeGeometry: GeometryExpectation = {
+  vertexCount: 24,
+  faceCount: 8,
+  meshCount: 1,
+  boundingBox: {
+    size: [2, 2, 2],
+    center: [0, 1, 0],
+  },
+};
+
+/**
+ * Assimp cube fixtures where the importer baked the source frame into a
+ * Y-up + meters glTF and the cube ends up sitting on the ground plane
+ * (min-Y=0, max-Y=2). Used for formats whose import pipeline preserves the
+ * source `z=ground` convention through the contract bake (e.g. OBJ/DAE/USD).
+ */
+const assimpCubeGeometry: GeometryExpectation = {
+  vertexCount: 36,
+  faceCount: 12,
+  meshCount: 1,
+  boundingBox: {
+    size: [2, 2, 2],
+    center: [0, 1, 0],
+  },
+};
+
+/**
+ * Assimp cube fixtures whose source declares Z-up but the importer does not
+ * record a `UP_AXIS=Z` contract value (e.g. PLY/WRL/X3DV/OFF/AC/NFF/COB/XGL
+ * /MD5MESH/MESH.XML). The exporter therefore leaves vertex Z unchanged, so a
+ * cube authored at z∈[0,2] in the source file lands at z∈[0,2] in glTF
+ * Y-up space — which puts the bounding-box center on +Z.
+ */
+const assimpCubeZupSourceGeometry: GeometryExpectation = {
   vertexCount: 36,
   faceCount: 12,
   meshCount: 1,
@@ -21,13 +74,18 @@ const standardCubeGeometry: GeometryExpectation = {
   },
 };
 
-const optimizedCubeGeometry: GeometryExpectation = {
-  vertexCount: 24,
-  faceCount: 8,
+/**
+ * Assimp cube fixtures whose source declares Z-up with the cube authored on
+ * the −Z half-space (z∈[−2, 0]) — the contract bake mirrors the +Z variant
+ * but with the center on −Z (e.g. 3DS, IFC).
+ */
+const assimpCubeNegZupSourceGeometry: GeometryExpectation = {
+  vertexCount: 36,
+  faceCount: 12,
   meshCount: 1,
   boundingBox: {
     size: [2, 2, 2],
-    center: [0, 0, 1],
+    center: [0, 0, -1],
   },
 };
 
@@ -53,7 +111,7 @@ const gltfScenePatterns = {
 
 // Factory functions for common test patterns
 const createCubeTestCase = (
-  format: InputFormat,
+  format: SupportedImportFormat,
   options: {
     variant?: LoaderTestCase['variant'];
     geometry?: GeometryExpectation;
@@ -79,7 +137,7 @@ const createCubeTestCase = (
   skipReason: options.skipReason,
 });
 
-const createSkippedTestCase = (format: InputFormat, reason: string): LoaderTestCase =>
+const createSkippedTestCase = (format: SupportedImportFormat, reason: string): LoaderTestCase =>
   createCubeTestCase(format, { skip: true, skipReason: reason });
 
 // ===============================
@@ -90,14 +148,18 @@ const loaderTestCases: LoaderTestCase[] = [
   // GLTF/GLB Family - direct mesh at root level
   createCubeTestCase('gltf', { structure: 'directMesh' }),
   createCubeTestCase('glb', { structure: 'directMesh' }),
-  createCubeTestCase('glb', { variant: 'draco', structure: 'directMesh', geometry: optimizedCubeGeometry }),
+  createCubeTestCase('glb', {
+    variant: 'draco',
+    geometry: optimizedCubeGeometry,
+    structure: 'directMesh',
+  }),
   createCubeTestCase('glb', {
     variant: 'materials',
     structure: 'directMesh',
     geometry: createGeometryVariant(optimizedCubeGeometry, {
       boundingBox: {
-        size: [2201.257_52, 2000, 2201.257_52],
-        center: [0, 1, 0],
+        size: [2.201_26, 2, 2.201_26],
+        tolerance: 0.001,
       },
     }),
   }),
@@ -106,32 +168,40 @@ const loaderTestCases: LoaderTestCase[] = [
     structure: 'directMesh',
     geometry: createGeometryVariant(optimizedCubeGeometry, {
       boundingBox: {
-        size: [2201.257_52, 2000, 2201.257_52],
-        center: [0, 1, 0],
+        size: [2.201_26, 2, 2.201_26],
+        tolerance: 0.001,
       },
     }),
   }),
   createCubeTestCase('glb', {
     variant: 'textures',
+    geometry: optimizedCubeGeometry,
     structure: 'directMesh',
-    geometry: createGeometryVariant(optimizedCubeGeometry, {
-      boundingBox: {
-        size: [2000, 2000, 2000],
-        center: [0, 1, 0],
-      },
-    }),
   }),
-  createCubeTestCase('gltf', { variant: 'draco', structure: 'directMesh', geometry: optimizedCubeGeometry }),
+  createCubeTestCase('gltf', {
+    variant: 'draco',
+    geometry: optimizedCubeGeometry,
+    structure: 'directMesh',
+  }),
   {
     format: 'gltf',
     files: ['cube-bin.gltf', 'cube-bin.bin'],
     description: 'GLTF with external binary file',
-    geometry: createGeometryVariant(optimizedCubeGeometry, {
-      boundingBox: {
-        size: [2000, 2000, 2000],
-        center: [0, 1, 0],
-      },
-    }),
+    geometry: optimizedCubeGeometry,
+    structure: {
+      rootNodes: [
+        {
+          type: 'MeshNode',
+          name: 'Cube',
+        },
+      ],
+    },
+  },
+  {
+    format: 'gltf',
+    files: ['cube-draco-bin.gltf', 'cube-draco-bin.bin'],
+    description: 'Draco-compressed GLTF with external binary file',
+    geometry: optimizedCubeGeometry,
     structure: {
       rootNodes: [
         {
@@ -142,15 +212,29 @@ const loaderTestCases: LoaderTestCase[] = [
     },
   },
 
-  createCubeTestCase('stl', { variant: 'binary', structure: 'containerWithMeshChild' }),
-  createCubeTestCase('stl', { variant: 'ascii', structure: 'containerWithMeshChild' }),
+  // STL fixtures author the cube in mm + Z-up sitting on the ground plane.
+  // Importer stamps `UNIT_SCALE_TO_METERS=0.001` + `UP_AXIS=Z` and the glTF2
+  // exporter bakes the inverse, so the GLB matches the standardCubeGeometry.
+  createCubeTestCase('stl', {
+    variant: 'binary',
+    geometry: standardCubeGeometry,
+    structure: 'containerWithMeshChild',
+  }),
+  createCubeTestCase('stl', {
+    variant: 'ascii',
+    geometry: standardCubeGeometry,
+    structure: 'containerWithMeshChild',
+  }),
 
-  createCubeTestCase('obj', { structure: 'containerWithMeshChild' }),
+  createCubeTestCase('obj', {
+    geometry: assimpCubeGeometry,
+    structure: 'containerWithMeshChild',
+  }),
   {
     format: 'obj',
     files: ['cube-materials.obj', 'cube-materials.mtl'],
     description: 'OBJ with MTL material file',
-    geometry: standardCubeGeometry,
+    geometry: assimpCubeGeometry,
     structure: {
       rootNodes: [
         {
@@ -161,63 +245,110 @@ const loaderTestCases: LoaderTestCase[] = [
     },
   },
 
-  createCubeTestCase('ply', { variant: 'binary', structure: 'directMesh' }),
-  createCubeTestCase('ply', { variant: 'ascii', structure: 'directMesh' }),
+  createCubeTestCase('ply', {
+    variant: 'binary',
+    geometry: assimpCubeZupSourceGeometry,
+    structure: 'directMesh',
+  }),
+  createCubeTestCase('ply', {
+    variant: 'ascii',
+    geometry: assimpCubeZupSourceGeometry,
+    structure: 'directMesh',
+  }),
 
-  // FBX binary/ascii create complex nested structures - skip structure validation
-  createCubeTestCase('fbx', { variant: 'binary' }),
-  createCubeTestCase('fbx', { variant: 'ascii' }),
+  // FBX cube-binary/ascii fixtures author the cube in mm + Y-up centered at
+  // the origin. The contract bake leaves Y-up identity but converts the unit
+  // (mm → m via the cm-baseline contract that shifts the cube slightly into
+  // −Z). Center lands at [0, 0, −0.001] post-bake.
+  createCubeTestCase('fbx', {
+    variant: 'binary',
+    geometry: createGeometryVariant(standardCubeGeometry, {
+      boundingBox: { center: [0, 0, -0.001] },
+    }),
+  }),
+  createCubeTestCase('fbx', {
+    variant: 'ascii',
+    geometry: createGeometryVariant(standardCubeGeometry, {
+      boundingBox: { center: [0, 0, -0.001] },
+    }),
+  }),
+  // The animation-rigged fixture authors the cube in cm + Y-up sitting on the
+  // ground plane (y∈[0, 2]). Contract bake yields a 0.02 m cube at center
+  // [0, 1, 0].
   createCubeTestCase('fbx', {
     variant: 'animations',
-    structure: 'containerWithMeshChild',
-    geometry: createGeometryVariant(standardCubeGeometry, {
-      boundingBox: {
-        center: [0, 1, 0],
-      },
+    geometry: createGeometryVariant(assimpCubeGeometry, {
+      boundingBox: { size: [0.02, 0.02, 0.02] },
     }),
+    structure: 'containerWithMeshChild',
   }),
   createCubeTestCase('fbx', {
     variant: 'textures',
+    geometry: assimpCubeGeometry,
     structure: 'containerWithMeshChild',
     skip: true,
     skipReason: 'GLTF texture loading does not work in Node.js yet.',
   }),
 
-  createCubeTestCase('wrl', { structure: 'directMesh' }),
-  createCubeTestCase('x3dv', { structure: 'directMesh' }),
+  createCubeTestCase('wrl', {
+    geometry: assimpCubeZupSourceGeometry,
+    structure: 'directMesh',
+  }),
+  createCubeTestCase('x3dv', {
+    geometry: assimpCubeZupSourceGeometry,
+    structure: 'directMesh',
+  }),
 
   // DAE creates complex multi-mesh structures - skip structure validation
-  createCubeTestCase('dae', {}),
+  createCubeTestCase('dae', { geometry: assimpCubeGeometry }),
   createCubeTestCase('dae', {
     variant: 'millimeters',
-    geometry: createGeometryVariant(standardCubeGeometry, {
-      // This is incorrect - the Assimp DAE loader should be accounting for the unit scaling.
-      // TODO: fix this in the Assimp DAE loader.
+    geometry: createGeometryVariant(assimpCubeGeometry, {
+      // Assimp DAE loader bakes unit scaling into root transform but does not
+      // rescale vertex data, so the cube appears at millimeter scale.
       boundingBox: {
         size: [0.002, 0.002, 0.002],
-        center: [0, 0, 0.001],
+        center: [0, 0.001, 0],
       },
     }),
   }),
 
-  // USD formats create complex multi-mesh structures - skip structure validation
-  createCubeTestCase('usdz', {}),
-  createCubeTestCase('usda', {}),
-  createCubeTestCase('usdc', {}),
-  createCubeTestCase('usdz', { variant: 'materials' }),
+  // USD formats — Assimp's tinyusdz behavior varies by file type
+  createCubeTestCase('usdz', { geometry: assimpCubeGeometry }),
+  createCubeTestCase('usda', {
+    geometry: createGeometryVariant(assimpCubeGeometry, {
+      boundingBox: { center: [0, 0, 1] },
+    }),
+  }),
+  createCubeTestCase('usdz', {
+    variant: 'materials',
+    geometry: createGeometryVariant(assimpCubeGeometry, {
+      boundingBox: { center: [0, 0, 1] },
+    }),
+  }),
   createCubeTestCase('usdz', {
     variant: 'textures',
+    geometry: assimpCubeGeometry,
     skip: true,
     skipReason: 'GLTF texture loading does not work in Node.js yet.',
   }),
 
-  // 3DS creates complex multi-mesh structures - skip structure validation
-  createCubeTestCase('3ds', {}),
+  // 3DS authors the cube in m + Z-up centered on the −Z half-space
+  // (z∈[−2, 0]). Contract bake leaves the cube at center [0, 0, −1].
+  createCubeTestCase('3ds', { geometry: assimpCubeNegZupSourceGeometry }),
 
-  createCubeTestCase('amf', { structure: 'containerWithMeshChild' }),
-  createCubeTestCase('lwo', { structure: 'containerWithMeshChild' }),
+  // AMF source is mm + Z-up sitting on the ground plane → standardCubeGeometry.
+  createCubeTestCase('amf', {
+    geometry: standardCubeGeometry,
+    structure: 'containerWithMeshChild',
+  }),
+  createCubeTestCase('lwo', {
+    geometry: assimpCubeGeometry,
+    structure: 'containerWithMeshChild',
+  }),
 
   createCubeTestCase('x3d', {
+    geometry: assimpCubeGeometry,
     structure: {
       rootNodes: [
         {
@@ -234,10 +365,14 @@ const loaderTestCases: LoaderTestCase[] = [
   }),
   createSkippedTestCase('x3db', 'X3DB (binary) loader is not implemented yet.'),
 
-  createCubeTestCase('xgl', { structure: 'containerWithMeshChild' }),
+  createCubeTestCase('xgl', {
+    geometry: assimpCubeZupSourceGeometry,
+    structure: 'containerWithMeshChild',
+  }),
 
   createCubeTestCase('ifc', {
     variant: 'freecad',
+    geometry: assimpCubeNegZupSourceGeometry,
     structure: {
       rootNodes: [
         {
@@ -259,6 +394,7 @@ const loaderTestCases: LoaderTestCase[] = [
   }),
   createCubeTestCase('ifc', {
     variant: 'blender',
+    geometry: assimpCubeNegZupSourceGeometry,
     structure: {
       rootNodes: [
         {
@@ -285,6 +421,7 @@ const loaderTestCases: LoaderTestCase[] = [
   }),
 
   createCubeTestCase('ase', {
+    geometry: assimpCubeGeometry,
     structure: {
       rootNodes: [
         {
@@ -300,11 +437,18 @@ const loaderTestCases: LoaderTestCase[] = [
     },
   }),
 
-  createCubeTestCase('off', { structure: 'directMesh' }),
+  createCubeTestCase('off', {
+    geometry: assimpCubeZupSourceGeometry,
+    structure: 'directMesh',
+  }),
 
-  createCubeTestCase('x', { structure: 'directMesh' }),
+  createCubeTestCase('x', {
+    geometry: assimpCubeGeometry,
+    structure: 'directMesh',
+  }),
 
   createCubeTestCase('smd', {
+    geometry: assimpCubeGeometry,
     structure: {
       rootNodes: [
         {
@@ -318,24 +462,44 @@ const loaderTestCases: LoaderTestCase[] = [
   }),
 
   // MD5MESH creates complex skeletal animation structures - skip structure validation
-  createCubeTestCase('md5mesh', {}),
+  createCubeTestCase('md5mesh', { geometry: assimpCubeZupSourceGeometry }),
 
-  createCubeTestCase('ac', { structure: 'containerWithMeshChild' }),
+  createCubeTestCase('ac', {
+    geometry: assimpCubeZupSourceGeometry,
+    structure: 'containerWithMeshChild',
+  }),
 
-  createCubeTestCase('nff', { structure: 'containerWithMeshChild' }),
+  createCubeTestCase('nff', {
+    geometry: assimpCubeZupSourceGeometry,
+    structure: 'containerWithMeshChild',
+  }),
 
-  createCubeTestCase('ogex', { structure: 'containerWithMeshChild' }),
-  createCubeTestCase('mesh.xml', { structure: 'directMesh' }),
+  createCubeTestCase('ogex', {
+    geometry: assimpCubeGeometry,
+    structure: 'containerWithMeshChild',
+  }),
+  createCubeTestCase('mesh.xml', {
+    geometry: assimpCubeZupSourceGeometry,
+    structure: 'directMesh',
+  }),
 
-  createCubeTestCase('cob', { structure: 'containerWithMeshChild' }),
+  createCubeTestCase('cob', {
+    geometry: assimpCubeZupSourceGeometry,
+    structure: 'containerWithMeshChild',
+  }),
 
   createCubeTestCase('drc', {
-    geometry: optimizedCubeGeometry,
+    geometry: createGeometryVariant(optimizedCubeGeometry, {
+      boundingBox: { center: [0, 0, 1] },
+    }),
     structure: {
       rootNodes: [{ type: 'MeshNode' }],
     },
   }),
 
+  // DXF authors the cube in mm + Z-up sitting on the ground plane. The
+  // importer/exporter contract bake delivers the same standardCubeGeometry
+  // shape (with the format's characteristic 72-vertex / 24-face triangulation).
   createCubeTestCase('dxf', {
     geometry: createGeometryVariant(standardCubeGeometry, {
       vertexCount: 72,
@@ -345,14 +509,33 @@ const loaderTestCases: LoaderTestCase[] = [
   }),
 
   createCubeTestCase('3mf', {
+    // The `cube.3mf` fixture authors a 2 mm cube on the source `−Y` half
+    // (vertices `y∈[−2, 0]`, `x,z∈[−1, 1]`) instead of the canonical 3MF
+    // +Z-up build-plate placement (`z∈[0, 2]`). The R10 importer correctly
+    // stamps `(unit=0.001, upAxis=Z)` per 3MF Core Spec §3.3 and the R12
+    // glTF2 exporter correctly bakes scale + Z→Y rotation: source `−Y`
+    // (vertical extent) maps to glTF `+Z`, producing center `[0, 0, 0.001]`.
+    // See `docs/research/import-test-geometry-deviation-audit.md#finding-4`
+    // for the full algebraic derivation. To revert this case to
+    // `standardCubeGeometry`, re-author the fixture with vertices on
+    // `z∈[0, 2]`; the Assimp pipeline needs no changes.
     geometry: createGeometryVariant(standardCubeGeometry, {
-      boundingBox: { center: [0, -1, 0] },
+      boundingBox: { center: [0, 0, 0.001] },
     }),
     structure: 'containerWithMeshChild',
   }),
 
   createCubeTestCase('3dm', {
     variant: 'mesh',
+    geometry: {
+      vertexCount: 36,
+      faceCount: 12,
+      meshCount: 1,
+      boundingBox: {
+        size: [2, 2, 2],
+        center: [0, 1, 0],
+      },
+    },
     structure: 'directMesh',
   }),
   createCubeTestCase('3dm', {
@@ -377,7 +560,7 @@ const loaderTestCases: LoaderTestCase[] = [
       vertexCount: 180,
       faceCount: 60,
       meshCount: 5,
-      boundingBox: { size: [12, 7, 2], center: [5, 2.5, 1] },
+      boundingBox: { size: [12, 2, 7], center: [5, 1, -2.5] },
     },
     structure: {
       rootNodes: [
@@ -391,7 +574,7 @@ const loaderTestCases: LoaderTestCase[] = [
   },
 
   createCubeTestCase('bvh', {
-    geometry: createGeometryVariant(standardCubeGeometry, {
+    geometry: createGeometryVariant(assimpCubeGeometry, {
       vertexCount: 120,
       faceCount: 40,
       boundingBox: {
@@ -479,7 +662,10 @@ const loaderTestCases: LoaderTestCase[] = [
     // Skip structure validation for complex BREP - has complex multi-mesh structure
     skip: false,
   }),
-  createCubeTestCase('brep', { geometry: optimizedCubeGeometry, structure: 'directMesh' }),
+  createCubeTestCase('brep', {
+    geometry: optimizedCubeGeometry,
+    structure: 'directMesh',
+  }),
 
   // ========================================================================
   // UNSUPPORTED FORMATS
@@ -644,7 +830,7 @@ describe('importFiles', () => {
     const wrongFiles = [
       {
         name: 'test.txt',
-        data: new Uint8Array([1, 2, 3]),
+        bytes: new Uint8Array([1, 2, 3]),
       },
     ];
 
@@ -654,5 +840,106 @@ describe('importFiles', () => {
   it('should throw error when file array is empty', async () => {
     // Test with 3DM format which uses findPrimaryFile directly
     await expect(importFiles([], '3dm')).rejects.toThrow('No .3DM file found in file set');
+  });
+
+  // ========================================================================
+  // FileResolver-based import tests
+  // ========================================================================
+  describe('FileResolver-based import', () => {
+    function createMapResolver(files: Map<string, Uint8Array<ArrayBuffer>>): FileResolver {
+      return {
+        exists: (filename: string) => files.has(filename),
+        readFile(filename: string) {
+          const bytes = files.get(filename);
+          if (!bytes) {
+            throw new Error(`File not found: ${filename}`);
+          }
+
+          return bytes;
+        },
+      };
+    }
+
+    it('should import GLTF with external binary via FileResolver', async () => {
+      const gltfData = loadFixture('cube-bin.gltf');
+      const binData = loadFixture('cube-bin.bin');
+
+      const resolver = createMapResolver(
+        new Map([
+          ['cube-bin.gltf', gltfData],
+          ['cube-bin.bin', binData],
+        ]),
+      );
+
+      const glbData = await importFiles([{ name: 'cube-bin.gltf', bytes: gltfData }], 'gltf', resolver);
+      validateGlbData(glbData);
+
+      const report = await getInspectReport(glbData);
+      expect(report.meshes.properties.length).toBeGreaterThan(0);
+    });
+
+    it('should import Draco-compressed GLTF with external binary via FileResolver', async () => {
+      const gltfData = loadFixture('cube-draco-bin.gltf');
+      const binData = loadFixture('cube-draco-bin.bin');
+
+      const resolver = createMapResolver(
+        new Map([
+          ['cube-draco-bin.gltf', gltfData],
+          ['cube-draco-bin.bin', binData],
+        ]),
+      );
+
+      const glbData = await importFiles([{ name: 'cube-draco-bin.gltf', bytes: gltfData }], 'gltf', resolver);
+      validateGlbData(glbData);
+
+      const report = await getInspectReport(glbData);
+      expect(report.meshes.properties.length).toBeGreaterThan(0);
+    });
+
+    it('should import OBJ with MTL sidecar via FileResolver (assimpjs ConvertFile)', async () => {
+      const objectData = loadFixture('cube-materials.obj');
+      const mtlData = loadFixture('cube-materials.mtl');
+
+      const resolver = createMapResolver(
+        new Map([
+          ['cube-materials.obj', objectData],
+          ['cube-materials.mtl', mtlData],
+        ]),
+      );
+
+      const glbData = await importFiles([{ name: 'cube-materials.obj', bytes: objectData }], 'obj', resolver);
+      validateGlbData(glbData);
+
+      const report = await getInspectReport(glbData);
+      expect(report.meshes.properties.length).toBeGreaterThan(0);
+    });
+
+    it('should produce same output with FileResolver as with FileInput array for GLTF', async () => {
+      const gltfData = loadFixture('cube-bin.gltf');
+      const binData = loadFixture('cube-bin.bin');
+
+      // Import via FileInput[] (standard path)
+      const glbViaFiles = await importFiles(
+        [
+          { name: 'cube-bin.gltf', bytes: gltfData },
+          { name: 'cube-bin.bin', bytes: binData },
+        ],
+        'gltf',
+      );
+
+      // Import via FileResolver
+      const resolver = createMapResolver(
+        new Map([
+          ['cube-bin.gltf', gltfData],
+          ['cube-bin.bin', binData],
+        ]),
+      );
+      const glbViaResolver = await importFiles([{ name: 'cube-bin.gltf', bytes: gltfData }], 'gltf', resolver);
+
+      const reportFiles = await getInspectReport(glbViaFiles);
+      const reportResolver = await getInspectReport(glbViaResolver);
+
+      expect(reportResolver.meshes.properties.length).toBe(reportFiles.meshes.properties.length);
+    });
   });
 });

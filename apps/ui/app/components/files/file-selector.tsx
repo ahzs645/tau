@@ -3,6 +3,7 @@ import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { ChevronDown, ChevronRight, Folder } from 'lucide-react';
 import { Virtuoso } from 'react-virtuoso';
 import { useIsMobile } from '#hooks/use-mobile.js';
+import { useOptionalFileManager } from '#hooks/use-file-manager.js';
 import { useHorizontalScroll } from '#hooks/use-horizontal-scroll.js';
 import { Command, CommandInput, CommandItem, CommandList } from '#components/ui/command.js';
 import { Drawer, DrawerContent, DrawerDescription, DrawerTitle, DrawerTrigger } from '#components/ui/drawer.js';
@@ -13,14 +14,48 @@ import { cn } from '#utils/ui.utils.js';
 import { menuItemLayoutClass } from '#components/ui/menu.variants.js';
 import { Loader } from '#components/ui/loader.js';
 
-type FileItem = {
+export type FileSelectorEntry = {
+  name: string;
   path: string;
+  isFolder: boolean;
   size?: number;
 };
 
+export type FileSelectorDataSource = {
+  loadDirectory: (path: string) => Promise<FileSelectorEntry[]>;
+  searchFiles: (query: string) => Promise<FileSelectorEntry[]>;
+};
+
+/**
+ * Wrap a static file list into a `FileSelectorDataSource`.
+ * Builds the tree once; all returned promises resolve in-memory (zero latency).
+ * Used by import routes where files come from GitHub API or disk upload.
+ */
+export function createStaticDataSource(files: Array<{ path: string; size?: number }>): FileSelectorDataSource {
+  const tree = buildTree(files);
+  const toEntry = (node: TreeNode): FileSelectorEntry => ({
+    name: node.name,
+    path: node.path,
+    isFolder: node.isFolder,
+    size: node.size,
+  });
+
+  return {
+    async loadDirectory(path: string) {
+      return getItemsAtPath(tree, path).map((node) => toEntry(node));
+    },
+    async searchFiles(query: string) {
+      return searchFilesRecursively(tree, query).map((node) => toEntry(node));
+    },
+  };
+}
+
 type FileSelectorProps = {
   readonly popoverProperties?: React.ComponentProps<typeof PopoverContent>;
-  readonly files: FileItem[];
+  /** Explicit data source. When omitted, auto-resolves from FileManagerProvider context. */
+  readonly dataSource?: FileSelectorDataSource;
+  /** Include directories in search results (only applies to context-based data source). */
+  readonly shouldIncludeDirectories?: boolean;
   readonly selectedFile: string | undefined;
   readonly onSelect: (file: string) => void;
   readonly placeholder?: string;
@@ -48,7 +83,7 @@ type TreeNode = {
 /**
  * Build tree structure from flat file paths
  */
-function buildTree(files: FileItem[]): TreeNode {
+function buildTree(files: Array<{ path: string; size?: number }>): TreeNode {
   const root: TreeNode = {
     name: '',
     path: '',
@@ -239,14 +274,14 @@ function BreadcrumbNav({
   useHorizontalScroll(scrollContainerRef);
 
   return (
-    <div className="flex items-center border-b text-sm">
+    <div className='flex items-center border-b text-sm'>
       <div
         ref={scrollContainerRef}
-        className="mx-2 flex flex-1 snap-x snap-mandatory items-center gap-0.5 overflow-x-auto overscroll-x-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        className='mx-2 flex flex-1 snap-x snap-mandatory items-center gap-0.5 overflow-x-auto overscroll-x-none [scrollbar-width:none] [&::-webkit-scrollbar]:hidden'
       >
         {/* "Files" root button - inside scrollable area */}
         <button
-          type="button"
+          type='button'
           className={cn(
             'my-1.5 shrink-0 snap-start rounded-xs px-1 py-0.5 hover:bg-muted',
             currentPath === '' && 'font-medium text-foreground',
@@ -262,11 +297,11 @@ function BreadcrumbNav({
         {crumbs.map((crumb, index) => {
           const isLast = index === crumbs.length - 1;
           return (
-            <div key={crumb.path} className="my-1.5 flex shrink-0 snap-start items-center gap-0.5">
-              <ChevronRight className="size-3 text-muted-foreground" />
+            <div key={crumb.path} className='my-1.5 flex shrink-0 snap-start items-center gap-0.5'>
+              <ChevronRight className='size-3 text-muted-foreground' />
               <button
                 ref={isLast ? currentCrumbRef : undefined}
-                type="button"
+                type='button'
                 className={cn(
                   'max-w-32 shrink-0 truncate rounded-xs px-1 py-0.5 hover:bg-muted',
                   isLast && 'font-medium text-foreground',
@@ -307,16 +342,16 @@ function FileSelectorItem({
     return (
       <CommandItem
         value={item.path}
-        className="flex items-center justify-between gap-2"
+        className='flex items-center justify-between gap-2'
         onSelect={() => {
           onDrillDown(item.path);
         }}
       >
         <div className={cn(menuItemLayoutClass, 'min-w-0 flex-1')}>
-          <Folder className="shrink-0 text-muted-foreground" />
-          <span className="truncate">{item.name}</span>
+          <Folder className='shrink-0 text-muted-foreground' />
+          <span className='truncate'>{item.name}</span>
         </div>
-        <ChevronRight className="shrink-0 text-muted-foreground" />
+        <ChevronRight className='shrink-0 text-muted-foreground' />
       </CommandItem>
     );
   }
@@ -324,63 +359,47 @@ function FileSelectorItem({
   return (
     <CommandItem
       value={item.path}
-      className="flex items-center justify-between gap-2"
+      className='flex items-center justify-between gap-2'
       onSelect={() => {
         onSelect(item.path);
       }}
     >
       <div className={cn(menuItemLayoutClass, 'min-w-0 flex-1')}>
-        <FileExtensionIcon filename={item.name} className="shrink-0" />
+        <FileExtensionIcon filename={item.name} className='shrink-0' />
         <span className={cn(directoryHint ? 'shrink-0' : 'truncate', isSelected && 'font-medium')}>{item.name}</span>
         {directoryHint ? (
-          <span className="min-w-0 truncate text-xs text-muted-foreground">{directoryHint}</span>
+          <span className='min-w-0 truncate text-xs text-muted-foreground'>{directoryHint}</span>
         ) : undefined}
       </div>
       {item.size === undefined ? undefined : (
-        <span className="shrink-0 text-xs text-muted-foreground">{formatBytes(item.size)}</span>
+        <span className='shrink-0 text-xs text-muted-foreground'>{formatBytes(item.size)}</span>
       )}
     </CommandItem>
   );
 }
 
-/**
- * File selector item list
- */
-function FileSelectorList({
+function FileSelectorItemList({
   items,
-  rootNode,
   currentPath,
   selectedFile,
-  searchQuery,
+  isSearching,
   virtualizationThreshold,
   emptyMessage,
   onDrillDown,
   onSelect,
 }: {
   readonly items: TreeNode[];
-  readonly rootNode: TreeNode;
   readonly currentPath: string;
   readonly selectedFile: string | undefined;
-  readonly searchQuery: string;
+  readonly isSearching: boolean;
   readonly virtualizationThreshold: number;
   readonly emptyMessage: string;
   readonly onDrillDown: (path: string) => void;
   readonly onSelect: (path: string) => void;
 }): React.JSX.Element {
-  const isSearching = searchQuery.length > 0;
-
-  // When searching, recursively find matching files from the root of the tree; otherwise show current level items
-  const filteredItems = useMemo(() => {
-    if (!searchQuery) {
-      return items;
-    }
-
-    return searchFilesRecursively(rootNode, searchQuery);
-  }, [items, searchQuery, rootNode]);
-
   const renderItem = useCallback(
     (index: number) => {
-      const item = filteredItems[index];
+      const item = items[index];
       if (!item) {
         return undefined;
       }
@@ -398,35 +417,32 @@ function FileSelectorList({
         />
       );
     },
-    [filteredItems, selectedFile, isSearching, currentPath, onDrillDown, onSelect],
+    [items, selectedFile, isSearching, currentPath, onDrillDown, onSelect],
   );
 
-  // Show empty message when no items match
-  if (filteredItems.length === 0) {
-    return <div className="p-1 py-6 text-center text-sm text-muted-foreground">{emptyMessage}</div>;
+  if (items.length === 0) {
+    return <div className='p-1 py-6 text-center text-sm text-muted-foreground'>{emptyMessage}</div>;
   }
 
-  if (filteredItems.length > virtualizationThreshold) {
+  if (items.length > virtualizationThreshold) {
     return (
       <Virtuoso
         style={{ height: '300px' }}
-        totalCount={filteredItems.length}
+        totalCount={items.length}
         itemContent={renderItem}
-        // Virtuoso's List component doesn't handle vertical padding correctly due to
-        // absolute positioning used for virtualization. Use Header/Footer for vertical
-        // spacing and px-1 on List for horizontal padding.
         components={{
-          List: (properties) => <div {...properties} className="px-1" />,
-          Header: () => <div className="h-1" />,
-          Footer: () => <div className="h-1" />,
+          Scroller: ({ children, ...properties }) => <div {...properties} className='scroll-shadows-y' />,
+          List: (properties) => <div {...properties} className='px-1' />,
+          Header: () => <div className='h-1' />,
+          Footer: () => <div className='h-1' />,
         }}
       />
     );
   }
 
   return (
-    <div className="p-1">
-      {filteredItems.map((item) => {
+    <div className='p-1'>
+      {items.map((item) => {
         const hint = isSearching ? getDirectoryHint(item.path, currentPath) : undefined;
         return (
           <FileSelectorItem
@@ -443,8 +459,58 @@ function FileSelectorList({
   );
 }
 
+/**
+ * Resolves a `FileSelectorDataSource` from `FileManagerProvider` context.
+ * Returns `undefined` when outside a provider (e.g. import routes).
+ */
+function useContextDataSource(shouldIncludeDirectories?: boolean): FileSelectorDataSource | undefined {
+  const fileManager = useOptionalFileManager();
+  const treeService = fileManager?.treeService;
+
+  const loadDirectory = useCallback(
+    async (path: string): Promise<FileSelectorEntry[]> => {
+      if (!treeService) {
+        return [];
+      }
+      const nodes = await treeService.readDirectoryEntries(path);
+      return nodes.map((n) => ({
+        name: n.name,
+        path: path ? `${path}/${n.name}` : n.name,
+        isFolder: n.children !== undefined,
+        size: undefined,
+      }));
+    },
+    [treeService],
+  );
+
+  const searchFiles = useCallback(
+    async (query: string): Promise<FileSelectorEntry[]> => {
+      if (!treeService) {
+        return [];
+      }
+      const items = await treeService.searchFiles(query, {
+        maxResults: 100,
+        includeDirectories: shouldIncludeDirectories,
+      });
+      return items.map((f) => ({
+        name: f.name,
+        path: f.path,
+        isFolder: f.type === 'dir',
+        size: f.size,
+      }));
+    },
+    [treeService, shouldIncludeDirectories],
+  );
+
+  return useMemo(
+    () => (treeService ? { loadDirectory, searchFiles } : undefined),
+    [treeService, loadDirectory, searchFiles],
+  );
+}
+
 export function FileSelector({
-  files,
+  dataSource: explicitSource,
+  shouldIncludeDirectories,
   selectedFile,
   onSelect,
   placeholder = 'Select file...',
@@ -460,41 +526,90 @@ export function FileSelector({
   popoverProperties,
   initialPath,
 }: FileSelectorProps): React.JSX.Element {
+  const contextSource = useContextDataSource(shouldIncludeDirectories);
+  const dataSource = explicitSource ?? contextSource;
+
   const [open, setOpen] = useState(false);
   const [currentPath, setCurrentPath] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const isMobile = useIsMobile();
 
-  // Build tree from files
-  const tree = useMemo(() => buildTree(files), [files]);
+  const [items, setItems] = useState<TreeNode[]>([]);
+  const [searchResults, setSearchResults] = useState<TreeNode[]>([]);
+  const [isLoadingItems, setIsLoadingItems] = useState(false);
 
-  // Get items at current path
-  const currentItems = useMemo(() => getItemsAtPath(tree, currentPath), [tree, currentPath]);
+  const loadDirectory = useCallback(
+    async (path: string) => {
+      if (!dataSource) {
+        return;
+      }
+      setIsLoadingItems(true);
+      try {
+        const entries = await dataSource.loadDirectory(path);
+        setItems(
+          entries
+            .map((entry) => ({
+              name: entry.name,
+              path: entry.path,
+              isFolder: entry.isFolder,
+              size: entry.size,
+              children: new Map<string, TreeNode>(),
+            }))
+            .sort(sortNodes),
+        );
+      } finally {
+        setIsLoadingItems(false);
+      }
+    },
+    [dataSource],
+  );
 
-  // Open at the same level as the selected file (or initialPath if provided)
+  useEffect(() => {
+    if (!dataSource || !searchQuery) {
+      setSearchResults([]);
+      return;
+    }
+    let cancelled = false;
+    const fetchResults = async (): Promise<void> => {
+      const results = await dataSource.searchFiles(searchQuery);
+      if (!cancelled) {
+        setSearchResults(
+          results.map((entry) => ({
+            name: entry.name,
+            path: entry.path,
+            isFolder: entry.isFolder,
+            size: entry.size,
+            children: new Map<string, TreeNode>(),
+          })),
+        );
+      }
+    };
+    void fetchResults();
+    return () => {
+      cancelled = true;
+    };
+  }, [dataSource, searchQuery]);
+
   const handleOpenChange = useCallback(
     (isOpen: boolean) => {
       setOpen(isOpen);
       if (isOpen) {
-        // Use initialPath if provided, otherwise navigate to parent of selectedFile
+        let targetPath = '';
         if (initialPath !== undefined) {
-          setCurrentPath(initialPath);
+          targetPath = initialPath;
         } else if (selectedFile) {
           const parts = selectedFile.split('/');
-          // Remove the filename to get the directory path
           parts.pop();
-          setCurrentPath(parts.join('/'));
-        } else {
-          setCurrentPath('');
+          targetPath = parts.join('/');
         }
-
+        setCurrentPath(targetPath);
         setSearchQuery('');
+        void loadDirectory(targetPath);
       }
     },
-    [initialPath, selectedFile],
+    [initialPath, selectedFile, loadDirectory],
   );
 
-  // Handle file selection
   const handleSelect = useCallback(
     (path: string) => {
       onSelect(path);
@@ -503,54 +618,66 @@ export function FileSelector({
     [onSelect],
   );
 
-  // Handle folder drill-down
-  const handleDrillDown = useCallback((path: string) => {
-    setCurrentPath(path);
-    setSearchQuery('');
-  }, []);
+  const handleDrillDown = useCallback(
+    (path: string) => {
+      setCurrentPath(path);
+      setSearchQuery('');
+      void loadDirectory(path);
+    },
+    [loadDirectory],
+  );
 
-  // Handle breadcrumb navigation
-  const handleNavigate = useCallback((path: string) => {
-    setCurrentPath(path);
-    setSearchQuery('');
-  }, []);
+  const handleNavigate = useCallback(
+    (path: string) => {
+      setCurrentPath(path);
+      setSearchQuery('');
+      void loadDirectory(path);
+    },
+    [loadDirectory],
+  );
 
-  // Get selected file display name
   const selectedFileName = selectedFile?.split('/').pop();
 
-  // Default trigger button
   const triggerButton = children ?? (
-    <Button variant="outline" className={cn('w-full justify-between', className)} disabled={isDisabled || isLoading}>
-      <div className="flex min-w-0 flex-1 items-center gap-2">
+    <Button variant='outline' className={cn('w-full justify-between', className)} disabled={isDisabled || isLoading}>
+      <div className='flex min-w-0 flex-1 items-center gap-2'>
         {isLoading ? (
-          <Loader className="size-4" />
+          <Loader className='size-4' />
         ) : selectedFile ? (
-          <FileExtensionIcon filename={selectedFile} className="size-4 shrink-0" />
+          <FileExtensionIcon filename={selectedFile} className='size-4 shrink-0' />
         ) : undefined}
         <span className={cn('truncate', !selectedFile && 'text-muted-foreground')}>
           {selectedFileName ?? placeholder}
         </span>
       </div>
-      <ChevronDown className="size-4 shrink-0" />
+      <ChevronDown className='size-4 shrink-0' />
     </Button>
   );
 
+  const displayItems = searchQuery ? searchResults : items;
+  const isSearching = searchQuery.length > 0;
+
   const content = (
-    <Command shouldFilter={false} className="flex flex-col">
+    <Command shouldFilter={false} className='flex flex-col'>
       <BreadcrumbNav currentPath={currentPath} onNavigate={handleNavigate} />
       <CommandInput placeholder={searchPlaceholder} value={searchQuery} onValueChange={setSearchQuery} />
-      <CommandList className="max-h-[300px]">
-        <FileSelectorList
-          items={currentItems}
-          rootNode={tree}
-          currentPath={currentPath}
-          selectedFile={selectedFile}
-          searchQuery={searchQuery}
-          virtualizationThreshold={virtualizationThreshold}
-          emptyMessage={emptyMessage}
-          onDrillDown={handleDrillDown}
-          onSelect={handleSelect}
-        />
+      <CommandList className='max-h-[300px] scroll-shadows-y'>
+        {isLoadingItems ? (
+          <div className='flex items-center justify-center p-4'>
+            <Loader className='size-4' />
+          </div>
+        ) : (
+          <FileSelectorItemList
+            items={displayItems}
+            currentPath={currentPath}
+            selectedFile={selectedFile}
+            isSearching={isSearching}
+            virtualizationThreshold={virtualizationThreshold}
+            emptyMessage={emptyMessage}
+            onDrillDown={handleDrillDown}
+            onSelect={handleSelect}
+          />
+        )}
       </CommandList>
     </Command>
   );
@@ -559,11 +686,11 @@ export function FileSelector({
     return (
       <Drawer open={open} onOpenChange={handleOpenChange}>
         <DrawerTrigger asChild>{triggerButton}</DrawerTrigger>
-        <DrawerContent aria-labelledby="drawer-title" aria-describedby="drawer-description">
-          <DrawerTitle className="sr-only" id="drawer-title">
+        <DrawerContent aria-labelledby='drawer-title' aria-describedby='drawer-description'>
+          <DrawerTitle className='sr-only' id='drawer-title'>
             {title}
           </DrawerTitle>
-          <DrawerDescription className="sr-only" id="drawer-description">
+          <DrawerDescription className='sr-only' id='drawer-description'>
             {description}
           </DrawerDescription>
           {content}

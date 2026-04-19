@@ -1,7 +1,6 @@
-/**
- * This is not a production server yet!
- * This is only a minimal backend to get started.
- */
+import '#telemetry/otel.js'; // oxlint-disable-line eslint-plugin-import/no-unassigned-import -- OTEL SDK must initialize before any other module
+
+import process from 'node:process';
 import { Logger, VersioningType } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
@@ -9,6 +8,7 @@ import { FastifyAdapter } from '@nestjs/platform-fastify';
 import { ConfigService } from '@nestjs/config';
 import { Logger as PinoLogger } from 'nestjs-pino';
 import helmet from '@fastify/helmet';
+import { FastifyOtelInstrumentation } from '@fastify/otel';
 import { idPrefix } from '@taucad/types/constants';
 import { generatePrefixedId } from '@taucad/utils/id';
 import { AppModule } from '#app.module.js';
@@ -19,6 +19,29 @@ import { createCorsOriginValidatorFromList } from '#utils/cors.utils.js';
 import { httpBodyLimit } from '#constants/http-body.constant.js';
 import { RedisService } from '#redis/redis.service.js';
 import { RedisIoAdapter } from '#api/websocket/redis-io.adapter.js';
+import { isTrackedAbortError } from '#api/chat/utils/chat-abort.js';
+
+// ---------------------------------------------------------------------------
+// Chat Abort Error Handling (see docs/policy/api-error-policy.md)
+// ---------------------------------------------------------------------------
+
+// Layer 2: Suppress unhandled AbortError rejections from chat cancellations.
+// LangGraph's internal abort propagation creates fire-and-forget promises in
+// node-fetch that reject with AbortError. The tracker ensures we only suppress
+// errors that correlate with a known chat abort.
+process.on('unhandledRejection', (reason: unknown) => {
+  if (isTrackedAbortError(reason)) {
+    return;
+  }
+
+  // Re-throw non-abort rejections so Node.js treats them as uncaught exceptions,
+  // preserving the default crash-on-unhandled-rejection behavior.
+  if (reason instanceof Error) {
+    throw reason;
+  }
+
+  throw new Error(typeof reason === 'string' ? reason : 'Unhandled promise rejection');
+});
 
 async function bootstrap() {
   const fastifyAdapter = new FastifyAdapter({
@@ -49,7 +72,13 @@ async function bootstrap() {
   });
   await app.register(helmet);
 
+  const fastifyInstance = app.getHttpAdapter().getInstance();
+  const fastifyOtel = new FastifyOtelInstrumentation();
+  await fastifyInstance.register(fastifyOtel.plugin());
+
   if (import.meta.env.PROD) {
+    app.enableShutdownHooks();
+
     // Set up Socket.IO with Redis adapter for horizontal scaling
     const redisService = app.get(RedisService);
     const redisIoAdapter = new RedisIoAdapter(app, redisService);

@@ -1,14 +1,14 @@
 import type { PartialDeep } from 'type-fest';
-import type { Build } from '@taucad/types';
+import type { Project } from '@taucad/types';
 
 export type StorageProvider = {
-  // Build operations
-  createBuild(build: Build): Promise<Build>;
-  updateBuild(
-    buildId: string,
-    update: PartialDeep<Build>,
+  // Project operations
+  createProject(project: Project): Promise<Project>;
+  updateProject(
+    projectId: string,
+    update: PartialDeep<Project>,
     options: { ignoreKeys?: string[] },
-  ): Promise<Build | undefined>;
-  getBuilds(): Promise<Build[]>;
-  getBuild(buildId: string): Promise<Build | undefined>;
+  ): Promise<Project | undefined>;
+  getProjects(): Promise<Project[]>;
+  getProject(projectId: string): Promise<Project | undefined>;
 };

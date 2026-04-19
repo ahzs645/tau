@@ -26,14 +26,14 @@ type ContentShapeDetector = (content: unknown) => boolean;
  * of the structure to be partially returned, including array elements.
  *
  * @param _toolName - The tool name (used only for type inference)
- * @param fn - The trimmer function with typed input, returns a trimmed structure
+ * @param trimmerFunction - The trimmer function with typed input, returns a trimmed structure
  * @returns A function that accepts unknown and returns unknown
  */
 function createTrimmer<T extends keyof ToolOutputRegistry>(
   _toolName: T,
-  fn: (result: ToolOutputRegistry[T]) => PartialDeep<ToolOutputRegistry[T], { recurseIntoArrays: true }>,
+  trimmerFunction: (result: ToolOutputRegistry[T]) => PartialDeep<ToolOutputRegistry[T], { recurseIntoArrays: true }>,
 ): (result: unknown) => unknown {
-  return fn as (result: unknown) => unknown;
+  return trimmerFunction as (result: unknown) => unknown;
 }
 
 // =============================================================================
@@ -160,6 +160,18 @@ function isGlobSearchShape(content: unknown): boolean {
 }
 
 /**
+ * Checks if content has the shape of ScreenshotOutput.
+ * Unique: has images array.
+ */
+function isScreenshotShape(content: unknown): boolean {
+  if (!isObject(content)) {
+    return false;
+  }
+
+  return Array.isArray(content['images']);
+}
+
+/**
  * Registry of content shape detectors.
  * Maps tool names to functions that detect if content matches that tool's output shape.
  * Used as a fallback when message.name is undefined.
@@ -176,6 +188,7 @@ const contentShapeDetectors: Record<string, ContentShapeDetector> = {
   [toolName.listDirectory]: isListDirectoryShape,
   [toolName.grep]: isGrepShape,
   [toolName.globSearch]: isGlobSearchShape,
+  [toolName.screenshot]: isScreenshotShape,
 };
 
 /**
@@ -272,6 +285,21 @@ const toolResultTrimmers: Record<string, (result: unknown) => unknown> = {
    * Trims get_kernel_result by removing verbose stack traces.
    * The message and location are sufficient for debugging.
    */
+  /**
+   * Trims screenshot results by stripping base64 dataUrl from each image.
+   * Older screenshots don't need the full image data — only view names are kept.
+   */
+  [toolName.screenshot]: createTrimmer(toolName.screenshot, (result) => {
+    if (!Array.isArray(result.images)) {
+      return result;
+    }
+
+    return {
+      images: result.images.map((img) => ({ view: img.view })),
+      _trimmed: true,
+    };
+  }),
+
   [toolName.getKernelResult]: createTrimmer(toolName.getKernelResult, (result) => {
     // Guard: return unchanged if status is missing (error/malformed response)
     // Uses hasDefined to bypass TypeScript's type narrowing for runtime safety
@@ -315,20 +343,8 @@ function isToolMessage(message: BaseMessage): message is ToolMessage {
 
   // Check for deserialized plain objects with type: "tool"
   // These lose their prototype chain when stored/loaded from PostgresSaver
-  // Cast through unknown to access properties on potentially deserialized objects
-  const messageRecord = message as unknown as Record<string, unknown>;
-
-  // Check for type property (present on deserialized messages)
-  if (messageRecord['type'] === 'tool') {
-    return true;
-  }
-
-  // Check for getType method (deprecated but still used in some places)
-  if (typeof messageRecord['getType'] === 'function') {
-    return (messageRecord['getType'] as () => string)() === 'tool';
-  }
-
-  return false;
+  // but retain data properties like `type`
+  return message.type === 'tool';
 }
 
 /**
@@ -353,17 +369,33 @@ function parseToolContent(content: string): unknown | undefined {
  * @param message - The tool message to trim
  */
 function trimToolMessage(message: ToolMessage): BaseMessage {
-  // Access properties defensively to handle both ToolMessage and plain objects
-  const messageRecord = message as unknown as Record<string, unknown>;
-  const {
-    content,
-    name,
-    tool_call_id: toolCallId,
-  } = messageRecord as {
-    content: unknown;
-    name: string | undefined;
-    tool_call_id: string;
-  };
+  const { content, name, tool_call_id: toolCallId } = message;
+
+  // Handle multi-modal content (arrays with image blocks from screenshot tool)
+  if (Array.isArray(content)) {
+    const hasImages = content.some(
+      (block: unknown) => isObject(block) && (block['type'] === 'image_url' || block['type'] === 'image'),
+    );
+
+    if (hasImages) {
+      const trimmedBlocks = (content as Array<Record<string, unknown>>).map((block) => {
+        if (block['type'] === 'image_url' || block['type'] === 'image') {
+          return { type: 'text', text: '[screenshot image - previously captured]' };
+        }
+
+        return block;
+      });
+
+      return new ToolMessage({
+        content: trimmedBlocks as ToolMessage['content'],
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
+        tool_call_id: toolCallId,
+        name,
+      });
+    }
+
+    return message;
+  }
 
   // Only handle string content (JSON)
   if (typeof content !== 'string') {
@@ -398,6 +430,80 @@ function trimToolMessage(message: ToolMessage): BaseMessage {
 }
 
 /**
+ * Converts a screenshot tool ToolMessage from schema output format
+ * `{"images":[{view,dataUrl},...]}` into multi-modal content blocks
+ * so the LLM can visually process the captured images.
+ */
+function injectScreenshotImages(message: ToolMessage): ToolMessage {
+  const { content, name, tool_call_id: toolCallId } = message;
+
+  if (typeof content !== 'string') {
+    return message;
+  }
+
+  const parsed = parseToolContent(content);
+  if (!isObject(parsed) || !Array.isArray(parsed['images'])) {
+    return message;
+  }
+
+  const images = parsed['images'] as Array<Record<string, unknown>>;
+  const imageBlocks = images
+    .filter((img) => typeof img['dataUrl'] === 'string' && img['dataUrl'].startsWith('data:'))
+    .map((img) => ({
+      type: 'image_url',
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain multimodal content block format
+      image_url: { url: img['dataUrl'] as string },
+    }));
+
+  if (imageBlocks.length === 0) {
+    return message;
+  }
+
+  return new ToolMessage({
+    content: [
+      {
+        type: 'text',
+        text: [
+          `Captured ${imageBlocks.length} screenshot(s).`,
+          'You are now a quality inspector, not the designer.',
+          'Examine with perfect attention to detail for surface defects, discontinuities, artifacts, or geometry that does not match design intent.',
+        ].join(' '),
+      },
+      ...imageBlocks,
+    ],
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
+    tool_call_id: toolCallId,
+    name,
+  });
+}
+
+/**
+ * Finds the index of the last screenshot tool ToolMessage in the messages array.
+ */
+function findLastScreenshotIndex(messages: BaseMessage[]): number {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]!;
+    if (!isToolMessage(message)) {
+      continue;
+    }
+
+    if (message.name === toolName.screenshot) {
+      return index;
+    }
+
+    const { content } = message;
+    if (typeof content === 'string') {
+      const parsed = parseToolContent(content);
+      if (isObject(parsed) && Array.isArray(parsed['images'])) {
+        return index;
+      }
+    }
+  }
+
+  return -1;
+}
+
+/**
  * Middleware that trims tool call results before sending to the LLM.
  *
  * Uses the `wrapModelCall` hook to intercept model requests and trim
@@ -405,6 +511,10 @@ function trimToolMessage(message: ToolMessage): BaseMessage {
  *
  * This helps reduce token usage by removing unnecessary data
  * from the message history that the LLM doesn't need to see again.
+ *
+ * For screenshot tool results: the latest screenshot is converted to
+ * multi-modal image content blocks so the LLM can see the images.
+ * Older screenshot results are trimmed to text placeholders.
  *
  * Trimming is applied uniformly to all messages to ensure stable content
  * for Anthropic prompt caching. Consistent content enables cache hits
@@ -416,16 +526,21 @@ export const toolResultTrimmerMiddleware = createMiddleware({
   async wrapModelCall(request, handler) {
     const { messages } = request;
 
-    // Trim tool messages to reduce token usage
-    const trimmedMessages = messages.map((message) => {
-      if (isToolMessage(message)) {
-        return trimToolMessage(message);
+    const lastScreenshotIndex = findLastScreenshotIndex(messages);
+
+    const trimmedMessages = messages.map((message, index) => {
+      if (!isToolMessage(message)) {
+        return message;
       }
 
-      return message;
+      // Inject images for the latest screenshot tool result so LLM can see them
+      if (index === lastScreenshotIndex) {
+        return injectScreenshotImages(message);
+      }
+
+      return trimToolMessage(message);
     });
 
-    // Call the handler with trimmed messages
     return handler({
       ...request,
       messages: trimmedMessages,

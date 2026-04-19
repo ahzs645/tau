@@ -1,12 +1,13 @@
 @import 'tailwindcss';
 
-/* Fumadocs minimal configuration */
-@import 'fumadocs-ui/css/shiki.css';
+/* Fumadocs preset: base styles, animations, layout, typography, and Tailwind source directives */
+@import 'fumadocs-ui/css/preset.css';
 
 @import 'tw-animate-css';
-@source "../../../../node_modules/@daveyplate/better-auth-ui";
+@source '../../../../node_modules/@daveyplate/better-auth-ui';
+@source '../../../../node_modules/streamdown/dist';
 
-@plugin '@tailwindcss/typography';
+/* Typography is provided by fumadocs-ui/css/preset.css (forked @tailwindcss/typography with fd-* color support) */
 
 :root {
   /* Radius */
@@ -35,11 +36,11 @@
   --hue-highlighter: calc(var(--hue-primary) - 86deg); /* Results in ~180deg - true teal */
 
   /* Lightness levels - will be flipped in dark mode */
-  --l-base: 1.00;
+  --l-base: 1;
   /* Base lightness level, typically used for the lightest backgrounds */
   --l-surface: 0.96;
   /* Slightly darker than base, used for surfaces like cards */
-  --l-subtle: 0.90;
+  --l-subtle: 0.9;
   /* Subtle lightness, for less prominent elements */
   --l-element: 0.85;
   /* Lightness for UI elements like buttons */
@@ -57,7 +58,7 @@
   --l-primary: 0.5719;
   --c-primary: 0.1898;
 
-  --l-secondary: 0.9;
+  --l-secondary: 0.95;
   --c-secondary: 0.01;
 
   --l-highlighter: 0.9;
@@ -136,11 +137,23 @@
   --chart-2: oklch(0.55 0.18 290deg); /* Purple - Output */
   --chart-3: oklch(0.55 0.15 180deg); /* Teal - Cache */
   --chart-4: oklch(0.55 0.18 150deg); /* Green */
-  --chart-5: oklch(0.55 0.20 30deg); /* Orange */
+  --chart-5: oklch(0.55 0.2 30deg); /* Orange */
+
+  /* Diagram colors — softened primary tint */
+  --diagram-node: oklch(0.96 0.015 var(--hue-primary));
+  --diagram-node-border: oklch(0.8 0.05 var(--hue-primary));
+  --diagram-node-text: var(--foreground);
+  --diagram-cluster: oklch(0.97 0.008 var(--hue-primary));
+  --diagram-cluster-border: oklch(0.88 0.03 var(--hue-primary));
+  --diagram-line: oklch(0.55 0.05 var(--hue-primary));
+  --diagram-text: var(--muted-foreground);
+  --diagram-note: oklch(0.96 0.012 calc(var(--hue-primary) + 60deg));
+  --diagram-note-border: oklch(0.78 0.04 calc(var(--hue-primary) + 60deg));
+  --diagram-accent: var(--muted-foreground);
 }
 
 .dark,
-:root[class~="dark"] {
+:root[class~='dark'] {
   /* Invert lightness levels for dark mode */
   --l-base: 0.21;
   --l-surface: 0.28;
@@ -174,14 +187,23 @@
   --highlighter-foreground: oklch(var(--l-deepest) 0.01 var(--hue-neutral) / 0.85);
 
   /* Chart colors - lighter for dark mode */
-  --chart-1: oklch(0.70 0.16 250deg); /* Blue - Input */
-  --chart-2: oklch(0.70 0.16 290deg); /* Purple - Output */
-  --chart-3: oklch(0.70 0.14 180deg); /* Teal - Cache */
-  --chart-4: oklch(0.70 0.16 150deg); /* Green */
-  --chart-5: oklch(0.70 0.18 30deg); /* Orange */
+  --chart-1: oklch(0.7 0.16 250deg); /* Blue - Input */
+  --chart-2: oklch(0.7 0.16 290deg); /* Purple - Output */
+  --chart-3: oklch(0.7 0.14 180deg); /* Teal - Cache */
+  --chart-4: oklch(0.7 0.16 150deg); /* Green */
+  --chart-5: oklch(0.7 0.18 30deg); /* Orange */
+
+  /* Diagram colors - dark mode */
+  --diagram-node: oklch(0.28 0.02 var(--hue-primary));
+  --diagram-node-border: oklch(0.4 0.03 var(--hue-primary));
+  --diagram-cluster: oklch(0.22 0.01 var(--hue-primary));
+  --diagram-cluster-border: oklch(0.3 0.02 var(--hue-primary));
+  --diagram-line: oklch(0.5 0.03 var(--hue-primary));
+  --diagram-note: oklch(0.26 0.015 calc(var(--hue-primary) + 60deg));
+  --diagram-note-border: oklch(0.38 0.025 calc(var(--hue-primary) + 60deg));
 }
 
-@custom-variant dark (&:is(.dark *));
+/* Dark variant is provided by fumadocs-ui/css/preset.css: @variant dark (&:where(.dark, .dark *)) */
 
 @utility rounded-* {
   /* 
@@ -291,14 +313,14 @@
   --color-fd-card: var(--card);
   --color-fd-card-foreground: var(--card-foreground);
   --color-fd-accent: var(--accent);
-  --color-fd-accent-foreground: var(--accent-foreground);
+  --color-fd-accent-foreground: var(--foreground);
   --color-fd-ring: var(--ring);
   --color-fd-popover: var(--popover);
   --color-fd-popover-foreground: var(--popover-foreground);
-  
+
   --color-fd-info: var(--color-information);
   --color-fd-warning: var(--color-warning);
-  --color-fd-error: var(--color-error);
+  --color-fd-error: var(--color-destructive);
   --color-fd-success: var(--color-success);
   --color-fd-diff-remove: rgba(200, 10, 100, 0.12);
   --color-fd-diff-remove-symbol: rgb(230, 10, 100);
@@ -306,7 +328,6 @@
   --color-fd-diff-add-symbol: rgb(10, 200, 100);
 
   @keyframes gradient {
-
     0%,
     100% {
       background-position: 0% 50%;
@@ -318,7 +339,6 @@
   }
 
   @keyframes pulse-subtle {
-
     0%,
     100% {
       opacity: 1;
@@ -330,7 +350,6 @@
   }
 
   @keyframes gentle-bounce {
-
     0%,
     100% {
       transform: translateY(0);
@@ -392,7 +411,6 @@
   color utility to any element that depends on these defaults.
 */
 @layer base {
-
   *,
   ::after,
   ::before,
@@ -402,7 +420,7 @@
   }
 
   button:not(:disabled),
-  [role="button"]:not(:disabled) {
+  [role='button']:not(:disabled) {
     cursor: pointer;
   }
 }
@@ -413,7 +431,7 @@
   }
 
   body {
-    @apply font-sans bg-background text-foreground antialiased scroll-smooth;
+    @apply scroll-smooth bg-background font-sans text-foreground antialiased;
     overflow: hidden;
   }
 }
@@ -442,7 +460,7 @@
 /* START SCROLLBAR STYLES */
 @plugin 'tailwind-scrollbar' {
   nocompatible: true;
-  preferredStrategy: 'pseudoelements';
+  preferredstrategy: 'pseudoelements';
 }
 
 :root {
@@ -476,92 +494,125 @@
 /* END SCROLLBAR STYLES */
 
 /* START SCROLL SHADOWS */
-/* 
- * Pure CSS scrolling shadows using gradients and background-attachment.
- * Inspired by: https://lea.verou.me/2012/04/background-attachment-local/
- * 
+/*
+ * Content-fading scroll indicators using CSS mask-image.
+ * Fades content itself at scroll edges — works on any background color.
+ *
+ * Enhanced with animation-timeline: scroll() for scroll-aware fading
+ * (Chrome/Edge 115+, Safari 26+). Browsers without support degrade
+ * gracefully to no fade (initial-value: black = fully opaque mask).
+ *
  * Usage: scroll-shadows-x, scroll-shadows-y, or scroll-shadows (both)
- * Override --scroll-shadows-bg to match your container's background color.
+ * Override --scroll-fade-size to control the fade distance.
  */
 
-/* Shared scroll shadow variables */
-:root {
-  --scroll-shadows-color: rgba(0, 0, 0, 0.06);
-  --scroll-shadows-bg: var(--popover);
-  --scroll-shadows-cover-size: 40px;
-  --scroll-shadows-size: 14px;
+@property --scroll-fade-top {
+  syntax: '<color>';
+  inherits: false;
+  initial-value: black;
 }
 
-.dark,
-:root[class~="dark"] {
-  --scroll-shadows-color: rgba(255, 255, 255, 0.06);
+@property --scroll-fade-bottom {
+  syntax: '<color>';
+  inherits: false;
+  initial-value: black;
+}
+
+@property --scroll-fade-left {
+  syntax: '<color>';
+  inherits: false;
+  initial-value: black;
+}
+
+@property --scroll-fade-right {
+  syntax: '<color>';
+  inherits: false;
+  initial-value: black;
+}
+
+@keyframes scroll-fade-y {
+  0% {
+    --scroll-fade-top: black;
+    --scroll-fade-bottom: transparent;
+  }
+  3%,
+  97% {
+    --scroll-fade-top: transparent;
+    --scroll-fade-bottom: transparent;
+  }
+  100% {
+    --scroll-fade-top: transparent;
+    --scroll-fade-bottom: black;
+  }
+}
+
+@keyframes scroll-fade-x {
+  0% {
+    --scroll-fade-left: black;
+    --scroll-fade-right: transparent;
+  }
+  3%,
+  97% {
+    --scroll-fade-left: transparent;
+    --scroll-fade-right: transparent;
+  }
+  100% {
+    --scroll-fade-left: transparent;
+    --scroll-fade-right: black;
+  }
 }
 
 @utility scroll-shadows-x {
+  --scroll-fade-size: 14px;
   overflow: auto;
-  background:
-    /* Covers (scroll with content) */
-    linear-gradient(90deg, var(--scroll-shadows-bg) 30%, transparent) left,
-    linear-gradient(270deg, var(--scroll-shadows-bg) 30%, transparent) right,
-    /* Shadows (stay fixed) */
-    linear-gradient(90deg, var(--scroll-shadows-color), transparent) left,
-    linear-gradient(270deg, var(--scroll-shadows-color), transparent) right;
-  background-repeat: no-repeat;
-  background-color: var(--scroll-shadows-bg);
-  background-size:
-    var(--scroll-shadows-cover-size) 100%,
-    var(--scroll-shadows-cover-size) 100%,
-    var(--scroll-shadows-size) 100%,
-    var(--scroll-shadows-size) 100%;
-  background-attachment: local, local, scroll, scroll;
+  mask-image: linear-gradient(
+    to right,
+    var(--scroll-fade-left),
+    black var(--scroll-fade-size),
+    black calc(100% - var(--scroll-fade-size)),
+    var(--scroll-fade-right)
+  );
+  animation: scroll-fade-x linear;
+  animation-timeline: scroll(self x);
 }
 
 @utility scroll-shadows-y {
+  --scroll-fade-size: 14px;
   overflow: auto;
-  background:
-    /* Covers (scroll with content) */
-    linear-gradient(180deg, var(--scroll-shadows-bg) 30%, transparent) top,
-    linear-gradient(0deg, var(--scroll-shadows-bg) 30%, transparent) bottom,
-    /* Shadows (stay fixed) */
-    linear-gradient(180deg, var(--scroll-shadows-color), transparent) top,
-    linear-gradient(0deg, var(--scroll-shadows-color), transparent) bottom;
-  background-repeat: no-repeat;
-  background-color: var(--scroll-shadows-bg);
-  background-size:
-    100% var(--scroll-shadows-cover-size),
-    100% var(--scroll-shadows-cover-size),
-    100% var(--scroll-shadows-size),
-    100% var(--scroll-shadows-size);
-  background-attachment: local, local, scroll, scroll;
+  mask-image: linear-gradient(
+    to bottom,
+    var(--scroll-fade-top),
+    black var(--scroll-fade-size),
+    black calc(100% - var(--scroll-fade-size)),
+    var(--scroll-fade-bottom)
+  );
+  animation: scroll-fade-y linear;
+  animation-timeline: scroll(self y);
 }
 
 @utility scroll-shadows {
+  --scroll-fade-size: 14px;
   overflow: auto;
-  background:
-    /* Y covers (scroll with content) */
-    linear-gradient(180deg, var(--scroll-shadows-bg) 30%, transparent) top,
-    linear-gradient(0deg, var(--scroll-shadows-bg) 30%, transparent) bottom,
-    /* X covers (scroll with content) */
-    linear-gradient(90deg, var(--scroll-shadows-bg) 30%, transparent) left,
-    linear-gradient(270deg, var(--scroll-shadows-bg) 30%, transparent) right,
-    /* Y shadows (stay fixed) */
-    linear-gradient(180deg, var(--scroll-shadows-color), transparent) top,
-    linear-gradient(0deg, var(--scroll-shadows-color), transparent) bottom,
-    /* X shadows (stay fixed) */
-    linear-gradient(90deg, var(--scroll-shadows-color), transparent) left,
-    linear-gradient(270deg, var(--scroll-shadows-color), transparent) right;
-  background-repeat: no-repeat;
-  background-color: var(--scroll-shadows-bg);
-  background-size:
-    100% var(--scroll-shadows-cover-size),
-    100% var(--scroll-shadows-cover-size),
-    var(--scroll-shadows-cover-size) 100%,
-    var(--scroll-shadows-cover-size) 100%,
-    100% var(--scroll-shadows-size),
-    100% var(--scroll-shadows-size),
-    var(--scroll-shadows-size) 100%,
-    var(--scroll-shadows-size) 100%;
-  background-attachment: local, local, local, local, scroll, scroll, scroll, scroll;
+  mask-image:
+    linear-gradient(
+      to bottom,
+      var(--scroll-fade-top),
+      black var(--scroll-fade-size),
+      black calc(100% - var(--scroll-fade-size)),
+      var(--scroll-fade-bottom)
+    ),
+    linear-gradient(
+      to right,
+      var(--scroll-fade-left),
+      black var(--scroll-fade-size),
+      black calc(100% - var(--scroll-fade-size)),
+      var(--scroll-fade-right)
+    );
+  mask-composite: intersect;
+  animation:
+    scroll-fade-y linear,
+    scroll-fade-x linear;
+  animation-timeline: scroll(self y), scroll(self x);
 }
 
 /* END SCROLL SHADOWS */

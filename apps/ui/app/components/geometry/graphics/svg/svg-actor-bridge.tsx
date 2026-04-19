@@ -7,7 +7,7 @@ import { useScreenshotCapability } from '#hooks/use-graphics.js';
  * Registers the SVG element for flat-image screenshot capture on mount
  * and unregisters on unmount – mirroring the Three.js ActorBridge pattern.
  */
-// eslint-disable-next-line @typescript-eslint/no-restricted-types -- React ref API requires null
+// oxlint-disable-next-line @typescript-eslint/no-restricted-types -- React ref API requires null
 export function SvgActorBridge({ svgRef }: { readonly svgRef: RefObject<SVGSVGElement | null> }): ReactNode {
   const screenshotCapabilityActor = useScreenshotCapability();
 

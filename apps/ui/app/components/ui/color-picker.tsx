@@ -53,8 +53,8 @@ function ColorPicker({
 
   // Default trigger button if no children provided
   const triggerContent = children ?? (
-    <Button variant="outline" size="icon" className={cn('block', className)}>
-      <Pipette className="size-4" />
+    <Button variant='outline' size='icon' className={cn('block', className)}>
+      <Pipette className='size-4' />
     </Button>
   );
 
@@ -65,9 +65,9 @@ function ColorPicker({
           <PopoverTrigger asChild disabled={isDisabled} onBlur={onBlur}>
             <TooltipTrigger asChild>{triggerContent}</TooltipTrigger>
           </PopoverTrigger>
-          <TooltipContent side="top">
+          <TooltipContent side='top'>
             Choose color{' '}
-            <KeyShortcut variant="tooltip" className="ml-1">
+            <KeyShortcut variant='tooltip' className='ml-1'>
               {formattedKeyCombination}
             </KeyShortcut>
           </TooltipContent>
@@ -78,12 +78,12 @@ function ColorPicker({
         </PopoverTrigger>
       )}
       <PopoverContent
-        side="top"
+        side='top'
         {...popoverProperties}
         className={cn('flex w-48 flex-col gap-2 p-2', popoverProperties?.className)}
       >
-        <span className="w-full items-center text-sm text-muted-foreground">Select hue ({value.h}°)</span>
-        <div className="flex w-full flex-row gap-2">
+        <span className='w-full items-center text-sm text-muted-foreground'>Select hue ({value.h}°)</span>
+        <div className='flex w-full flex-row gap-2'>
           <Slider
             min={0}
             max={360}
@@ -106,8 +106,8 @@ function ColorPicker({
           />
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button variant="outline" size="icon" onClick={onReset}>
-                <RotateCcw className="size-4" />
+              <Button variant='outline' size='icon' onClick={onReset}>
+                <RotateCcw className='size-4' />
               </Button>
             </TooltipTrigger>
             <TooltipContent>Reset hue</TooltipContent>

@@ -21,7 +21,7 @@ type SummaryStats = {
 
 function calculateStats(records: UsageRecord[]): SummaryStats {
   const modelSet = new Set<string>();
-  const buildSet = new Set<string>();
+  const projectSet = new Set<string>();
 
   let totalCost = 0;
   let inputTokens = 0;
@@ -34,7 +34,7 @@ function calculateStats(records: UsageRecord[]): SummaryStats {
     outputTokens += record.outputTokens;
     cacheTokens += record.cacheReadTokens + record.cacheWriteTokens;
     modelSet.add(record.model);
-    buildSet.add(record.buildId);
+    projectSet.add(record.projectId);
   }
 
   return {
@@ -44,7 +44,7 @@ function calculateStats(records: UsageRecord[]): SummaryStats {
     outputTokens,
     cacheTokens,
     uniqueModels: modelSet.size,
-    uniqueBuilds: buildSet.size,
+    uniqueBuilds: projectSet.size,
   };
 }
 
@@ -52,30 +52,30 @@ export function UsageSummaryCards({ records }: UsageSummaryCardsProps): React.JS
   const stats = useMemo(() => calculateStats(records), [records]);
 
   return (
-    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+    <div className='grid gap-4 md:grid-cols-2 lg:grid-cols-4'>
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-          <CardTitle className="text-sm font-medium">Total Cost</CardTitle>
-          <DollarSign className="size-4 text-muted-foreground" />
+        <CardHeader className='flex flex-row items-center justify-between space-y-0 pb-2'>
+          <CardTitle className='text-sm font-medium'>Total Cost</CardTitle>
+          <DollarSign className='size-4 text-muted-foreground' />
         </CardHeader>
         <CardContent>
-          <div className="text-2xl font-bold">
+          <div className='text-2xl font-bold'>
             {formatCurrency(stats.totalCost, { significantFigures: 3, minDecimalPlaces: 3 })}
           </div>
-          <p className="text-xs text-muted-foreground">
+          <p className='text-xs text-muted-foreground'>
             From {records.length} usage {records.length === 1 ? 'record' : 'records'}
           </p>
         </CardContent>
       </Card>
 
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-          <CardTitle className="text-sm font-medium">Total Tokens</CardTitle>
-          <Coins className="size-4 text-muted-foreground" />
+        <CardHeader className='flex flex-row items-center justify-between space-y-0 pb-2'>
+          <CardTitle className='text-sm font-medium'>Total Tokens</CardTitle>
+          <Coins className='size-4 text-muted-foreground' />
         </CardHeader>
         <CardContent>
-          <div className="text-2xl font-bold">{formatNumberAbbreviation(stats.totalTokens)}</div>
-          <p className="text-xs text-muted-foreground">
+          <div className='text-2xl font-bold'>{formatNumberAbbreviation(stats.totalTokens)}</div>
+          <p className='text-xs text-muted-foreground'>
             {formatNumberAbbreviation(stats.inputTokens + stats.cacheTokens)} in /{' '}
             {formatNumberAbbreviation(stats.outputTokens)} out
           </p>
@@ -83,24 +83,24 @@ export function UsageSummaryCards({ records }: UsageSummaryCardsProps): React.JS
       </Card>
 
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-          <CardTitle className="text-sm font-medium">Models Used</CardTitle>
-          <Bot className="size-4 text-muted-foreground" />
+        <CardHeader className='flex flex-row items-center justify-between space-y-0 pb-2'>
+          <CardTitle className='text-sm font-medium'>Models Used</CardTitle>
+          <Bot className='size-4 text-muted-foreground' />
         </CardHeader>
         <CardContent>
-          <div className="text-2xl font-bold">{stats.uniqueModels}</div>
-          <p className="text-xs text-muted-foreground">Unique AI models</p>
+          <div className='text-2xl font-bold'>{stats.uniqueModels}</div>
+          <p className='text-xs text-muted-foreground'>Unique AI models</p>
         </CardContent>
       </Card>
 
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-          <CardTitle className="text-sm font-medium">Builds</CardTitle>
-          <Folder className="size-4 text-muted-foreground" />
+        <CardHeader className='flex flex-row items-center justify-between space-y-0 pb-2'>
+          <CardTitle className='text-sm font-medium'>Projects</CardTitle>
+          <Folder className='size-4 text-muted-foreground' />
         </CardHeader>
         <CardContent>
-          <div className="text-2xl font-bold">{stats.uniqueBuilds}</div>
-          <p className="text-xs text-muted-foreground">Builds with usage</p>
+          <div className='text-2xl font-bold'>{stats.uniqueBuilds}</div>
+          <p className='text-xs text-muted-foreground'>Projects with usage</p>
         </CardContent>
       </Card>
     </div>

@@ -1,5 +1,6 @@
-import { assign, assertEvent, setup, fromPromise, enqueueActions, emit } from 'xstate';
+import { assign, assertEvent, setup, enqueueActions, emit } from 'xstate';
 import type { ActorRefFrom } from 'xstate';
+import { fromSafeAsync } from '#lib/xstate.lib.js';
 import type { PartialDeep } from 'type-fest';
 import type { SerializedDockview } from 'dockview-react';
 import type {
@@ -12,6 +13,8 @@ import type {
 } from '#types/editor.types.js';
 import type { GraphicsViewSettings } from '#constants/editor.constants.js';
 import { defaultPanelState } from '#constants/editor.constants.js';
+
+const maxOpenFiles = 200;
 
 /**
  * Deep merge utility for panel state.
@@ -28,6 +31,14 @@ function deepMergePanelState(current: PanelState, update: PartialDeep<PanelState
       ...update.panelSizes,
     },
     mobileActiveTab: update.mobileActiveTab ?? current.mobileActiveTab,
+    kernelPaneview: {
+      ...current.kernelPaneview,
+      ...(update.kernelPaneview as PanelState['kernelPaneview'] | undefined),
+    },
+    parametersPaneview: {
+      ...current.parametersPaneview,
+      ...(update.parametersPaneview as PanelState['parametersPaneview'] | undefined),
+    },
   };
 }
 
@@ -35,7 +46,7 @@ function deepMergePanelState(current: PanelState, update: PartialDeep<PanelState
  * Editor state Machine Context
  */
 export type EditorStateContext = {
-  buildId: string;
+  projectId: string;
   openFiles: OpenFile[];
   activeFilePath: string | undefined;
   lastChatId: string | undefined;
@@ -57,7 +68,7 @@ export type EditorStateContext = {
  * Editor state Machine Input
  */
 type EditorStateMachineInput = {
-  buildId: string;
+  projectId: string;
 };
 
 /**
@@ -65,7 +76,7 @@ type EditorStateMachineInput = {
  */
 type EditorStateEvent =
   | { type: 'load' }
-  | { type: 'reload'; buildId: string }
+  | { type: 'reload'; projectId: string }
   // File operations (consolidated from fileExplorerMachine)
   | { type: 'openFile'; path: string; source: FileOpenSource; lineNumber?: number; column?: number }
   | { type: 'closeFile'; path: string }
@@ -85,7 +96,8 @@ type EditorStateEvent =
   | { type: 'updateViewSettings'; viewId: string; settings: Partial<GraphicsViewSettings> }
   | { type: 'removeViewSettings'; viewId: string }
   // Flush pending state immediately (bypasses debounce, used on tab close)
-  | { type: 'flushNow' };
+  | { type: 'flushNow' }
+  | { type: 'editorStateRetrieved'; state: EditorState | undefined };
 
 /**
  * Editor state Machine Emitted Events
@@ -96,11 +108,14 @@ type EditorStateEmitted =
   | { type: 'fileRevealRequested'; path: string };
 
 // Actors to be provided by the consumer
-const loadEditorStateActor = fromPromise<EditorState | undefined, { buildId: string }>(async () => {
+const loadEditorStateActor = fromSafeAsync<
+  { type: 'editorStateRetrieved'; state: EditorState | undefined },
+  { projectId: string }
+>(async () => {
   throw new Error('Not implemented. Please supply via provide.');
 });
 
-const saveEditorStateActor = fromPromise<void, { editorState: EditorStateInput }>(async () => {
+const saveEditorStateActor = fromSafeAsync<void, { editorState: EditorStateInput }>(async () => {
   throw new Error('Not implemented. Please supply via provide.');
 });
 
@@ -112,18 +127,18 @@ const saveEditorStateActor = fromPromise<void, { editorState: EditorStateInput }
  * - Active file path
  * - Last active chat ID
  *
- * This machine is DECOUPLED from the build machine to keep the build machine
+ * This machine is DECOUPLED from the project machine to keep the project machine
  * clean for CLI/multi-frontend reuse.
  */
 export const editorMachine = setup({
   types: {
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     context: {} as EditorStateContext,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     events: {} as EditorStateEvent,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     emitted: {} as EditorStateEmitted,
-    // eslint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate setup
     input: {} as EditorStateMachineInput,
   },
   actors: {
@@ -149,8 +164,8 @@ export const editorMachine = setup({
     clearError: assign({ error: undefined }),
 
     setLoadedState: enqueueActions(({ enqueue, event }) => {
-      // Extract loaded state from actor done event
-      const loadedState = (event as unknown as { output: EditorState | undefined }).output;
+      assertEvent(event, 'editorStateRetrieved');
+      const loadedState = event.state;
 
       // Merge loaded panelState with defaults to handle missing fields from old data
       const mergedPanelState = loadedState?.panelState
@@ -201,10 +216,10 @@ export const editorMachine = setup({
       });
     }),
 
-    updateBuildId: assign(({ event }) => {
+    updateProjectId: assign(({ event }) => {
       assertEvent(event, 'reload');
       return {
-        buildId: event.buildId,
+        projectId: event.projectId,
         openFiles: [],
         activeFilePath: undefined,
         lastChatId: undefined,
@@ -216,7 +231,7 @@ export const editorMachine = setup({
     }),
 
     emitEditorStateLoadedEmpty: emit(() => ({
-      type: 'editorStateLoaded' as const,
+      type: 'editorStateLoaded',
       editorState: undefined,
     })),
 
@@ -226,26 +241,16 @@ export const editorMachine = setup({
     openFile: enqueueActions(({ enqueue, event, context }) => {
       assertEvent(event, 'openFile');
 
+      const now = Date.now();
       const existingFile = context.openFiles.find((f) => f.path === event.path);
       if (existingFile) {
-        // File already open and active - still emit to allow line navigation
-        if (context.activeFilePath === event.path) {
-          enqueue.emit({
-            type: 'fileOpened' as const,
-            path: event.path,
-            lineNumber: event.lineNumber,
-            column: event.column,
-            source: event.source,
-          });
-          return;
-        }
-
-        // File open but not active - set as active and emit
+        // File already open - update lastAccessedAt
         enqueue.assign({
+          openFiles: context.openFiles.map((f) => (f.path === event.path ? { ...f, lastAccessedAt: now } : f)),
           activeFilePath: event.path,
         });
         enqueue.emit({
-          type: 'fileOpened' as const,
+          type: 'fileOpened',
           path: event.path,
           lineNumber: event.lineNumber,
           column: event.column,
@@ -258,15 +263,27 @@ export const editorMachine = setup({
       const newFile: OpenFile = {
         path: event.path,
         name: event.path.split('/').pop() ?? event.path,
+        lastAccessedAt: now,
       };
 
+      let updatedFiles = [...context.openFiles, newFile];
+
+      // LRU eviction: remove least-recently-accessed tab when at capacity
+      if (updatedFiles.length > maxOpenFiles) {
+        const sorted = [...updatedFiles].sort((a, b) => a.lastAccessedAt - b.lastAccessedAt);
+        const victim = sorted.find((f) => f.path !== newFile.path);
+        if (victim) {
+          updatedFiles = updatedFiles.filter((f) => f.path !== victim.path);
+        }
+      }
+
       enqueue.assign({
-        openFiles: [...context.openFiles, newFile],
+        openFiles: updatedFiles,
         activeFilePath: newFile.path,
       });
 
       enqueue.emit({
-        type: 'fileOpened' as const,
+        type: 'fileOpened',
         path: event.path,
         lineNumber: event.lineNumber,
         column: event.column,
@@ -287,7 +304,7 @@ export const editorMachine = setup({
         // Emit fileOpened for the new active file (if any)
         if (newActiveFilePath) {
           enqueue.emit({
-            type: 'fileOpened' as const,
+            type: 'fileOpened',
             path: newActiveFilePath,
           });
         }
@@ -308,12 +325,13 @@ export const editorMachine = setup({
       }
 
       enqueue.assign({
+        openFiles: context.openFiles.map((f) => (f.path === event.path ? { ...f, lastAccessedAt: Date.now() } : f)),
         activeFilePath: event.path,
       });
 
       // Emit fileOpened for the new active file
       enqueue.emit({
-        type: 'fileOpened' as const,
+        type: 'fileOpened',
         path: event.path,
       });
     }),
@@ -322,7 +340,7 @@ export const editorMachine = setup({
       assertEvent(event, 'revealFileInTree');
 
       enqueue.emit({
-        type: 'fileRevealRequested' as const,
+        type: 'fileRevealRequested',
         path: event.path,
       });
     }),
@@ -383,7 +401,7 @@ export const editorMachine = setup({
         (context.activeFilePath === oldPath || context.activeFilePath?.startsWith(`${oldPath}/`))
       ) {
         enqueue.emit({
-          type: 'fileOpened' as const,
+          type: 'fileOpened',
           path: newActiveFilePath,
         });
       }
@@ -461,9 +479,9 @@ export const editorMachine = setup({
     clearPendingChanges: assign({ hasPendingChanges: false }),
   },
   guards: {
-    isBuildIdChanging({ context, event }) {
+    isProjectIdChanging({ context, event }) {
       assertEvent(event, 'reload');
-      return context.buildId !== event.buildId;
+      return context.projectId !== event.projectId;
     },
     hasPendingChanges({ context }) {
       return context.hasPendingChanges;
@@ -476,7 +494,7 @@ export const editorMachine = setup({
   id: 'editor',
   context({ input }) {
     return {
-      buildId: input.buildId,
+      projectId: input.projectId,
       openFiles: [],
       activeFilePath: undefined,
       lastChatId: undefined,
@@ -499,7 +517,7 @@ export const editorMachine = setup({
         },
         reload: {
           target: 'loading',
-          actions: ['updateBuildId', 'setLoading'],
+          actions: ['updateProjectId', 'setLoading'],
         },
       },
     },
@@ -507,20 +525,22 @@ export const editorMachine = setup({
       entry: 'clearError',
       invoke: {
         src: 'loadEditorStateActor',
-        input: ({ context }) => ({ buildId: context.buildId }),
+        input: ({ context }) => ({ projectId: context.projectId }),
         onDone: {
           target: 'ready',
-          actions: 'setLoadedState',
         },
         onError: {
-          target: 'ready', // Editor state missing is fine, just use defaults
+          target: 'ready',
           actions: ['clearLoading', 'emitEditorStateLoadedEmpty'],
         },
       },
       on: {
+        editorStateRetrieved: {
+          actions: 'setLoadedState',
+        },
         reload: {
           target: 'loading',
-          actions: ['updateBuildId', 'setLoading'],
+          actions: ['updateProjectId', 'setLoading'],
           reenter: true,
         },
       },
@@ -581,7 +601,7 @@ export const editorMachine = setup({
             // Reload
             reload: {
               target: '#editor.loading',
-              actions: ['updateBuildId', 'setLoading'],
+              actions: ['updateProjectId', 'setLoading'],
             },
           },
         },
@@ -592,6 +612,7 @@ export const editorMachine = setup({
               on: {
                 openFile: { target: 'pending' },
                 closeFile: { target: 'pending' },
+                closeAll: { target: 'pending' },
                 setActiveFile: { target: 'pending' },
                 renameFile: { target: 'pending' },
                 setLastChatId: { target: 'pending' },
@@ -610,6 +631,7 @@ export const editorMachine = setup({
               on: {
                 openFile: { target: 'pending', reenter: true },
                 closeFile: { target: 'pending', reenter: true },
+                closeAll: { target: 'pending', reenter: true },
                 setActiveFile: { target: 'pending', reenter: true },
                 renameFile: { target: 'pending', reenter: true },
                 setLastChatId: { target: 'pending', reenter: true },
@@ -629,7 +651,7 @@ export const editorMachine = setup({
                 input({ context }) {
                   return {
                     editorState: {
-                      buildId: context.buildId,
+                      projectId: context.projectId,
                       openFiles: context.openFiles,
                       activeFilePath: context.activeFilePath,
                       lastChatId: context.lastChatId,
@@ -654,6 +676,7 @@ export const editorMachine = setup({
                 // Track mutations during write so we persist again after completion
                 openFile: { actions: 'setPendingChanges' },
                 closeFile: { actions: 'setPendingChanges' },
+                closeAll: { actions: 'setPendingChanges' },
                 setActiveFile: { actions: 'setPendingChanges' },
                 renameFile: { actions: 'setPendingChanges' },
                 setLastChatId: { actions: 'setPendingChanges' },

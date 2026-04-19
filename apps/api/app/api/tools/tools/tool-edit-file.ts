@@ -43,12 +43,19 @@ export const editFileTool: ChatTool<
 
   // Step 1: Read the original file content via RPC
   // The frontend returns raw content without line numbers
-  const readResult = await chatRpcService.sendRpcRequest(chatId, toolCallId, rpcName.readFile, {
-    targetFile,
+  const readResult = await chatRpcService.sendRpcRequest({
+    chatId,
+    toolCallId,
+    rpcName: rpcName.readFile,
+    args: { targetFile },
   });
 
   // Assert RPC success - throws ToolError for any infrastructure or client error
-  assertRpcSuccess(readResult, toolName.editFile, toolCallId, `Cannot read file "${targetFile}"`);
+  assertRpcSuccess(readResult, {
+    toolName: toolName.editFile,
+    toolCallId,
+    clientErrorMessage: `Cannot read file "${targetFile}"`,
+  });
 
   // Frontend sends raw content (no line numbers)
   const originalContent = readResult.content;
@@ -71,13 +78,19 @@ export const editFileTool: ChatTool<
   }
 
   // Step 3: Write the edited content back via RPC
-  const writeResult = await chatRpcService.sendRpcRequest(chatId, toolCallId, rpcName.createFile, {
-    targetFile,
-    content: editResult.editedContent,
+  const writeResult = await chatRpcService.sendRpcRequest({
+    chatId,
+    toolCallId,
+    rpcName: rpcName.createFile,
+    args: { targetFile, content: editResult.editedContent },
   });
 
   // Assert RPC success - throws ToolError for any infrastructure or client error
-  assertRpcSuccess(writeResult, toolName.editFile, toolCallId, `Cannot save file`);
+  assertRpcSuccess(writeResult, {
+    toolName: toolName.editFile,
+    toolCallId,
+    clientErrorMessage: `Cannot save file`,
+  });
 
   // Return the result with diff stats (success only - no success property)
   const result: EditFileOutput = {

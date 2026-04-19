@@ -6,30 +6,26 @@ import { describe, it, expect, beforeAll } from 'vitest';
  * Tests for the replicad bundled type declarations.
  *
  * Verifies that the generated output has the correct structure:
- * - Wrapped in `declare module 'replicad' { ... }`
+ * - Raw module `.d.ts` content (no `declare module` wrapper)
  * - All exported classes, functions, types, and interfaces are present
- * - Imports from replicad-opencascadejs are preserved inside the module block
+ * - Imports from replicad-opencascadejs are preserved
  */
 
 let output: string;
 
 beforeAll(() => {
-  const bundledPath = join(import.meta.dirname, 'generated/replicad/replicad-modeling.bundled.d.ts');
-  output = readFileSync(bundledPath, 'utf8');
+  const jsonPath = join(import.meta.dirname, 'generated/replicad/replicad.bundled.json');
+  const modules = JSON.parse(readFileSync(jsonPath, 'utf8')) as Record<string, string>;
+  output = modules['replicad']!;
 });
 
 describe('extract-replicad-types', () => {
   // ---------------------------------------------------------------------------
-  // Module wrapper
+  // Raw module format (no declare module wrapper)
   // ---------------------------------------------------------------------------
 
-  it('wraps content in declare module replicad', () => {
-    expect(output).toContain("declare module 'replicad' {");
-  });
-
-  it('has exactly one declare module block', () => {
-    const matches = output.match(/declare module/g);
-    expect(matches).toHaveLength(1);
+  it('does not contain a declare module wrapper', () => {
+    expect(output).not.toContain("declare module 'replicad'");
   });
 
   it('starts with a generated header comment', () => {
@@ -37,10 +33,10 @@ describe('extract-replicad-types', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // Imports inside the module block
+  // Imports
   // ---------------------------------------------------------------------------
 
-  it('preserves replicad-opencascadejs imports inside the module', () => {
+  it('preserves replicad-opencascadejs imports', () => {
     expect(output).toContain("import { gp_Pnt } from 'replicad-opencascadejs'");
     expect(output).toContain("import { TopoDS_Shape } from 'replicad-opencascadejs'");
   });
@@ -123,46 +119,5 @@ describe('extract-replicad-types', () => {
 
   it('exports DrawingInterface', () => {
     expect(output).toContain('export declare interface DrawingInterface');
-  });
-
-  // ---------------------------------------------------------------------------
-  // Indentation and structure
-  // ---------------------------------------------------------------------------
-
-  it('all content is indented inside the module block', () => {
-    const lines = output.split('\n');
-    let insideModule = false;
-    let moduleDepth = 0;
-
-    for (const line of lines) {
-      if (line.includes("declare module 'replicad'")) {
-        insideModule = true;
-        continue;
-      }
-
-      if (!insideModule || line.trim() === '' || line.trim() === '}') {
-        if (line.trim() === '}' && insideModule) {
-          moduleDepth--;
-          if (moduleDepth === 0) {
-            insideModule = false;
-          }
-        }
-
-        if (line.includes('{')) {
-          moduleDepth++;
-        }
-
-        continue;
-      }
-
-      if (line.includes('{')) {
-        moduleDepth++;
-      }
-
-      // Content lines inside the module should be indented
-      if (line.trim() !== '' && !line.startsWith(' ')) {
-        throw new Error(`Line not indented inside module block: "${line}"`);
-      }
-    }
   });
 });

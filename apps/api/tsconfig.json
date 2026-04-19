@@ -4,21 +4,6 @@
   "include": [],
   "references": [
     {
-      "path": "../../libs/utils"
-    },
-    {
-      "path": "../../libs/chat"
-    },
-    {
-      "path": "../../libs/api-extractor"
-    },
-    {
-      "path": "../../libs/tau-examples"
-    },
-    {
-      "path": "../../libs/types"
-    },
-    {
       "path": "./tsconfig.app.json"
     },
     {

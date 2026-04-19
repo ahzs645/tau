@@ -1,10 +1,10 @@
 {
   "metadata": {
-    "extractionDate": "2026-02-10T12:18:11.777Z",
+    "extractionDate": "2026-03-12T00:38:24.970Z",
     "source": "TypeScript Compiler API (@jscad/modeling)",
-    "totalEntries": 549,
+    "totalEntries": 552,
     "breakdown": {
-      "function": 322,
+      "function": 325,
       "constant": 150,
       "type": 26,
       "interface": 51
@@ -1475,6 +1475,20 @@
         }
       ],
       "returnType": "object is Geom3"
+    },
+    {
+      "name": "isConvex",
+      "kind": "function",
+      "module": "geometries.geom3",
+      "signature": "export function isConvex(geometry: Geom3): boolean;",
+      "parameters": [
+        {
+          "name": "geometry",
+          "type": "Geom3",
+          "optional": false
+        }
+      ],
+      "returnType": "boolean"
     },
     {
       "name": "toPoints",
@@ -6053,6 +6067,25 @@
       "returnType": "Geom2"
     },
     {
+      "name": "minkowski",
+      "kind": "function",
+      "module": "booleans",
+      "signature": "export function minkowskiSum(geometryA: Geom3, geometryB: Geom3): Geom3;\nexport function minkowskiSum(...geometries: Geom3[]): Geom3;",
+      "parameters": [
+        {
+          "name": "geometryA",
+          "type": "Geom3",
+          "optional": false
+        },
+        {
+          "name": "geometryB",
+          "type": "Geom3",
+          "optional": false
+        }
+      ],
+      "returnType": "Geom3"
+    },
+    {
       "name": "subtract",
       "kind": "function",
       "module": "booleans",
@@ -6535,6 +6568,25 @@
       "returnType": "Array<Poly3>"
     },
     {
+      "name": "minkowskiSum",
+      "kind": "function",
+      "module": "minkowski",
+      "signature": "export function minkowskiSum(geometryA: Geom3, geometryB: Geom3): Geom3;\nexport function minkowskiSum(...geometries: Geom3[]): Geom3;",
+      "parameters": [
+        {
+          "name": "geometryA",
+          "type": "Geom3",
+          "optional": false
+        },
+        {
+          "name": "geometryB",
+          "type": "Geom3",
+          "optional": false
+        }
+      ],
+      "returnType": "Geom3"
+    },
+    {
       "name": "retessellate",
       "kind": "function",
       "module": "modifiers",
@@ -6976,7 +7028,7 @@
       "name": "RecursiveArray",
       "kind": "interface",
       "module": "@jscad/modeling",
-      "signature": "export interface RecursiveArray<T> extends Array<T | RecursiveArray<T>> {\n}"
+      "signature": "export declare interface RecursiveArray<T> extends Array<T | RecursiveArray<T>> {\n}"
     },
     {
       "name": "RGB",
@@ -6988,13 +7040,13 @@
       "name": "Vec2",
       "kind": "type",
       "module": "@jscad/modeling",
-      "signature": "export type Vec2 = [\n    number,\n    number\n];"
+      "signature": "export declare type Vec2 = [\n    number,\n    number\n];"
     },
     {
       "name": "Mat4",
       "kind": "type",
       "module": "@jscad/modeling",
-      "signature": "export type Mat4 = [\n    number,\n    number,\n    number,\n    number,\n    number,\n    number,\n    number,\n    number,\n    number,\n    number,\n    number,\n    number,\n    number,\n    number,\n    number,\n    number\n];"
+      "signature": "export declare type Mat4 = [\n    number,\n    number,\n    number,\n    number,\n    number,\n    number,\n    number,\n    number,\n    number,\n    number,\n    number,\n    number,\n    number,\n    number,\n    number,\n    number\n];"
     },
     {
       "name": "Color",
@@ -7006,43 +7058,43 @@
       "name": "Poly3",
       "kind": "interface",
       "module": "@jscad/modeling",
-      "signature": "export interface Poly3 {\n    vertices: Array<Vec3>;\n    color?: Color;\n    plane?: Plane;\n}"
+      "signature": "export declare interface Poly3 {\n    vertices: Array<Vec3>;\n    color?: Color;\n    plane?: Plane;\n}"
     },
     {
       "name": "Vec3",
       "kind": "type",
       "module": "@jscad/modeling",
-      "signature": "export type Vec3 = [\n    number,\n    number,\n    number\n];"
+      "signature": "export declare type Vec3 = [\n    number,\n    number,\n    number\n];"
     },
     {
       "name": "Plane",
       "kind": "type",
       "module": "@jscad/modeling",
-      "signature": "export type Plane = [\n    number,\n    number,\n    number,\n    number\n];"
+      "signature": "export declare type Plane = [\n    number,\n    number,\n    number,\n    number\n];"
     },
     {
       "name": "Vec4",
       "kind": "type",
       "module": "@jscad/modeling",
-      "signature": "export type Vec4 = [\n    number,\n    number,\n    number,\n    number\n];"
+      "signature": "export declare type Vec4 = [\n    number,\n    number,\n    number,\n    number\n];"
     },
     {
       "name": "Path2",
       "kind": "interface",
       "module": "@jscad/modeling",
-      "signature": "export interface Path2 {\n    points: Array<Vec2>;\n    isClosed: boolean;\n    transforms: Mat4;\n    color?: Color;\n}"
+      "signature": "export declare interface Path2 {\n    points: Array<Vec2>;\n    isClosed: boolean;\n    transforms: Mat4;\n    color?: Color;\n}"
     },
     {
       "name": "Geom2",
       "kind": "interface",
       "module": "@jscad/modeling",
-      "signature": "export interface Geom2 {\n    sides: Array<[\n        Vec2,\n        Vec2\n    ]>;\n    transforms: Mat4;\n    color?: Color;\n}"
+      "signature": "export declare interface Geom2 {\n    sides: Array<[\n        Vec2,\n        Vec2\n    ]>;\n    transforms: Mat4;\n    color?: Color;\n}"
     },
     {
       "name": "Geom3",
       "kind": "interface",
       "module": "@jscad/modeling",
-      "signature": "export interface Geom3 {\n    polygons: Array<Poly3>;\n    transforms: Mat4;\n    color?: Color;\n}"
+      "signature": "export declare interface Geom3 {\n    polygons: Array<Poly3>;\n    transforms: Mat4;\n    color?: Color;\n}"
     },
     {
       "name": "RGBA",
@@ -7060,7 +7112,7 @@
       "name": "Vec1",
       "kind": "type",
       "module": "@jscad/modeling",
-      "signature": "export type Vec1 = [\n    number\n];"
+      "signature": "export declare type Vec1 = [\n    number\n];"
     }
   ]
 }

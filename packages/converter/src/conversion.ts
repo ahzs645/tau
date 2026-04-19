@@ -1,56 +1,56 @@
-import type { File, InputFormat, OutputFormat } from '#types.js';
-import { importFiles, supportedImportFormats } from '#import.js';
-import { exportFiles, supportedExportFormats } from '#export.js';
+import type { ExportFile, FileInput } from '@taucad/types';
+import { mimeTypes } from '@taucad/types/constants';
+import type { FileResolver } from '#file-resolver.js';
+import { importFiles } from '#import.js';
+import { exportFiles } from '#export.js';
+import { supportedImportFormats, supportedExportFormats } from '#formats.js';
+import type { SupportedImportFormat, SupportedExportFormat } from '#formats.js';
 
 /**
  * Convert files from one format to another.
  *
  * @param inputFiles - The input files to convert.
- * @param inputFormat - The input format.
- * @param outputFormat - The output format.
+ * @param inputFormat - source file format (e.g. 'step', 'stl', 'glb')
+ * @param outputFormat - target file format to convert into
+ * @param options - optional conversion options
+ * @param options.exportProperties - Assimp export properties (e.g. `{ '3MF_EXPORT_UNIT': 'centimeter' }`)
  * @returns A promise that resolves to an array of output files.
  */
+// oxlint-disable-next-line max-params -- 4th param is an options bag, not a positional arg
 export const convertFile = async (
-  inputFiles: File[],
-  inputFormat: InputFormat,
-  outputFormat: OutputFormat,
-): Promise<File[]> => {
-  // Validate input format
-  if (!supportedImportFormats.includes(inputFormat)) {
-    throw new Error(`Unsupported input format: ${inputFormat}`);
-  }
-
-  // Validate output format
-  if (!supportedExportFormats.includes(outputFormat)) {
-    throw new Error(`Unsupported output format: ${outputFormat}`);
-  }
-
+  inputFiles: FileInput[],
+  inputFormat: SupportedImportFormat,
+  outputFormat: SupportedExportFormat,
+  options?: { exportProperties?: Record<string, boolean | number | string> },
+): Promise<ExportFile[]> => {
   // GLB to GLB pass-through optimization
   if (inputFormat === 'glb' && outputFormat === 'glb') {
     return inputFiles.map((file) => ({
       name: file.name,
-      data: file.data,
+      bytes: file.bytes,
+      mimeType: mimeTypes.glb,
     }));
   }
 
   // Standard conversion pipeline
   const glb = await importFiles(inputFiles, inputFormat);
-  return exportFiles(glb, outputFormat);
+  return exportFiles(glb, outputFormat, options?.exportProperties);
 };
 
 /**
- * Import files to GLB format only.
+ * Imports files to GLB format only.
  *
- * @param inputFiles - The input files to import.
- * @param inputFormat - The input format.
+ * @param inputFiles - named file buffers to feed into the import pipeline
+ * @param inputFormat - source file format (e.g. 'step', 'stl', '3dm')
+ * @param resolver - optional file resolver for on-demand sidecar asset loading
  * @returns A promise that resolves to GLB data.
+ * @throws Error if no GLB file is found when the input format is `glb`
  */
-export const importToGlb = async (inputFiles: File[], inputFormat: InputFormat): Promise<Uint8Array<ArrayBuffer>> => {
-  // Validate input format
-  if (!supportedImportFormats.includes(inputFormat)) {
-    throw new Error(`Unsupported input format: ${inputFormat}`);
-  }
-
+export const importToGlb = async (
+  inputFiles: FileInput[],
+  inputFormat: SupportedImportFormat,
+  resolver?: FileResolver,
+): Promise<Uint8Array<ArrayBuffer>> => {
   // GLB pass-through optimization
   if (inputFormat === 'glb') {
     const primaryFile = inputFiles.find((file) => file.name.toLowerCase().endsWith('.glb'));
@@ -58,11 +58,11 @@ export const importToGlb = async (inputFiles: File[], inputFormat: InputFormat):
       throw new Error('No GLB file found in input files');
     }
 
-    return primaryFile.data;
+    return primaryFile.bytes;
   }
 
   // Standard import pipeline
-  const glb = await importFiles(inputFiles, inputFormat);
+  const glb = await importFiles(inputFiles, inputFormat, resolver);
   return glb;
 };
 
@@ -70,27 +70,28 @@ export const importToGlb = async (inputFiles: File[], inputFormat: InputFormat):
  * Export GLB data to the specified format.
  *
  * @param glbData - The GLB data to export.
- * @param outputFormat - The output format.
+ * @param outputFormat - target file format to export into
+ * @param exportProperties - optional Assimp export properties (e.g. `{ '3MF_EXPORT_UNIT': 'centimeter' }`)
  * @returns A promise that resolves to an array of output files.
  */
-export const exportFromGlb = async (glbData: Uint8Array<ArrayBuffer>, outputFormat: OutputFormat): Promise<File[]> => {
-  // Validate output format
-  if (!supportedExportFormats.includes(outputFormat)) {
-    throw new Error(`Unsupported output format: ${outputFormat}`);
-  }
-
+export const exportFromGlb = async (
+  glbData: Uint8Array<ArrayBuffer>,
+  outputFormat: SupportedExportFormat,
+  exportProperties?: Record<string, boolean | number | string>,
+): Promise<ExportFile[]> => {
   // GLB pass-through optimization
   if (outputFormat === 'glb') {
     return [
       {
         name: 'model.glb',
-        data: glbData,
+        bytes: glbData,
+        mimeType: mimeTypes.glb,
       },
     ];
   }
 
   // Standard export pipeline
-  return exportFiles(glbData, outputFormat);
+  return exportFiles(glbData, outputFormat, exportProperties);
 };
 
 /**
@@ -98,7 +99,7 @@ export const exportFromGlb = async (glbData: Uint8Array<ArrayBuffer>, outputForm
  *
  * @returns Array of supported input format strings.
  */
-export const getSupportedInputFormats = (): readonly InputFormat[] => {
+export const getSupportedInputFormats = (): readonly SupportedImportFormat[] => {
   return supportedImportFormats;
 };
 
@@ -107,7 +108,7 @@ export const getSupportedInputFormats = (): readonly InputFormat[] => {
  *
  * @returns Array of supported output format strings.
  */
-export const getSupportedOutputFormats = (): readonly OutputFormat[] => {
+export const getSupportedOutputFormats = (): readonly SupportedExportFormat[] => {
   return supportedExportFormats;
 };
 
@@ -117,8 +118,8 @@ export const getSupportedOutputFormats = (): readonly OutputFormat[] => {
  * @param format - The format to check.
  * @returns True if the format is supported.
  */
-export const isInputFormatSupported = (format: string): format is InputFormat => {
-  return supportedImportFormats.includes(format as InputFormat);
+export const isInputFormatSupported = (format: string): format is SupportedImportFormat => {
+  return supportedImportFormats.includes(format as SupportedImportFormat);
 };
 
 /**
@@ -127,6 +128,6 @@ export const isInputFormatSupported = (format: string): format is InputFormat =>
  * @param format - The format to check.
  * @returns True if the format is supported.
  */
-export const isOutputFormatSupported = (format: string): format is OutputFormat => {
-  return supportedExportFormats.includes(format as OutputFormat);
+export const isOutputFormatSupported = (format: string): format is SupportedExportFormat => {
+  return supportedExportFormats.includes(format as SupportedExportFormat);
 };

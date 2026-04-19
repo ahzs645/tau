@@ -1,4 +1,4 @@
-import type { JSONSchema7, JSONSchema7Type } from 'json-schema';
+import type { JSONSchema7, JSONSchema7Type } from '@taucad/json-schema';
 import { toJsonSchema } from '@taucad/json-schema';
 
 /**
@@ -24,6 +24,7 @@ function getTitleFromPropertyName(propertyName: string): string {
  * Takes a JSON object and returns it's equivalent JSON Schema with default values.
  * @param json - The JSON object to convert to a JSON Schema.
  * @returns The JSON Schema with default values added.
+ * @public
  */
 export async function jsonSchemaFromJson(json: Record<string, unknown>): Promise<JSONSchema7> {
   const schema = toJsonSchema(json, {
@@ -43,6 +44,7 @@ export async function jsonSchemaFromJson(json: Record<string, unknown>): Promise
         };
       },
     },
+    // oxlint-disable-next-line max-params -- implements PostProcessFunction callback interface
     postProcessFnc(type, generatedSchema, value, defaultFunction): JSONSchema7 {
       const processedSchema = defaultFunction(type, generatedSchema, value);
 
@@ -127,6 +129,7 @@ function hasArrayOrObjectInCombinators(schema: JSONSchema7): boolean {
  *
  * @param jsonSchema - The JSON Schema to check.
  * @returns `true` if the JSON Schema has any array or object properties, `false` otherwise.
+ * @public
  */
 export const hasJsonSchemaObjectProperties = (jsonSchema: JSONSchema7): boolean => {
   // Check direct properties
