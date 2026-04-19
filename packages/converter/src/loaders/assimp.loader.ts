@@ -1,9 +1,7 @@
-/* eslint-disable @typescript-eslint/naming-convention -- some formats are named like this */
 /* oxlint-disable new-cap -- External library uses PascalCase method names */
 import assimpjs from 'assimpjs/all';
 import type { AssimpResult } from 'assimpjs/all';
 import type { FileExtension, FileInput } from '@taucad/types';
-import { normalizeGlbToYup } from '#gltf.transforms.js';
 import type { FileResolver } from '#file-resolver.js';
 import { BaseLoader } from '#loaders/base.loader.js';
 
@@ -14,33 +12,14 @@ type AssimpOptions = {
 
 /**
  * Loader for 3D file formats using the Assimp library compiled to WebAssembly.
+ *
+ * As of taucad/assimp's UnitAxisContract migration (Tier 1A/1B importers +
+ * Tier 2 exporters), every importer stamps `AI_METADATA_UNIT_SCALE_TO_METERS`
+ * and `AI_METADATA_UP_AXIS` on the imported scene, and the glTF2 exporter
+ * bakes the inverse transform so the GLB we emit is always spec-compliant
+ * (meters + Y-up). No per-format JS post-processing is required.
  */
 export class AssimpLoader extends BaseLoader<Uint8Array<ArrayBuffer>, AssimpOptions> {
-  /**
-   * Formats where Assimp's glTF2 output retains Z-up coordinates because
-   * the importer does not bake a Y-up conversion into the scene.
-   *
-   * Formats NOT listed here already produce Y-up output from Assimp
-   * (e.g. FBX, DAE, OBJ, 3DS bake a root transform during import).
-   */
-  private static readonly zUpFormats: Partial<Record<FileExtension, boolean>> = {
-    stl: true,
-    ply: true,
-    '3mf': true,
-    off: true,
-    amf: true,
-    wrl: true,
-    x3dv: true,
-    x3d: true,
-    xgl: true,
-    nff: true,
-    ogex: true,
-    'mesh.xml': true,
-    cob: true,
-    md5mesh: true,
-    ac: true,
-  };
-
   protected async parseAsync(files: FileInput[], options: AssimpOptions): Promise<Uint8Array<ArrayBuffer>> {
     const ajs = await assimpjs({
       locateFile() {
@@ -87,12 +66,6 @@ export class AssimpLoader extends BaseLoader<Uint8Array<ArrayBuffer>, AssimpOpti
     // is invalidated the moment the WebAssembly.Memory grows (any later
     // malloc/free in the same module detaches the underlying ArrayBuffer).
     const glbData = new Uint8Array(resultFile.GetContent());
-
-    const isZup = AssimpLoader.zUpFormats[options.format] ?? false;
-
-    if (isZup) {
-      return normalizeGlbToYup(glbData);
-    }
 
     return glbData;
   }

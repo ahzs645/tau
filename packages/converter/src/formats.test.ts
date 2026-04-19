@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import {
-  supportedImportFormats,
-  supportedExportFormats,
-  type SupportedImportFormat,
-  type SupportedExportFormat,
-} from '#formats.js';
+import type { SupportedImportFormat, SupportedExportFormat } from '#formats.js';
+import { supportedImportFormats, supportedExportFormats } from '#formats.js';
 
 describe('formats', () => {
   describe('supportedImportFormats', () => {

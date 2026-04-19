@@ -1524,8 +1524,8 @@ importers:
         specifier: workspace:*
         version: link:../../libs/types
       assimpjs:
-        specifier: file:../../tarballs/taucad-assimpjs-0.0.16.tgz
-        version: '@taucad/assimpjs@file:tarballs/taucad-assimpjs-0.0.16.tgz'
+        specifier: file:../../tarballs/taucad-assimpjs-0.0.17.tgz
+        version: '@taucad/assimpjs@file:tarballs/taucad-assimpjs-0.0.17.tgz'
       draco3dgltf:
         specifier: ^1.5.7
         version: 1.5.7
@@ -8861,9 +8861,9 @@ packages:
   '@tanstack/virtual-core@3.13.19':
     resolution: {integrity: sha512-/BMP7kNhzKOd7wnDeB8NrIRNLwkf5AhCYCvtfZV2GXWbBieFm/el0n6LOAXlTi6ZwHICSNnQcIxRCWHrLzDY+g==}
 
-  '@taucad/assimpjs@file:tarballs/taucad-assimpjs-0.0.16.tgz':
-    resolution: {integrity: sha512-6P5q7okewZz8riPbbTGXg5np2JGG5CjPIyv5aM2JnoK9+fsp0Yk5SZ7o+y9S7AD1H0kLjID8rHk7+maRlVnRsA==, tarball: file:tarballs/taucad-assimpjs-0.0.16.tgz}
-    version: 0.0.16
+  '@taucad/assimpjs@file:tarballs/taucad-assimpjs-0.0.17.tgz':
+    resolution: {integrity: sha512-ii/W+h3YG5eN3v/hlXoRVIOHwCphbGFMH6A39ERIDpkbqy1LO0YRjWcohtHtZHNh+f/265PT9xKigpb8nPfMEw==, tarball: file:tarballs/taucad-assimpjs-0.0.17.tgz}
+    version: 0.0.17
 
   '@taucad/kcl-wasm-lib@0.1.130':
     resolution: {integrity: sha512-nSmwe6gArl2YpgrS+XCSLFclNl5+rdznoMV7t/LdAKG9tzOv3O2iUKtpSDTFwDcFlIsTZZd8AmBoH9e9AoDsOg==}
@@ -26736,7 +26736,7 @@ snapshots:
 
   '@tanstack/virtual-core@3.13.19': {}
 
-  '@taucad/assimpjs@file:tarballs/taucad-assimpjs-0.0.16.tgz': {}
+  '@taucad/assimpjs@file:tarballs/taucad-assimpjs-0.0.17.tgz': {}
 
   '@taucad/kcl-wasm-lib@0.1.130(patch_hash=a5113ece295fc5a140b912793b5b08236be48a8ab797e0c981c91cd6cf7bad83)': {}
 

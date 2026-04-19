@@ -1,7 +1,5 @@
-import { NodeIO } from '@gltf-transform/core';
 import { transformMesh } from '@gltf-transform/functions';
 import type { mat4, vec4, Document } from '@gltf-transform/core';
-import { allExtensions } from '#gltf.extensions.js';
 
 /**
  * Shared gltf-transform utilities for applying coordinate system and scaling transformations.
@@ -201,24 +199,4 @@ export function createReverseScalingTransform(shouldTransform = true): (document
 
     applyUniformScaleToDocument(document, gltfReverseScalingMatrix, 0.001);
   };
-}
-
-/**
- * Normalizes GLB data from Z-up coordinate system to Y-up (glTF spec-compliant).
- * Used by format-specific loaders that import from Z-up source formats.
- *
- * @param glbData - the raw GLB buffer to re-orient
- * @returns The re-oriented GLB buffer, or the original data if transformation fails.
- */
-export async function normalizeGlbToYup(glbData: Uint8Array<ArrayBuffer>): Promise<Uint8Array<ArrayBuffer>> {
-  const io = new NodeIO().registerExtensions(allExtensions);
-
-  try {
-    const document = await io.readBinary(glbData);
-    await document.transform(createReverseCoordinateTransform());
-    return await io.writeBinary(document);
-  } catch (error) {
-    console.warn('[GLB Transforms] Failed to normalize coordinates:', error);
-    return glbData;
-  }
 }
