@@ -16,40 +16,8 @@
 import type { OpenCascadeInstance } from 'replicad-opencascadejs';
 import type { RuntimeSpanTracer } from '#types/runtime-tracer.types.js';
 import { OcKernelError } from '#kernels/replicad/oc-kernel-error.js';
-import { RenderAbortedError } from '#framework/runtime-worker-client.js';
-import { signalSlot } from '#types/runtime-protocol.types.js';
+import { checkAbort } from '#framework/cooperative-abort.js';
 import { named } from '#framework/named.js';
-
-// =============================================================================
-// Cooperative abort context (module-level, set per render cycle)
-// =============================================================================
-
-let abortSignalView: Int32Array | undefined;
-let abortGeneration = 0;
-
-/**
- * Configure the abort context before starting a render cycle.
- * The proxy checks this before every OC call (~1ns overhead per call).
- *
- * @param view - Int32Array view over the shared signal buffer
- * @param generation - current render generation (must match to continue)
- */
-export function setAbortContext(view: Int32Array, generation: number): void {
-  abortSignalView = view;
-  abortGeneration = generation;
-}
-
-/** Clear the abort context after a render cycle completes or is aborted. */
-export function clearAbortContext(): void {
-  abortSignalView = undefined;
-  abortGeneration = 0;
-}
-
-function checkAbort(): void {
-  if (abortSignalView && Atomics.load(abortSignalView, signalSlot.abortGeneration) !== abortGeneration) {
-    throw new RenderAbortedError();
-  }
-}
 
 /**
  * Configuration for OC API call tracing.
@@ -91,6 +59,81 @@ type ExceptionDecoder = (ex: WebAssembly.Exception) => [string, string];
 
 function isCallable(value: unknown): value is GenericFunction {
   return typeof value === 'function';
+}
+
+/**
+ * Checks whether a value is an OC namespace object — a plain (non-null) object
+ * that is NOT callable and NOT an Emscripten record (no `delete()` method).
+ * Namespace objects like `BRepLib` contain static methods that need exception
+ * interception but are not themselves WASM-allocated objects.
+ *
+ * Host-platform objects with non-plain prototypes (e.g. `WebAssembly.Memory`,
+ * typed array `HEAP*` views) are excluded — proxying them breaks accessors
+ * like `WebAssembly.Memory.prototype.buffer`, which require the real receiver.
+ *
+ * @param value - Value to classify as an OC namespace or not
+ * @returns Whether `value` is a non-callable namespace object without `delete`
+ */
+function isOcNamespace(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || isCallable(value)) {
+    return false;
+  }
+  if (typeof (value as Record<string, unknown>)['delete'] === 'function') {
+    return false;
+  }
+  const proto: unknown = Object.getPrototypeOf(value);
+  return proto === null || proto === Object.prototype;
+}
+
+/**
+ * Wraps an OC namespace object so that its callable properties are intercepted
+ * for exception conversion. Handles nested namespaces recursively.
+ *
+ * @param rethrowIfWasmException - Converts or rethrows errors from WASM calls
+ * @returns Function that wraps namespace values with exception interception
+ */
+function createNamespaceWrapper(rethrowIfWasmException: (error: unknown) => never): (value: unknown) => unknown {
+  const wrappedNamespaces = new WeakSet<Record<string, unknown>>();
+
+  /**
+   * Recursively proxies a namespace object's members for exception handling.
+   *
+   * @param ns - OC namespace object to wrap
+   * @returns Proxied namespace with intercepted callables
+   */
+  function wrapNamespace(ns: Record<string, unknown>): Record<string, unknown> {
+    if (wrappedNamespaces.has(ns)) {
+      return ns;
+    }
+    wrappedNamespaces.add(ns);
+
+    return new Proxy(ns, {
+      get(target, property, receiver): unknown {
+        const member: unknown = Reflect.get(target, property, receiver);
+        if (isCallable(member)) {
+          return function (this: unknown, ...args: unknown[]): unknown {
+            checkAbort();
+            try {
+              return Reflect.apply(member, target, args);
+            } catch (error) {
+              return rethrowIfWasmException(error);
+            }
+          };
+        }
+        if (isOcNamespace(member)) {
+          return wrapNamespace(member);
+        }
+        return member;
+      },
+    });
+  }
+
+  return (value: unknown): unknown => {
+    if (isOcNamespace(value)) {
+      return wrapNamespace(value);
+    }
+    return value;
+  };
 }
 
 /** V8-only `Error.captureStackTrace` — not present in all runtimes. */
@@ -137,6 +180,12 @@ function createRethrowFunction(decoder: ExceptionDecoder | undefined): (error: u
         if (decodeError instanceof OcKernelError) {
           throw decodeError;
         }
+
+        // Decoding failed — still wrap as OcKernelError to preserve the
+        // JS call stack from the proxy call site (which includes user code).
+        const fallback = new OcKernelError('', 'Unknown C++ exception');
+        (Error as V8ErrorConstructor).captureStackTrace?.(fallback, rethrowIfWasmException);
+        throw fallback;
       }
     }
 
@@ -180,8 +229,10 @@ function createEmscriptenWrapper(rethrowIfWasmException: (error: unknown) => nev
           }
         };
 
-        const className = (target as { constructor?: { name?: string } }).constructor?.name ?? 'OC';
-        return named(`${className}.${String(property)}`, wrapper);
+        return named(
+          `${(target as { constructor?: { name?: string } }).constructor?.name ?? 'OC'}.${String(property)}`,
+          wrapper,
+        );
       },
     });
   }
@@ -208,6 +259,7 @@ export function wrapOcForExceptions(oc: OpenCascadeInstance): OpenCascadeInstanc
 
   const rethrowIfWasmException = createRethrowFunction(decoder);
   const wrapEmscriptenResult = createEmscriptenWrapper(rethrowIfWasmException);
+  const wrapIfNamespace = createNamespaceWrapper(rethrowIfWasmException);
 
   const cache = new Map<string, unknown>();
   return new Proxy(oc, {
@@ -248,6 +300,12 @@ export function wrapOcForExceptions(oc: OpenCascadeInstance): OpenCascadeInstanc
         });
         cache.set(property, wrapped);
         return wrapped;
+      }
+
+      const wrappedNs = wrapIfNamespace(value);
+      if (wrappedNs !== value) {
+        cache.set(property, wrappedNs);
+        return wrappedNs;
       }
 
       return value;
@@ -351,6 +409,7 @@ export function wrapOcWithTracing(
   }
 
   const wrapFunction = config.mode === 'summary' ? wrapFunctionForSummary : wrapFunctionForPerCall;
+  const wrapIfNamespace = createNamespaceWrapper(rethrowIfWasmException);
 
   const classProxyCache = new Map<string, unknown>();
 
@@ -371,6 +430,12 @@ export function wrapOcWithTracing(
         const wrapped = wrapFunction(value, property);
         classProxyCache.set(property, wrapped);
         return wrapped;
+      }
+
+      const wrappedNs = wrapIfNamespace(value);
+      if (wrappedNs !== value) {
+        classProxyCache.set(property, wrappedNs);
+        return wrappedNs;
       }
 
       return value;

@@ -13,7 +13,7 @@
 import { createOpenSCAD } from 'openscad-wasm-prebuilt';
 import type { OpenSCAD } from 'openscad-wasm-prebuilt';
 import { jsonDefault } from 'json-schema-default';
-import type { JSONSchema7 } from 'json-schema';
+import type { JSONSchema7 } from '@taucad/json-schema';
 import type { GeometryGltf, LogLevel } from '@taucad/types';
 import { logLevels, createExportFile } from '@taucad/types/constants';
 import { asBuffer } from '@taucad/utils/file';
@@ -24,8 +24,8 @@ import { defineKernel } from '#types/runtime-kernel.types.js';
 import type { OpenScadParameterExport } from '#kernels/openscad/parse-parameters.js';
 import { processOpenScadParameters, flattenParametersForInjection } from '#kernels/openscad/parse-parameters.js';
 import { convertOffToGltf } from '#utils/off-to-gltf.js';
-import { convertOffToStl } from '#utils/off-to-stl.js';
-import { convertOffTo3mf } from '#utils/off-to-3mf.js';
+import { openscadRenderSchema, openscadExportSchemas } from '#kernels/openscad/openscad.schemas.js';
+import { resolveToRelative, loadBinaryFile } from '#kernels/kernel-module-helpers.js';
 import { createKernelError, createKernelSuccess } from '#kernels/kernel-helpers.js';
 import type { AddErrorFunction, GetFileContentsFunction } from '#kernels/openscad/parse-output.js';
 import { OpenScadStderrParser } from '#kernels/openscad/parse-output.js';
@@ -39,10 +39,14 @@ const geistBoldUrl = new URL('fonts/Geist-Bold.ttf', import.meta.url).href;
 
 type OpenScadContext = {
   fontCache: Map<string, Uint8Array<ArrayBuffer>>;
+  lastFilePath?: string;
+  lastBasePath?: string;
+  lastParameters?: Record<string, unknown>;
 };
 
 const maxIncludeDepth = 50;
 const useIncludeRegex = /^\s*(?:use|include)\s*["<]([^">]+)[">]/gm;
+const tessellationSpecialVariables = ['$fn', '$fa', '$fs'] as const;
 
 const fontsConfig = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
@@ -58,15 +62,6 @@ const fontFiles = [
 // =============================================================================
 // Path helpers
 // =============================================================================
-
-function resolveToRelative(absolutePath: string, basePath: string): string {
-  const normalizedBase = basePath.endsWith('/') ? basePath.slice(0, -1) : basePath;
-  if (absolutePath.startsWith(`${normalizedBase}/`)) {
-    return absolutePath.slice(normalizedBase.length + 1);
-  }
-
-  return absolutePath;
-}
 
 function resolveFromRoot(relativePath: string, basePath: string): string {
   return joinPath(basePath, relativePath);
@@ -117,10 +112,11 @@ async function getReferencedScadFiles(options: {
   basePath: string;
   filesystem: RuntimeFileSystem;
   logger: RuntimeLogger;
-}): Promise<string[]> {
+}): Promise<{ resolved: string[]; unresolved: string[] }> {
   const { mainFile, basePath, filesystem, logger } = options;
   const visited = new Set<string>();
-  const result: string[] = [];
+  const resolved: string[] = [];
+  const unresolved: string[] = [];
 
   const resolveFile = async (filePath: string, depth: number): Promise<void> => {
     const normalizedPath = filePath.replace(/^\/+/, '');
@@ -140,10 +136,11 @@ async function getReferencedScadFiles(options: {
       code = await filesystem.readFile(resolveFromRoot(normalizedPath, basePath), 'utf8');
     } catch {
       logger.debug(`Could not read file ${normalizedPath} for dependency resolution`);
+      unresolved.push(normalizedPath);
       return;
     }
 
-    result.push(normalizedPath);
+    resolved.push(normalizedPath);
 
     const dependencies = parseUseIncludeStatements(code);
     for (const depPath of dependencies) {
@@ -154,7 +151,7 @@ async function getReferencedScadFiles(options: {
   };
 
   await resolveFile(mainFile, 0);
-  return result;
+  return { resolved, unresolved };
 }
 
 // =============================================================================
@@ -240,7 +237,7 @@ async function mountFileSystem(
   (instance.FS as unknown as { chdir(path: string): void }).chdir('/');
   instance.FS.mkdir('/locale');
 
-  const referencedFiles = await getReferencedScadFiles({
+  const { resolved: referencedFiles } = await getReferencedScadFiles({
     mainFile,
     basePath,
     filesystem,
@@ -279,12 +276,10 @@ async function mountFonts(instance: OpenSCAD, context: OpenScadContext, logger: 
     if (context.fontCache.size === 0) {
       logger.debug('Fetching fonts (first time)');
       const fontPromises = fontFiles.map(async ({ url, filename }) => {
-        const response = await fetch(url, { cache: 'force-cache' });
-        if (!response.ok) {
-          throw new Error(`Failed to fetch font ${filename}: ${response.statusText}`);
+        const arrayBuffer = await loadBinaryFile(url);
+        if (!arrayBuffer) {
+          throw new Error(`Failed to load font ${filename}`);
         }
-
-        const arrayBuffer = await response.arrayBuffer();
         return { filename, data: new Uint8Array(arrayBuffer) };
       });
 
@@ -380,6 +375,102 @@ function formatValue(value: unknown): string {
 }
 
 // =============================================================================
+// Tessellation helpers
+// =============================================================================
+
+/**
+ * Inject tessellation `-D` args for `$fn`/`$fa`/`$fs` only when they are
+ * not already present in the user-supplied parameters.
+ *
+ * @param args - CLI argument array to append to
+ * @param flattenedParameters - user-supplied parameters after flattening
+ * @param values - tessellation key/value pairs to inject when absent
+ */
+function injectTessellationArgs(
+  args: string[],
+  flattenedParameters: Record<string, unknown>,
+  values: Record<string, number>,
+): void {
+  for (const [key, value] of Object.entries(values)) {
+    if (!(key in flattenedParameters)) {
+      args.push(`-D${key}=${value}`);
+    }
+  }
+}
+
+// =============================================================================
+// OpenSCAD build pipeline
+// =============================================================================
+
+type OpenScadBuildOptions = {
+  filePath: string;
+  basePath: string;
+  parameters: Record<string, unknown>;
+  tessellationOverrides?: Record<string, number>;
+  filesystem: RuntimeFileSystem;
+  logger: RuntimeLogger;
+  fileContentCache: ReadonlyMap<string, Uint8Array<ArrayBuffer> | string>;
+  fontCache: Map<string, Uint8Array<ArrayBuffer>>;
+};
+
+/**
+ * Run the OpenSCAD WASM pipeline and return the raw OFF output.
+ * Shared between `createGeometry` (render) and `exportGeometry` (export re-render).
+ *
+ * @param options - build configuration including file paths, parameters, and tessellation overrides
+ * @returns the raw OFF geometry string
+ */
+async function runOpenScadBuild(options: OpenScadBuildOptions): Promise<string> {
+  const { filePath, basePath, parameters, tessellationOverrides, filesystem, logger, fileContentCache, fontCache } =
+    options;
+  const relativeFilePath = resolveToRelative(filePath, basePath);
+
+  const instance = await createInstance({ logger });
+  const fileContentsCache = new Map<string, string>();
+
+  await mountFileSystem(instance, {
+    mainFile: relativeFilePath,
+    basePath,
+    filesystem,
+    logger,
+    fileContentCache,
+    fileContentsCache,
+  });
+  await mountFonts(instance, { fontCache }, logger);
+
+  const code = await filesystem.readFile(filePath, 'utf8');
+  instance.FS.writeFile(relativeFilePath, code);
+
+  const args = [relativeFilePath, '-o', `${relativeFilePath}.off`, '--backend=manifold'];
+
+  const flattenedParameters = flattenParametersForInjection(parameters);
+
+  // Filter out $fn/$fa/$fs from user params when tessellationOverrides forces values
+  for (const [key, value] of Object.entries(flattenedParameters)) {
+    if (
+      tessellationOverrides &&
+      tessellationSpecialVariables.includes(key as (typeof tessellationSpecialVariables)[number])
+    ) {
+      continue;
+    }
+    args.push(`-D${key}=${formatValue(value)}`);
+  }
+
+  if (tessellationOverrides) {
+    for (const [key, value] of Object.entries(tessellationOverrides)) {
+      args.push(`-D${key}=${value}`);
+    }
+  }
+
+  const result = instance.callMain(args);
+  if (result !== 0) {
+    throw new Error('OpenSCAD build failed during export re-render');
+  }
+
+  return instance.FS.readFile(`${relativeFilePath}.off`, { encoding: 'utf8' });
+}
+
+// =============================================================================
 // Kernel module definition
 // =============================================================================
 
@@ -387,30 +478,31 @@ function formatValue(value: unknown): string {
 export default defineKernel({
   name: 'OpenScadKernel',
   version: '1.0.0',
+  renderSchema: openscadRenderSchema,
+  exportSchemas: openscadExportSchemas,
 
-  async initialize() {
+  async initialize(): Promise<OpenScadContext> {
     return { fontCache: new Map<string, Uint8Array<ArrayBuffer>>() };
-  },
-
-  async canHandle({ extension }) {
-    return extension === 'scad';
   },
 
   async getDependencies({ filePath, basePath }, { filesystem, logger }) {
     const relativeFilePath = resolveToRelative(filePath, basePath);
-    const relativePaths = await getReferencedScadFiles({
+    const { resolved, unresolved } = await getReferencedScadFiles({
       mainFile: relativeFilePath,
       basePath,
       filesystem,
       logger,
     });
-    return relativePaths.map((relativePath) => resolveFromRoot(relativePath, basePath));
+    return {
+      resolved: resolved.map((relativePath) => resolveFromRoot(relativePath, basePath)),
+      unresolved: unresolved.map((relativePath) => resolveFromRoot(relativePath, basePath)),
+    };
   },
 
   async getParameters({ filePath, basePath }, { filesystem, logger, fileContentCache }, context) {
     try {
       const mainFilePath = resolveToRelative(filePath, basePath);
-      const referencedFiles = await getReferencedScadFiles({
+      const { resolved: referencedFiles } = await getReferencedScadFiles({
         mainFile: mainFilePath,
         basePath,
         filesystem,
@@ -436,10 +528,6 @@ export default defineKernel({
 
         const isMainFile = scadFile === mainFilePath;
         for (const parameter of parameters) {
-          if (parameter.name.startsWith('$')) {
-            continue;
-          }
-
           const needsFileGroup =
             !isMainFile && (!parameter.group || parameter.group === 'Global' || parameter.group === 'Parameters');
 
@@ -462,8 +550,17 @@ export default defineKernel({
           parameters: allParameters,
           title: mainFilePath,
         };
+        // Schema excludes $-prefixed params via processOpenScadParameters
         jsonSchema = processOpenScadParameters(mergedExport);
         defaultParameters = jsonDefault(jsonSchema) as Record<string, unknown>;
+
+        // Include $fn/$fa/$fs in defaultParameters so they flow through
+        // the parameter merge pipeline and are available in createGeometry
+        for (const parameter of allParameters) {
+          if (parameter.name.startsWith('$')) {
+            defaultParameters[parameter.name] = parameter.initial;
+          }
+        }
       } else {
         jsonSchema = {
           type: 'object',
@@ -491,7 +588,7 @@ export default defineKernel({
   },
 
   async createGeometry(
-    { filePath, basePath, parameters, tessellation },
+    { filePath, basePath, parameters, options },
     { filesystem, logger, fileContentCache, tracer },
     context,
   ) {
@@ -536,17 +633,19 @@ export default defineKernel({
 
       const args = [relativeFilePath, '-o', `${relativeFilePath}.off`, '--backend=manifold'];
 
-      if (tessellation) {
-        args.push(`-D$fn=48`, `-D$fa=${tessellation.angularTolerance}`, `-D$fs=${tessellation.linearTolerance}`);
-      }
-      //  Else {
-      //   args.push(`-D$fn=48`, `-D$fa=48`, `-D$fs=2`);
-      // }
-
       const flattenedParameters = flattenParametersForInjection(parameters);
       for (const [key, value] of Object.entries(flattenedParameters)) {
         args.push(`-D${key}=${formatValue(value)}`);
       }
+
+      const { tessellation } = options;
+      const overrides: Record<string, number> = {};
+      if (tessellation.segments > 0) {
+        overrides['$fn'] = tessellation.segments;
+      }
+      overrides['$fa'] = tessellation.minimumAngle;
+      overrides['$fs'] = tessellation.minimumSize;
+      injectTessellationArgs(args, flattenedParameters, overrides);
 
       const callMainSpan = tracer.startSpan('openscad.call-main', {
         phase: 'computingGeometry',
@@ -574,8 +673,12 @@ export default defineKernel({
       const convertSpan = tracer.startSpan('openscad.convert-geometry', {
         phase: 'computingGeometry',
       });
-      const gltfBlob = await convertOffToGltf(offData, 'glb');
+      const gltfBlob = await convertOffToGltf(offData, 'glb', 'y-up');
       convertSpan.end();
+
+      context.lastFilePath = filePath;
+      context.lastBasePath = basePath;
+      context.lastParameters = parameters;
 
       const geometry: GeometryGltf = { format: 'gltf', content: gltfBlob };
       return {
@@ -596,12 +699,8 @@ export default defineKernel({
     }
   },
 
-  async exportGeometry({ fileType, tessellation, nativeHandle }, { logger }, _context) {
-    if (tessellation) {
-      logger.warn(
-        'OpenSCAD tessellation is baked at render time via $fa/$fs. Export tessellation override is ignored.',
-      );
-    }
+  async exportGeometry(input, runtime, context) {
+    const { format, nativeHandle, options } = input;
 
     if (!nativeHandle) {
       return createKernelError([
@@ -612,36 +711,46 @@ export default defineKernel({
       ]);
     }
 
-    switch (fileType) {
+    const { tessellation } = options;
+
+    // When export tessellation options are provided, re-render the geometry
+    // with forced overrides so the OFF output reflects export quality settings.
+    let offData = nativeHandle;
+    if (context.lastFilePath && context.lastBasePath) {
+      offData = await runOpenScadBuild({
+        filePath: context.lastFilePath,
+        basePath: context.lastBasePath,
+        parameters: context.lastParameters ?? {},
+        tessellationOverrides: {
+          $fn: tessellation.segments,
+          $fa: tessellation.minimumAngle,
+          $fs: tessellation.minimumSize,
+        },
+        filesystem: runtime.filesystem,
+        logger: runtime.logger,
+        fileContentCache: runtime.fileContentCache,
+        fontCache: context.fontCache,
+      });
+    }
+
+    const { coordinateSystem } = options;
+
+    switch (format) {
       case 'glb': {
-        const glbData = await convertOffToGltf(nativeHandle, 'glb');
+        const glbData = await convertOffToGltf(offData, 'glb', coordinateSystem);
         return createKernelSuccess([createExportFile('glb', 'model.glb', asBuffer(glbData))]);
       }
 
       case 'gltf': {
-        const gltfData = await convertOffToGltf(nativeHandle, 'gltf');
+        const gltfData = await convertOffToGltf(offData, 'gltf', coordinateSystem);
         return createKernelSuccess([createExportFile('gltf', 'model.gltf', asBuffer(gltfData))]);
       }
 
-      case 'stl': {
-        const stlData = await convertOffToStl(nativeHandle, 'stl');
-        return createKernelSuccess([createExportFile('stl', 'model.stl', stlData)]);
-      }
-
-      case 'stl-binary': {
-        const stlData = await convertOffToStl(nativeHandle, 'stl-binary');
-        return createKernelSuccess([createExportFile('stl-binary', 'model.stl', stlData)]);
-      }
-
-      case '3mf': {
-        const threeMfData = await convertOffTo3mf(nativeHandle);
-        return createKernelSuccess([createExportFile('3mf', 'model.3mf', threeMfData)]);
-      }
-
       default: {
+        const _exhaustive: never = format;
         return createKernelError([
           {
-            message: `Unsupported export format: ${fileType}`,
+            message: `Unsupported export format: ${_exhaustive as string}`,
             severity: 'error',
           },
         ]);

@@ -10,9 +10,18 @@
  * 3. Write result to cache on the way back up
  */
 
+import { LruMap } from '@taucad/utils/cache';
 import { joinPath } from '@taucad/utils/path';
 import type { GetParametersResult } from '#types/runtime.types.js';
 import { defineMiddleware } from '#middleware/runtime-middleware.js';
+
+/**
+ * In-memory L1 cache for parsed parameter results.
+ * Module-scoped so each worker gets its own cache.
+ * Exported for test isolation (`beforeEach` → `.clear()`).
+ * @public
+ */
+export const parameterMemoryCache = new LruMap<GetParametersResult>({ maxEntries: 50 });
 
 /**
  * Get the cache file path for a given cache key.
@@ -50,38 +59,41 @@ export const parameterCacheMiddleware = defineMiddleware({
 
   async wrapGetParameters(input, handler, { logger, filesystem, dependencyHash }) {
     const { basePath } = input;
-
-    // Use pre-computed dependency hash as cache key
     const cacheKey = dependencyHash;
-    const cachePath = getCachePath(basePath, cacheKey);
 
-    // 2. Try reading cache directly (single round-trip instead of exists + readFile)
+    // L1: In-memory cache (fast, no I/O)
+    const memoryCached = parameterMemoryCache.get(cacheKey);
+    if (memoryCached) {
+      logger.debug(`Parameter memory cache hit for ${cacheKey}`);
+      return memoryCached;
+    }
+
+    // L2: Filesystem cache
+    const cachePath = getCachePath(basePath, cacheKey);
     try {
       const cachedData = await filesystem.readFile(cachePath, 'utf8');
       logger.debug(`Parameter cache hit for ${cacheKey}`);
 
       const cachedResult = JSON.parse(cachedData) as GetParametersResult;
+      parameterMemoryCache.set(cacheKey, cachedResult);
       return cachedResult;
     } catch (error) {
-      // Cache miss or read error - proceed to compute
       logger.debug(`Parameter cache miss for ${cacheKey}: ${String(error)}`);
     }
 
-    // 3. Cache miss - execute downstream
-    logger.debug(`Parameter cache miss for ${cacheKey}`);
+    // Compute: execute downstream
     const result = await handler(input);
 
-    // 4. Write to cache on the way back up
+    // Write back to L2 and populate L1
     if (result.success) {
+      parameterMemoryCache.set(cacheKey, result);
       try {
-        // Ensure cache directory exists
         const cacheDirectory = getCacheDirectory(basePath);
         await filesystem.ensureDir(cacheDirectory);
 
         await filesystem.writeFile(cachePath, JSON.stringify(result));
         logger.debug(`Cached parameters at ${cacheKey}`);
       } catch (error) {
-        // Cache write error - log and continue
         logger.warn(`Parameter cache write error for ${cacheKey}: ${String(error)}`);
       }
     }

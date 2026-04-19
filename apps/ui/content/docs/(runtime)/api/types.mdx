@@ -1,6 +1,6 @@
 ---
 title: Core Types
-description: KernelResult, KernelIssue, Tessellation, WorkerState, and other fundamental type definitions.
+description: KernelResult, KernelIssue, WorkerState, and other fundamental type definitions.
 icon: lucide:file-type
 ---
 
@@ -27,12 +27,6 @@ type KernelResult<T> = KernelSuccessResult<T> | KernelErrorResult;
 <auto-type-table path='./props/types.ts' name='KernelStackFrame' />
 
 <auto-type-table path='./props/types.ts' name='ErrorLocation' />
-
-## Tessellation
-
-<auto-type-table path='./props/types.ts' name='Tessellation' />
-
-Controls the quality of mesh tessellation. `linearTolerance` controls chord deviation and `angularTolerance` controls angular deviation. Lower values produce finer meshes.
 
 ## Worker State and Render Phase
 

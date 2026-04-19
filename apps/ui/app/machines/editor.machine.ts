@@ -14,6 +14,8 @@ import type {
 import type { GraphicsViewSettings } from '#constants/editor.constants.js';
 import { defaultPanelState } from '#constants/editor.constants.js';
 
+const maxOpenFiles = 200;
+
 /**
  * Deep merge utility for panel state.
  * Merges partial updates into the current state while preserving unspecified values.
@@ -29,6 +31,14 @@ function deepMergePanelState(current: PanelState, update: PartialDeep<PanelState
       ...update.panelSizes,
     },
     mobileActiveTab: update.mobileActiveTab ?? current.mobileActiveTab,
+    kernelPaneview: {
+      ...current.kernelPaneview,
+      ...(update.kernelPaneview as PanelState['kernelPaneview'] | undefined),
+    },
+    parametersPaneview: {
+      ...current.parametersPaneview,
+      ...(update.parametersPaneview as PanelState['parametersPaneview'] | undefined),
+    },
   };
 }
 
@@ -231,22 +241,12 @@ export const editorMachine = setup({
     openFile: enqueueActions(({ enqueue, event, context }) => {
       assertEvent(event, 'openFile');
 
+      const now = Date.now();
       const existingFile = context.openFiles.find((f) => f.path === event.path);
       if (existingFile) {
-        // File already open and active - still emit to allow line navigation
-        if (context.activeFilePath === event.path) {
-          enqueue.emit({
-            type: 'fileOpened',
-            path: event.path,
-            lineNumber: event.lineNumber,
-            column: event.column,
-            source: event.source,
-          });
-          return;
-        }
-
-        // File open but not active - set as active and emit
+        // File already open - update lastAccessedAt
         enqueue.assign({
+          openFiles: context.openFiles.map((f) => (f.path === event.path ? { ...f, lastAccessedAt: now } : f)),
           activeFilePath: event.path,
         });
         enqueue.emit({
@@ -263,10 +263,22 @@ export const editorMachine = setup({
       const newFile: OpenFile = {
         path: event.path,
         name: event.path.split('/').pop() ?? event.path,
+        lastAccessedAt: now,
       };
 
+      let updatedFiles = [...context.openFiles, newFile];
+
+      // LRU eviction: remove least-recently-accessed tab when at capacity
+      if (updatedFiles.length > maxOpenFiles) {
+        const sorted = [...updatedFiles].sort((a, b) => a.lastAccessedAt - b.lastAccessedAt);
+        const victim = sorted.find((f) => f.path !== newFile.path);
+        if (victim) {
+          updatedFiles = updatedFiles.filter((f) => f.path !== victim.path);
+        }
+      }
+
       enqueue.assign({
-        openFiles: [...context.openFiles, newFile],
+        openFiles: updatedFiles,
         activeFilePath: newFile.path,
       });
 
@@ -313,6 +325,7 @@ export const editorMachine = setup({
       }
 
       enqueue.assign({
+        openFiles: context.openFiles.map((f) => (f.path === event.path ? { ...f, lastAccessedAt: Date.now() } : f)),
         activeFilePath: event.path,
       });
 

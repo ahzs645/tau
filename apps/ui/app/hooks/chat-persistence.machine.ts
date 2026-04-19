@@ -248,6 +248,9 @@ export const chatPersistenceMachine = setup({
             clearPersistedError: {
               target: 'clearing',
               guard: 'canPersist',
+              actions: assign({
+                persistedError: undefined,
+              }),
             },
           },
         },

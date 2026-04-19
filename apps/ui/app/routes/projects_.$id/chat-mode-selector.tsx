@@ -59,7 +59,7 @@ export const ChatModeSelector = memo(function ({
   const currentMode = chatModes.find((mode) => mode.id === selectedMode);
 
   return (
-    <DropdownMenu>
+    <DropdownMenu modal={false}>
       <Tooltip>
         <Button asChild variant='ghost' className='gap-2'>
           <TooltipTrigger asChild>

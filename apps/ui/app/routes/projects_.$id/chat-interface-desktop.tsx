@@ -21,6 +21,7 @@ import {
   panelMinSizeStandard,
   panelMinSizeEditor,
   panelMinSizeViewer,
+  panelMinSizeChat,
 } from '#constants/editor.constants.js';
 import type { PanelId } from '#constants/editor.constants.js';
 
@@ -41,7 +42,6 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
     setIsKernelOpen,
     isConverterOpen,
     setIsConverterOpen,
-    isGitOpen,
     isDetailsOpen,
     setIsDetailsOpen,
     panelSizes,
@@ -76,7 +76,6 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
     parameters: isParametersOpen,
     editor: isEditorOpen,
     converter: isConverterOpen,
-    git: isGitOpen,
     details: isDetailsOpen,
   };
 
@@ -152,7 +151,6 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
     isParametersOpen,
     isEditorOpen,
     isConverterOpen,
-    isGitOpen,
     isDetailsOpen,
   ]);
 
@@ -166,7 +164,6 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
     isExplorerOpen,
     isKernelOpen,
     isConverterOpen,
-    isGitOpen,
     isDetailsOpen,
   });
 
@@ -237,7 +234,7 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
           {/* Left panels - Low priority so they keep their preferred size */}
           <Allotment.Pane
             className='rs-left z-10'
-            minSize={panelMinSizeStandard}
+            minSize={panelMinSizeChat}
             preferredSize={panelSizes.chat}
             priority={LayoutPriority.Low}
             visible={isChatOpen}

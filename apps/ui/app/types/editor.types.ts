@@ -13,6 +13,8 @@ import { allotmentPanelOrder } from '#constants/editor.constants.js';
 export type OpenFile = {
   path: string;
   name: string;
+  /** Timestamp of last focus/access for LRU eviction. */
+  lastAccessedAt: number;
 };
 
 /**
@@ -37,6 +39,14 @@ export type FileItem = {
 };
 
 /**
+ * Per-panel state for a PaneviewReact panel (expansion + pixel height).
+ */
+export type PaneviewPanelState = {
+  isExpanded: boolean;
+  size: number;
+};
+
+/**
  * Panel layout state - stored per-project for persistence across page refreshes.
  */
 export type PanelState = {
@@ -46,6 +56,10 @@ export type PanelState = {
   panelSizes: Record<PanelId, number>;
   /** Mobile active tab ID */
   mobileActiveTab: PanelId;
+  /** Kernel paneview panel states (keyed by entry file path) */
+  kernelPaneview: Record<string, PaneviewPanelState>;
+  /** Parameters paneview panel states (keyed by entry file path) */
+  parametersPaneview: Record<string, PaneviewPanelState>;
 };
 
 /**

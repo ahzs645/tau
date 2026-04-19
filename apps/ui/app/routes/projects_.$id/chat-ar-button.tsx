@@ -4,6 +4,7 @@ import type { Geometry } from '@taucad/types';
 import { Button } from '#components/ui/button.js';
 import { useIsMobile } from '#hooks/use-mobile.js';
 import { useAr } from '#hooks/use-ar.js';
+import type { AppRuntimeClient } from '#types/runtime-client.alias.js';
 import { cn } from '#utils/ui.utils.js';
 
 function ArIcon({ className }: { readonly className?: string }): React.JSX.Element {
@@ -34,13 +35,15 @@ function ArIcon({ className }: { readonly className?: string }): React.JSX.Eleme
 
 export const ChatArButton = memo(function ({
   geometries,
+  kernelClient,
   className,
 }: {
   readonly geometries: readonly Geometry[];
+  readonly kernelClient?: AppRuntimeClient;
   readonly className?: string;
 }): React.ReactNode {
   const isMobile = useIsMobile();
-  const { canActivateAr, isConverting, activateAr } = useAr(geometries);
+  const { canActivateAr, isConverting, activateAr } = useAr(geometries, kernelClient);
 
   if (!isMobile || !canActivateAr) {
     return undefined;

@@ -74,15 +74,15 @@ function getIssueSummary(issues: KernelIssue[]): {
   const parts: string[] = [];
 
   if (counts.error > 0) {
-    parts.push(`${counts.error} ${counts.error === 1 ? 'error' : 'errors'}`);
+    parts.push(`${counts.error} ${counts.error === 1 ? 'CAD error' : 'CAD errors'}`);
   }
 
   if (counts.warning > 0) {
-    parts.push(`${counts.warning} ${counts.warning === 1 ? 'warning' : 'warnings'}`);
+    parts.push(`${counts.warning} ${counts.warning === 1 ? 'CAD warning' : 'CAD warnings'}`);
   }
 
   if (counts.info > 0) {
-    parts.push(`${counts.info} ${counts.info === 1 ? 'info' : 'infos'}`);
+    parts.push(`${counts.info} ${counts.info === 1 ? 'CAD infos' : 'CAD infos'}`);
   }
 
   return {

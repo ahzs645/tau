@@ -390,6 +390,27 @@ class GitHubApiClient {
    *
    * Note: GitHub API returns Content-Length header when using full refs like refs/heads/main
    */
+  /**
+   * Get the proxied archive download URL for a repository.
+   * Intended for use by the import worker which fetches off the main thread.
+   */
+  public getArchiveUrl({ owner, repo, ref }: { owner: string; repo: string; ref: string }): string {
+    const fullRef = ref.startsWith('refs/') ? ref : `refs/heads/${ref}`;
+    const zipUrl = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/zipball/${fullRef}`;
+    return `/api/import?url=${encodeURIComponent(zipUrl)}`;
+  }
+
+  /**
+   * Get auth headers to pass to fetch requests (e.g. in workers).
+   */
+  public getAuthHeaders(): Record<string, string> {
+    return {
+      'User-Agent': metaConfig.userAgent,
+      accept: 'application/vnd.github.v3+json',
+      'Accept-Encoding': 'identity',
+    };
+  }
+
   public async downloadArchiveWithSize({
     owner,
     repo,

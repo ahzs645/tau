@@ -165,6 +165,24 @@ export function transformVerticesGltf(vertex: readonly [number, number, number])
 }
 
 /**
+ * Convert vertex units from millimeters to meters without coordinate system transformation.
+ * Used when the output coordinate system matches the source (z-up → z-up).
+ *
+ * @param vertex - xyz position in millimeter space
+ * @returns xyz position in meter space
+ */
+export function transformVerticesZup(vertex: readonly [number, number, number]): [number, number, number] {
+  const x = vertex[0] / 1000;
+  const y = vertex[1] / 1000;
+  const z = vertex[2] / 1000;
+
+  return [x === 0 ? 0 : x, y === 0 ? 0 : y, z === 0 ? 0 : z];
+}
+
+/** Vertex transform function signature for coordinate system selection. */
+export type VertexTransformFunction = (vertex: readonly [number, number, number]) => [number, number, number];
+
+/**
  * Transform a flat array of vertex positions from z-up to y-up coordinate system and convert units.
  *
  * Processes a flat array of vertex coordinates in groups of 3, applying both coordinate

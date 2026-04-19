@@ -2,14 +2,15 @@
  * Filesystem Architecture Types
  *
  * Core types for the layered filesystem architecture:
- * - FileSystemProvider: abstraction over ZenFS backends
+ * - FileSystemProvider: abstraction over filesystem backends
  * - ProviderCapabilities: what a provider supports
  * - ProviderFileStat: stat result from provider operations
- * - ChangeEvent: push-based change notifications
+ * - ChangeEvent: push-based change notifications (canonical definition in @taucad/types)
  * - FileTreeNode: tree representation for /files route
  */
 
-import type { FileSystemBackend } from '@taucad/types';
+// oxlint-disable-next-line no-barrel-files/no-barrel-files -- re-export for internal consumers that import from #types.js
+export type { ChangeEvent } from '@taucad/types';
 
 /**
  * Capability flags describing what a storage provider supports.
@@ -53,18 +54,24 @@ export type FileSystemProvider = {
   exists(path: string): Promise<boolean>;
   lstat(path: string): Promise<ProviderFileStat>;
   dispose(): void;
+  /** Optional streaming read. When present, service routes through this instead of buffered readFile. */
+  readFileStream?(path: string, options?: FileReadStreamOptions): ReadableStream<Uint8Array<ArrayBuffer>>;
+  /** Optional batched readdir+stat. When present, eliminates N+1 stat calls per directory listing. */
+  readdirWithStats?(path: string): Promise<Array<{ name: string } & ProviderFileStat>>;
 };
 
 /**
- * Discriminated union of filesystem change events emitted by the event bus.
+ * Options for streaming file reads.
  * @public
  */
-export type ChangeEvent =
-  | { type: 'fileWritten'; path: string; backend: FileSystemBackend }
-  | { type: 'fileDeleted'; path: string; backend: FileSystemBackend }
-  | { type: 'fileRenamed'; oldPath: string; newPath: string; backend: FileSystemBackend }
-  | { type: 'directoryChanged'; path: string; backend: FileSystemBackend }
-  | { type: 'backendChanged'; backend: FileSystemBackend };
+export type FileReadStreamOptions = {
+  /** Byte offset to start reading from. */
+  position?: number;
+  /** Maximum number of bytes to read. */
+  length?: number;
+  /** Abort signal for cancellation. */
+  signal?: AbortSignal;
+};
 
 /**
  * Node in a standalone backend file tree.

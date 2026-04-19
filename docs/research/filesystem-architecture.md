@@ -3,11 +3,13 @@ title: 'Filesystem Architecture Blueprint'
 description: "Target architecture blueprint for Tau's web-based filesystem: worker topology, RPC bridge, provider abstraction, and performance optimizations."
 status: active
 created: '2026-03-05'
-updated: '2026-03-05'
+updated: '2026-03-27'
 category: architecture
 related:
   - docs/policy/filesystem-policy.md
   - docs/research/fs-capabilities.md
+  - docs/research/large-repo-import-performance.md
+  - docs/research/vscode-fs-performance.md
 ---
 
 # Filesystem Architecture Blueprint
@@ -232,7 +234,7 @@ flowchart TB
     EventBus -->|"invalidate"| DirCache
 ```
 
-**Write Coordinator:** Serializes mutating operations. Current: global queue (prevents ZenFS TOCTOU). Target: per-directory queues when ZenFS fixes the underlying race condition.
+**Write Coordinator:** Serializes mutating operations. Current: global FIFO promise chain (`_writeQueue: Promise<void>`). Target: per-parent-directory queues. ZenFS's TOCTOU (zen-fs/core#256) only affects `StoreFS.commitNew` read-modify-write on the **same parent directory's listing blob** — writes to different parent directories are independent and safe to parallelize today without a ZenFS fix.
 
 **Directory Tree Cache:** Maintains an in-memory representation of the directory structure (names, types, sizes, mtimes). Invalidated incrementally by write operations — only the affected parent directory is re-read. Consumers query this cache instead of performing full recursive traversals.
 
@@ -478,7 +480,7 @@ flowchart TB
     end
 ```
 
-The global queue exists because ZenFS has a TOCTOU race on concurrent writes to the same directory. Once ZenFS fixes this (zen-fs/core#256), per-directory queues will unlock parallel writes to different projects.
+The global queue exists because ZenFS has a TOCTOU race in `StoreFS.commitNew` — a read-modify-write on the parent directory's listing blob (`Record<string, number>` in JSON). This only affects concurrent writes to the **same parent directory**. Writes to files in different parent directories are independent. Per-parent-directory queues can be implemented today without a ZenFS fix.
 
 ### 5.3 Tree refresh optimization
 
@@ -541,11 +543,12 @@ When Tau adds cloud storage, the filesystem architecture must support:
 
 ### 6.6 Cross-tab filesystem access
 
-Multiple browser tabs may access the same IndexedDB store. Currently each tab has its own worker and ZenFS instance. Future options:
+Multiple browser tabs may access the same IndexedDB store. Each tab has its own dedicated worker and FileService instance. Cross-tab coordination is implemented via `CrossTabCoordinator`:
 
-- `SharedWorker` for a single FS worker across tabs
-- `BroadcastChannel` for change notifications (VS Code's `IndexedDBFileSystemProvider` does this)
-- `navigator.locks` for cross-tab write coordination
+- **`navigator.locks`** for per-file exclusive write serialization across tabs (crash-safe, built-in FIFO queuing)
+- **`BroadcastChannel`** for change notifications to other tabs (VS Code's `IndexedDBFileSystemProvider` uses this same pattern)
+
+**SharedWorker was evaluated and rejected** — see `docs/research/shared-worker-fs-architecture.md`. Key blockers: `SharedArrayBuffer` inaccessible from SharedWorkers (breaks R20 `SharedContentPool`), `FileSystemSyncAccessHandle` restricted to dedicated Workers (blocks R21 OPFS fast-path), no Android Chrome support, and lifecycle fragility. The per-tab dedicated worker + `navigator.locks` approach is architecturally superior and matches VS Code's choice.
 
 ---
 
@@ -727,7 +730,7 @@ Components to build in sequence, each delivering incremental value. Each phase c
 3. `ensureDirectoryExistsInternal` acquires locks on each ancestor
 4. Queue auto-cleanup when empty (VS Code `ResourceQueue` pattern)
 
-**Depends on:** Validation that ZenFS TOCTOU only affects same-directory writes (or ZenFS fix lands)
+**Depends on:** Nothing — verified that ZenFS TOCTOU only affects same-parent-directory writes (see `StoreFS.commitNew` in `repos/zenfs/core/src/backends/store/fs.ts`)
 **Unblocks:** Faster batch imports, parallel project creation
 
 ### Phase 7: Worker port lifecycle
@@ -767,7 +770,7 @@ Components to build in sequence, each delivering incremental value. Each phase c
 | Single file manager worker               | Eliminates cross-worker ZenFS corruption; simple mental model                                                                  | Multiple workers with SharedArrayBuffer (complex, browser support)                          |
 | MessagePort RPC over Comlink             | Lighter weight, no proxy magic, explicit transfer control                                                                      | Comlink (implicit proxy, harder to debug thenable issues)                                   |
 | ZenFS over raw IndexedDB                 | Node.js `fs` API compatibility, multiple backend support                                                                       | Raw IndexedDB (faster but no path abstraction)                                              |
-| Global write queue                       | Prevents ZenFS TOCTOU; simple correctness guarantee                                                                            | Per-directory queues (optimal but needs ZenFS fix first)                                    |
+| Global write queue                       | Prevents ZenFS TOCTOU; simple correctness guarantee                                                                            | Per-parent-directory queues (safe now — TOCTOU only affects same-parent-dir writes)         |
 | Lazy tree loading                        | O(1) initial load vs O(n) full traversal                                                                                       | Virtual scrolling with eager load (still loads all data)                                    |
 | Provider abstraction (target)            | Clean separation, testability, future backend extensibility                                                                    | Monolithic fileManager (current, works but rigid)                                           |
 | Promise-based RPC (`await`)              | FS ops are one-shot request/response; matches VS Code `channel.call()`                                                         | Event-driven fire-and-forget (kernel pattern; adds complexity without FS benefit)           |

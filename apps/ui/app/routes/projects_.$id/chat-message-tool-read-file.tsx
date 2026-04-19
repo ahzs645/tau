@@ -66,7 +66,11 @@ export function ChatMessageToolReadFile({
             <ChatToolCardIcon icon={FileText} />
             <ChatToolCardTitle>
               <ChatToolAction>Read</ChatToolAction>
-              <FileLink path={targetFile} lineNumber={startLine} className='min-w-0 truncate text-foreground/50'>
+              <FileLink
+                path={targetFile}
+                lineNumber={startLine}
+                className='min-w-0 truncate font-normal text-foreground/50'
+              >
                 {targetFile}
                 {lineRange}
               </FileLink>

@@ -15,7 +15,6 @@ import { Separator } from '#components/ui/separator.js';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '#components/ui/sidebar.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import { Badge } from '#components/ui/badge.js';
-import { AlphaBadge } from '#components/alpha-badge.js';
 import { useNetworkConnectivity } from '#hooks/use-network-connectivity.js';
 import { useTypedMatches } from '#hooks/use-typed-matches.js';
 import { NavUser } from '#components/nav/nav-user.js';
@@ -197,12 +196,10 @@ export function Page({ error }: { readonly error?: ReactNode }): React.JSX.Eleme
                   <TooltipContent>You are offline. Reconnect to access online features.</TooltipContent>
                 </Tooltip>
               )}
-              <AlphaBadge />
-              <Commands />
               {hasActionItems
                 ? actionItems.map((match) => <Fragment key={match.id}>{match.handle.actions?.(match)}</Fragment>)
                 : null}
-
+              <Commands />
               <NavUser />
             </div>
           </header>

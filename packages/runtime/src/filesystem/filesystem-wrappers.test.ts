@@ -7,7 +7,8 @@ import { mock } from 'vitest-mock-extended';
 import { fromMemoryFS } from '#filesystem/from-memory-fs.js';
 import type { RuntimeFileSystemBase } from '#types/runtime-kernel.types.js';
 import { createBridgeProxy } from '#framework/runtime-filesystem-bridge.js';
-import { exposeFileSystem, createFileSystemBridge } from '#filesystem/filesystem-bridge.js';
+import { workerReadyMessageType } from '#framework/runtime-framework.constants.js';
+import { exposeFileSystem, createFileSystemBridge, waitForWorkerReady } from '#filesystem/filesystem-bridge.js';
 
 describe('filesystem high-level wrappers', () => {
   describe('exposeFileSystem', () => {
@@ -127,6 +128,54 @@ describe('filesystem high-level wrappers', () => {
 
       const content = await proxy2.readFile('/custom.txt', 'utf8');
       expect(content).toBe('custom');
+    });
+  });
+
+  describe('waitForWorkerReady', () => {
+    it('should resolve when worker posts the ready message', async () => {
+      const worker = new EventTarget() as unknown as Worker;
+      const ready = waitForWorkerReady(worker);
+
+      worker.dispatchEvent(new MessageEvent('message', { data: { type: workerReadyMessageType } }));
+
+      await expect(ready).resolves.toBeUndefined();
+    });
+
+    it('should not resolve for unrelated messages', async () => {
+      const worker = new EventTarget() as unknown as Worker;
+      const ready = waitForWorkerReady(worker);
+      const notYet = Symbol('not-yet');
+
+      worker.dispatchEvent(new MessageEvent('message', { data: { type: 'other' } }));
+
+      const raceResult = await Promise.race([ready, Promise.resolve(notYet)]);
+      expect(raceResult).toBe(notYet);
+
+      worker.dispatchEvent(new MessageEvent('message', { data: { type: workerReadyMessageType } }));
+      await ready;
+    });
+
+    it('should reject when signal is aborted before ready', async () => {
+      const worker = new EventTarget() as unknown as Worker;
+      const controller = new AbortController();
+
+      const ready = waitForWorkerReady(worker, controller.signal);
+      controller.abort();
+
+      await expect(ready).rejects.toThrow();
+    });
+
+    it('should clean up listener after resolving', async () => {
+      const worker = new EventTarget() as unknown as Worker;
+      const removeSpy = vi.spyOn(worker, 'removeEventListener');
+
+      const ready = waitForWorkerReady(worker);
+
+      worker.dispatchEvent(new MessageEvent('message', { data: { type: workerReadyMessageType } }));
+
+      await ready;
+      expect(removeSpy).toHaveBeenCalledWith('message', expect.any(Function));
+      removeSpy.mockRestore();
     });
   });
 

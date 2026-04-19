@@ -6,6 +6,8 @@
  */
 
 import type { RuntimeCommand, RuntimeResponse } from '#types/runtime-protocol.types.js';
+import type * as NodeWorkerThreads from 'node:worker_threads';
+import type { MessagePort as NodeMessagePort, Transferable as NodeTransferable } from 'node:worker_threads';
 import { isWebWorker } from '#framework/environment.js';
 
 /**
@@ -18,15 +20,34 @@ export type RuntimeMessagePort = {
   close(): void;
 };
 
-// oxlint-disable-next-line @typescript-eslint/consistent-type-imports -- Dynamic require for Node.js detection
-function getNodeParentPort(): import('node:worker_threads').MessagePort | undefined {
-  try {
-    // oxlint-disable-next-line @typescript-eslint/no-require-imports, unicorn/prefer-module, @typescript-eslint/consistent-type-imports -- Dynamic require for Node.js detection
-    const workerThreads = require('node:worker_threads') as typeof import('node:worker_threads');
-    return workerThreads.parentPort ?? undefined;
-  } catch {
-    return undefined;
+/*
+ * Lazy, memoized loader for `node:worker_threads`.
+ *
+ * Top-level await would block CJS dist output, so the load is deferred to first
+ * call. Both Web Workers and Node `worker_threads` buffer port messages until
+ * a handler is attached, so the brief async window during worker bootstrap is
+ * race-safe.
+ */
+let cachedWorkerThreadsModule: typeof NodeWorkerThreads | undefined;
+let workerThreadsLoadPromise: Promise<void> | undefined;
+
+async function ensureWorkerThreadsLoaded(): Promise<void> {
+  if (workerThreadsLoadPromise) {
+    return workerThreadsLoadPromise;
   }
+  workerThreadsLoadPromise = (async () => {
+    // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- globalThis.process is undefined in browsers despite TS typings
+    if (!globalThis.process?.versions.node) {
+      return;
+    }
+    cachedWorkerThreadsModule = await import('node:worker_threads').catch(() => undefined);
+  })();
+  return workerThreadsLoadPromise;
+}
+
+async function getNodeParentPort(): Promise<NodeMessagePort | undefined> {
+  await ensureWorkerThreadsLoaded();
+  return cachedWorkerThreadsModule?.parentPort ?? undefined;
 }
 
 /**
@@ -35,8 +56,11 @@ function getNodeParentPort(): import('node:worker_threads').MessagePort | undefi
  *
  * @returns `true` when running inside a Web Worker or Node.js worker_threads
  */
-export function isWorkerContext(): boolean {
-  return isWebWorker() || getNodeParentPort() !== undefined;
+export async function isWorkerContext(): Promise<boolean> {
+  if (isWebWorker()) {
+    return true;
+  }
+  return (await getNodeParentPort()) !== undefined;
 }
 
 /**
@@ -46,7 +70,7 @@ export function isWorkerContext(): boolean {
  * @returns RuntimeMessagePort with unified send/receive interface
  * @throws Error if called outside a worker context
  */
-export function getWorkerMessagePort(): RuntimeMessagePort {
+export async function getWorkerMessagePort(): Promise<RuntimeMessagePort> {
   if (isWebWorker()) {
     return {
       postMessage(message, transferables) {
@@ -63,12 +87,11 @@ export function getWorkerMessagePort(): RuntimeMessagePort {
     };
   }
 
-  const parentPort = getNodeParentPort();
+  const parentPort = await getNodeParentPort();
   if (parentPort) {
     return {
       postMessage(message, transferables) {
-        // oxlint-disable-next-line @typescript-eslint/consistent-type-imports -- Dynamic require for Node.js detection
-        parentPort.postMessage(message, transferables as Array<import('node:worker_threads').Transferable> | undefined);
+        parentPort.postMessage(message, transferables as Array<NodeTransferable> | undefined);
       },
       onMessage(handler) {
         parentPort.on('message', (data: RuntimeCommand | RuntimeResponse) => {

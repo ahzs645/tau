@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useDeferredValue, useRef } from 'react';
 import type * as THREE from 'three';
 import { useThree, useFrame } from '@react-three/fiber';
 import { Environment, Lightformer } from '@react-three/drei';
@@ -9,8 +9,11 @@ import {
   environmentBaseIntensity,
   defaultHeadlampConfig,
   lightingUserDataKeys,
+  darkModeIntensityScale,
+  darkModeAmbientBoost,
 } from '#components/geometry/graphics/three/utils/lights.utils.js';
 import type { SceneLightingConfig } from '#components/geometry/graphics/three/utils/lights.utils.js';
+import { Theme, useTheme } from '#hooks/use-theme.js';
 
 /** Environment cubemap resolution (px). Higher = sharper specular reflections. */
 const envResolution = 512;
@@ -77,6 +80,8 @@ export function Lights({
   const { camera, scene } = useThree();
   const cameraLightReference = useRef<THREE.DirectionalLight>(null);
   const ambientReference = useRef<THREE.AmbientLight>(null);
+  const { theme } = useTheme();
+  const isDark = theme === Theme.DARK;
 
   // Clamp sceneRadius to avoid zero/tiny values before geometry loads
   const clampedSceneRadius = Math.max(sceneRadius, 1);
@@ -84,6 +89,10 @@ export function Lights({
   // Keep clamped radius accessible in useFrame without re-subscribing
   const radiusRef = useRef(clampedSceneRadius);
   radiusRef.current = clampedSceneRadius;
+
+  // Theme-based intensity factors (1.0 in light mode, reduced in dark mode)
+  const themeIntensityScale = isDark ? darkModeIntensityScale : 1;
+  const themeAmbientBoost = isDark ? darkModeAmbientBoost : 1;
 
   // Per-frame updates delegated to the shared applyLightingForCamera utility.
   // This ensures the live renderer and the offline screenshot renderer apply
@@ -94,6 +103,7 @@ export function Lights({
     scene.userData[lightingUserDataKeys.config] = {
       sceneRadius: radiusRef.current,
       upDirection,
+      themeIntensityScale,
     } satisfies SceneLightingConfig;
 
     applyLightingForCamera({
@@ -108,11 +118,15 @@ export function Lights({
         ambientIntensity: ambientBaseIntensity,
         environmentIntensity: environmentBaseIntensity,
         headlampConfig: defaultHeadlampConfig,
+        themeIntensityScale,
+        themeAmbientBoost,
       },
     });
   });
 
-  const showEnvironment = !enableMatcap && (environmentPreset === 'studio' || environmentPreset === 'neutral');
+  const showEnvironment = useDeferredValue(
+    !enableMatcap && (environmentPreset === 'studio' || environmentPreset === 'neutral'),
+  );
 
   return (
     <>
@@ -216,16 +230,18 @@ export function Lights({
       ) : null}
 
       {/* Soft preset: hemisphere + ambient only, no environment map */}
-      {/* oxlint-disable-next-line tau-lint/no-hardcoded-color -- Three.js light color */}
-      {!enableMatcap && environmentPreset === 'soft' ? <hemisphereLight args={['#ffffff', '#444444', 0.8]} /> : null}
+      {!enableMatcap && environmentPreset === 'soft' ? (
+        // oxlint-disable-next-line tau-lint/no-hardcoded-color -- Three.js light color
+        <hemisphereLight args={['#ffffff', '#444444', 0.8 * themeIntensityScale]} />
+      ) : null}
 
       {/* Performance preset: minimal lights, no environment (equivalent to legacy setup) */}
       {!enableMatcap && environmentPreset === 'performance' ? (
         <>
           {/* oxlint-disable-next-line tau-lint/no-hardcoded-color -- Three.js light color */}
-          <hemisphereLight args={['#ffffff', '#444444', 1]} />
-          <directionalLight color='white' intensity={2} position={[-1, -3, 5]} />
-          <directionalLight color='white' intensity={2} position={[1, 3, 5]} />
+          <hemisphereLight args={['#ffffff', '#444444', themeIntensityScale]} />
+          <directionalLight color='white' intensity={2 * themeIntensityScale} position={[-1, -3, 5]} />
+          <directionalLight color='white' intensity={2 * themeIntensityScale} position={[1, 3, 5]} />
         </>
       ) : null}
     </>

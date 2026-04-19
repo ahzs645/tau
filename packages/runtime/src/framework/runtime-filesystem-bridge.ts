@@ -17,6 +17,16 @@ import { safeDispose } from '@taucad/utils/dispose';
 import type { RuntimeFileSystemBase, RuntimeWatchRequest, RuntimeWatchEvent } from '#types/runtime-kernel.types.js';
 import type { StringKeyedObject } from '#types/bridge.types.js';
 import { messagePortCallTimeoutMs } from '#framework/runtime-framework.constants.js';
+/**
+ * Minimal interface for a shared file pool used by the bridge for
+ * zero-IPC cached reads. Structurally compatible with `SharedPool`
+ * from `@taucad/memory`.
+ * @public
+ */
+export type FilePool = {
+  store(path: string, data: Uint8Array<ArrayBuffer>): boolean;
+  resolveCopy(path: string): Uint8Array<ArrayBuffer> | undefined;
+};
 
 /**
  * Walk an arbitrarily nested value and collect every unique `ArrayBuffer`
@@ -121,6 +131,8 @@ export function createBridgeServer<T extends StringKeyedObject>(
     onDisconnect?: () => void;
     onWatch?: (watchId: string, request: RuntimeWatchRequest) => void;
     onUnwatch?: (watchId: string) => void;
+    /** Writer-side shared file pool. Binary readFile results are stored here after successful reads. */
+    filePool?: FilePool;
   },
 ): BridgeServerHandle {
   // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MessagePort requires onmessage (implicitly calls start(); addEventListener does not)
@@ -146,13 +158,11 @@ export function createBridgeServer<T extends StringKeyedObject>(
     }
 
     const { id, method, args } = data as BridgeRequest;
-    console.debug(`[BridgeServer] request: ${method}(${JSON.stringify(args).slice(0, 100)})`);
 
     const function_ = (handlers as Record<string, unknown>)[method] as
       | ((...functionArguments: unknown[]) => Promise<unknown>)
       | undefined;
     if (!function_) {
-      console.debug(`[BridgeServer] method '${method}' not found on handlers`);
       port.postMessage({
         id,
         error: { message: `Unknown method: ${method}`, name: 'Error' },
@@ -162,6 +172,12 @@ export function createBridgeServer<T extends StringKeyedObject>(
 
     try {
       const result: unknown = await function_.call(handlers, ...args);
+
+      if (options?.filePool && method === 'readFile' && result instanceof Uint8Array) {
+        const filePath = args[0] as string;
+        options.filePool.store(filePath, result as Uint8Array<ArrayBuffer>);
+      }
+
       const response = { id, result } satisfies BridgeResponse;
       const transferables = extractTransferables(result);
       try {
@@ -282,7 +298,13 @@ function reconstructError(bridgeError: BridgeError): Error & {
  * @returns Object with call, listen, watch, and dispose methods.
  * @public
  */
-export function createBridgeCall(port: MessagePort): {
+export function createBridgeCall(
+  port: MessagePort,
+  options?: {
+    /** Reader-side shared file pool. readFile calls check here before sending RPC. */
+    filePool?: FilePool;
+  },
+): {
   call: (method: string, args: unknown[]) => Promise<unknown>;
   listen: (event: string, handler: (data: unknown) => void) => () => void;
   watch: (request: RuntimeWatchRequest, handler: (event: RuntimeWatchEvent) => void) => () => void;
@@ -298,6 +320,20 @@ export function createBridgeCall(port: MessagePort): {
   const pending = new Map<number, PendingEntry>();
   const eventListeners = new Map<string, Set<(data: unknown) => void>>();
 
+  function dispatchBridgeEventHandlers(
+    handlers: Set<(data: unknown) => void>,
+    eventName: string,
+    eventData: unknown,
+  ): void {
+    for (const handler of handlers) {
+      try {
+        handler(eventData);
+      } catch (error) {
+        console.error(`[BridgeCall] Event listener error for '${eventName}':`, error);
+      }
+    }
+  }
+
   // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MessagePort requires onmessage (implicitly calls start(); addEventListener does not)
   port.onmessage = (event: MessageEvent<BridgeMessage>): void => {
     const { data } = event;
@@ -307,13 +343,7 @@ export function createBridgeCall(port: MessagePort): {
         const eventMessage = data;
         const handlers = eventListeners.get(eventMessage.event);
         if (handlers) {
-          for (const handler of handlers) {
-            try {
-              handler(eventMessage.data);
-            } catch (error) {
-              console.error(`[BridgeCall] Event listener error for '${eventMessage.event}':`, error);
-            }
-          }
+          dispatchBridgeEventHandlers(handlers, eventMessage.event, eventMessage.data);
         }
         return;
       }
@@ -365,6 +395,18 @@ export function createBridgeCall(port: MessagePort): {
 
   return {
     async call(method: string, args: unknown[]): Promise<unknown> {
+      if (options?.filePool && method === 'readFile') {
+        const filePath = args[0] as string;
+        const encoding = args[1] as string | undefined;
+        const cached = options.filePool.resolveCopy(filePath);
+        if (cached) {
+          if (encoding === 'utf8') {
+            return new TextDecoder().decode(cached);
+          }
+          return new Uint8Array(cached);
+        }
+      }
+
       return new Promise((resolve, reject) => {
         const id = nextId++;
         const timer = setTimeout(() => {
@@ -438,17 +480,28 @@ export function createBridgeCall(port: MessagePort): {
  *
  * @param port - MessagePort for bridge communication.
  * @returns Proxy that forwards method calls over the bridge.
+ * @public
  */
-/** @public */
 // oxlint-disable-next-line @typescript-eslint/no-explicit-any -- generic proxy type must accept any callable shape
 export function createBridgeProxy<T extends Record<string, (...args: any[]) => any>>(
   port: MessagePort,
+  options?: {
+    /** Reader-side shared file pool for zero-IPC cached reads. */
+    filePool?: FilePool;
+  },
 ): T & {
   dispose(): void;
   listen(event: string, handler: (data: unknown) => void): () => void;
   watch(request: RuntimeWatchRequest, handler: (event: RuntimeWatchEvent) => void): () => void;
 } {
-  const { call, listen, watch, dispose: rawDispose } = createBridgeCall(port);
+  const {
+    call,
+    listen,
+    watch,
+    dispose: rawDispose,
+  } = createBridgeCall(port, {
+    filePool: options?.filePool,
+  });
   let isDisposed = false;
 
   const dispose = (): void => {

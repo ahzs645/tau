@@ -1,8 +1,9 @@
-import { XIcon, Info, Database, HardDrive, FolderOpen, MemoryStick } from 'lucide-react';
-import { useCallback, useMemo } from 'react';
+import { XIcon, Info } from 'lucide-react';
+import { useCallback } from 'react';
 import { useSelector } from '@xstate/react';
 import type { FileSystemBackend } from '@taucad/types';
 import { filesystemBackendMeta } from '@taucad/types/constants';
+import { backendIcons } from '#components/filesystem/backend-indicator.js';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
 import {
   FloatingPanel,
@@ -24,19 +25,11 @@ import { useProject } from '#hooks/use-project.js';
 import type { KeyCombination } from '#utils/keys.utils.js';
 import { formatKeyCombination } from '#utils/keys.utils.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
-import { useFileTreeMap } from '#hooks/use-file-tree.js';
 
 const keyCombinationEditor = {
   key: 'i',
   ctrlKey: true,
 } as const satisfies KeyCombination;
-
-const backendIcons: Record<FileSystemBackend, typeof Database> = {
-  indexeddb: Database,
-  opfs: HardDrive,
-  webaccess: FolderOpen,
-  memory: MemoryStick,
-};
 
 /**
  * Displays the filesystem backend info for the current project.
@@ -107,8 +100,6 @@ export function ChatDetails({
   const projectTags = useSelector(projectRef, (state) => state.context.project?.tags ?? []);
   const mainFile = useSelector(projectRef, (state) => state.context.project?.assets.mechanical?.main ?? '');
   const { fileManagerRef, connectedDirectoryName } = useFileManager();
-  const fileTree = useFileTreeMap();
-  const availableFiles = useMemo(() => [...fileTree.keys()], [fileTree]);
   const backendType = useSelector(fileManagerRef, (state) => state.context.backendType);
 
   const toggleDetails = (): void => {
@@ -193,13 +184,11 @@ export function ChatDetails({
               <div className='space-y-2'>
                 <label className='text-sm font-medium text-foreground'>Main File:</label>
                 <FileSelector
-                  files={availableFiles.map((path) => ({ path }))}
                   selectedFile={mainFile}
                   placeholder='Select main file...'
                   title='Select Main File'
                   description='Choose the main file for your project'
                   emptyMessage='No files available'
-                  isDisabled={availableFiles.length === 0}
                   onSelect={handleMainFileChange}
                 />
               </div>

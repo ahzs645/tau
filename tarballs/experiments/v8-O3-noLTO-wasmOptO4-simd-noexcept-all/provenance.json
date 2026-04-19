@@ -1,0 +1,76 @@
+{
+  "schema": "wasm-build-provenance-v1",
+  "buildId": "20260324T055420-O3-noLTO-single",
+  "timestamp": "2026-03-24T05:54:20.635694+00:00",
+  "toolchain": {
+    "emscripten": "5.0.1",
+    "llvm": "17",
+    "wasmOpt": "(version_123-685-g18ba06162)",
+    "python": "3.14.3"
+  },
+  "source": {
+    "occtCommit": "48ebca0f70a5e4b936548b695bc3583363898da4",
+    "opencascadejsCommit": "9f217d182c6d42cf8c1fa914920be442c5740841",
+    "filterPackagesHash": "8b12ca608181",
+    "pinnedDeps": {
+      "occt": {
+        "commit": "48ebca0f70a5e4b936548b695bc3583363898da4",
+        "version": "V8_0_0_rc4 (master tip)"
+      },
+      "rapidjson": {
+        "commit": "24b5e7a8b27f42fa16b96fc70aade9106cf7102f",
+        "version": "post-1.1.0 (master)"
+      },
+      "freetype": {
+        "commit": "de8b92dd7ec634e9e2b25ef534c54a3537555c11",
+        "version": "VER-2-13-0"
+      },
+      "emscripten": {
+        "docker_digest": "sha256:c89732ef63a56de5a96395c5a8c1c7904f7420131a045406e6fedc4cbe1cc198",
+        "emsdk_version": "5.0.1"
+      },
+      "doxygen": {
+        "version": "1.16.1"
+      }
+    }
+  },
+  "compilation": {
+    "cacheKey": "O3-noLTO-noExc-single-8b12ca60-48ebca",
+    "cacheHit": false,
+    "optimization": "-O3",
+    "lto": false,
+    "exceptions": "none",
+    "threading": "single-threaded",
+    "wasmOptLevel": "-O4",
+    "emccCompileFlags": [
+      "-O3",
+      "-sDISABLE_EXCEPTION_CATCHING=1",
+      "-DOCCT_NO_DUMP",
+      "-UOCC_CONVERT_SIGNALS",
+      "-msimd128"
+    ],
+    "sourceFiles": 0,
+    "bindingFiles": 0,
+    "compileDuration_s": 0
+  },
+  "linking": {},
+  "postProcessing": {},
+  "output": {
+    "replicad_single.wasm": {
+      "size": 20157432,
+      "sha256": "a1e984a533fef69f"
+    },
+    "replicad_single.js": {
+      "size": 54212
+    },
+    "replicad_single.d.ts": {
+      "size": 968575,
+      "lines": 21026
+    }
+  },
+  "sections": {},
+  "filtering": {
+    "excludedPackages": []
+  },
+  "totalDuration_s": 1
+}

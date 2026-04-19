@@ -8,12 +8,58 @@
  */
 
 import { safeDispose } from '@taucad/utils/dispose';
+import type { ChangeEvent } from '@taucad/types';
 import type { StringKeyedObject } from '#types/bridge.types.js';
 import type { BridgeHandle, BridgeServerHandle } from '#framework/runtime-filesystem-bridge.js';
 import type { RuntimeWatchRequest, RuntimeWatchEvent } from '#types/runtime-kernel.types.js';
 import { createBridgeServer, catchMessages } from '#framework/runtime-filesystem-bridge.js';
+import { workerReadyMessageType } from '#framework/runtime-framework.constants.js';
 
 const defaultBridgeMessageType = 'connect';
+const defaultUiCoalescingWindowMs = 500;
+
+/**
+ * Minimal interface for an event coalescer that batches ChangeEvents
+ * before delivering them. Matches the push/flush/dispose API surface
+ * of `EventCoalescer` from `@taucad/filesystem`.
+ * @public
+ */
+export type ChangeEventCoalescer = {
+  push(event: ChangeEvent): void;
+  flush(): void;
+  dispose(): void;
+};
+
+/**
+ * Factory that creates a {@link ChangeEventCoalescer}.
+ *
+ * Called by {@link exposeFileSystem} with the delivery callback (broadcasts
+ * to all connected bridge ports) and the configured coalescing window.
+ * @public
+ */
+export type CoalescerFactory = (deliver: (events: ChangeEvent[]) => void, windowMs: number) => ChangeEventCoalescer;
+
+/**
+ * Minimal interface for a throttled worker that delivers events in chunks.
+ * Matches the push/flush/dispose API surface of `ThrottledWorker` from
+ * `@taucad/filesystem`.
+ * @public
+ */
+export type ThrottledEventWorker = {
+  push(items: ChangeEvent[]): void;
+  flush(): void;
+  dispose(): void;
+};
+
+/**
+ * Factory that creates a {@link ThrottledEventWorker}.
+ *
+ * Called by {@link exposeFileSystem} with a handler that delivers chunks
+ * to all connected bridge ports. The factory receives the handler and
+ * should return a throttled worker wrapping it.
+ * @public
+ */
+export type ThrottledWorkerFactory = (handler: (chunk: ChangeEvent[]) => void) => ThrottledEventWorker;
 
 /**
  * Options for configuring the filesystem bridge message type.
@@ -21,6 +67,20 @@ const defaultBridgeMessageType = 'connect';
  */
 export type FileSystemBridgeOptions = {
   messageType?: string;
+  /** Coalescing window for UI-bound fileChanged events (default: 500ms). */
+  uiCoalescingWindowMs?: number;
+  /**
+   * Factory for creating a change event coalescer. When provided, events
+   * from `changeEventBus` are batched before broadcasting to bridge clients.
+   * When omitted, events pass through without batching.
+   */
+  createCoalescer?: CoalescerFactory;
+  /**
+   * Factory for creating a throttled event worker. When provided alongside
+   * `createCoalescer`, coalesced batches flow through the throttled worker
+   * for chunked delivery to bridge clients.
+   */
+  createThrottledWorker?: ThrottledWorkerFactory;
 };
 
 /**
@@ -79,15 +139,43 @@ export function exposeFileSystem<T extends StringKeyedObject>(
   const serverHandles = new Map<MessagePort, BridgeServerHandle>();
   const portWatches = new Map<MessagePort, Map<string, () => void>>();
 
+  const deliverToHandles = (events: ChangeEvent[]): void => {
+    for (const event of events) {
+      for (const handle of serverHandles.values()) {
+        handle.emit('fileChanged', event);
+      }
+    }
+  };
+
+  let throttledWorker: ThrottledEventWorker | undefined;
+  if (options?.createThrottledWorker) {
+    throttledWorker = options.createThrottledWorker(deliverToHandles);
+  }
+
+  const deliverFromCoalescer = throttledWorker
+    ? (events: ChangeEvent[]): void => {
+        throttledWorker.push(events);
+      }
+    : deliverToHandles;
+
+  let coalescer: ChangeEventCoalescer | undefined;
+  if (options?.createCoalescer) {
+    coalescer = options.createCoalescer(
+      deliverFromCoalescer,
+      options.uiCoalescingWindowMs ?? defaultUiCoalescingWindowMs,
+    );
+  }
+
   const unsubscribeEventBus = options?.changeEventBus?.subscribe((event) => {
-    for (const handle of serverHandles.values()) {
-      handle.emit('fileChanged', event);
+    if (coalescer) {
+      coalescer.push(event as ChangeEvent);
+    } else {
+      deliverToHandles([event as ChangeEvent]);
     }
   });
 
   const handler = (event: MessageEvent): void => {
     if (event.data?.type === messageType && event.data.port instanceof MessagePort) {
-      console.debug(`[exposeFileSystem] connect received, setting up bridge server`);
       const port = event.data.port as MessagePort;
       const stopAndReplayMessages = catchMessages(port);
       const portId = `port_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -148,6 +236,8 @@ export function exposeFileSystem<T extends StringKeyedObject>(
 
   return {
     cleanup() {
+      coalescer?.dispose();
+      throttledWorker?.dispose();
       unsubscribeEventBus?.();
       self.removeEventListener('message', handler);
       for (const port of activePorts) {
@@ -161,6 +251,50 @@ export function exposeFileSystem<T extends StringKeyedObject>(
     activePorts,
     serverHandles,
   };
+}
+
+/**
+ * Wait for a worker to signal that its initialization is complete.
+ *
+ * Workers post `{ type: workerReadyMessageType }` after `exposeFileSystem`
+ * has registered its listener. Callers should await this before sending
+ * bridge `connect` messages to avoid the race where the message is dropped.
+ *
+ * @param worker - Worker to wait for
+ * @param signal - Optional AbortSignal to cancel the wait
+ * @returns Resolves when the worker posts the ready message
+ * @public
+ */
+export async function waitForWorkerReady(worker: Worker | EventTarget, signal?: AbortSignal): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const onMessage = (event: Event): void => {
+      if ((event as MessageEvent).data?.type === workerReadyMessageType) {
+        cleanup();
+        resolve();
+      }
+    };
+
+    const toError = (reason: unknown): Error =>
+      reason instanceof Error ? reason : new Error('The operation was aborted.');
+
+    const onAbort = (): void => {
+      cleanup();
+      reject(toError(signal?.reason));
+    };
+
+    const cleanup = (): void => {
+      worker.removeEventListener('message', onMessage);
+      signal?.removeEventListener('abort', onAbort);
+    };
+
+    if (signal?.aborted) {
+      reject(toError(signal.reason));
+      return;
+    }
+
+    worker.addEventListener('message', onMessage);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 /**

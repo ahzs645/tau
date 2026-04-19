@@ -2,20 +2,7 @@ import { HumanMessage, AIMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { promptCachingMiddleware } from '#api/chat/middleware/prompt-caching.middleware.js';
-
-// Helper type for the request shape we're testing
-type TestRequest = { messages: BaseMessage[] };
-
-// Helper to call wrapModelCall with proper typing
-async function callWrapModelCall(request: TestRequest, handler: ReturnType<typeof vi.fn>): Promise<void> {
-  const { wrapModelCall } = promptCachingMiddleware;
-  if (!wrapModelCall) {
-    throw new Error('wrapModelCall is not defined on middleware');
-  }
-
-  // Cast to the expected types - in tests we only care about messages
-  await wrapModelCall(request as Parameters<typeof wrapModelCall>[0], handler as Parameters<typeof wrapModelCall>[1]);
-}
+import { invokeWrapModelCall } from '#testing/middleware-testing.utils.js';
 
 /**
  * Type for content block with cache control.
@@ -37,10 +24,10 @@ describe('promptCachingMiddleware', () => {
     it('should add cache_control to last HumanMessage with string content', async () => {
       const messages: BaseMessage[] = [new HumanMessage('What is the capital of France?')];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(promptCachingMiddleware, { messages }, handler);
 
       expect(handler).toHaveBeenCalledTimes(1);
-      const [request] = handler.mock.calls[0] as [TestRequest];
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
 
       const lastMessage = request.messages[0] as HumanMessage;
       expect(lastMessage.content).toBeInstanceOf(Array);
@@ -65,9 +52,9 @@ describe('promptCachingMiddleware', () => {
 
       const messages: BaseMessage[] = [humanMessage];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(promptCachingMiddleware, { messages }, handler);
 
-      const [request] = handler.mock.calls[0] as [TestRequest];
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
       const lastMessage = request.messages[0] as HumanMessage;
       const contentBlocks = lastMessage.content as ContentBlockWithCacheControl[];
 
@@ -91,9 +78,9 @@ describe('promptCachingMiddleware', () => {
     it('should add cache_control to last AIMessage with string content', async () => {
       const messages: BaseMessage[] = [new HumanMessage('Hello'), new AIMessage('Hi there!')];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(promptCachingMiddleware, { messages }, handler);
 
-      const [request] = handler.mock.calls[0] as [TestRequest];
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
 
       // First message (HumanMessage) should NOT be modified
       const firstMessage = request.messages[0] as HumanMessage;
@@ -121,9 +108,9 @@ describe('promptCachingMiddleware', () => {
 
       const messages: BaseMessage[] = [aiMessage];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(promptCachingMiddleware, { messages }, handler);
 
-      const [request] = handler.mock.calls[0] as [TestRequest];
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
       const lastMessage = request.messages[0] as AIMessage;
       const contentBlocks = lastMessage.content as ContentBlockWithCacheControl[];
 
@@ -151,9 +138,9 @@ describe('promptCachingMiddleware', () => {
 
       const messages: BaseMessage[] = [aiMessage];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(promptCachingMiddleware, { messages }, handler);
 
-      const [request] = handler.mock.calls[0] as [TestRequest];
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
       const lastMessage = request.messages[0] as AIMessage;
       const contentBlocks = lastMessage.content as ContentBlockWithCacheControl[];
 
@@ -189,9 +176,9 @@ describe('promptCachingMiddleware', () => {
         }),
       ];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(promptCachingMiddleware, { messages }, handler);
 
-      const [request] = handler.mock.calls[0] as [TestRequest];
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
 
       // First two messages should NOT be modified
       const humanMessage = request.messages[0] as HumanMessage;
@@ -226,9 +213,9 @@ describe('promptCachingMiddleware', () => {
 
       const messages: BaseMessage[] = [toolMessage];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(promptCachingMiddleware, { messages }, handler);
 
-      const [request] = handler.mock.calls[0] as [TestRequest];
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
       const lastMessage = request.messages[0] as ToolMessage;
       const contentBlocks = lastMessage.content as ContentBlockWithCacheControl[];
 
@@ -245,6 +232,169 @@ describe('promptCachingMiddleware', () => {
         // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
         cache_control: { type: 'ephemeral' },
       });
+    });
+  });
+
+  describe('AIMessage metadata preservation', () => {
+    it('should preserve response_metadata when caching AIMessage with string content', async () => {
+      /* eslint-disable @typescript-eslint/naming-convention -- LangChain API uses snake_case */
+      const responseMetadata = { model: 'claude-3-5-sonnet-20241022', stop_reason: 'end_turn' };
+      const messages: BaseMessage[] = [
+        new AIMessage({
+          content: 'Response text',
+          response_metadata: responseMetadata,
+        }),
+      ];
+      /* eslint-enable @typescript-eslint/naming-convention -- Re-enable naming convention after LangChain metadata */
+
+      await invokeWrapModelCall(promptCachingMiddleware, { messages }, handler);
+
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
+      const result = request.messages[0] as AIMessage;
+      expect(result.response_metadata).toEqual(responseMetadata);
+    });
+
+    it('should preserve usage_metadata when caching AIMessage with string content', async () => {
+      /* eslint-disable @typescript-eslint/naming-convention -- LangChain API uses snake_case */
+      const usageMetadata = {
+        input_tokens: 100,
+        output_tokens: 50,
+        total_tokens: 150,
+        input_token_details: { cache_read: 80, cache_creation: 20 },
+      };
+      const messages: BaseMessage[] = [
+        new AIMessage({
+          content: 'Response text',
+          usage_metadata: usageMetadata,
+        }),
+      ];
+      /* eslint-enable @typescript-eslint/naming-convention -- Re-enable naming convention after LangChain metadata */
+
+      await invokeWrapModelCall(promptCachingMiddleware, { messages }, handler);
+
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
+      const result = request.messages[0] as AIMessage;
+      expect(result.usage_metadata).toEqual(usageMetadata);
+    });
+
+    it('should preserve response_metadata when caching AIMessage with array content', async () => {
+      /* eslint-disable @typescript-eslint/naming-convention -- LangChain API uses snake_case */
+      const responseMetadata = { model: 'gpt-4o-2024-05-13' };
+      const messages: BaseMessage[] = [
+        new AIMessage({
+          content: [{ type: 'text', text: 'Array response' }],
+          response_metadata: responseMetadata,
+        }),
+      ];
+      /* eslint-enable @typescript-eslint/naming-convention -- Re-enable naming convention after LangChain metadata */
+
+      await invokeWrapModelCall(promptCachingMiddleware, { messages }, handler);
+
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
+      const result = request.messages[0] as AIMessage;
+      expect(result.response_metadata).toEqual(responseMetadata);
+    });
+
+    it('should preserve usage_metadata when caching AIMessage with array content', async () => {
+      /* eslint-disable @typescript-eslint/naming-convention -- LangChain API uses snake_case */
+      const usageMetadata = {
+        input_tokens: 200,
+        output_tokens: 100,
+        total_tokens: 300,
+        input_token_details: { cache_read: 0, cache_creation: 0 },
+      };
+      const messages: BaseMessage[] = [
+        new AIMessage({
+          content: [{ type: 'text', text: 'Array response' }],
+          usage_metadata: usageMetadata,
+        }),
+      ];
+      /* eslint-enable @typescript-eslint/naming-convention -- Re-enable naming convention after LangChain metadata */
+
+      await invokeWrapModelCall(promptCachingMiddleware, { messages }, handler);
+
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
+      const result = request.messages[0] as AIMessage;
+      expect(result.usage_metadata).toEqual(usageMetadata);
+    });
+
+    it('should preserve response_metadata when caching AIMessage with only tool_calls', async () => {
+      /* eslint-disable @typescript-eslint/naming-convention -- LangChain API uses snake_case */
+      const responseMetadata = { model: 'claude-3-5-sonnet-20241022' };
+      const messages: BaseMessage[] = [
+        new AIMessage({
+          content: '',
+          tool_calls: [{ id: 'call_1', name: 'read_file', args: {} }],
+          response_metadata: responseMetadata,
+        }),
+      ];
+      /* eslint-enable @typescript-eslint/naming-convention -- Re-enable naming convention after LangChain metadata */
+
+      await invokeWrapModelCall(promptCachingMiddleware, { messages }, handler);
+
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
+      const result = request.messages[0] as AIMessage;
+      expect(result.response_metadata).toEqual(responseMetadata);
+    });
+
+    it('should preserve usage_metadata when caching AIMessage with only tool_calls', async () => {
+      /* eslint-disable @typescript-eslint/naming-convention -- LangChain API uses snake_case */
+      const usageMetadata = {
+        input_tokens: 50,
+        output_tokens: 25,
+        total_tokens: 75,
+        input_token_details: { cache_read: 0, cache_creation: 0 },
+      };
+      const messages: BaseMessage[] = [
+        new AIMessage({
+          content: '',
+          tool_calls: [{ id: 'call_1', name: 'read_file', args: {} }],
+          usage_metadata: usageMetadata,
+        }),
+      ];
+      /* eslint-enable @typescript-eslint/naming-convention -- Re-enable naming convention after LangChain metadata */
+
+      await invokeWrapModelCall(promptCachingMiddleware, { messages }, handler);
+
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
+      const result = request.messages[0] as AIMessage;
+      expect(result.usage_metadata).toEqual(usageMetadata);
+    });
+
+    it('should preserve all metadata properties together when caching AIMessage', async () => {
+      /* eslint-disable @typescript-eslint/naming-convention -- LangChain API uses snake_case */
+      const toolCalls = [{ id: 'call_1', name: 'read_file', args: {} }];
+      const responseMetadata = { model: 'claude-3-5-sonnet-20241022', stop_reason: 'end_turn' };
+      const usageMetadata = {
+        input_tokens: 300,
+        output_tokens: 150,
+        total_tokens: 450,
+        input_token_details: { cache_read: 200, cache_creation: 100 },
+      };
+      const additionalKwargs = { custom: 'value' };
+
+      const messages: BaseMessage[] = [
+        new AIMessage({
+          content: 'Full metadata test',
+          id: 'msg_cache_full',
+          tool_calls: toolCalls,
+          additional_kwargs: additionalKwargs,
+          response_metadata: responseMetadata,
+          usage_metadata: usageMetadata,
+        }),
+      ];
+      /* eslint-enable @typescript-eslint/naming-convention -- Re-enable naming convention after LangChain metadata */
+
+      await invokeWrapModelCall(promptCachingMiddleware, { messages }, handler);
+
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
+      const result = request.messages[0] as AIMessage;
+
+      expect(result.id).toBe('msg_cache_full');
+      expect(result.tool_calls).toEqual(toolCalls);
+      expect(result.additional_kwargs).toEqual(additionalKwargs);
+      expect(result.response_metadata).toEqual(responseMetadata);
+      expect(result.usage_metadata).toEqual(usageMetadata);
     });
   });
 
@@ -275,9 +425,9 @@ describe('promptCachingMiddleware', () => {
         }),
       ];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(promptCachingMiddleware, { messages }, handler);
 
-      const [request] = handler.mock.calls[0] as [TestRequest];
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
 
       // Only the LAST message should have cache_control
       // First 3 messages should NOT be modified
@@ -296,18 +446,18 @@ describe('promptCachingMiddleware', () => {
     it('should handle empty messages array', async () => {
       const messages: BaseMessage[] = [];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(promptCachingMiddleware, { messages }, handler);
 
-      const [request] = handler.mock.calls[0] as [TestRequest];
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
       expect(request.messages).toHaveLength(0);
     });
 
     it('should handle single message of any type', async () => {
       const messages: BaseMessage[] = [new HumanMessage('Hello!')];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(promptCachingMiddleware, { messages }, handler);
 
-      const [request] = handler.mock.calls[0] as [TestRequest];
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
       const message = request.messages[0] as HumanMessage;
       const contentBlocks = message.content as ContentBlockWithCacheControl[];
 
@@ -326,7 +476,7 @@ describe('promptCachingMiddleware', () => {
       const messages: BaseMessage[] = [originalMessage];
       const originalMessagesLength = messages.length;
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(promptCachingMiddleware, { messages }, handler);
 
       // Original array should not be mutated
       expect(messages).toHaveLength(originalMessagesLength);
@@ -337,9 +487,9 @@ describe('promptCachingMiddleware', () => {
     it('should create a new array with modified messages', async () => {
       const messages: BaseMessage[] = [new HumanMessage('Test')];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(promptCachingMiddleware, { messages }, handler);
 
-      const [request] = handler.mock.calls[0] as [TestRequest];
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
 
       // The returned array should be different from the input
       expect(request.messages).not.toBe(messages);
@@ -354,7 +504,7 @@ describe('promptCachingMiddleware', () => {
       });
       const messages: BaseMessage[] = [originalToolMessage];
 
-      await callWrapModelCall({ messages }, handler);
+      await invokeWrapModelCall(promptCachingMiddleware, { messages }, handler);
 
       // Original message should still have string content
       expect(originalToolMessage.content).toBe('{"result": "success"}');

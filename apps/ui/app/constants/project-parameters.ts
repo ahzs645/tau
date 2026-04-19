@@ -58,7 +58,17 @@ export const countTerms = [
  * Terms that indicate a parameter represents an angle
  * These parameters should display an angle icon
  */
-export const angleTerms = ['angle', 'rotation', 'radians', 'degrees', 'tilt', 'orientation', 'slope', 'twist'];
+export const angleTerms = [
+  'angle',
+  'angular',
+  'rotation',
+  'radians',
+  'degrees',
+  'tilt',
+  'orientation',
+  'slope',
+  'twist',
+];
 
 /**
  * Terms that indicate a parameter is unitless (dimensionless values)

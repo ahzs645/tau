@@ -10,7 +10,7 @@ import { createRuntimeClient } from '@taucad/runtime';
 import { createInProcessTransport } from '@taucad/runtime/transport';
 import { replicad } from '@taucad/runtime/kernels';
 import { esbuild } from '@taucad/runtime/bundler';
-import type { MeasurementTestRequirement } from '@taucad/chat';
+import type { MeasurementTestRequirement } from '@taucad/testing';
 import { GeometryAnalysisService } from '#api/analysis/geometry-analysis.service.js';
 
 // =============================================================================
@@ -65,6 +65,10 @@ function meshCountRequirement(id: string, description: string, count: number): M
   return { id, description, type: 'measurement', check: 'meshCount', expected: { count } };
 }
 
+function connectedComponentsRequirement(id: string, description: string, count: number): MeasurementTestRequirement {
+  return { id, description, type: 'measurement', check: 'connectedComponents', expected: { count } };
+}
+
 function vertexCountRequirement(options: {
   id: string;
   description: string;
@@ -102,6 +106,24 @@ const multiShapeCode = `
   }
 `;
 
+const compoundCode = `
+  import { makeBaseBox } from 'replicad';
+  export default function main() {
+    const box1 = makeBaseBox(10, 10, 10);
+    const box2 = makeBaseBox(10, 10, 10).translate(50, 0, 0);
+    return box1.fuse(box2);
+  }
+`;
+
+const fusedCode = `
+  import { makeBaseBox, makeSphere } from 'replicad';
+  export default function main() {
+    const box = makeBaseBox(20, 20, 20);
+    const sphere = makeSphere(12);
+    return box.fuse(sphere);
+  }
+`;
+
 // =============================================================================
 // Tests
 // =============================================================================
@@ -114,6 +136,8 @@ describe('GeometryAnalysisService', () => {
   let boxGlb: Uint8Array<ArrayBuffer>;
   let sphereGlb: Uint8Array<ArrayBuffer>;
   let multiShapeGlb: Uint8Array<ArrayBuffer>;
+  let compoundGlb: Uint8Array<ArrayBuffer>;
+  let fusedGlb: Uint8Array<ArrayBuffer>;
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
@@ -124,10 +148,12 @@ describe('GeometryAnalysisService', () => {
     module = moduleRef;
 
     // Render all GLBs in parallel
-    [boxGlb, sphereGlb, multiShapeGlb] = await Promise.all([
+    [boxGlb, sphereGlb, multiShapeGlb, compoundGlb, fusedGlb] = await Promise.all([
       renderGlb('box.ts', boxCode),
       renderGlb('sphere.ts', sphereCode),
       renderGlb('multi.ts', multiShapeCode),
+      renderGlb('compound.ts', compoundCode),
+      renderGlb('fused.ts', fusedCode),
     ]);
   }, 120_000);
 
@@ -327,6 +353,73 @@ describe('GeometryAnalysisService', () => {
         description: 'missing count',
         type: 'measurement',
         check: 'meshCount',
+        expected: {},
+      };
+
+      const result = await service.runMeasurementTests(boxGlb, [requirement]);
+
+      expect(result.passed).toBe(0);
+      expect(result.failures[0]!.reason).toContain('Missing expected.count');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Connected components checks
+  // ---------------------------------------------------------------------------
+
+  describe('connected components', () => {
+    it('should report 1 component for a single solid box', async () => {
+      const result = await service.runMeasurementTests(boxGlb, [
+        connectedComponentsRequirement('cc1', 'single solid', 1),
+      ]);
+
+      expect(result.passed).toBe(1);
+      expect(result.failures).toHaveLength(0);
+    });
+
+    it('should report 2 components for a compound of non-overlapping boxes', async () => {
+      const result = await service.runMeasurementTests(compoundGlb, [
+        connectedComponentsRequirement('cc1', 'two disconnected pieces', 2),
+      ]);
+
+      expect(result.passed).toBe(1);
+    });
+
+    it('should fail when expecting 1 component but compound has 2', async () => {
+      const result = await service.runMeasurementTests(compoundGlb, [
+        connectedComponentsRequirement('cc1', 'single solid', 1),
+      ]);
+
+      expect(result.passed).toBe(0);
+      expect(result.failures[0]!.reason).toContain('Connected components');
+      expect(result.failures[0]!.reason).toContain('expected 1');
+      expect(result.failures[0]!.reason).toContain('got 2');
+      expect(result.failures[0]!.suggestion).toContain('disconnected pieces');
+    });
+
+    it('should report 1 component for overlapping fused shapes', async () => {
+      const result = await service.runMeasurementTests(fusedGlb, [
+        connectedComponentsRequirement('cc1', 'fused solid', 1),
+      ]);
+
+      expect(result.passed).toBe(1);
+    });
+
+    it('should count components across multiple meshes', async () => {
+      // MultiShapeGlb has 2 separate shapes (box + sphere) as 2 meshes, each is 1 component
+      const result = await service.runMeasurementTests(multiShapeGlb, [
+        connectedComponentsRequirement('cc1', 'two separate shapes', 2),
+      ]);
+
+      expect(result.passed).toBe(1);
+    });
+
+    it('should fail when expected.count is missing', async () => {
+      const requirement: MeasurementTestRequirement = {
+        id: 'cc1',
+        description: 'missing count',
+        type: 'measurement',
+        check: 'connectedComponents',
         expected: {},
       };
 

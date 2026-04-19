@@ -1,12 +1,15 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useSelector } from '@xstate/react';
+import type { PaneviewApi } from 'dockview-react';
 import { useCookie } from '#hooks/use-cookie.js';
 import { cookieName } from '#constants/cookie.constants.js';
 import type { chatTabs } from '#routes/projects_.$id/chat-interface-nav.js';
 import { useViewContext } from '#routes/projects_.$id/chat-interface-view-context.js';
 import { useProject } from '#hooks/use-project.js';
+import { useIsMobile } from '#hooks/use-mobile.js';
 import type { PanelId } from '#constants/editor.constants.js';
 import { allotmentPanelOrder, mobileDrawerSnapPoints } from '#constants/editor.constants.js';
+import type { PaneviewPanelState, PanelState } from '#types/editor.types.js';
 
 export type ChatInterfaceState = {
   // Loading state
@@ -28,8 +31,6 @@ export type ChatInterfaceState = {
   setIsKernelOpen: (value: boolean | ((previous: boolean) => boolean)) => void;
   isConverterOpen: boolean;
   setIsConverterOpen: (value: boolean | ((previous: boolean) => boolean)) => void;
-  isGitOpen: boolean;
-  setIsGitOpen: (value: boolean | ((previous: boolean) => boolean)) => void;
   isDetailsOpen: boolean;
   setIsDetailsOpen: (value: boolean | ((previous: boolean) => boolean)) => void;
 
@@ -63,6 +64,7 @@ export type ChatInterfaceState = {
 export function useChatInterfaceState(): ChatInterfaceState {
   const viewContext = useViewContext();
   const { editorRef } = useProject();
+  const isMobile = useIsMobile();
 
   // Check if editor state has been loaded from IndexedDB
   // This is used to defer Allotment rendering until saved panel sizes are available
@@ -109,6 +111,16 @@ export function useChatInterfaceState(): ChatInterfaceState {
   const [drawerOpen, setDrawerOpen] = useState<boolean>(activeTab !== 'viewer');
   // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- Vaul API
   const [snapPoint, setSnapPoint] = useState<number | string | null>(mobileDrawerSnapPoints[0]!);
+
+  // Opening a non-viewer tab via editor machine (e.g. header Export) must raise the drawer; tab changes
+  // from the bottom nav already sync drawer via handleTabChange.
+  useEffect(() => {
+    if (!isMobile || activeTab === 'viewer' || drawerOpen) {
+      return;
+    }
+
+    setDrawerOpen(true);
+  }, [isMobile, activeTab, drawerOpen]);
 
   const handleDrawerChange = useCallback(
     (value: boolean): void => {
@@ -164,6 +176,73 @@ export function useChatInterfaceState(): ChatInterfaceState {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Paneview persistence hook
+// ---------------------------------------------------------------------------
+
+type PaneviewKey = 'kernelPaneview' | 'parametersPaneview';
+
+/**
+ * Reads the saved paneview panel state for a given panel ID, returning
+ * `isExpanded` and `size` for use as initial `addPanel` options.
+ */
+export function getInitialPanelOptions(
+  saved: Record<string, PaneviewPanelState>,
+  panelId: string,
+  defaults: { isExpanded: boolean; size?: number },
+): { isExpanded: boolean; size?: number } {
+  const entry = saved[panelId];
+  if (!entry) {
+    return defaults;
+  }
+  return { isExpanded: entry.isExpanded, size: entry.size };
+}
+
+/**
+ * Persists PaneviewReact panel states (expansion + size) through the editor
+ * machine, following the same pattern as Allotment panel sizes.
+ *
+ * Call `connectApi` inside the PaneviewReact `onReady` callback so the hook
+ * can subscribe to `onDidLayoutChange` and snapshot panel state on every change.
+ */
+export function usePaneviewPersistence(paneviewKey: PaneviewKey): {
+  savedState: Record<string, PaneviewPanelState>;
+  connectApi: (api: PaneviewApi) => void;
+} {
+  const { editorRef } = useProject();
+  const savedState = useSelector(editorRef, (state) => state.context.panelState[paneviewKey]);
+  const [api, setApi] = useState<PaneviewApi | undefined>(undefined);
+
+  const connectApi = useCallback((paneviewApi: PaneviewApi) => {
+    setApi(paneviewApi);
+  }, []);
+
+  useEffect(() => {
+    if (!api) {
+      return;
+    }
+
+    const disposable = api.onDidLayoutChange(() => {
+      const record: Record<string, PaneviewPanelState> = {};
+      for (const panel of api.panels) {
+        record[panel.id] = {
+          isExpanded: panel.api.isExpanded,
+          size: panel.height,
+        };
+      }
+
+      const panelState: Partial<PanelState> = { [paneviewKey]: record };
+      editorRef.send({ type: 'setPanelState', panelState });
+    });
+
+    return () => {
+      disposable.dispose();
+    };
+  }, [editorRef, paneviewKey, api]);
+
+  return { savedState, connectApi };
+}
+
 type UsePanePositionObserverOptions = {
   isChatOpen: boolean;
   isFileTreeOpen: boolean;
@@ -172,7 +251,6 @@ type UsePanePositionObserverOptions = {
   isExplorerOpen: boolean;
   isKernelOpen: boolean;
   isConverterOpen: boolean;
-  isGitOpen: boolean;
   isDetailsOpen: boolean;
 };
 
@@ -193,7 +271,6 @@ export function usePanePositionObserver(
     isExplorerOpen,
     isKernelOpen,
     isConverterOpen,
-    isGitOpen,
     isDetailsOpen,
   } = options;
 
@@ -271,7 +348,6 @@ export function usePanePositionObserver(
     isExplorerOpen,
     isKernelOpen,
     isConverterOpen,
-    isGitOpen,
     isDetailsOpen,
   ]);
 }

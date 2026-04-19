@@ -29,7 +29,8 @@
   "author": "Richard Fontein",
   "license": "MIT",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./formats": "./src/formats.ts"
   },
   "publishConfig": {
     "access": "public",
@@ -43,6 +44,16 @@
           "types": "./dist/esm/index.d.ts",
           "default": "./dist/esm/index.js"
         }
+      },
+      "./formats": {
+        "require": {
+          "types": "./dist/cjs/formats.d.cts",
+          "default": "./dist/cjs/formats.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/formats.d.ts",
+          "default": "./dist/esm/formats.js"
+        }
       }
     }
   },
@@ -54,7 +65,7 @@
     "@gltf-transform/extensions": "catalog:",
     "@gltf-transform/functions": "catalog:",
     "@taucad/types": "workspace:*",
-    "assimpjs": "https://codeload.github.com/taucad/assimpjs/tar.gz/877787b",
+    "assimpjs": "file:../../tarballs/taucad-assimpjs-0.0.17.tgz",
     "draco3dgltf": "^1.5.7",
     "occt-import-js": "^0.0.23",
     "rhino3dm": "^8.17.0"

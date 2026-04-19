@@ -22,6 +22,8 @@ export const rpcName = {
   captureObservations: 'capture_observations',
   fetchGeometry: 'fetch_geometry',
   captureScreenshot: 'capture_screenshot',
+  appendFile: 'append_file',
+  editFile: 'edit_file',
 } as const satisfies Record<string, string>;
 
 /**

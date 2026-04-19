@@ -1,10 +1,8 @@
 import { createContext, useCallback, useContext, useMemo } from 'react';
 import type { IDockviewHeaderActionsProps, DockviewGroupPanel, DockviewApi } from 'dockview-react';
 import { Plus } from 'lucide-react';
-import type { FileEntry } from '@taucad/types';
 import { FileSelector } from '#components/files/file-selector.js';
 import { DockviewPaneAction } from '#components/panes/dockview-pane-action.js';
-import { useFileTreeMap } from '#hooks/use-file-tree.js';
 
 /**
  * Callback invoked when a file is selected from the open-file action.
@@ -38,18 +36,7 @@ export function DockviewOpenFileAction({
   group,
 }: IDockviewHeaderActionsProps): React.JSX.Element {
   const onFileSelect = useContext(DockviewFileActionContext);
-  const fileTree = useFileTreeMap();
 
-  const files = useMemo(
-    () =>
-      [...fileTree.values()]
-        .filter((entry: FileEntry) => entry.type === 'file')
-        .map((entry: FileEntry) => ({ path: entry.path, size: entry.size })),
-    [fileTree],
-  );
-
-  // Determine the initial directory from the active panel's file path.
-  // Editor panels store the path as `filePath`, viewer panels as `entryFile`.
   const initialPath = useMemo(() => {
     if (!activePanel) {
       return undefined;
@@ -76,7 +63,6 @@ export function DockviewOpenFileAction({
 
   return (
     <FileSelector
-      files={files}
       selectedFile={undefined}
       initialPath={initialPath}
       placeholder='Open file...'

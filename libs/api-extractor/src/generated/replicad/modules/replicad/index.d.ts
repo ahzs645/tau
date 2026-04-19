@@ -4,11 +4,13 @@
 import { Adaptor3d_Surface } from 'replicad-opencascadejs';
 import { Bnd_Box } from 'replicad-opencascadejs';
 import { Bnd_Box2d } from 'replicad-opencascadejs';
+import type { Box } from 'manifold-3d';
 import { BRepAdaptor_CompCurve } from 'replicad-opencascadejs';
 import { BRepAdaptor_Curve } from 'replicad-opencascadejs';
 import type { BRepExtrema_DistShapeShape } from 'replicad-opencascadejs';
 import { Geom2d_Curve } from 'replicad-opencascadejs';
 import { Geom2dAdaptor_Curve } from 'replicad-opencascadejs';
+import { Geom_Surface } from 'replicad-opencascadejs';
 import { gp_Ax1 } from 'replicad-opencascadejs';
 import { gp_Ax2 } from 'replicad-opencascadejs';
 import { gp_Ax2d } from 'replicad-opencascadejs';
@@ -19,9 +21,10 @@ import { gp_Trsf } from 'replicad-opencascadejs';
 import { gp_Vec } from 'replicad-opencascadejs';
 import { gp_XYZ } from 'replicad-opencascadejs';
 import type { GProp_GProps } from 'replicad-opencascadejs';
-import { Handle_Geom2d_Curve } from 'replicad-opencascadejs';
-import { Handle_Geom_Surface } from 'replicad-opencascadejs';
 import { Law_Function } from 'replicad-opencascadejs';
+import type { Manifold } from 'manifold-3d';
+import type { ManifoldToplevel } from 'manifold-3d';
+import type { Mesh } from 'manifold-3d';
 import { OpenCascadeInstance } from 'replicad-opencascadejs';
 import { default as opentype_2 } from 'opentype.js';
 import type { TDocStd_Document } from 'replicad-opencascadejs';
@@ -35,6 +38,7 @@ import { TopoDS_Shell } from 'replicad-opencascadejs';
 import { TopoDS_Solid } from 'replicad-opencascadejs';
 import { TopoDS_Vertex } from 'replicad-opencascadejs';
 import { TopoDS_Wire } from 'replicad-opencascadejs';
+import type { Vec3 } from 'manifold-3d';
 
 export declare abstract class _1DShape<Type extends TopoDS_Shape> extends Shape<Type> {
     protected abstract _geomAdaptor(): CurveLike;
@@ -49,33 +53,40 @@ export declare abstract class _1DShape<Type extends TopoDS_Shape> extends Shape<
     get period(): number;
     get geomType(): CurveType;
     get length(): number;
-    get orientation(): "forward" | "backward";
+    get orientation(): 'forward' | 'backward';
     flipOrientation(): Type;
 }
 
-export declare class _3DShape<Type extends TopoDS_Shape> extends Shape<Type> {
+export declare class _3DShape<Type extends TopoDS_Shape> extends Shape<Type> implements Shape3DLike<Shape3D, ShapeMesh, AnyShape, {
+    tolerance?: number;
+    angularTolerance?: number;
+}> {
     /**
      * Builds a new shape out of the two, fused, shapes
      *
      * @category Shape Modifications
      */
-    fuse(other: Shape3D, { optimisation, }?: {
-        optimisation?: "none" | "commonFace" | "sameFace";
+    fuse(other: Shape3D, { optimisation }?: {
+        optimisation?: 'none' | 'commonFace' | 'sameFace';
     }): Shape3D;
     /**
      * Builds a new shape by removing the tool tape from this shape
      *
      * @category Shape Modifications
      */
-    cut(tool: Shape3D, { optimisation, }?: {
-        optimisation?: "none" | "commonFace" | "sameFace";
+    cut(tool: Shape3D, { optimisation }?: {
+        optimisation?: 'none' | 'commonFace' | 'sameFace';
     }): Shape3D;
     /**
      * Builds a new shape by intersecting this shape and another
      *
      * @category Shape Modifications
      */
-    intersect(tool: AnyShape): AnyShape;
+    intersect(tool: AnyShape): Shape3D;
+    meshShape(options?: {
+        tolerance?: number;
+        angularTolerance?: number;
+    }): MeshShape;
     /**
      * Hollows out the current shape, removing the faces found by the `filter` and
      * keeping a border of `thickness`
@@ -300,6 +311,7 @@ export declare class BlueprintSketcher extends BaseSketcher2d implements Generic
 
 export declare class BoundingBox extends WrappingObj<Bnd_Box> {
     constructor(wrapped?: Bnd_Box);
+    static fromBounds(min: Point, max: Point): BoundingBox;
     get repr(): string;
     get bounds(): [SimplePoint, SimplePoint];
     get center(): SimplePoint;
@@ -508,9 +520,9 @@ export declare class Curve extends WrappingObj<CurveLike> {
     get period(): number;
 }
 
-export declare class Curve2D extends WrappingObj<Handle_Geom2d_Curve> {
+export declare class Curve2D extends WrappingObj<Geom2d_Curve> {
     _boundingBox: null | BoundingBox2d;
-    constructor(handle: Handle_Geom2d_Curve);
+    constructor(handle: Geom2d_Curve);
     get boundingBox(): BoundingBox2d;
     get repr(): string;
     get innerCurve(): Geom2d_Curve;
@@ -905,7 +917,7 @@ export declare interface ExtrusionProfile {
 export declare class Face extends Shape<TopoDS_Face> {
     protected _geomAdaptor(): Adaptor3d_Surface;
     get surface(): Surface;
-    get orientation(): "forward" | "backward";
+    get orientation(): 'forward' | 'backward';
     flipOrientation(): Face;
     get geomType(): SurfaceType;
     get UVBounds(): {
@@ -978,7 +990,7 @@ export declare class FaceSketcher extends BaseSketcher2d implements GenericSketc
     constructor(face: Face, origin?: Point2D);
     protected _convertToUV([x, y]: Point2D): Point2D;
     protected _convertFromUV([u, v]: Point2D): Point2D;
-    _adaptSurface(): Handle_Geom_Surface;
+    _adaptSurface(): Geom_Surface;
     /**
      * @ignore
      */
@@ -1436,6 +1448,8 @@ declare type GenericTopo = TopoDS_Vertex | TopoDS_Face | TopoDS_Shape | TopoDS_E
 
 export declare const getFont: (fontFamily?: string) => opentype_2.Font;
 
+export declare const getManifold: () => ManifoldToplevel;
+
 export declare const getOC: () => OpenCascadeInstance;
 
 export declare function getSingleFace(f: SingleFace, shape: AnyShape): Face;
@@ -1591,6 +1605,14 @@ export declare const makeThreePointArc: (v1: Point, v2: Point, v3: Point) => Edg
 
 export declare const makeVertex: (point: Point) => Vertex;
 
+export declare type ManifoldBox = Box;
+
+export declare type ManifoldInstance = Manifold;
+
+export declare type ManifoldMesh = Mesh;
+
+export declare type ManifoldVec3 = Vec3;
+
 /**
  * Measure the area of a shape
  *
@@ -1624,6 +1646,45 @@ export declare function measureShapeVolumeProperties(shape: Shape3D): VolumePhys
  * @category Measure
  */
 export declare function measureVolume(shape: Shape3D): number;
+
+export declare class MeshShape extends WrappingObj<ManifoldInstance> implements Shape3DLike<MeshShape, MeshShapeMesh, MeshShape, number> {
+    constructor(manifoldShape: ManifoldInstance);
+    clone(): MeshShape;
+    fuse(other: MeshShape, _options?: any): MeshShape;
+    cut(other: MeshShape, _options?: any): MeshShape;
+    intersect(other: MeshShape): MeshShape;
+    translate(xDist: number, yDist: number, zDist: number): MeshShape;
+    translate(vector: Point): MeshShape;
+    translateX(distance: number): MeshShape;
+    translateY(distance: number): MeshShape;
+    translateZ(distance: number): MeshShape;
+    rotate(angle: number, position?: Point, direction?: Point): MeshShape;
+    rotate(vector: Point): MeshShape;
+    scale(scale: number, center?: Point): MeshShape;
+    mirror(inputPlane?: Plane | PlaneName | Point, origin?: Point): MeshShape;
+    simplify(tolerance?: number): MeshShape;
+    refine(n: number): MeshShape;
+    refineToLength(length: number): MeshShape;
+    refineToTolerance(tolerance: number): MeshShape;
+    hull(): MeshShape;
+    asOriginal(): MeshShape;
+    mesh(): MeshShapeMesh;
+    get boundingBox(): BoundingBox;
+    volume(): number;
+    surfaceArea(): number;
+    numTri(): number;
+    numVert(): number;
+    numEdge(): number;
+    get isEmpty(): boolean;
+}
+
+export declare interface MeshShapeMesh {
+    vertices: number[];
+    triangles: number[];
+    normals: number[];
+    vertProperties: number[];
+    numProp: number;
+}
 
 export declare function mirror(shape: TopoDS_Shape, inputPlane?: Plane | PlaneName | Point, origin?: Point): TopoDS_Shape;
 
@@ -1744,6 +1805,8 @@ export declare function scale(shape: TopoDS_Shape, center: Point, scale: number)
 
 export declare type ScaleMode = "original" | "bounds" | "native";
 
+export declare const setManifold: (manifold: ManifoldToplevel) => void;
+
 export declare const setOC: (oc: OpenCascadeInstance) => void;
 
 export declare class Shape<Type extends TopoDS_Shape> extends WrappingObj<Type> {
@@ -1852,7 +1915,7 @@ export declare class Shape<Type extends TopoDS_Shape> extends WrappingObj<Type> 
      *
      * @category Shape Export
      */
-    blobSTL({ tolerance, angularTolerance, binary, }?: {
+    blobSTL({ tolerance, angularTolerance, binary }?: {
         tolerance?: number | undefined;
         angularTolerance?: number | undefined;
         binary?: boolean | undefined;
@@ -1863,11 +1926,32 @@ export declare type Shape2D = Blueprint | Blueprints | CompoundBlueprint | null;
 
 export declare type Shape3D = Shell | Solid | CompSolid | Compound;
 
-declare type ShapeConfig = {
+export declare interface Shape3DLike<ShapeT, MeshT, OtherT = ShapeT, MeshOptionsT = any> {
+    fuse(other: ShapeT, options?: any): ShapeT;
+    cut(other: ShapeT, options?: any): ShapeT;
+    intersect(other: OtherT): ShapeT;
+    translate(xDist: number, yDist: number, zDist: number): ShapeT;
+    translate(vector: Point): ShapeT;
+    translateX(distance: number): ShapeT;
+    translateY(distance: number): ShapeT;
+    translateZ(distance: number): ShapeT;
+    rotate(angle: number, position?: Point, direction?: Point): ShapeT;
+    scale(scale: number, center?: Point): ShapeT;
+    mirror(inputPlane?: Plane | PlaneName | Point, origin?: Point): ShapeT;
+    mesh(options?: MeshOptionsT): MeshT;
+    readonly boundingBox: BoundingBox;
+}
+
+export declare type ShapeConfig = {
     shape: AnyShape;
     color?: string;
     alpha?: number;
     name?: string;
+    /** PBR metallic factor — threaded to GLTF only (not STEP; see note above). */
+    metallic?: number;
+    /** PBR roughness factor — threaded to GLTF only (not STEP; see note above). */
+    roughness?: number;
+    density?: number;
 };
 
 export declare interface ShapeMesh {
@@ -2200,7 +2284,7 @@ declare type StandardPlane = "XY" | "XZ" | "YZ";
 
 declare type StartSplineTangent = number | Point2D;
 
-export declare type SupportedUnit = "M" | "CM" | "MM" | "INCH" | "FT" | "m" | "mm" | "cm" | "inch" | "ft";
+export declare type SupportedUnit = 'M' | 'CM' | 'MM' | 'INCH' | 'FT' | 'm' | 'mm' | 'cm' | 'inch' | 'ft';
 
 export declare const supportExtrude: (wire: Wire, center: Point, normal: Point, support: TopoDS_Shape) => Shape3D;
 
@@ -2212,7 +2296,7 @@ export declare class SurfacePhysicalProperties extends PhysicalProperties {
     get area(): number;
 }
 
-export declare type SurfaceType = "PLANE" | "CYLINDRE" | "CONE" | "SPHERE" | "TORUS" | "BEZIER_SURFACE" | "BSPLINE_SURFACE" | "REVOLUTION_SURFACE" | "EXTRUSION_SURFACE" | "OFFSET_SURFACE" | "OTHER_SURFACE";
+export declare type SurfaceType = 'PLANE' | 'CYLINDRE' | 'CONE' | 'SPHERE' | 'TORUS' | 'BEZIER_SURFACE' | 'BSPLINE_SURFACE' | 'REVOLUTION_SURFACE' | 'EXTRUSION_SURFACE' | 'OFFSET_SURFACE' | 'OTHER_SURFACE';
 
 /**
  * Creates the `Blueprints` of a text, in a defined font size and a font familiy
@@ -2225,7 +2309,7 @@ export declare function textBlueprints(text: string, { startX, startY, fontSize,
     fontFamily?: string | undefined;
 }): Blueprints;
 
-declare type TopoEntity = "vertex" | "edge" | "wire" | "face" | "shell" | "solid" | "solidCompound" | "compound" | "shape";
+declare type TopoEntity = 'vertex' | 'edge' | 'wire' | 'face' | 'shell' | 'solid' | 'solidCompound' | 'compound' | 'shape';
 
 export declare class Transformation extends WrappingObj<gp_Trsf> {
     constructor(transform?: gp_Trsf);
@@ -2295,7 +2379,7 @@ export declare function weldShellsAndFaces(facesOrShells: Array<Face | Shell>, i
 
 export declare class Wire extends _1DShape<TopoDS_Wire> {
     protected _geomAdaptor(): BRepAdaptor_CompCurve;
-    offset2D(offset: number, kind?: "arc" | "intersection" | "tangent"): Wire;
+    offset2D(offset: number, kind?: 'arc' | 'intersection' | 'tangent'): Wire;
 }
 
 export declare class WrappingObj<Type extends Deletable> {

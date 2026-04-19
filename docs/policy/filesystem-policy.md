@@ -3,10 +3,12 @@ title: 'Filesystem Policy'
 description: 'Standards for filesystem access, data transfer, caching, concurrency, and watcher architecture in the Tau application. Covers ZenFS, bridge RPC, and kernel/UI watch planes.'
 status: active
 created: '2026-03-05'
-updated: '2026-03-09'
+updated: '2026-03-27'
 related:
   - docs/research/filesystem-architecture.md
   - docs/research/fs-capabilities.md
+  - docs/research/large-repo-import-performance.md
+  - docs/research/vscode-fs-performance.md
 ---
 
 # Filesystem Policy
@@ -38,7 +40,7 @@ Main Thread                       File Manager Worker              Kernel Worker
      │    (MessagePort)                  │              (MessagePort)        │
      │   readFile, writeFile, stat       │   readFile, readFiles, stat   │
      │   readShallowDirectory            │   exists, readdir             │
-     │   reconfigure, readBackendFileTree│   writeFile (cache only)      │
+     │   mount, readBackendFileTree      │   writeFile (cache only)      │
      │                                   │                               │
      │                                   │         ZenFS                 │
      │                                   │   IndexedDB / WebAccess /    │
@@ -47,7 +49,7 @@ Main Thread                       File Manager Worker              Kernel Worker
 
 All filesystem I/O runs on the file manager worker. The main thread and kernel workers access it exclusively via MessagePort RPC using the **same bridge mechanism** (`createFileSystemBridge` → `MessageChannel` → `createBridgeProxy`). The only difference is the TypeScript type used for the proxy:
 
-- **Main thread**: `createBridgeProxy<FileManagerProtocol>` — full API including worker management (`reconfigure`, `setDirectoryHandle`), diagnostics (`readBackendFileTree`), and higher-level operations (`copyDirectory`, `getZippedDirectory`)
+- **Main thread**: `createBridgeProxy<FileManagerProtocol>` — full API including worker management (`mount`, `unmount`, `setDirectoryHandle`), diagnostics (`readBackendFileTree`), and higher-level operations (`copyDirectory`, `getZippedDirectory`)
 - **Kernel worker**: `createBridgeProxy<RuntimeFileSystemBase>` — 11 base primitives only (`readFile`, `writeFile`, `stat`, `readdir`, `exists`, etc.)
 
 This is the Interface Segregation Principle (ISP): kernels receive a narrow API surface matching their needs. Both proxies talk to the same worker, same `fileManager` object, same bridge server. No thread may import or use ZenFS directly outside the worker.
@@ -72,6 +74,8 @@ Deep reads are permitted only for: `getDirectoryContents` (ZIP/copy), startup-on
 
 When listing a single directory, `readdir` + parallel `Promise.all(stat(...))` is preferred over sequential `stat` calls. Recursive traversal (when needed) should be sequential at the directory level to avoid overwhelming the storage backend.
 
+**ZenFS performance context:** Each `StoreFS.stat()` creates a new `WrappedTransaction` → `IndexedDBStore.transaction()` → `db.transaction('tau-fs', 'readwrite')`. Even though `IndexedDBStore.cache` serves data from memory (populated during mount preload), IDB transaction creation has fixed overhead (~0.1–0.3ms each). Parallelizing stat calls within a directory allows the browser to pipeline IDB transactions instead of sequentially awaiting each one.
+
 ```typescript
 // CORRECT: Parallel stat for one directory
 const entries = await fs.readdir(path);
@@ -79,9 +83,11 @@ const stats = await Promise.all(entries.map((e) => fs.stat(joinPath(path, e))));
 
 // INCORRECT: Sequential stat for one directory
 for (const entry of entries) {
-  const stat = await fs.stat(joinPath(path, entry)); // Unnecessary serialization
+  const stat = await fs.stat(joinPath(path, entry)); // Sequential IDB transactions
 }
 ```
+
+**For metadata-only queries (tree display, file counts):** Prefer the in-memory tree at the `FileService` layer over ZenFS stat calls. See Rule 33.
 
 ### Rule 3: Read caching expectations
 
@@ -105,9 +111,22 @@ Source files are typically <100 KB. Binary CAD files (STL, STEP, glTF) can be 10
 
 ### Rule 5: Write serialization scope
 
-All mutating operations (`writeFile`, `writeFiles`, `mkdir`, `rename`, `unlink`, `rmdir`) must be serialized through the global write queue to prevent ZenFS directory listing corruption (zen-fs/core#256).
+All mutating operations (`writeFile`, `writeFiles`, `mkdir`, `rename`, `unlink`, `rmdir`) must be serialized to prevent ZenFS directory listing corruption (zen-fs/core#256).
 
-Future optimization: per-directory serialization when ZenFS fixes the TOCTOU bug. Until then, global serialization is required.
+**Verified TOCTOU scope (from ZenFS source audit):** The race condition is in `StoreFS.commitNew` — a read-modify-write on the parent directory's listing blob (`Record<string, number>` in JSON). Two concurrent `commitNew` calls to the **same parent directory** can lose entries. Writes to files in **different parent directories** are independent and safe to parallelize.
+
+**Current implementation:** Global `WriteCoordinator` — a single FIFO promise chain (`_writeQueue: Promise<void>`). This is overly conservative.
+
+**Target implementation:** Per-parent-directory serialization. Serialize writes that share a parent directory; parallelize writes to different parent directories. This is safe today — it does not require a ZenFS fix.
+
+```typescript
+// CORRECT: Per-parent-directory serialization (safe now)
+const parentDir = path.substring(0, path.lastIndexOf('/')) || '/';
+await resourceQueue.queueFor(parentDir, () => provider.writeFile(path, data));
+
+// INCORRECT: Global serialization (unnecessarily blocks independent writes)
+await globalQueue.serialized(() => provider.writeFile(path, data));
+```
 
 ### Rule 6: Transfer, don't clone
 
@@ -173,7 +192,7 @@ Standalone `FileSystem` instances (created via `resolveMountConfig`) are used to
 
 **Safety**: Standalone read-only instances are safe to use alongside the main mounted FS. ZenFS's TOCTOU bug (zen-fs/core#256) only affects concurrent _writers_ — the read-modify-write cycle on directory listings. A standalone instance that only calls `readdir` + `stat` cannot trigger this corruption. The main risk is stale reads (file deleted between `readdir` and `stat`), which is handled by try/catch around individual stat calls.
 
-**Reuse**: Cache the standalone `FileSystem` instance per backend in the worker. Each `resolveMountConfig` call creates a new `IDBDatabase` connection and preloads the entire store into memory. Creating one per call is wasteful.
+**Reuse**: Cache the standalone `FileSystem` instance per backend in the worker. Each `resolveMountConfig` call creates a new `IDBDatabase` connection via `indexedDB.open('tau-fs')` and then **preloads every key-value pair** (`getAllKeys()` + `get(id)` for each key) into `IndexedDBStore.cache`. For a project with 6265 files, this means ~12,530 `get` operations on mount (inode + data per file). Creating one per call is extremely wasteful — each instance pays this full preload cost. (Set `disableAsyncCache: true` in options to skip preload, but then every read hits IDB.)
 
 ```typescript
 // CORRECT: Cache and reuse
@@ -190,7 +209,7 @@ const fs = await resolveMountConfig({ backend: IndexedDB, storeName }); // New c
 
 ### Rule 13: WebAccess handle lifecycle
 
-`FileSystemDirectoryHandle` is structured-clonable (not transferable). It must be explicitly passed from the main thread to the worker via `setDirectoryHandle` before `reconfigure('webaccess')`. Permission must be re-requested from a user gesture after page reload.
+`FileSystemDirectoryHandle` is structured-clonable (not transferable). It must be explicitly passed from the main thread to the worker via `setDirectoryHandle` before mounting a webaccess backend. Permission must be re-requested from a user gesture after page reload.
 
 ## RPC Pattern Rules
 
@@ -362,7 +381,7 @@ On port disconnect/dispose:
 - decrement shared ref-counted subscriptions
 - clear pending delivery queues for that port
 
-On backend reconfigure:
+On backend mount change:
 
 - invalidate watch subscriptions tied to old backend
 - emit backend reset events so clients can resync
@@ -399,7 +418,7 @@ The next implementation plan is incomplete unless all of the following are expli
 6. **Incremental dependency watch set diffing**: avoid full resubscribe churn.
 7. **Incremental tree patching**: no mutation-triggered full recursive tree scans.
 8. **Self-churn exclusion**: explicit ignore patterns for generated cache paths.
-9. **Lifecycle cleanup guarantees**: disconnect/reconfigure cleanup of watches and queues.
+9. **Lifecycle cleanup guarantees**: disconnect/unmount cleanup of watches and queues.
 10. **Performance acceptance gates**: concrete watch latency/throughput/flood tests.
 
 If one of these items is absent, the plan is not ready for "best-in-class" watcher implementation.
@@ -428,6 +447,62 @@ When a bridge proxy is disposed, the main-thread port (`port2`) is closed. The w
 
 All bridge calls have a 30-second timeout. Long-running operations (large file writes, directory copies) should not exceed this. If they might, the operation should be split into chunks or the timeout extended per-call.
 
+## ZenFS Performance Rules
+
+### Rule 33: In-memory file tree for metadata queries
+
+`FileService.getDirectoryStat` and related metadata queries must use an in-memory file tree at the `FileService` layer, not ZenFS stat/readdir calls. ZenFS's `StoreFS.stat()` and `StoreFS.readdir()` each create a new browser `IDBTransaction` via `IndexedDBStore.transaction()` → `db.transaction('tau-fs', 'readwrite')`, even though data is served from the in-memory `IndexedDBStore.cache`. IDB transaction creation has fixed overhead (~0.1–0.3ms each); for 6265 files this accumulates to ~2 seconds.
+
+The in-memory tree should be built from ZenFS's internal `StoreFS._ids: Map<string, number>` (path → inode ID map, always in memory) or by reading all directory listing blobs on init. It should be maintained incrementally on writes (not rebuilt).
+
+```typescript
+// CORRECT: Metadata from in-memory tree (O(1))
+const stat = inMemoryTree.stat(path);
+const entries = inMemoryTree.readdir(path);
+
+// INCORRECT: Metadata via ZenFS (1 IDB transaction per call)
+const stat = await provider.stat(path);
+const entries = await provider.readdir(path);
+```
+
+### Rule 34: Bulk import bypasses ZenFS
+
+For bulk import operations (GitHub import, ZIP upload), bypass ZenFS and write directly to the `tau-fs` IndexedDB object store in a single `IDBTransaction`. ZenFS produces ~5 IDB transactions per `writeFile` call (exists + stat + createFile/commitNew + write + touch), totaling ~25,000–30,000 IDB transactions for 6265 files. A single batched IDB transaction with ~12,530 `put` requests (inode + data per file, plus directory listings) reduces this by 4 orders of magnitude.
+
+After bulk write, invalidate `StoreFS._ids` and `IndexedDBStore.cache` (or remount the filesystem). The in-memory file tree (Rule 33) must also be rebuilt.
+
+### Rule 35: ZenFS mount preload awareness
+
+ZenFS's `@zenfs/dom` IndexedDB backend **eagerly preloads all data** on mount: `getAllKeys()` + `get(id)` for every key in the store, populating `IndexedDBStore.cache`. For a project with 6265 files, this reads ~12,530 key-value pairs (inode + data per file). This preload is the reason subsequent reads are fast (cache hit), but it also means:
+
+- Mount time scales linearly with total stored data
+- Creating standalone `FileSystem` instances (Rule 12) repeats this preload
+- The `disableAsyncCache` option skips preload but makes every read hit IDB
+
+Design decisions should account for this preload cost when considering multiple mounts, backend switches, or standalone instances.
+
+## ZenFS Internals Reference
+
+Quick reference for ZenFS internals that affect performance decisions. Verified from `repos/zenfs/core` and `repos/zenfs/dom` source.
+
+| Aspect                                 | Fact                                                                                                                                                   |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **IDB key format**                     | Numeric inode IDs (not path strings). `put(data, id)` / `get(id)`                                                                                      |
+| **IDB value format**                   | `Uint8Array` — packed binary inodes and raw file content                                                                                               |
+| **Directory listings**                 | UTF-8 JSON blob at key `inode.data`: `Record<string, number>` (filename → child inode ID)                                                              |
+| **In-memory path map**                 | `StoreFS._ids: Map<string, number>` (path → inode ID). Always in memory.                                                                               |
+| **In-memory data cache**               | `IndexedDBStore.cache: Map<number, Uint8Array>`. Populated during mount preload.                                                                       |
+| **`findInode` (with id tables)**       | `_ids.get(path)` → `tx.get(ino)` — 1 store read. O(1) path resolution.                                                                                 |
+| **`findInode` (no id tables)**         | Recursive walk from `/` via parent dir listings. Multiple store reads.                                                                                 |
+| **IDB tx per `stat()`**                | 1 new `db.transaction('tau-fs', 'readwrite')` + 1 `get` for inode bytes                                                                                |
+| **IDB tx per `readdir()`**             | 1 new `IDBTransaction` + 2 `get` ops (inode + directory listing blob)                                                                                  |
+| **IDB tx per `writeFile()`**           | ~5 transactions: exists/stat(1) + stat(1) + commitNew(1, 3 puts) + write(1) + touch(1)                                                                 |
+| **`WrappedTransaction.commit()`**      | Only sets `done = true`. Does NOT flush to IDB. Persistence is via IDB request completion.                                                             |
+| **`IndexedDBTransaction` sync bridge** | `setSync`/`removeSync` queue async IDB ops on a chained `asyncDone` promise                                                                            |
+| **Mount preload**                      | `getAllKeys()` + `get(id)` for every key → fills `IndexedDBStore.cache`                                                                                |
+| **DB/store name**                      | Both database and object store are named `storeName` param (Tau: `'tau-fs'`)                                                                           |
+| **TOCTOU scope**                       | `commitNew` read-modify-writes parent directory listing. Concurrent writes to same parent dir can lose entries. Different parent dirs are independent. |
+
 ## Performance Budget
 
 | Operation                           | Target              | Current                     |
@@ -440,3 +515,5 @@ All bridge calls have a 30-second timeout. Long-running operations (large file w
 | Watch event -> kernel invalidate    | < 25ms p95          | N/A (not implemented)       |
 | Watch event -> UI tree patch        | < 75ms p95          | N/A (not implemented)       |
 | Sustained edit burst (100 events)   | 0 silent drops      | N/A (not implemented)       |
+| Bulk import (6265 files)            | < 5s                | ~143s (sequential ZenFS)    |
+| `getDirectoryStat` (6265 files)     | < 10ms (in-memory)  | ~2s (sequential IDB tx)     |

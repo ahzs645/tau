@@ -54,8 +54,8 @@ export class HeadlessChatRpcService extends ChatRpcService {
   }
 
   // No-ops for connection management (no Socket.IO in headless mode)
-  public override registerConnection(): void {
-    // No-op
+  public override registerConnection(): boolean {
+    return true;
   }
 
   public override unregisterConnection(): void {

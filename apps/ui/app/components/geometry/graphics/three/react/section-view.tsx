@@ -8,6 +8,11 @@ import * as React from 'react';
 import * as THREE from 'three';
 import { useFrame, useThree } from '@react-three/fiber';
 import { Plane } from '@react-three/drei';
+import {
+  collectAndClipMeshes,
+  enforceMaterialClipping,
+} from '#components/geometry/graphics/three/react/section-view.utils.js';
+import { sceneTag, sceneTagData } from '#components/geometry/graphics/three/utils/scene-tags.js';
 
 // Reusable temporaries for per-frame plane positioning (avoids GC pressure)
 const _defaultNormal = new THREE.Vector3(0, 0, 1);
@@ -44,105 +49,50 @@ export const SectionView = React.forwardRef<{ update: () => void }, CutterProper
     const previousMeshIdsRef = React.useRef<string>('');
 
     const update: () => void = React.useCallback(() => {
-      // Early return if cutting is disabled
+      const rootGroup = rootGroupRef.current;
+
       if (!enableSection) {
         setMeshList([]);
 
-        // Remove clipping planes from all objects when cutting is disabled
-        const rootGroup = rootGroupRef.current;
-
         if (rootGroup) {
-          rootGroup.traverse((child: THREE.Object3D) => {
-            const isMeshOrLine = child instanceof THREE.Mesh || child instanceof THREE.LineSegments;
-
-            if (isMeshOrLine && child.material) {
-              if (Array.isArray(child.material)) {
-                for (const mat of child.material) {
-                  mat.clippingPlanes = [];
-                }
-              } else {
-                child.material.clippingPlanes = [];
-              }
-            }
+          collectAndClipMeshes(rootGroup, {
+            enableSection: false,
+            enableLines,
+            enableMesh,
+            plane,
           });
         }
 
         return;
       }
 
-      const meshChildren: THREE.Mesh[] = [];
-      const rootGroup = rootGroupRef.current;
+      if (!rootGroup) {
+        return;
+      }
 
-      if (rootGroup) {
-        rootGroup.traverse((child: THREE.Object3D) => {
-          // Handle LineSegments - apply/clear clipping but no caps
-          if (child instanceof THREE.LineSegments) {
-            if (child.material) {
-              if (Array.isArray(child.material)) {
-                for (const mat of child.material) {
-                  mat.clippingPlanes = enableLines ? [plane] : [];
-                }
-              } else {
-                child.material.clippingPlanes = enableLines ? [plane] : [];
-              }
-            }
+      const meshChildren = collectAndClipMeshes(rootGroup, {
+        enableSection: true,
+        enableLines,
+        enableMesh,
+        plane,
+      });
 
-            return; // Lines don't get caps, so return early
-          }
+      // Only update the mesh list and recompute bounds when the set of meshes
+      // actually changed (not on every plane drag). The mesh list is stable during
+      // plane manipulation -- only clipping plane values on materials change.
+      const meshIdsKey = meshChildren.map((m) => m.id).join(',');
+      if (meshIdsKey !== previousMeshIdsRef.current) {
+        previousMeshIdsRef.current = meshIdsKey;
 
-          // Clear clipping planes from meshes if not enabled
-          if (child instanceof THREE.Mesh && !enableMesh) {
-            if (child.material) {
-              if (Array.isArray(child.material)) {
-                for (const mat of child.material) {
-                  mat.clippingPlanes = [];
-                }
-              } else {
-                child.material.clippingPlanes = [];
-              }
-            }
+        const bbox = new THREE.Box3();
+        bbox.setFromObject(rootGroup);
 
-            return;
-          }
+        const boxSize = new THREE.Vector3();
+        bbox.getSize(boxSize);
 
-          if (child instanceof THREE.Mesh && child.material && child.geometry) {
-            child.matrixAutoUpdate = false;
-
-            // Add clipping planes to each mesh and make sure that the material is
-            // double sided. This is needed to create PlaneStencilGroup for the mesh.
-            if (Array.isArray(child.material)) {
-              for (const mat of child.material) {
-                mat.clippingPlanes = [plane];
-                mat.side = THREE.DoubleSide;
-              }
-            } else {
-              child.material.clippingPlanes = [plane];
-              child.material.side = THREE.DoubleSide;
-            }
-
-            // Three.js mesh types are complex and involve generics
-            // oxlint-disable-next-line @typescript-eslint/no-unsafe-argument -- Mesh type generics are complex
-            meshChildren.push(child);
-          }
-        });
-
-        // Only update the mesh list and recompute bounds when the set of meshes
-        // actually changed (not on every plane drag). The mesh list is stable during
-        // plane manipulation -- only clipping plane values on materials change.
-        const meshIdsKey = meshChildren.map((m) => m.id).join(',');
-        if (meshIdsKey !== previousMeshIdsRef.current) {
-          previousMeshIdsRef.current = meshIdsKey;
-
-          const bbox = new THREE.Box3();
-          bbox.setFromObject(rootGroup);
-
-          const boxSize = new THREE.Vector3();
-          bbox.getSize(boxSize);
-
-          const calculatedPlaneSize = 2 * boxSize.length();
-          setPlaneSize(calculatedPlaneSize);
-          setMeshList(meshChildren);
-        }
+        const calculatedPlaneSize = 2 * boxSize.length();
+        setPlaneSize(calculatedPlaneSize);
+        setMeshList(meshChildren);
       }
       // Depend on primitive values instead of plane object to avoid infinite loop
       // oxlint-disable-next-line react-hooks/exhaustive-deps -- plane.normal and plane.constant are extracted below
@@ -157,96 +107,98 @@ export const SectionView = React.forwardRef<{ update: () => void }, CutterProper
       cappingMaterial,
     ]);
 
-    const planeListRef = React.useRef<Map<number, React.ComponentRef<typeof Plane>> | undefined>(undefined);
-
-    // See
-    // https://react.dev/learn/manipulating-the-dom-with-refs#how-to-manage-a-list-of-refs-using-a-ref-callback
-    function getPlaneListMap(): Map<number, React.ComponentRef<typeof Plane>> {
-      planeListRef.current ??= new Map<number, React.ComponentRef<typeof Plane>>();
-      return planeListRef.current;
-    }
+    const cappingPlaneReferencesRef = React.useRef<Map<number, React.ComponentRef<typeof Plane>>>(new Map());
 
     useFrame(() => {
-      if (enableSection && planeListRef.current && rootGroupRef.current) {
-        // Reuse module-scoped temporaries to avoid per-frame allocations
+      if (!enableSection) {
+        return;
+      }
+
+      if (rootGroupRef.current && cappingPlaneReferencesRef.current.size > 0) {
         _defaultNormal.set(0, 0, 1);
         _quaternion.setFromUnitVectors(_defaultNormal, plane.normal);
 
-        for (const [, planeObject] of planeListRef.current) {
-          // Get a point on the clipping plane in world space
-          plane.coplanarPoint(_worldPosition);
+        plane.coplanarPoint(_worldPosition);
 
-          // Offset slightly opposite to the plane normal to prevent z-fighting with the mesh surface
-          const zFightingOffset = 0.1;
-          _worldPosition.addScaledVector(plane.normal, -zFightingOffset);
+        const zFightingOffset = 0.1;
+        _worldPosition.addScaledVector(plane.normal, -zFightingOffset);
 
-          // Transform the world position to the local space of the root group
-          // This accounts for any centering or translation applied to the parent group
+        for (const planeObject of cappingPlaneReferencesRef.current.values()) {
           rootGroupRef.current.worldToLocal(planeObject.position.copy(_worldPosition));
-
-          // Orient the plane to match the clipping plane's normal
           planeObject.quaternion.copy(_quaternion);
         }
       }
+
+      enforceMaterialClipping(meshList, plane, enableMesh);
     });
 
     React.useEffect(() => {
       update();
     }, [update, children]);
 
-    // Enable/disable local clipping and stencil based on cutting state
+    // While section view is active, enable local clipping in the renderer. Individual
+    // materials only clip when they have non-empty clippingPlanes — safe even when
+    // mesh surfaces are not clipped (enableMesh false) but stencil caps still need it.
     React.useEffect(() => {
-      const shouldEnable = enableSection && (meshList.length > 0 || enableLines);
-      gl.localClippingEnabled = shouldEnable;
+      gl.localClippingEnabled = enableSection;
 
       return () => {
         gl.localClippingEnabled = false;
       };
-    }, [gl, enableSection, enableLines, meshList.length]);
+    }, [gl, enableSection]);
 
     React.useImperativeHandle(ref, () => ({ update }), [update]);
 
     return (
       <group>
         <group ref={rootGroupRef}>{children}</group>
-        {enableSection && meshList.length > 0 ? (
-          <>
-            <group>
-              {meshList.map((meshObject, index) => (
-                <PlaneStencilGroup key={meshObject.id} meshObj={meshObject} plane={plane} renderOrder={index + 1} />
-              ))}
-            </group>
-            {meshList.map((meshObject, index) => (
-              <group key={meshObject.id}>
+        {enableSection && meshList.length > 0
+          ? meshList.map((meshObject, index) => (
+              <React.Fragment key={meshObject.id}>
+                <PlaneStencilGroup meshObj={meshObject} plane={plane} renderOrder={index + 1} />
                 <Plane
                   ref={(node) => {
-                    const map = getPlaneListMap();
+                    const references = cappingPlaneReferencesRef.current;
                     if (node) {
-                      map.set(index, node);
+                      references.set(index, node);
                     } else {
-                      map.delete(index);
+                      references.delete(index);
                     }
                   }}
                   args={[planeSize, planeSize]}
-                  renderOrder={index + 1}
+                  renderOrder={index + 1.1}
                   material={cappingMaterial}
+                  userData={sceneTagData(sceneTag.sectionViewHelper)}
                   onAfterRender={(renderer) => {
                     renderer.clearStencil();
                   }}
                 />
-              </group>
-            ))}
-          </>
-        ) : null}
+              </React.Fragment>
+            ))
+          : null}
       </group>
     );
   },
 );
 
 function PlaneStencilGroup({ meshObj, plane, renderOrder }: PlaneStencilGroupProperties): React.JSX.Element {
+  const groupRef = React.useRef<THREE.Group>(null);
+
+  React.useEffect(() => {
+    meshObj.updateMatrix();
+    meshObj.updateMatrixWorld();
+    const group = groupRef.current;
+    if (!group) {
+      return;
+    }
+    meshObj.getWorldPosition(group.position);
+    meshObj.getWorldScale(group.scale);
+    meshObj.getWorldQuaternion(group.quaternion);
+  }, [meshObj]);
+
   return (
-    <group>
-      <mesh geometry={meshObj.geometry} renderOrder={renderOrder}>
+    <group ref={groupRef}>
+      <mesh geometry={meshObj.geometry} renderOrder={renderOrder} userData={sceneTagData(sceneTag.sectionViewHelper)}>
         <meshBasicMaterial
           stencilWrite
           depthWrite={false}
@@ -260,7 +212,7 @@ function PlaneStencilGroup({ meshObj, plane, renderOrder }: PlaneStencilGroupPro
           stencilZPass={THREE.DecrementWrapStencilOp}
         />
       </mesh>
-      <mesh geometry={meshObj.geometry} renderOrder={renderOrder}>
+      <mesh geometry={meshObj.geometry} renderOrder={renderOrder} userData={sceneTagData(sceneTag.sectionViewHelper)}>
         <meshBasicMaterial
           stencilWrite
           depthWrite={false}

@@ -39,5 +39,5 @@ type ChatToolDescriptionProps = {
  * <ChatToolDescription>for 2.5s</ChatToolDescription>
  */
 export function ChatToolDescription({ children, className }: ChatToolDescriptionProps): React.JSX.Element {
-  return <span className={cn('min-w-0 truncate text-foreground/50', className)}>{children}</span>;
+  return <span className={cn('min-w-0 font-normal truncate text-foreground/50', className)}>{children}</span>;
 }

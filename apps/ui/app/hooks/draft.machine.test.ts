@@ -6,6 +6,8 @@ import type { ChatMode } from '@taucad/chat/constants';
 import { draftMachine } from '#hooks/draft.machine.js';
 import { fromSafeAsync } from '#lib/xstate.lib.js';
 
+type PersistDraftInput = { chatId: string; draft: MyUIMessage };
+
 function createTestActor(options?: { chatId?: string }) {
   const machine = draftMachine.provide({
     actors: {
@@ -20,6 +22,47 @@ function createTestActor(options?: { chatId?: string }) {
 
   return createActor(machine, {
     input: { chatId: options?.chatId },
+  });
+}
+
+function createTestActorWithPersistCapture(options: { chatId: string; onPersist: (input: PersistDraftInput) => void }) {
+  const machine = draftMachine.provide({
+    actors: {
+      persistDraftActor: fromSafeAsync(async ({ input }: { input: PersistDraftInput }) => {
+        options.onPersist(input);
+      }),
+      // oxlint-disable-next-line no-empty-function -- mock stub
+      persistEditDraftActor: fromSafeAsync(async () => {}),
+      // oxlint-disable-next-line no-empty-function -- mock stub
+      clearMessageEditActor: fromSafeAsync(async () => {}),
+    },
+  });
+
+  return createActor(machine, {
+    input: { chatId: options.chatId },
+  });
+}
+
+function createTestActorWithDeferredPersist(options: {
+  chatId: string;
+  onPersist: (input: PersistDraftInput, resolve: () => void) => void;
+}) {
+  const machine = draftMachine.provide({
+    actors: {
+      persistDraftActor: fromSafeAsync(async ({ input }: { input: PersistDraftInput }) => {
+        await new Promise<void>((resolve) => {
+          options.onPersist(input, resolve);
+        });
+      }),
+      // oxlint-disable-next-line no-empty-function -- mock stub
+      persistEditDraftActor: fromSafeAsync(async () => {}),
+      // oxlint-disable-next-line no-empty-function -- mock stub
+      clearMessageEditActor: fromSafeAsync(async () => {}),
+    },
+  });
+
+  return createActor(machine, {
+    input: { chatId: options.chatId },
   });
 }
 
@@ -156,6 +199,119 @@ describe('draftMachine', () => {
         expect(actor.getSnapshot().matches({ inputSaving: 'idle' })).toBe(true);
         actor.stop();
       } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  // ===========================================================================
+  // clearDraft persistence across inputSaving states
+  // ===========================================================================
+  describe('clearDraft persistence', () => {
+    it('should persist empty draft when clearDraft fires during idle state', async () => {
+      const persistInputs: Array<{ chatId: string; draft: MyUIMessage }> = [];
+      const actor = createTestActorWithPersistCapture({
+        chatId: 'chat_abc',
+        onPersist(input) {
+          persistInputs.push(input);
+        },
+      });
+      actor.start();
+
+      actor.send({ type: 'setDraftText', text: 'will be cleared' });
+      // ClearDraft resets context immediately; we want inputSaving in idle first
+      // so advance past the debounce to let the initial save complete
+      vi.useFakeTimers();
+      try {
+        await vi.advanceTimersByTimeAsync(200);
+        await waitFor(actor, (s) => s.matches({ inputSaving: 'idle' }));
+
+        persistInputs.length = 0;
+        actor.send({ type: 'clearDraft' });
+
+        expect(actor.getSnapshot().matches({ inputSaving: 'persisting' })).toBe(true);
+
+        await waitFor(actor, (s) => s.matches({ inputSaving: 'idle' }));
+        expect(persistInputs).toHaveLength(1);
+        expect(persistInputs[0]!.draft.parts).toEqual([]);
+      } finally {
+        actor.stop();
+        vi.useRealTimers();
+      }
+    });
+
+    it('should persist empty draft when clearDraft fires during pending state', async () => {
+      const persistInputs: Array<{ chatId: string; draft: MyUIMessage }> = [];
+      const actor = createTestActorWithPersistCapture({
+        chatId: 'chat_abc',
+        onPersist(input) {
+          persistInputs.push(input);
+        },
+      });
+      actor.start();
+      vi.useFakeTimers();
+      try {
+        actor.send({ type: 'setDraftText', text: 'typed before send' });
+        expect(actor.getSnapshot().matches({ inputSaving: 'pending' })).toBe(true);
+
+        // Fire clearDraft while still in pending (before 200ms debounce)
+        actor.send({ type: 'clearDraft' });
+
+        // Should bypass debounce and go straight to persisting
+        expect(actor.getSnapshot().matches({ inputSaving: 'persisting' })).toBe(true);
+        expect(actor.getSnapshot().context.draftText).toBe('');
+
+        await waitFor(actor, (s) => s.matches({ inputSaving: 'idle' }));
+        expect(persistInputs).toHaveLength(1);
+        expect(persistInputs[0]!.draft.parts).toEqual([]);
+      } finally {
+        actor.stop();
+        vi.useRealTimers();
+      }
+    });
+
+    it('should re-persist empty draft when clearDraft fires during persisting state', async () => {
+      const persistInputs: Array<{ chatId: string; draft: MyUIMessage }> = [];
+      let resolveCurrentPersist: (() => void) | undefined;
+
+      const actor = createTestActorWithDeferredPersist({
+        chatId: 'chat_abc',
+        onPersist(input, resolve) {
+          persistInputs.push(input);
+          resolveCurrentPersist = resolve;
+        },
+      });
+      actor.start();
+      vi.useFakeTimers();
+      try {
+        actor.send({ type: 'setDraftText', text: 'stale content' });
+        expect(actor.getSnapshot().matches({ inputSaving: 'pending' })).toBe(true);
+
+        // Let debounce fire so inputSaving enters persisting with stale text
+        await vi.advanceTimersByTimeAsync(200);
+        expect(actor.getSnapshot().matches({ inputSaving: 'persisting' })).toBe(true);
+        expect(persistInputs).toHaveLength(1);
+
+        const staleParts = persistInputs[0]!.draft.parts;
+        const staleTextPart = staleParts.find((p) => p.type === 'text');
+        expect(staleTextPart?.text).toBe('stale content');
+
+        // Fire clearDraft while the stale persist is in-flight
+        actor.send({ type: 'clearDraft' });
+
+        // Should re-enter persisting, cancelling the stale invoke
+        expect(actor.getSnapshot().matches({ inputSaving: 'persisting' })).toBe(true);
+        expect(actor.getSnapshot().context.draftText).toBe('');
+
+        // The re-enter started a NEW persist invoke with the empty draft
+        expect(persistInputs).toHaveLength(2);
+        expect(persistInputs[1]!.draft.parts).toEqual([]);
+
+        // Resolve the new persist so the machine settles
+        resolveCurrentPersist?.();
+        await waitFor(actor, (s) => s.matches({ inputSaving: 'idle' }));
+      } finally {
+        actor.stop();
         vi.useRealTimers();
       }
     });

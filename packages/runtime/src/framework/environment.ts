@@ -31,9 +31,9 @@ export function getEnvironment(): RuntimeEnvironment {
     return 'node';
   }
 
-  // Browser Web Worker — `self` exists and is not `window`
-  // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- self may not exist
-  if (globalThis.self !== undefined && typeof self.postMessage === 'function' && globalThis.window === undefined) {
+  // Browser Web Worker — detect via WorkerGlobalScope (works even if `window` is polyfilled)
+  // @ts-expect-error - WorkerGlobalScope is not defined in the global scope
+  if (typeof WorkerGlobalScope !== 'undefined' && globalThis instanceof WorkerGlobalScope) {
     return 'worker';
   }
 

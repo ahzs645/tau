@@ -1,7 +1,14 @@
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest';
 import type { Geometry } from '@taucad/types';
-import type { RuntimeClient, RuntimeClientOptions, HashedGeometryResult, GetParametersResult } from '@taucad/runtime';
+import type {
+  RuntimeClient,
+  RuntimeClientOptions,
+  HashedGeometryResult,
+  GetParametersResult,
+  KernelPlugin,
+  TranscoderPlugin,
+} from '@taucad/runtime';
 import { createRuntimeClient, createRuntimeClientOptions } from '@taucad/runtime';
 import { createMockRuntimeClient } from '@taucad/runtime/testing';
 import { replicad } from '@taucad/runtime/kernels';
@@ -36,7 +43,10 @@ const errorResult: HashedGeometryResult = {
   issues: [{ message: 'Kernel error: invalid geometry', severity: 'error' }],
 };
 
-function createConfiguredMockClient(result: HashedGeometryResult = successResult): RuntimeClient {
+function createConfiguredMockClient(
+  result: HashedGeometryResult = successResult,
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-arguments -- intentional: documents the wide-default erasure form per R6
+): RuntimeClient<KernelPlugin[], TranscoderPlugin[]> {
   const client = createMockRuntimeClient();
   vi.mocked(client.render).mockResolvedValue(result);
   vi.mocked(createRuntimeClient).mockReturnValue(client);
@@ -469,7 +479,7 @@ describe('useRender', () => {
 
       unmount();
 
-      expect(unsubscribe).toHaveBeenCalledOnce();
+      expect(unsubscribe).toHaveBeenCalledTimes(2);
     });
 
     it('should terminate the old client and create a new one when client options change', () => {

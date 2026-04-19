@@ -17,6 +17,10 @@ groups:
       - phyz
       - bitbybit
       - bitbybit-occt
+      - brepjs
+      - zalo-opencascade.js
+      - ForgeCAD
+      - tinyusdz
   slicers:
     description: 3D printer slicer applications
     repos:
@@ -29,6 +33,12 @@ groups:
       - langchainjs
       - langgraphjs
       - ai
+      - deepagentsjs
+      - anthropic-quickstarts
+      - cline
+      - aider
+      - open-interpreter
+      - bolt.diy
   3d:
     description: 3D rendering and visualization
     repos:
@@ -61,6 +71,16 @@ groups:
       - type-fest
       - xyflow
       - shiki
+      - tsdown
+      - rolldown
+      - knip
+      - agentfs
+      - primitives
+      - trpc
+      - hono
+      - effect
+      - drizzle-orm
+      - elysia
   tscircuit:
     description: tscircuit EDA ecosystem
     repos:
@@ -335,3 +355,68 @@ repos:
   shiki:
     upstream: shikijs/shiki
     description: A beautiful yet powerful syntax highlighter
+  brepjs:
+    upstream: andymai/brepjs
+    description: Web CAD library with pluggable geometry kernel
+  zalo-opencascade.js:
+    upstream: zalo/opencascade.js
+    path: zalo-opencascade.js
+    branch: cascadestudio-v2
+    description: Zalo fork of opencascade.js — OCCT 8.0.0 RC4, emsdk 4.0.23, CascadeStudio bindings
+    shallow: true
+  tsdown:
+    upstream: rolldown/tsdown
+    description: The elegant bundler for libraries powered by Rolldown
+  rolldown:
+    upstream: rolldown/rolldown
+    description: Fast Rust bundler for JavaScript/TypeScript with Rollup-compatible API.
+  deepagentsjs:
+    upstream: langchain-ai/deepagentsjs
+    description: Deep Agents in JS
+  knip:
+    upstream: webpro-nl/knip
+    description: ✂️  Find unused files, dependencies and exports in your JavaScript and TypeScript projects. Knip it before you ship it!
+  agentfs:
+    upstream: tursodatabase/agentfs
+    description: The filesystem for agents.
+  primitives:
+    upstream: radix-ui/primitives
+    description: Radix UI primitives - accessible component library
+  ForgeCAD:
+    upstream: KoStard/ForgeCAD
+    fork: rifont/ForgeCAD
+    commit: 48853a53c84c943ee95d329524837dd2103ead83
+    description: ForgeCAD - AI-native CAD
+  trpc:
+    upstream: trpc/trpc
+    description: tRPC - end-to-end typesafe APIs
+  hono:
+    upstream: honojs/hono
+    description: Hono - TypeScript-first web framework
+  effect:
+    upstream: Effect-TS/effect
+    description: Effect - TypeScript type-level programming framework
+  drizzle-orm:
+    upstream: drizzle-team/drizzle-orm
+    description: Drizzle ORM - TypeScript SQL ORM
+  elysia:
+    upstream: elysiajs/elysia
+    description: Elysia - TypeScript web framework with full type inference
+  anthropic-quickstarts:
+    upstream: anthropics/anthropic-quickstarts
+    description: A collection of projects designed to help developers quickly get started with building deployable applications using the Claude API
+  cline:
+    upstream: cline/cline
+    description: Autonomous coding agent right in your IDE, capable of creating/editing files, executing commands, using the browser, and more with your permission every step of the way.
+  aider:
+    upstream: Aider-AI/aider
+    description: aider is AI pair programming in your terminal
+  open-interpreter:
+    upstream: OpenInterpreter/open-interpreter
+    description: A natural language interface for computers
+  bolt.diy:
+    upstream: stackblitz-labs/bolt.diy
+    description: Prompt, run, edit, and deploy full-stack web applications using any LLM you want!
+  tinyusdz:
+    upstream: lighttransport/tinyusdz
+    description: Tiny, dependency-free USDZ/USDA/USDC library written in C++14

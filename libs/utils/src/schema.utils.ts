@@ -1,4 +1,4 @@
-import type { JSONSchema7, JSONSchema7Type } from 'json-schema';
+import type { JSONSchema7, JSONSchema7Type } from '@taucad/json-schema';
 import { toJsonSchema } from '@taucad/json-schema';
 
 /**

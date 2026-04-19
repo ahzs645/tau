@@ -17,11 +17,11 @@ Example:
   "requirements": [
     { "id": "req_width", "type": "measurement", "description": "Model is 100mm wide", "check": "boundingBox", "expected": { "size": { "x": 100 } }, "tolerance": 1 },
     { "id": "req_centered", "type": "measurement", "description": "Centered at origin XY", "check": "boundingBox", "expected": { "center": { "x": 0, "y": 0 } }, "tolerance": 0.5 },
-    { "id": "req_mesh", "type": "measurement", "description": "Single solid mesh", "check": "meshCount", "expected": { "count": 1 } }
+    { "id": "req_solid", "type": "measurement", "description": "Single connected solid", "check": "connectedComponents", "expected": { "count": 1 } }
   ]
 }
 
-Checks: boundingBox (expected: { size: { x?, y?, z? }, center: { x?, y?, z? } } — specify only axes to check), meshCount, vertexCount.
+Checks: boundingBox (size/center — specify only axes to check), meshCount (number of returned shapes), connectedComponents (disconnected pieces — use for "single solid" checks), vertexCount.
 
 Use this tool BEFORE making model changes (TDD approach).`,
   schema: editTestsInputSchema,

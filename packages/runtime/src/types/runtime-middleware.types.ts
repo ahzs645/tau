@@ -13,6 +13,7 @@ import type {
   RuntimeFileSystem,
   CreateGeometryInput,
   ExportGeometryInput,
+  GetDependenciesInput,
   GetParametersInput,
 } from '#types/runtime-kernel.types.js';
 
@@ -81,6 +82,18 @@ export type KernelMiddlewareRuntime<
    * This is a 64-character hex string.
    */
   dependencyHash: string;
+  /**
+   * Register a file path for the kernel's watch set with an optional debounce tier.
+   * Paths registered here are included in the kernel's filesystem watcher.
+   * The debounce tier controls how quickly changes to this path trigger a re-render
+   * (e.g., 50ms for parameter files vs 500ms default for source code).
+   *
+   * Idempotent — re-registering the same path updates the debounce value.
+   *
+   * @param absolutePath - Absolute filesystem path to watch
+   * @param options - Optional configuration with debounceMs override
+   */
+  registerWatchPath(absolutePath: string, options?: { debounceMs?: number }): void;
 };
 
 // =============================================================================
@@ -195,3 +208,36 @@ export type WrapGetParametersHook<
   handler: GetParametersHandler,
   runtime: KernelMiddlewareRuntime<State, Options>,
 ) => Promise<GetParametersResult>;
+
+// =============================================================================
+// Middleware Dependency Hook
+// =============================================================================
+
+/**
+ * Hook for middleware to declare additional file dependencies.
+ *
+ * Called during dependency resolution (before the wrap chain executes) so that
+ * middleware-owned files contribute to the dependency hash used by cache middleware.
+ * Returns absolute file paths; the kernel worker handles reading, hashing, and
+ * including them in the dependency set.
+ *
+ * @template Options - The options type from the middleware's optionsSchema. Must be an object type.
+ * @public
+ *
+ * @example <caption>Parameter file resolver declaring a dependency</caption>
+ * ```typescript
+ * import { defineMiddleware } from '@taucad/runtime/middleware';
+ *
+ * const parameterResolver = defineMiddleware({
+ *   name: 'ParameterResolver',
+ *   getDependencies({ filePath, basePath }, options) {
+ *     const relativePath = filePath.replace(`${basePath}/`, '');
+ *     return [`${basePath}/${options.parametersDir}/${relativePath}.json`];
+ *   },
+ * });
+ * ```
+ */
+export type GetMiddlewareDependenciesHook<
+  // oxlint-disable-next-line @typescript-eslint/no-empty-object-type -- Default represents z.infer<z.object({})>
+  Options extends Record<string, unknown> = {},
+> = (input: GetDependenciesInput, options: Options) => string[] | Promise<string[]>;

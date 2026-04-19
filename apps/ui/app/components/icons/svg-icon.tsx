@@ -2,7 +2,10 @@ import spriteSvg from '#components/icons/generated/sprite.svg';
 import type { SvgIcons } from '#components/icons/generated/svg-icons.js';
 import manifoldPng from '#components/icons/raw/manifold.png?url';
 
-const iconAliases: Record<string, SvgIcons> = {};
+const iconAliases: Record<string, SvgIcons> = {
+  llama: 'meta',
+  glm: 'zai',
+};
 
 const pngIcons: Record<string, string> = {
   // Manifold has no SVG icon, this can be removed when there is one.

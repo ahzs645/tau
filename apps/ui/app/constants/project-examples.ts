@@ -1,4 +1,4 @@
-import { mockProjects, jscadExamples } from '@taucad/tau-examples';
+import { mockProjects, jscadExamples, openscadExamples } from '@taucad/tau-examples';
 import type { Project } from '@taucad/types';
 import type { KernelProvider } from '@taucad/runtime';
 import { encodeTextFile } from '#utils/filesystem.utils.js';
@@ -62,11 +62,20 @@ const openScadModels: Model[] = [
   },
 ] as const;
 
-export const openscadBuilds: ProjectsWithFiles[] = openScadModels.map((model) => {
+const openscadExampleBuilds: ProjectsWithFiles[] = openscadExamples.map((model) => {
   const mainFile = 'main.scad';
-  const language = 'openscad';
+  const language: KernelProvider = 'openscad';
   return createProject(model, mainFile, language);
 });
+
+export const openscadBuilds: ProjectsWithFiles[] = [
+  ...openScadModels.map((model) => {
+    const mainFile = 'main.scad';
+    const language = 'openscad';
+    return createProject(model, mainFile, language);
+  }),
+  ...openscadExampleBuilds,
+];
 
 const jscadBuilds: ProjectsWithFiles[] = jscadExamples.map((model) => {
   const mainFile = 'main.ts';

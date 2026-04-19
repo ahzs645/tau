@@ -20,10 +20,20 @@
 import { encode as msgpackEncode, decode as msgpackDecode } from '@msgpack/msgpack';
 import type { GeometryResponse } from '@taucad/types';
 import { z } from 'zod';
+import { LruMap } from '@taucad/utils/cache';
 import { joinPath } from '@taucad/utils/path';
 import type { RuntimeFileSystem } from '#types/runtime-kernel.types.js';
 import type { KernelSuccessResult } from '#types/runtime.types.js';
 import { defineMiddleware } from '#middleware/runtime-middleware.js';
+
+/**
+ * In-memory L1 cache for deserialized geometry results.
+ * Module-scoped so each worker gets its own cache.
+ * Smaller than parameter cache due to larger value sizes (binary GLTF).
+ * Exported for test isolation (`beforeEach` → `.clear()`).
+ * @public
+ */
+export const geometryMemoryCache = new LruMap<KernelSuccessResult<GeometryResponse[]>>({ maxEntries: 20 });
 
 /**
  * Cache entry structure for MessagePack serialization.
@@ -31,7 +41,7 @@ import { defineMiddleware } from '#middleware/runtime-middleware.js';
  * and any future additions) are persisted implicitly.
  */
 type CacheEntry = {
-  version: 2;
+  version: 3;
   result: KernelSuccessResult<GeometryResponse[]>;
 };
 
@@ -44,7 +54,7 @@ type CacheEntry = {
  * @returns Binary MessagePack-encoded data
  */
 function serializeResult(result: KernelSuccessResult<GeometryResponse[]>): Uint8Array<ArrayBuffer> {
-  const entry: CacheEntry = { version: 2, result };
+  const entry: CacheEntry = { version: 3, result };
   return msgpackEncode(entry);
 }
 
@@ -63,7 +73,7 @@ function deserializeResult(data: Uint8Array<ArrayBuffer>): KernelSuccessResult<G
     typeof decoded !== 'object' ||
     decoded === null ||
     !('version' in decoded) ||
-    decoded.version !== 2 ||
+    decoded.version !== 3 ||
     !('result' in decoded)
   ) {
     throw new Error('Invalid or incompatible cache format');
@@ -203,34 +213,39 @@ export const geometryCacheMiddleware = defineMiddleware({
 
   async wrapCreateGeometry(input, handler, { logger, filesystem, dependencyHash, options }) {
     const { basePath } = input;
-    // Use pre-computed dependency hash as cache key
     const cacheKey = dependencyHash;
-    const cachePath = getCachePath(basePath, cacheKey);
 
-    // 1. Try reading cache directly (single round-trip instead of exists + readFile)
+    // L1: In-memory cache (fast, no I/O or deserialization)
+    const memoryCached = geometryMemoryCache.get(cacheKey);
+    if (memoryCached) {
+      logger.debug(`Geometry memory cache hit for ${cacheKey}`);
+      return memoryCached;
+    }
+
+    // L2: Filesystem cache
+    const cachePath = getCachePath(basePath, cacheKey);
     try {
       const cachedData = await filesystem.readFile(cachePath);
       logger.debug(`Cache hit for ${cacheKey}`);
 
-      return deserializeResult(cachedData);
+      const result = deserializeResult(cachedData);
+      geometryMemoryCache.set(cacheKey, result);
+      return result;
     } catch (error) {
-      // Cache miss or read error - proceed to compute
       logger.debug(`Cache miss for ${cacheKey}: ${String(error)}`);
     }
 
-    // 2. Cache miss - execute downstream
-    logger.debug(`Cache miss for ${cacheKey}`);
+    // Compute: execute downstream
     const result = await handler(input);
 
-    // 4. Write to cache on the way back up (skip if webrtc geometries present)
+    // Write back to L2 and populate L1 (skip webrtc for both)
     if (result.success && result.data.length > 0) {
-      // Skip caching if any geometry is a webrtc - these cannot be cached
-      // and would result in incomplete data on cache hit
       if (hasVideoStreamGeometry(result.data)) {
         logger.debug(`Skipping cache for ${cacheKey}: contains webrtc geometry`);
       } else {
+        geometryMemoryCache.set(cacheKey, result);
+
         try {
-          // Ensure cache directory exists
           const cacheDirectory = getCacheDirectory(basePath);
           await filesystem.ensureDir(cacheDirectory);
 
@@ -238,7 +253,6 @@ export const geometryCacheMiddleware = defineMiddleware({
           await filesystem.writeFile(cachePath, serialized);
           logger.debug(`Cached ${result.data.length} geometries at ${cacheKey}`);
 
-          // Cleanup old cache entries to prevent unbounded growth
           await cleanupOldCacheEntries({
             filesystem,
             cacheDirectory,
@@ -246,7 +260,6 @@ export const geometryCacheMiddleware = defineMiddleware({
             maxEntries: options.maxEntries,
           });
         } catch (error) {
-          // Cache write error - log and continue
           logger.warn(`Cache write error for ${cacheKey}: ${String(error)}`);
         }
       }

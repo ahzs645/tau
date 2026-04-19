@@ -5,7 +5,7 @@ export function AlphaBadge(): React.JSX.Element {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
-        <Badge className='h-8 cursor-help border-purple/30 bg-purple/10 font-normal text-purple dark:text-purple/70'>
+        <Badge className='h-7 cursor-help border-purple/30 bg-purple/10 font-normal text-purple dark:text-purple/70'>
           ALPHA
         </Badge>
       </TooltipTrigger>

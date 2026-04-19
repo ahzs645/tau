@@ -11,10 +11,19 @@ import type { Document } from '@gltf-transform/core';
 import { createExportFile } from '@taucad/types/constants';
 import { asBuffer } from '@taucad/utils/file';
 import { jsonSchemaFromJson } from '@taucad/utils/schema';
-import { z } from 'zod';
 import type { KernelIssue } from '#types/runtime.types.js';
 import type { KernelRuntime } from '#types/runtime-kernel.types.js';
 import { defineKernel } from '#types/runtime-kernel.types.js';
+import { manifoldOptionsSchema, manifoldExportSchemas } from '#kernels/manifold/manifold.schemas.js';
+import {
+  KERNEL_MODULES_KEY,
+  getModuleRegistry,
+  isRecordObject,
+  extractDefaultParameters,
+  resolveToRelative,
+  enrichIssueLocation,
+} from '#kernels/kernel-module-helpers.js';
+import type { RuntimeModuleExports } from '#kernels/kernel-module-helpers.js';
 import { createKernelError, createKernelSuccess } from '#kernels/kernel-helpers.js';
 import { initManifoldWasm } from '#kernels/manifold/init-manifold.js';
 import { parseStackTrace, resolveSourcePath, deriveLocationFromFrames } from '#framework/error-enrichment.js';
@@ -23,48 +32,15 @@ import { parseStackTrace, resolveSourcePath, deriveLocationFromFrames } from '#f
 // Types
 // =============================================================================
 
-type RuntimeModuleExports = {
-  default?: (...args: unknown[]) => unknown;
-  main?: (...args: unknown[]) => unknown;
-  defaultParams?: Record<string, unknown>;
-  defaultParameters?: Record<string, unknown>;
-};
-
 type CleanupModule = {
   cleanup: () => void;
 };
 
-const kernelModulesKey = '__KERNEL_MODULES__';
 const manifoldModuleVersion = '3.3.2';
-
-// =============================================================================
-// Path helpers
-// =============================================================================
-
-function resolveToRelative(absolutePath: string, basePath: string): string {
-  const normalizedBase = basePath.endsWith('/') ? basePath.slice(0, -1) : basePath;
-  if (absolutePath.startsWith(`${normalizedBase}/`)) {
-    return absolutePath.slice(normalizedBase.length + 1);
-  }
-
-  return absolutePath;
-}
 
 // =============================================================================
 // Module registration helpers
 // =============================================================================
-
-function getModuleRegistry(): Map<string, Record<string, unknown>> {
-  let registry = (globalThis as Record<string, unknown>)[kernelModulesKey] as
-    | Map<string, Record<string, unknown>>
-    | undefined;
-  if (!registry) {
-    registry = new Map();
-    (globalThis as Record<string, unknown>)[kernelModulesKey] = registry;
-  }
-
-  return registry;
-}
 
 function generateModuleShim(name: string, exports: Record<string, unknown>): string {
   const registry = getModuleRegistry();
@@ -72,7 +48,7 @@ function generateModuleShim(name: string, exports: Record<string, unknown>): str
 
   const exportNames = Object.keys(exports).filter((key) => /^[$_a-z][\w$]*$/i.test(key) && key !== 'default');
   const namedExports = exportNames.map((key) => `export const ${key} = __mod.${key};`).join('\n');
-  return `const __mod = globalThis.${kernelModulesKey}.get('${name}');\n${namedExports}\nexport default __mod;\n`;
+  return `const __mod = globalThis.${KERNEL_MODULES_KEY}.get('${name}');\n${namedExports}\nexport default __mod;\n`;
 }
 
 async function registerManifoldModules(runtime: KernelRuntime): Promise<Record<string, unknown>> {
@@ -117,10 +93,6 @@ async function registerManifoldModules(runtime: KernelRuntime): Promise<Record<s
 // Module execution helpers
 // =============================================================================
 
-function isRecordObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
 function resolveModule(module: unknown): RuntimeModuleExports {
   const module_ = module as RuntimeModuleExports;
   if (module_.default && typeof module_.default !== 'function' && isRecordObject(module_.default)) {
@@ -133,20 +105,6 @@ function resolveModule(module: unknown): RuntimeModuleExports {
   }
 
   return module_;
-}
-
-function extractDefaultParameters(module: unknown): Record<string, unknown> {
-  if (!isRecordObject(module)) {
-    return {};
-  }
-
-  /* oxlint-disable @typescript-eslint/no-unnecessary-condition -- runtime guard for untyped module */
-  return (
-    (module['defaultParams'] as Record<string, unknown>) ??
-    (module['defaultParameters'] as Record<string, unknown>) ??
-    {}
-  );
-  /* oxlint-enable @typescript-eslint/no-unnecessary-condition -- end of runtime guard */
 }
 
 async function runMain(
@@ -233,21 +191,6 @@ async function createGlbFromManifoldOutput(output: unknown): Promise<Uint8Array<
   return io.writeBinary(document);
 }
 
-function enrichIssueLocation(issues: KernelIssue[], fallbackFileName: string): KernelIssue[] {
-  return issues.map((issue) => ({
-    ...issue,
-    location: issue.location ?? {
-      fileName: fallbackFileName,
-      startLineNumber: 1,
-      startColumn: 1,
-    },
-  }));
-}
-
-// =============================================================================
-// Options schema
-// =============================================================================
-
 /**
  * Configuration for the Manifold kernel, allowing custom WASM builds for benchmarking or CI.
  * @public
@@ -257,10 +200,6 @@ export type ManifoldOptions = {
   wasmUrl?: string;
 };
 
-const optionsSchema = z.object({
-  wasmUrl: z.string().optional(),
-}) satisfies z.ZodType<ManifoldOptions>;
-
 // =============================================================================
 // Kernel module definition
 // =============================================================================
@@ -269,25 +208,14 @@ const optionsSchema = z.object({
 export default defineKernel({
   name: 'ManifoldKernel',
   version: '1.0.0',
-  optionsSchema,
+  optionsSchema: manifoldOptionsSchema,
+  exportSchemas: manifoldExportSchemas,
 
   async initialize(options, runtime) {
     initManifoldWasm(options.wasmUrl);
     const manifoldCadModule = await registerManifoldModules(runtime);
     runtime.logger.debug('Initialized Manifold kernel with manifold-3d modules');
     return { manifoldCadModule };
-  },
-
-  async canHandle({ filePath, extension }, { filesystem }) {
-    if (!['ts', 'js'].includes(extension)) {
-      return false;
-    }
-
-    const code = await filesystem.readFile(filePath, 'utf8');
-    const hasEsmImport = /import\s+.*from\s+["']manifold-3d(?:\/[^"']*)?["']/.test(code);
-    const hasRequire = /require\s*\(\s*["']manifold-3d(?:\/[^"']*)?["']\s*\)/.test(code);
-    const hasDynamicImport = /import\s*\(\s*["']manifold-3d(?:\/[^"']*)?["']\s*\)/.test(code);
-    return hasEsmImport || hasRequire || hasDynamicImport;
   },
 
   async getDependencies({ filePath }, runtime) {
@@ -355,6 +283,7 @@ export default defineKernel({
       const stackFrames = parseStackTrace(error, {
         sourceMap: bundleResult.sourceMap,
         resolveSourcePath: (sourcePath) => resolveSourcePath(sourcePath, basePath),
+        lastEntryName: executeResult.entryUrl,
       });
       const location = deriveLocationFromFrames(stackFrames, bundleResult.sourceMap, (sourcePath) =>
         resolveSourcePath(sourcePath, basePath),
@@ -401,6 +330,7 @@ export default defineKernel({
       const stackFrames = parseStackTrace(error, {
         sourceMap: bundleResult.sourceMap,
         resolveSourcePath: (sourcePath) => resolveSourcePath(sourcePath, basePath),
+        lastEntryName: executeResult.entryUrl,
       });
       const location = deriveLocationFromFrames(stackFrames, bundleResult.sourceMap, (sourcePath) =>
         resolveSourcePath(sourcePath, basePath),
@@ -419,7 +349,9 @@ export default defineKernel({
     }
   },
 
-  async exportGeometry({ fileType, nativeHandle }) {
+  async exportGeometry(input) {
+    const { format, nativeHandle } = input;
+
     if (!nativeHandle) {
       return createKernelError([
         {
@@ -430,19 +362,23 @@ export default defineKernel({
       ]);
     }
 
-    if (fileType === 'glb' || fileType === 'gltf') {
-      return createKernelSuccess([
-        createExportFile(fileType, fileType === 'glb' ? 'model.glb' : 'model.gltf', asBuffer(nativeHandle.glb)),
-      ]);
-    }
+    switch (format) {
+      // oxlint-disable-next-line typescript/no-unnecessary-condition -- exhaustive switch
+      case 'glb': {
+        return createKernelSuccess([createExportFile('glb', 'model.glb', asBuffer(nativeHandle.glb))]);
+      }
 
-    return createKernelError([
-      {
-        message: `Export format '${fileType}' is not implemented for Manifold. Only 'glb' and 'gltf' are supported.`,
-        type: 'runtime',
-        severity: 'error',
-      },
-    ]);
+      default: {
+        const _exhaustive: never = format;
+        return createKernelError([
+          {
+            message: `Export format '${_exhaustive as string}' is not supported by Manifold. Supported formats: glb.`,
+            type: 'runtime',
+            severity: 'error',
+          },
+        ]);
+      }
+    }
   },
 
   async cleanup() {

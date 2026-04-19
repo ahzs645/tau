@@ -8,6 +8,16 @@ describe('editor constants – panel consistency', () => {
     }
   });
 
+  it('allotmentPanelOrder should not contain extra panels missing from panelIds', () => {
+    // Allotment.resize() is positional: every entry in allotmentPanelOrder must
+    // correspond to exactly one <Allotment.Pane> in chat-interface-desktop.tsx.
+    // Stale entries (e.g. an unshipped 'git' panel) shift sizes onto the wrong
+    // panes and zero out the last visible pane.
+    for (const id of allotmentPanelOrder) {
+      expect(panelIds).toContain(id);
+    }
+  });
+
   it('desktopPanelIds should be a subset of panelIds', () => {
     for (const id of desktopPanelIds) {
       expect(panelIds).toContain(id);

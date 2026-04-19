@@ -34,7 +34,7 @@ flowchart TB
         Caches["Caches (file, bundle, selection)"]
     end
 
-    subgraph FSWorker["File Manager Worker (ZenFS + IndexedDB)"]
+    subgraph FSWorker["File Manager Worker (IndexedDB)"]
         FS["Filesystem Backend"]
         EventBus["EventBus + WatchRegistry"]
     end
@@ -58,13 +58,13 @@ flowchart TB
 
 **Kernel Worker** -- the autonomous render service. Holds the current file, parameters, watch subscriptions, debounce timers, render generation counter, all caches (file hash, file content, bundle result, kernel selection), and the render loop. Runs middleware and kernel code. Pushes results to the main thread via events.
 
-**File Manager Worker** -- hosts the virtual filesystem (ZenFS + IndexedDB backend), an EventBus, and a WatchRegistry. Accepts **two** MessagePort bridge connections: one from the main thread (editor file writes, tree operations) and one from the kernel worker (file reads, watch subscriptions). When a file write lands, the EventBus emits a change event, the WatchRegistry matches it against the kernel worker's subscriptions, and pushes a watch event directly to the kernel worker -- no main-thread relay.
+**File Manager Worker** -- hosts the virtual filesystem (multi-provider backend: DirectIdbProvider, OPFSProvider, FileSystemAccessProvider), an EventBus, and a WatchRegistry. Accepts **two** MessagePort bridge connections: one from the main thread (editor file writes, tree operations) and one from the kernel worker (file reads, watch subscriptions). When a file write lands, the EventBus emits a change event, the WatchRegistry matches it against the kernel worker's subscriptions, and pushes a watch event directly to the kernel worker -- no main-thread relay.
 
 ## Filesystem Bridge
 
 The File Manager Worker is the single owner of the virtual filesystem. Other threads access it through `createFileSystemBridge`, which creates a `MessageChannel` and transfers one port to the worker. The worker-side `exposeFileSystem` listens for incoming bridge connections and serves filesystem operations over each port. Two bridges are established at startup:
 
-**Bridge A (main thread → File Manager Worker):** The editor writes files (`writeFile`), reads directory trees, and performs file management operations. When a file is written, the worker's `FileService` persists it via ZenFS and emits a `fileWritten` event on the EventBus.
+**Bridge A (main thread → File Manager Worker):** The editor writes files (`writeFile`), reads directory trees, and performs file management operations. When a file is written, the worker's `FileService` persists it via the active provider and emits a `fileWritten` event on the EventBus.
 
 **Bridge B (kernel worker → File Manager Worker):** The kernel worker reads files, resolves dependencies, and subscribes to watch events. The `WatchRegistry` matches EventBus change events against watch subscriptions and pushes watch events directly to the kernel worker over this bridge.
 
@@ -86,7 +86,7 @@ sequenceDiagram
 
     Note over KW,FSW: Both bridges active
     Main->>FSW: writeFile (Bridge A, editor save)
-    FSW->>FSW: ZenFS persist + EventBus emit
+    FSW->>FSW: persist via provider + EventBus emit
     FSW-->>KW: watch event (Bridge B, direct)
     KW->>KW: invalidate caches → debounce → render
 ```
@@ -145,7 +145,7 @@ sequenceDiagram
 
     Note over Editor: User edits file in Monaco
     Editor->>FSW: writeFile(path, content) via Bridge A
-    FSW->>FSW: ZenFS persist + EventBus emit
+    FSW->>FSW: persist via provider + EventBus emit
     FSW-->>Worker: watch event via Bridge B
     Worker->>Worker: invalidate caches, debounce 500ms
     Worker->>Worker: re-render

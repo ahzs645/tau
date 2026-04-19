@@ -42,8 +42,8 @@ Every research doc follows this skeleton. Include sections in order; omit option
 title: '{Title}'
 description: '{One-line description for agent discoverability}'
 status: draft
-created: YYYY-MM-DD
-updated: YYYY-MM-DD
+created: 'YYYY-MM-DD'
+updated: 'YYYY-MM-DD'
 category: audit # audit | investigation | comparison | architecture | migration | optimization | reference
 related: # optional
   - docs/policy/related-policy.md
@@ -104,6 +104,55 @@ ASCII or Mermaid diagrams for architecture, data flow, or state machines.
 ## Appendix <!-- optional -->
 
 Detailed data tables, file inventories, or raw experiment results.
+```
+
+## Frontmatter Pitfalls
+
+Two errors that repeatedly break `pnpm docs:validate`:
+
+1. **Unquoted dates** — YAML auto-parses bare `YYYY-MM-DD` as `Date` objects. The validator expects strings. Always single-quote dates.
+
+CORRECT:
+
+```yaml
+created: '2026-03-24'
+updated: '2026-03-24'
+```
+
+INCORRECT:
+
+```yaml
+created: 2026-03-24
+updated: 2026-03-24
+```
+
+2. **Markdown syntax in YAML** — The frontmatter block between `---` delimiters is pure YAML. Markdown headings (`##`), blank lines between fields, or markdown list syntax (`- ` without indentation for `related`) will corrupt the parse.
+
+CORRECT:
+
+```yaml
+---
+title: 'My Research'
+description: 'One-line description'
+status: draft
+created: '2026-03-24'
+updated: '2026-03-24'
+category: audit
+related:
+  - docs/policy/some-policy.md
+---
+```
+
+INCORRECT:
+
+```yaml
+---
+## title: 'My Research'
+
+description: 'One-line description'
+status: draft
+related:
+  - docs/policy/some-policy.md
 ```
 
 ## Section Guide
@@ -219,7 +268,7 @@ Use descriptive slugs that identify the subject: `filesystem-architecture`, `occ
 Before finalizing a research document:
 
 - [ ] Filename matches `docs/research/{slug}.md`
-- [ ] YAML frontmatter with title, description, status, created, updated, category
+- [ ] YAML frontmatter with title, description, status, created, updated, category — dates single-quoted
 - [ ] Frontmatter `title` matches H1 heading
 - [ ] Frontmatter `related` lists cross-referenced docs
 - [ ] Opens with one-line scope statement

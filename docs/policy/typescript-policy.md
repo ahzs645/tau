@@ -3,7 +3,7 @@ title: 'TypeScript Policy'
 description: 'Type assertion rules, mock typing patterns, generic inference, and common gotchas for safe TypeScript usage across the Tau monorepo.'
 status: active
 created: '2026-03-09'
-updated: '2026-03-10'
+updated: '2026-04-10'
 related:
   - docs/policy/testing-policy.md
   - docs/research/typescript-overloads.md
@@ -143,7 +143,104 @@ machine.provide({
 });
 ```
 
-### 6. Do Not Use `as const` on Individual Literals
+### 6. Preserve Generic Type Information
+
+Generic-aware libraries (notably `@taucad/runtime`'s `RuntimeClient`/`CapabilitiesManifest`/`ExportRoute`/`KernelRenderSchema` and the `KernelPlugin`/`TranscoderPlugin` carrier types) propagate phantom plugin tuples through every leaf field. Four common patterns silently erode that propagation; this rule blocks all four.
+
+**Why**: Type information lost at one seam cascades — every downstream consumer falls back to wide-default unions (`FileExtension`, `string`, `Record<string, unknown>`), and the loss is invisible at the call site. Sentinel tests in [`packages/runtime/src/types/define-plugin.test-d.ts`](../../packages/runtime/src/types/define-plugin.test-d.ts) (`describe('Type-info preservation invariants (audit-R4)')`) lock in the invariants. Violations of any sub-rule below will trip those sentinels.
+
+#### 6a. Inline named-type expansion to bypass variance failures
+
+When a TypeScript variance failure blocks a structural assignment between a narrow generic instantiation and a wider one (e.g., `RuntimeClient<NarrowKernels>` to `RuntimeClient<KernelPlugin[]>`), inline the named-type expansion at the failing site **before** reaching for `unknown`/`any` fallbacks. Inline shapes are checked structurally; named generic instantiations are checked invariantly when the parameter appears in conditional/distributive positions.
+
+**Why**: The named alias remains exported and structurally equivalent — consumers can still type variables and parameters with it. Only the carrier-type usage is inlined to sidestep the variance check. No type information is lost.
+
+CORRECT — inline expansion at the carrier:
+
+```typescript
+renderSchemas: {
+  [K in CollectKernelIds<Kernels>]?: {
+    schema: JSONSchema7;
+    defaults: RenderOptionsFor<Kernels, K>;
+  };
+};
+```
+
+INCORRECT — `unknown`/`any` fallback that erases the per-kernel narrowing:
+
+```typescript
+renderSchemas: { [K in string]?: { schema: JSONSchema7; defaults: unknown } };
+```
+
+#### 6b. Never use `ReturnType<typeof genericFn>` for long-lived bindings
+
+`ReturnType<typeof X>` picks the **last overload** of `X` — for generic-returning factory functions like `createRuntimeClient`, that is the implementation signature, which has no generic parameters bound and resolves to the wide-default form. This silently erodes narrow types across the entire scope of the binding.
+
+**Why**: An explicit `RuntimeClient<MyKernels, MyTranscoders>` alias derived from `ReturnType<typeof kernelFactory>` calls (which return concrete `KernelPlugin<...>`, not generics) preserves narrow type information at every call site.
+
+CORRECT:
+
+```typescript
+type TestKernels = readonly [ReturnType<typeof replicad>, ReturnType<typeof tau>];
+type TestRuntimeClient = RuntimeClient<TestKernels>;
+let client: TestRuntimeClient | undefined;
+```
+
+INCORRECT:
+
+```typescript
+let client: ReturnType<typeof createRuntimeClient> | undefined;
+```
+
+#### 6c. Constrain `Id extends string` in plugin-union utility types
+
+When declaring **union types** that include `KernelPlugin<...>` or `TranscoderPlugin<...>` (not generic constraints, not `infer` carriers), use `string` for the `Id` slot. With `any` in the `Id` slot, every `plugin.id` access leaks `any` and triggers `no-unsafe-argument` lints — which then get papered over with `as string` casts.
+
+**Why**: Generic constraints (`<Kernels extends readonly KernelPlugin<any, any, any>[]>`) and `Extract<…, KernelPlugin<any, any, infer Id>>` projections must use `any` to accept literal narrowing through `infer`. Union types are different — they describe a value, not a projection, so the constraint is sound.
+
+CORRECT:
+
+```typescript
+type PluginWithId =
+  | KernelPlugin<any, any, string>
+  | MiddlewarePlugin
+  | BundlerPlugin
+  | TranscoderPlugin<any, any, string>;
+```
+
+INCORRECT:
+
+```typescript
+type PluginWithId = KernelPlugin<any, any, any> | TranscoderPlugin<any, any, any>;
+// Forces `plugin.id as string` casts at every access site.
+```
+
+#### 6d. Bound `as unknown as` casts in the runtime client surface
+
+Every `as unknown as` cast in [`packages/runtime/src/client/*.ts`](../../packages/runtime/src/client) requires a `// SAFETY:` comment block within five lines above it explaining **why** the cast is sound (typically: the value is a structural witness of the narrower carrier type emitted at a worker boundary).
+
+**Why**: The runtime client surface is the public type contract for every consumer. Drive-by escape hatches there cascade into invisible erosion across `apps/ui`, `apps/api`, and `packages/react`. The sentinel test [`runtime-client.surface.test.ts`](../../packages/runtime/src/client/runtime-client.surface.test.ts) enforces this at PR-review time (type-checking is the wrong layer — the casts are type-system-legal).
+
+CORRECT — a documented witness-narrowing seam:
+
+```typescript
+// SAFETY (R7 — see docs/research/runtime-type-bag-propagation.md):
+// The implementation signature returns the wide-default `RuntimeClient`
+// because the worker physically emits a wide `CapabilitiesManifest` over
+// `postMessage`. The public overload narrows the return — every concrete
+// value the worker emits is a member of the narrower carrier.
+export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClient { ... }
+```
+
+INCORRECT — undocumented cast:
+
+```typescript
+return wideManifest as unknown as CapabilitiesManifest<Kernels, Transcoders>;
+```
+
+For the full rationale and trade-off analysis, see [`docs/research/runtime-client-type-preservation-audit.md`](../research/runtime-client-type-preservation-audit.md).
+
+### 7. Do Not Use `as const` on Individual Literals
 
 `as const` on individual literal values (e.g., `'foo' as const`, `true as const`, `42 as const`) is banned. The `tau-lint/no-literal-const-assertion` oxlint rule enforces this at lint time with auto-fix support.
 
@@ -173,7 +270,7 @@ entries.map((e) => ({ type: e.isDir ? ('dir' as const) : ('file' as const), name
 
 The rule only targets `as const` on individual literal values — whole-object `{ ... } as const` and whole-array `[...] as const` are permitted and preferred.
 
-### 7. Widen Literal Types in Mock Return Values
+### 8. Widen Literal Types in Mock Return Values
 
 When a mock's return value has literal types (e.g., `false`, `undefined`) that are narrower than the slot's expected type (e.g., `boolean`, `string | undefined`), widen explicitly.
 
@@ -185,7 +282,7 @@ CORRECT:
 return { hasMore: false as boolean, endCursor: undefined as string | undefined };
 ```
 
-### 8. Handle `process.exit` Mocks Correctly
+### 9. Handle `process.exit` Mocks Correctly
 
 `process.exit()` returns `never` (it never returns). Mock implementations cannot actually return `never`, so cast the mock function itself.
 
@@ -200,7 +297,7 @@ vi.spyOn(process, 'exit').mockImplementation(
 );
 ```
 
-### 9. Use `as T` for `JSON.parse` Return Values
+### 10. Use `as T` for `JSON.parse` Return Values
 
 `JSON.parse()` returns `any`. In generic functions with a known return type `T`, cast directly to `T`.
 
@@ -214,7 +311,7 @@ function parseJson<T>(input: string): T {
 }
 ```
 
-### 10. Iterator `done` Results Use `void`, Not `never`
+### 11. Iterator `done` Results Use `void`, Not `never`
 
 When implementing `AsyncIterator<T, TReturn>`, the `done: true` result needs `value: TReturn`. Use `TReturn = void` (not `never`) when the iterator has no meaningful return value.
 
@@ -270,6 +367,22 @@ return { done: true, value: undefined as never };
 
 **Fix**: Return the current value (`return context.field`), restructure with exhaustive checks, or widen the return type to include `undefined`.
 
+### `ReturnType<typeof createRuntimeClient>` for Client Bindings
+
+**Symptom**: `let client: ReturnType<typeof createRuntimeClient> | undefined;` followed by call sites where narrow per-format / per-kernel type narrowing has silently disappeared.
+
+**Root cause**: `ReturnType<typeof X>` resolves against `X`'s implementation signature — for generic-returning factories like `createRuntimeClient` that signature is the wide-default form (no generic parameters bound), so the binding loses every narrow `Kernels`/`Transcoders` projection.
+
+**Fix**: Declare an explicit `RuntimeClient<MyKernels, MyTranscoders>` alias derived from `ReturnType<typeof kernelFactory>` calls (kernel/transcoder factories return concrete plugins, not generics). Rule 6b. See [`docs/research/runtime-client-type-preservation-audit.md`](../research/runtime-client-type-preservation-audit.md) Finding 2.
+
+### Plugin-Union Types with `KernelPlugin<any, any, any>`
+
+**Symptom**: Lint errors `@typescript-eslint/no-unsafe-argument` on `plugin.id` accesses, papered over with `plugin.id as string`.
+
+**Root cause**: Using `any` in the `Id` slot of plugin-union types leaks `any` into every `.id` access. The `any` was needed for generic constraints / `infer` carriers — but in **union types** (which describe values rather than projections) `string` is sound.
+
+**Fix**: Constrain `Id extends string` in plugin-union utility types. Rule 6c.
+
 ## Summary Checklist
 
 - [ ] No `as never` in any file (`no-restricted-syntax` ESLint rule enforced at lint time)
@@ -280,11 +393,17 @@ return { done: true, value: undefined as never };
 - [ ] Mock input types match original actor input types exactly
 - [ ] No `literal as const` on individual values (`tau-lint/no-literal-const-assertion` enforced)
 - [ ] Iterator `TReturn` uses `void`, not `never`
+- [ ] No `ReturnType<typeof genericFn>` for long-lived bindings of generic-returning functions (Rule 6b)
+- [ ] Plugin-union types constrain `Id extends string`, not `any` (Rule 6c)
+- [ ] Inline named-type expansion when variance blocks narrow → wide assignment, before reaching for `unknown`/`any` (Rule 6a)
+- [ ] Every `as unknown as` in the runtime client surface has a `// SAFETY:` comment block within 5 lines above (Rule 6d)
 
 ## References
 
 - Related: `docs/policy/testing-policy.md` — `mock<T>()` usage and type-safe mock patterns
 - Related: `docs/research/typescript-overloads.md` — overloaded function patterns and mock compatibility
 - Related: `docs/policy/xstate-policy.md` — `fromSafeAsync` usage and async actor patterns
+- Related: `docs/research/runtime-client-type-preservation-audit.md` — generic type-info preservation across the runtime client surface (Rule 6)
+- Related: `docs/research/runtime-type-bag-propagation.md` — top-level `Kernels`/`Transcoders` bag propagation through `RuntimeClient`
 - [TypeScript Handbook — Type Assertions](https://www.typescriptlang.org/docs/handbook/2/everyday-types.html#type-assertions)
 - [TypeScript Handbook — Conditional Types (overload inference)](https://www.typescriptlang.org/docs/handbook/2/conditional-types.html)

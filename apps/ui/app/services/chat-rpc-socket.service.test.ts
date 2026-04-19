@@ -1,3 +1,4 @@
+/* oxlint-disable @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-assignment -- dynamic import via await import() loses type safety */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Socket, Manager } from 'socket.io-client';
 
@@ -35,12 +36,18 @@ vi.mock('socket.io-client', () => ({
   },
 }));
 
-vi.mock('#environment.config.js', () => ({
-  ENV: {
-    TAU_WEBSOCKET_URL: 'http://localhost:3001',
-  },
-}));
+vi.mock('#environment.config.js', () => {
+  /* eslint-disable @typescript-eslint/naming-convention -- mock env object shape */
+  const mock = {
+    ENV: {
+      TAU_WEBSOCKET_URL: 'http://localhost:3001',
+    },
+  };
+  /* eslint-enable @typescript-eslint/naming-convention -- mock env object shape */
+  return mock;
+});
 
+// eslint-disable-next-line @typescript-eslint/naming-convention -- destructures exported class
 const { ChatRpcSocketService } = await import('#services/chat-rpc-socket.service.js');
 
 function emitSocketEvent(event: string, ...args: unknown[]): void {
@@ -62,7 +69,7 @@ function emitManagerEvent(event: string, ...args: unknown[]): void {
 }
 
 describe('ChatRpcSocketService', () => {
-  let service: ChatRpcSocketService;
+  let service: ReturnType<typeof ChatRpcSocketService.getInstance>;
 
   beforeEach(() => {
     socketHandlers.clear();
@@ -84,23 +91,23 @@ describe('ChatRpcSocketService', () => {
   describe('configuration', () => {
     it('should set reconnectionDelayMax to 5000ms', () => {
       service.connect();
-      expect(capturedOptions?.reconnectionDelayMax).toBe(5_000);
+      expect(capturedOptions?.['reconnectionDelayMax']).toBe(5000);
     });
 
     it('should use websocket transport only', () => {
       service.connect();
-      expect(capturedOptions?.transports).toEqual(['websocket']);
+      expect(capturedOptions?.['transports']).toEqual(['websocket']);
     });
 
     it('should enable infinite reconnection attempts', () => {
       service.connect();
-      expect(capturedOptions?.reconnectionAttempts).toBe(Infinity);
+      expect(capturedOptions?.['reconnectionAttempts']).toBe(Infinity);
     });
   });
 
   describe('disconnect reason logging', () => {
     it('should log disconnect reason via console.warn', () => {
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(vi.fn());
       service.connect();
 
       emitSocketEvent('disconnect', 'transport close');
@@ -110,7 +117,7 @@ describe('ChatRpcSocketService', () => {
     });
 
     it('should log ping timeout disconnect reason', () => {
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(vi.fn());
       service.connect();
 
       emitSocketEvent('disconnect', 'ping timeout');
@@ -130,7 +137,7 @@ describe('ChatRpcSocketService', () => {
     });
 
     it('should not log when disconnect is due to auth failure', () => {
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(vi.fn());
       service.connect();
 
       // Simulate auth failure first
@@ -177,6 +184,93 @@ describe('ChatRpcSocketService', () => {
       service.joinChat('chat_new', vi.fn());
 
       expect(mockSocket.emit).toHaveBeenCalledWith('join', { chatId: 'chat_new' }, expect.any(Function));
+    });
+  });
+
+  describe('rpc_request handling with ack', () => {
+    it('should call ack with handler result for known chat', async () => {
+      service.connect();
+      const handler = vi.fn().mockResolvedValue({
+        type: 'rpc_response',
+        requestId: 'req_1',
+        toolCallId: 'tc_1',
+        result: { content: 'ok' },
+      });
+      service.joinChat('chat_1', handler);
+
+      const ack = vi.fn();
+      const request = {
+        type: 'rpc_request',
+        chatId: 'chat_1',
+        requestId: 'req_1',
+        toolCallId: 'tc_1',
+        rpcName: 'read_file',
+        args: {},
+      };
+
+      emitSocketEvent('rpc_request', request, ack);
+
+      await vi.waitFor(() => {
+        expect(ack).toHaveBeenCalled();
+      });
+
+      expect(ack).toHaveBeenCalledWith(expect.objectContaining({ type: 'rpc_response', result: { content: 'ok' } }));
+    });
+
+    it('should call ack with error for unknown chat', async () => {
+      service.connect();
+
+      const ack = vi.fn();
+      const request = {
+        type: 'rpc_request',
+        chatId: 'unknown_chat',
+        requestId: 'req_1',
+        toolCallId: 'tc_1',
+        rpcName: 'read_file',
+        args: {},
+      };
+
+      emitSocketEvent('rpc_request', request, ack);
+
+      await vi.waitFor(() => {
+        expect(ack).toHaveBeenCalled();
+      });
+
+      expect(ack).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'rpc_response',
+          error: expect.stringContaining('No handler registered'),
+        }),
+      );
+    });
+
+    it('should call ack with error when handler throws', async () => {
+      service.connect();
+      const handler = vi.fn().mockRejectedValue(new Error('handler crashed'));
+      service.joinChat('chat_1', handler);
+
+      const ack = vi.fn();
+      const request = {
+        type: 'rpc_request',
+        chatId: 'chat_1',
+        requestId: 'req_1',
+        toolCallId: 'tc_1',
+        rpcName: 'read_file',
+        args: {},
+      };
+
+      emitSocketEvent('rpc_request', request, ack);
+
+      await vi.waitFor(() => {
+        expect(ack).toHaveBeenCalled();
+      });
+
+      expect(ack).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'rpc_response',
+          error: 'handler crashed',
+        }),
+      );
     });
   });
 });

@@ -1,0 +1,42 @@
+{
+  "schema": "wasm-build-provenance-v1",
+  "buildId": "20260322T170000-O3-noLTO-rbv-simd-wasmExc",
+  "timestamp": "2026-03-22T17:00:00Z",
+  "toolchain": {
+    "emscripten": "5.0.1",
+    "llvm": "17",
+    "wasmOpt": "(version_123-685-g18ba06162)",
+    "python": "3.14.3"
+  },
+  "source": {
+    "occtCommit": "48ebca0f70a5e4b936548b695bc3583363898da4",
+    "opencascadejsCommit": "55dcf253bf68ed7e7811bd1521516c0102a07654",
+    "filterPackagesHash": "8b12ca608181"
+  },
+  "compilation": {
+    "cacheKey": "O3-noLTO-wasmExc-single-rbv-simd",
+    "cacheHit": false,
+    "optimization": "-O3",
+    "lto": false,
+    "exceptions": "wasm-native",
+    "threading": "single-threaded",
+    "wasmOptLevel": "-O4",
+    "emccCompileFlags": ["-O3", "-fwasm-exceptions", "-DOCCT_NO_DUMP", "-UOCC_CONVERT_SIGNALS", "-msimd128"],
+    "sourceFiles": 0,
+    "bindingFiles": 4446,
+    "compileDuration_s": 0
+  },
+  "linking": {
+    "yamlConfig": "custom_build_with_exceptions_v8.yml",
+    "boundSymbols": 218,
+    "emccFlags": ["-flto", "-fwasm-exceptions", "-sEXPORT_ES6=1", "-sMODULARIZE", "-sALLOW_MEMORY_GROWTH=1", "-msimd128", "-mrelaxed-simd", "-O3"],
+    "linkDuration_s": 0
+  },
+  "postProcessing": {
+    "wasmOptFlags": ["-O4", "--converge", "--enable-exception-handling", "--enable-simd", "--enable-relaxed-simd"],
+    "preOptSize": 21815196,
+    "postOptSize": 21756243,
+    "optReduction": "0.3%",
+    "wasmOptDuration_s": 0
+  }
+}

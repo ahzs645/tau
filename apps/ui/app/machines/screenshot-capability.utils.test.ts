@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import * as THREE from 'three';
-import { calculateOptimalGrid } from '#machines/screenshot-capability.machine.js';
+import { calculateOptimalGrid, removeCloneUnsafeObjects } from '#machines/screenshot-capability.machine.js';
 import {
   applyMatcapToClonedScene,
   disposeClonedSceneMaterials,
@@ -1024,5 +1024,95 @@ describe('computeViewFittingZoom', () => {
       const orthographicZoom = (distance * tanHalf) / halfExtent;
       expect(zoom).toBeCloseTo(orthographicZoom, 1);
     });
+  });
+});
+
+// ── removeCloneUnsafeObjects ────────────────────────────────────────────────
+
+describe('removeCloneUnsafeObjects', () => {
+  /**
+   * Minimal stand-in for TransformControls. The real class's updateMatrixWorld
+   * unconditionally accesses `this.camera.updateMatrixWorld()`. When cloned via
+   * `scene.clone()`, the new instance's constructor receives no arguments, leaving
+   * `this.camera` as `undefined` and causing a runtime crash during scene traversal.
+   */
+  class MockTransformControls extends THREE.Object3D {
+    public get isTransformControls(): boolean {
+      return true;
+    }
+    private readonly camera: THREE.Camera | undefined;
+
+    public constructor(camera?: THREE.Camera) {
+      super();
+      this.camera = camera;
+    }
+
+    public override updateMatrixWorld(force?: boolean): void {
+      this.camera!.updateMatrixWorld();
+      super.updateMatrixWorld(force);
+    }
+  }
+
+  it('should remove TransformControls from a cloned scene so updateMatrixWorld does not crash', () => {
+    const scene = new THREE.Scene();
+    scene.add(createColoredMesh());
+    scene.add(new MockTransformControls(new THREE.PerspectiveCamera()));
+
+    const clonedScene = scene.clone();
+
+    removeCloneUnsafeObjects(clonedScene);
+
+    expect(() => {
+      clonedScene.updateMatrixWorld();
+    }).not.toThrow();
+  });
+
+  it('should leave the cloned scene with no TransformControls descendants', () => {
+    const scene = new THREE.Scene();
+    scene.add(createColoredMesh());
+    scene.add(new MockTransformControls(new THREE.PerspectiveCamera()));
+
+    const clonedScene = scene.clone();
+
+    removeCloneUnsafeObjects(clonedScene);
+
+    let foundTransformControls = false;
+    clonedScene.traverse((object) => {
+      if ('isTransformControls' in object) {
+        foundTransformControls = true;
+      }
+    });
+    expect(foundTransformControls).toBe(false);
+  });
+
+  it('should preserve regular meshes in the cloned scene', () => {
+    const scene = new THREE.Scene();
+    scene.add(createColoredMesh());
+    scene.add(new MockTransformControls(new THREE.PerspectiveCamera()));
+
+    const clonedScene = scene.clone();
+
+    removeCloneUnsafeObjects(clonedScene);
+
+    let meshCount = 0;
+    clonedScene.traverse((object) => {
+      if ('isMesh' in object && object.isMesh) {
+        meshCount++;
+      }
+    });
+    expect(meshCount).toBe(1);
+  });
+
+  it('should be a no-op when the scene has no TransformControls', () => {
+    const scene = new THREE.Scene();
+    scene.add(createColoredMesh());
+    scene.add(new THREE.Group());
+
+    const clonedScene = scene.clone();
+    const childCountBefore = clonedScene.children.length;
+
+    removeCloneUnsafeObjects(clonedScene);
+
+    expect(clonedScene.children.length).toBe(childCountBefore);
   });
 });

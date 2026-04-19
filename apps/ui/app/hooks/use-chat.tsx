@@ -23,7 +23,7 @@ import { useChats } from '#hooks/use-chats.js';
 import { inspect } from '#machines/inspector.js';
 import { ENV } from '#environment.config.js';
 import { parseErrorForPersistence } from '#utils/error.utils.js';
-import { finalizeInterruptedToolParts } from '#utils/chat.utils.js';
+import { extractMimeTypeFromDataUrl, finalizeInterruptedToolParts } from '#utils/chat.utils.js';
 import type { ChatMode } from '#routes/projects_.$id/chat-mode-selector.js';
 
 type UseChatReturn = ReturnType<typeof useChat<MyUIMessage>>;
@@ -512,7 +512,7 @@ export function useChatActions(): {
                 ({
                   type: 'file',
                   url,
-                  mediaType: 'image/png',
+                  mediaType: extractMimeTypeFromDataUrl(url),
                 }) as const,
             ) ?? []),
           ],

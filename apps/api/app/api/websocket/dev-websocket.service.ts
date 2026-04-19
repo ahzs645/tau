@@ -2,11 +2,14 @@ import { createServer } from 'node:http';
 import type { IncomingMessage, Server as HttpServer } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { Injectable, Logger } from '@nestjs/common';
-import type { OnModuleDestroy } from '@nestjs/common';
+import type { OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { createAdapter } from '@socket.io/redis-streams-adapter';
+import type { Redis } from 'ioredis';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Server as SocketIoServer } from 'socket.io';
 import type { Environment } from '#config/environment.config.js';
+import { RedisService } from '#redis/redis.service.js';
 // oxlint-disable-next-line eslint-plugin-import/no-cycle -- gateway and dev-websocket are tightly coupled
 import { chatRpcPath } from '#api/chat/chat-rpc.gateway.js';
 
@@ -27,7 +30,7 @@ export type WebSocketConnectionHandler = (socket: WebSocket, request: IncomingMe
  * - Other registered paths go to raw WebSocket handlers
  */
 @Injectable()
-export class DevWebSocketService implements OnModuleDestroy {
+export class DevWebSocketService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(DevWebSocketService.name);
   private httpServer: HttpServer | undefined;
   private wss: WebSocketServer | undefined;
@@ -35,10 +38,54 @@ export class DevWebSocketService implements OnModuleDestroy {
   private readonly wsPort: number;
   private readonly pathHandlers = new Map<string, WebSocketConnectionHandler>();
   private initialized = false;
+  private adapterConstructor: ReturnType<typeof createAdapter> | undefined;
+  private adapterClient: Redis | undefined;
 
-  public constructor(private readonly configService: ConfigService<Environment, true>) {
+  public constructor(
+    private readonly configService: ConfigService<Environment, true>,
+    private readonly redisService: RedisService,
+  ) {
     const mainPort = Number(this.configService.get('PORT', { infer: true }));
     this.wsPort = mainPort + 1;
+  }
+
+  /**
+   * Connect a dedicated Redis client for the Socket.IO Streams adapter.
+   * Matches the production RedisIoAdapter configuration exactly.
+   */
+  public async onModuleInit(): Promise<void> {
+    if (!import.meta.env.DEV) {
+      return;
+    }
+
+    try {
+      this.adapterClient = this.redisService.createDuplicateClient();
+
+      this.adapterClient.on('error', (error) => {
+        this.logger.error(`[Dev] Redis adapter error: ${error.message}`);
+      });
+      this.adapterClient.on('connect', () => {
+        this.logger.debug('[Dev] Redis adapter connected');
+      });
+      this.adapterClient.on('close', () => {
+        this.logger.warn('[Dev] Redis adapter disconnected');
+      });
+
+      await this.adapterClient.connect();
+
+      this.adapterConstructor = createAdapter(this.adapterClient, {
+        streamName: 'tau:socketio',
+        maxLen: 10_000,
+      });
+
+      this.logger.log('Redis Streams adapter initialized for dev Socket.IO');
+    } catch (error) {
+      this.logger.warn(
+        `Redis Streams adapter failed to initialize (falling back to in-memory): ${error instanceof Error ? error.message : String(error)}`,
+      );
+      this.adapterClient = undefined;
+      this.adapterConstructor = undefined;
+    }
   }
 
   /**
@@ -89,7 +136,7 @@ export class DevWebSocketService implements OnModuleDestroy {
   /**
    * Stop the servers when the module is destroyed.
    */
-  public onModuleDestroy(): void {
+  public async onModuleDestroy(): Promise<void> {
     if (this.io) {
       void this.io.close();
     }
@@ -100,6 +147,12 @@ export class DevWebSocketService implements OnModuleDestroy {
 
     if (this.httpServer) {
       this.httpServer.close();
+    }
+
+    if (this.adapterClient) {
+      await this.adapterClient.quit();
+      this.adapterClient = undefined;
+      this.logger.debug('Redis adapter client disconnected');
     }
 
     this.logger.log('Dev WebSocket server stopped');
@@ -129,12 +182,22 @@ export class DevWebSocketService implements OnModuleDestroy {
     this.io = new SocketIoServer(this.httpServer, {
       path: chatRpcPath,
       cors: {
-        origin: true, // Allow all origins in dev
+        origin: this.configService.get('TAU_FRONTEND_URL', { infer: true }),
         credentials: true,
       },
       transports: ['websocket'],
-      maxHttpBufferSize: 50e6, // 50MB — accommodates binary GLB geometry from fetchGeometry RPC
+      maxHttpBufferSize: 50e6,
+      pingTimeout: 30_000,
+      connectionStateRecovery: {
+        maxDisconnectionDuration: 2 * 60 * 1000,
+        skipMiddlewares: true,
+      },
     });
+
+    if (this.adapterConstructor) {
+      this.io.adapter(this.adapterConstructor);
+      this.logger.debug('Redis Streams adapter applied to dev Socket.IO server');
+    }
 
     // Handle upgrade requests manually to route between Socket.IO and raw WebSocket
     // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- Buffer required by ws library

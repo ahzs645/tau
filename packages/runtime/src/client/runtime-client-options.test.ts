@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { RuntimeClientOptions } from '#client/runtime-client.js';
-import type { KernelPlugin, MiddlewarePlugin, BundlerPlugin } from '#plugins/plugin-types.js';
+import type { KernelPlugin, MiddlewarePlugin, BundlerPlugin, TranscoderPlugin } from '#plugins/plugin-types.js';
 import { createRuntimeClientOptions } from '#client/runtime-client-options.js';
 
 function kernel(id: string, extra?: Record<string, unknown>): KernelPlugin {
@@ -13,6 +13,10 @@ function middleware(id: string): MiddlewarePlugin {
 
 function bundler(id: string, extensions = ['ts', 'js']): BundlerPlugin {
   return { id, moduleUrl: `https://example.com/${id}.js`, extensions };
+}
+
+function transcoder(id: string): TranscoderPlugin {
+  return { id, moduleUrl: `https://example.com/${id}.js` };
 }
 
 function baseOptions(overrides: Partial<RuntimeClientOptions> = {}): RuntimeClientOptions {
@@ -29,9 +33,7 @@ describe('createRuntimeClientOptions', () => {
 
   describe('identity overload', () => {
     it('should return the same shape with all fields preserved', () => {
-      const options = baseOptions({
-        tessellation: { preview: { linearTolerance: 0.1, angularTolerance: 0.1 } },
-      });
+      const options = baseOptions();
 
       const result = createRuntimeClientOptions(options);
 
@@ -195,90 +197,32 @@ describe('createRuntimeClientOptions', () => {
     });
   });
 
-  // ── Deep merge: tessellation ─────────────────────────────────────────────
-
-  describe('deep merge -- tessellation', () => {
-    it('should preserve base preview when overriding export', () => {
-      const base = baseOptions({
-        tessellation: { preview: { linearTolerance: 0.1, angularTolerance: 0.1 } },
-      });
-
-      const result = createRuntimeClientOptions(base, {
-        tessellation: { export: { linearTolerance: 0.01, angularTolerance: 0.01 } },
-      });
-
-      expect(result.tessellation).toEqual({
-        preview: { linearTolerance: 0.1, angularTolerance: 0.1 },
-        export: { linearTolerance: 0.01, angularTolerance: 0.01 },
-      });
-    });
-
-    it('should preserve base export when overriding preview', () => {
-      const base = baseOptions({
-        tessellation: { export: { linearTolerance: 0.01, angularTolerance: 0.01 } },
-      });
-
-      const result = createRuntimeClientOptions(base, {
-        tessellation: { preview: { linearTolerance: 0.5, angularTolerance: 0.5 } },
-      });
-
-      expect(result.tessellation).toEqual({
-        preview: { linearTolerance: 0.5, angularTolerance: 0.5 },
-        export: { linearTolerance: 0.01, angularTolerance: 0.01 },
-      });
-    });
-
-    it('should replace both preview and export when both are overridden', () => {
-      const base = baseOptions({
-        tessellation: {
-          preview: { linearTolerance: 0.1, angularTolerance: 0.1 },
-          export: { linearTolerance: 0.01, angularTolerance: 0.01 },
-        },
-      });
-
-      const result = createRuntimeClientOptions(base, {
-        tessellation: {
-          preview: { linearTolerance: 0.5, angularTolerance: 0.5 },
-          export: { linearTolerance: 0.001, angularTolerance: 0.001 },
-        },
-      });
-
-      expect(result.tessellation).toEqual({
-        preview: { linearTolerance: 0.5, angularTolerance: 0.5 },
-        export: { linearTolerance: 0.001, angularTolerance: 0.001 },
-      });
-    });
-
-    it('should set tessellation when base has none', () => {
-      const base = baseOptions();
-
-      const result = createRuntimeClientOptions(base, {
-        tessellation: { preview: { linearTolerance: 0.2, angularTolerance: 0.2 } },
-      });
-
-      expect(result.tessellation).toEqual({
-        preview: { linearTolerance: 0.2, angularTolerance: 0.2 },
-      });
-    });
-
-    it('should preserve base tessellation when override omits it', () => {
-      const tess = { preview: { linearTolerance: 0.1, angularTolerance: 0.1 } };
-      const base = baseOptions({ tessellation: tess });
-
-      const result = createRuntimeClientOptions(base, {
-        kernels: [kernel('alpha', { options: { v2: true } })],
-      });
-
-      expect(result.tessellation).toEqual(tess);
-    });
-  });
-
   // ── Scalar field replacement ─────────────────────────────────────────────
 
   describe('scalar field replacement', () => {
     it('should replace transport entirely', () => {
-      const transport1 = { send: () => {}, onMessage: () => {}, close: () => {} };
-      const transport2 = { send: () => {}, onMessage: () => {}, close: () => {} };
+      const transport1 = {
+        send: () => {
+          /* Noop */
+        },
+        onMessage: () => {
+          /* Noop */
+        },
+        close: () => {
+          /* Noop */
+        },
+      };
+      const transport2 = {
+        send: () => {
+          /* Noop */
+        },
+        onMessage: () => {
+          /* Noop */
+        },
+        close: () => {
+          /* Noop */
+        },
+      };
       const base = baseOptions({ transport: transport1 });
 
       const result = createRuntimeClientOptions(base, { transport: transport2 });
@@ -287,7 +231,9 @@ describe('createRuntimeClientOptions', () => {
     });
 
     it('should replace fileSystem entirely', () => {
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- Test stub: empty object for identity-equality check
       const fs1 = {} as RuntimeClientOptions['fileSystem'];
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- Test stub: empty object for identity-equality check
       const fs2 = {} as RuntimeClientOptions['fileSystem'];
       const base = baseOptions({ fileSystem: fs1 });
 
@@ -297,14 +243,12 @@ describe('createRuntimeClientOptions', () => {
     });
 
     it('should preserve omitted fields from base', () => {
-      const tess = { preview: { linearTolerance: 0.1, angularTolerance: 0.1 } };
-      const base = baseOptions({ tessellation: tess });
+      const base = baseOptions();
 
       const result = createRuntimeClientOptions(base, {
         kernels: [kernel('alpha', { options: { v2: true } })],
       });
 
-      expect(result.tessellation).toEqual(tess);
       expect(result.middleware).toEqual(base.middleware);
       expect(result.bundlers).toEqual(base.bundlers);
     });
@@ -334,19 +278,6 @@ describe('createRuntimeClientOptions', () => {
       expect(base.kernels).toHaveLength(3);
     });
 
-    it('should not mutate base tessellation object', () => {
-      const tess = { preview: { linearTolerance: 0.1, angularTolerance: 0.1 } };
-      const base = baseOptions({ tessellation: tess });
-
-      createRuntimeClientOptions(base, {
-        tessellation: { export: { linearTolerance: 0.01, angularTolerance: 0.01 } },
-      });
-
-      expect(base.tessellation).toEqual({
-        preview: { linearTolerance: 0.1, angularTolerance: 0.1 },
-      });
-    });
-
     it('should not mutate the override object', () => {
       const base = baseOptions();
       const overrides: Partial<RuntimeClientOptions> = {
@@ -357,6 +288,41 @@ describe('createRuntimeClientOptions', () => {
       createRuntimeClientOptions(base, overrides);
 
       expect(overrides.kernels).toEqual(overridesCopy.kernels);
+    });
+  });
+
+  // ── Transcoders merge ───────────────────────────────────────────────────
+
+  describe('transcoders merge', () => {
+    it('should replace a transcoder by ID, preserving position in array', () => {
+      const base = baseOptions({ transcoders: [transcoder('converter'), transcoder('cloud')] });
+      const replacedConverter = transcoder('converter');
+      replacedConverter.options = { apiKey: 'new' };
+
+      const result = createRuntimeClientOptions(base, { transcoders: [replacedConverter] });
+
+      expect(result.transcoders).toHaveLength(2);
+      expect(result.transcoders![0]).toEqual(replacedConverter);
+      expect(result.transcoders![1]!.id).toBe('cloud');
+    });
+
+    it('should append a transcoder with a new ID', () => {
+      const base = baseOptions({ transcoders: [transcoder('converter')] });
+      const newTranscoder = transcoder('zoo-cloud');
+
+      const result = createRuntimeClientOptions(base, { transcoders: [newTranscoder] });
+
+      expect(result.transcoders).toHaveLength(2);
+      expect(result.transcoders![1]).toEqual(newTranscoder);
+    });
+
+    it('should handle transcoders when base has none', () => {
+      const base = baseOptions();
+      const newTranscoder = transcoder('converter');
+
+      const result = createRuntimeClientOptions(base, { transcoders: [newTranscoder] });
+
+      expect(result.transcoders).toEqual([newTranscoder]);
     });
   });
 });

@@ -27,6 +27,8 @@ export type RpcRequest = {
   rpcName: RpcName;
   /** The arguments for the RPC operation */
   args: unknown;
+  /** W3C trace context for distributed tracing propagation */
+  traceContext?: Record<string, string>;
 };
 
 /**
@@ -43,6 +45,8 @@ export type RpcResponse = {
   result: unknown;
   /** Error message if the RPC operation failed (infrastructure error) */
   error?: string;
+  /** W3C trace context echoed back from client for distributed tracing */
+  traceContext?: Record<string, string>;
 };
 
 /**

@@ -10,10 +10,6 @@
       "from": "./node_modules/replicad-opencascadejs/src/replicad_single.wasm",
       "to": "src/kernels/replicad/wasm/replicad_single.wasm"
     },
-    {
-      "from": "./node_modules/replicad-opencascadejs/src/replicad_with_exceptions.wasm",
-      "to": "src/kernels/replicad/wasm/replicad_with_exceptions.wasm"
-    },
     // KCL WASM file for Zoo kernel
     {
       "from": "./node_modules/@taucad/kcl-wasm-lib/kcl_wasm_lib_bg.wasm",

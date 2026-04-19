@@ -697,7 +697,7 @@ pnpm nx benchmark runtime
 | Kernel tests              | `packages/runtime/src/kernels/replicad/replicad.kernel.test.ts`                                   |
 | Kernel options            | `apps/ui/app/constants/kernel-worker.constants.ts`                                                |
 | WASM inspect tool         | `packages/runtime/scripts/wasm-inspect.mts`                                                       |
-| Size analysis             | `docs/research/wasm-size-analysis-v762-vs-v8rc4.md`                                               |
+| Size analysis             | `docs/research/ocjs-wasm-size-analysis-v762-vs-v8rc4.md`                                          |
 | Optimization plan         | `.cursor/plans/wasm_size_optimization_288da51b.plan.md`                                           |
 | Stress test model         | `libs/tau-examples/src/kernels/replicad/stress-test/main.ts`                                      |
 | Replicad shapes (meshing) | `repos/replicad/packages/replicad/src/shapes.ts`                                                  |

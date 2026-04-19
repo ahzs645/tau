@@ -1,0 +1,354 @@
+{
+  "uid": "tau-slo-executive",
+  "title": "SLO / Executive",
+  "tags": ["tau", "slo", "executive"],
+  "timezone": "browser",
+  "refresh": "1m",
+  "time": { "from": "now-24h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "service",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(up, service_name)",
+        "current": { "text": "tau-api", "value": "tau-api" },
+        "includeAll": false,
+        "refresh": 1
+      },
+      {
+        "name": "instance",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(up{service_name=\"$service\"}, instance)",
+        "current": { "text": "All", "value": "$__all" },
+        "includeAll": true,
+        "allValue": ".*",
+        "refresh": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "title": "API Availability (% requests < 5xx)",
+      "type": "gauge",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "(1 - (sum(rate(http_server_duration_count{service_name=~\"$service\",http_status_code=~\"5..\"}[24h])) / clamp_min(sum(rate(http_server_duration_count{service_name=~\"$service\"}[24h])), 1e-10))) * 100"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 95,
+          "max": 100,
+          "thresholds": {
+            "steps": [
+              { "value": 95, "color": "red" },
+              { "value": 99, "color": "yellow" },
+              { "value": 99.5, "color": "orange" },
+              { "value": 99.9, "color": "green" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "RPC Success Rate (24h)",
+      "type": "gauge",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 0 },
+      "targets": [
+        {
+          "expr": "(sum(rate(rpc_server_call_duration_count{service_name=~\"$service\",rpc_status=\"ok\"}[24h])) / clamp_min(sum(rate(rpc_server_call_duration_count{service_name=~\"$service\"}[24h])), 1e-10)) * 100"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 95,
+          "max": 100,
+          "thresholds": {
+            "steps": [
+              { "value": 95, "color": "red" },
+              { "value": 99, "color": "yellow" },
+              { "value": 99.5, "color": "orange" },
+              { "value": 99.9, "color": "green" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "API Latency SLO (p95 < 500ms)",
+      "type": "gauge",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 0 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(http_server_duration_bucket{service_name=~\"$service\"}[24h])) by (le))"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "min": 0,
+          "max": 2000,
+          "thresholds": {
+            "steps": [
+              { "value": 0, "color": "green" },
+              { "value": 300, "color": "#73BF69" },
+              { "value": 500, "color": "yellow" },
+              { "value": 1000, "color": "red" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "Active Sessions",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "ws_connections_active{service_name=~\"$service\"}",
+          "legendFormat": "WebSocket"
+        },
+        {
+          "expr": "sse_connections_active{service_name=~\"$service\"}",
+          "legendFormat": "SSE (Chat)"
+        }
+      ]
+    },
+    {
+      "title": "Total LLM Cost (24h)",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(increase(gen_ai_client_cost_total{service_name=~\"$service\"}[24h]))"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "currencyUSD" } }
+    },
+    {
+      "title": "Total Kernel Executions (24h)",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(increase(kernel_executions_total{service_name=~\"$service\"}[24h]))"
+        }
+      ]
+    },
+    {
+      "title": "Error Budget",
+      "type": "row",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 },
+      "collapsed": false,
+      "panels": []
+    },
+    {
+      "title": "API Error Budget Remaining",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 10 },
+      "targets": [
+        {
+          "expr": "1 - (sum(rate(http_server_duration_count{service_name=~\"$service\",http_status_code=~\"5..\"}[$__range])) / clamp_min(sum(rate(http_server_duration_count{service_name=~\"$service\"}[$__range])), 1e-10) / 0.001)",
+          "legendFormat": "Error Budget Remaining",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "steps": [
+              { "value": 0, "color": "red" },
+              { "value": 0.25, "color": "yellow" },
+              { "value": 0.5, "color": "green" }
+            ]
+          },
+          "custom": { "fillOpacity": 20 }
+        }
+      }
+    },
+    {
+      "title": "RPC Error Budget Remaining",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 10 },
+      "targets": [
+        {
+          "expr": "1 - (sum(rate(rpc_server_call_duration_count{service_name=~\"$service\",rpc_status=\"error\"}[$__range])) / clamp_min(sum(rate(rpc_server_call_duration_count{service_name=~\"$service\"}[$__range])), 1e-10) / 0.001)",
+          "legendFormat": "Error Budget Remaining",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "steps": [
+              { "value": 0, "color": "red" },
+              { "value": 0.25, "color": "yellow" },
+              { "value": 0.5, "color": "green" }
+            ]
+          },
+          "custom": { "fillOpacity": 20 }
+        }
+      }
+    },
+    {
+      "title": "API Burn Rate (1h)",
+      "description": "How fast the error budget is being consumed. >1 means burning faster than sustainable.",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 10 },
+      "targets": [
+        {
+          "expr": "(sum(rate(http_server_duration_count{service_name=~\"$service\",http_status_code=~\"5..\"}[1h])) / clamp_min(sum(rate(http_server_duration_count{service_name=~\"$service\"}[1h])), 1e-10)) / 0.001",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 2,
+          "thresholds": {
+            "steps": [
+              { "value": 0, "color": "green" },
+              { "value": 1, "color": "yellow" },
+              { "value": 5, "color": "red" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "API Burn Rate (6h)",
+      "description": "6-hour error budget consumption rate. >1 means burning faster than sustainable.",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 18 },
+      "targets": [
+        {
+          "expr": "(sum(rate(http_server_duration_count{service_name=~\"$service\",http_status_code=~\"5..\"}[6h])) / clamp_min(sum(rate(http_server_duration_count{service_name=~\"$service\"}[6h])), 1e-10)) / 0.001",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 2,
+          "thresholds": {
+            "steps": [
+              { "value": 0, "color": "green" },
+              { "value": 1, "color": "yellow" },
+              { "value": 5, "color": "red" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "API Burn Rate (24h)",
+      "description": "24-hour error budget consumption rate. >1 means burning faster than sustainable.",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 18 },
+      "targets": [
+        {
+          "expr": "(sum(rate(http_server_duration_count{service_name=~\"$service\",http_status_code=~\"5..\"}[24h])) / clamp_min(sum(rate(http_server_duration_count{service_name=~\"$service\"}[24h])), 1e-10)) / 0.001",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 2,
+          "thresholds": {
+            "steps": [
+              { "value": 0, "color": "green" },
+              { "value": 1, "color": "yellow" },
+              { "value": 5, "color": "red" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "RPC Burn Rate (6h)",
+      "description": "6-hour RPC error budget consumption rate.",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 18 },
+      "targets": [
+        {
+          "expr": "(sum(rate(rpc_server_call_duration_count{rpc_status=\"error\",service_name=~\"$service\"}[6h])) / clamp_min(sum(rate(rpc_server_call_duration_count{service_name=~\"$service\"}[6h])), 1e-10)) / 0.001",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 2,
+          "thresholds": {
+            "steps": [
+              { "value": 0, "color": "green" },
+              { "value": 1, "color": "yellow" },
+              { "value": 5, "color": "red" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "RPC Burn Rate (24h)",
+      "description": "24-hour RPC error budget consumption rate.",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 18 },
+      "targets": [
+        {
+          "expr": "(sum(rate(rpc_server_call_duration_count{rpc_status=\"error\",service_name=~\"$service\"}[24h])) / clamp_min(sum(rate(rpc_server_call_duration_count{service_name=~\"$service\"}[24h])), 1e-10)) / 0.001",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 2,
+          "thresholds": {
+            "steps": [
+              { "value": 0, "color": "green" },
+              { "value": 1, "color": "yellow" },
+              { "value": 5, "color": "red" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "Error Logs",
+      "type": "logs",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 100 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [{ "expr": "{service_name=~\"$service\"} |= \"level\" | json | level = \"error\"", "refId": "A" }],
+      "options": {
+        "showTime": true,
+        "showLabels": true,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "sortOrder": "Descending"
+      }
+    },
+    {
+      "title": "Recent Traces",
+      "type": "traces",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 108 },
+      "datasource": { "type": "tempo", "uid": "tempo" },
+      "targets": [{ "query": "{resource.service.name=~\"$service\"}", "refId": "A", "queryType": "traceqlSearch" }]
+    }
+  ],
+  "schemaVersion": 39
+}

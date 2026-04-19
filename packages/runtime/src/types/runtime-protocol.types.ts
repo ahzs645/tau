@@ -8,21 +8,76 @@
  * commands (fileChanged, configureMiddleware, cleanup) do not require a requestId.
  */
 
-import type { GeometryFile, ExportFormat, LogLevel, LogOrigin } from '@taucad/types';
+import type { FileExtension, GeometryFile, GeometrySvg, GeometryWebRtc, LogEntry } from '@taucad/types';
 import type {
-  HashedGeometryResult,
   GetParametersResult,
   ExportGeometryResult,
   KernelIssue,
+  KernelResult,
   MiddlewareRegistrations,
   BundlerRegistrations,
+  CapabilitiesManifest,
 } from '#types/runtime.types.js';
-import type { Tessellation } from '#types/runtime-kernel.types.js';
+
+// =============================================================================
+// Two-Layer Geometry Transport Types
+// =============================================================================
+
+/**
+ * Discriminated delivery descriptor for GLTF content in transit.
+ *
+ * `inline` carries the raw bytes in the message (traditional ArrayBuffer transfer).
+ * `pooled` carries only the pool/key coordinates — the main thread resolves bytes
+ * from SharedPool for zero-copy access.
+ * @internal
+ */
+export type GltfContentDelivery =
+  | { readonly delivery: 'inline'; readonly bytes: Uint8Array<ArrayBuffer> }
+  | { readonly delivery: 'pooled'; readonly key: string };
+
+/**
+ * GLTF geometry in transit — content delivered inline or via shared pool.
+ * @internal
+ */
+export type GeometryGltfTransport = {
+  readonly format: 'gltf';
+  readonly content: GltfContentDelivery;
+};
+
+/**
+ * All geometry variants in transit.
+ * SVG and WebRTC pass through unchanged — only GLTF uses the two-layer transport.
+ * @internal
+ */
+export type GeometryResponseTransport = GeometrySvg | GeometryGltfTransport | GeometryWebRtc;
+
+/**
+ * Hashed geometry in transit (wire format).
+ * @internal
+ */
+export type GeometryTransport = GeometryResponseTransport & { readonly hash: string };
+
+/**
+ * Full geometry result in transit (wire format).
+ * Used on the MessagePort protocol; resolved to `HashedGeometryResult` by RuntimeClient.
+ * @internal
+ */
+export type HashedGeometryResultTransport = KernelResult<GeometryTransport[]>;
+
+/**
+ * Entry describing a transcoder module to load during worker initialization.
+ * @internal
+ */
+export type TranscoderModuleEntry = {
+  id: string;
+  moduleUrl: string;
+  options?: Record<string, unknown>;
+};
 
 /**
  * Commands sent from the kernel machine (main thread) to the runtime worker.
  * Request/response commands include a `requestId` for correlation.
- * @public
+ * @internal
  */
 export type RuntimeCommand =
   | {
@@ -31,21 +86,26 @@ export type RuntimeCommand =
       options: Record<string, unknown>;
       middlewareEntries: MiddlewareRegistrations;
       bundlerEntries?: BundlerRegistrations;
+      transcoderModules?: TranscoderModuleEntry[];
       fileSystemPort?: MessagePort;
       signalBuffer?: SharedArrayBuffer;
+      /** SharedArrayBuffer for the geometry pool (zero-IPC geometry data exchange). */
+      geometryPoolBuffer?: SharedArrayBuffer;
+      /** SharedArrayBuffer for the file pool (zero-IPC file content caching). */
+      filePoolBuffer?: SharedArrayBuffer;
     }
   | {
       type: 'render';
       requestId: string;
       file: GeometryFile;
       params: Record<string, unknown>;
-      tessellation?: Tessellation;
+      options?: Record<string, unknown>;
     }
   | {
       type: 'setFile';
       file: GeometryFile;
       parameters: Record<string, unknown>;
-      tessellation?: Tessellation;
+      options?: Record<string, unknown>;
     }
   | {
       type: 'setParameters';
@@ -54,8 +114,8 @@ export type RuntimeCommand =
   | {
       type: 'export';
       requestId: string;
-      format: ExportFormat;
-      tessellation?: Tessellation;
+      format: FileExtension;
+      options?: Record<string, unknown>;
     }
   | { type: 'cancel'; requestId: string }
   | { type: 'fileChanged'; paths: string[] }
@@ -87,51 +147,66 @@ export type RenderPhase = string;
  * Worker state as reported via the shared signal channel and stateChanged responses.
  * @public
  */
-export type WorkerState = 'idle' | 'rendering' | 'error';
+export type WorkerState = 'idle' | 'buffering' | 'rendering' | 'error';
 
 /**
  * Integer enum for worker state in the SharedArrayBuffer signal channel.
- * @public
+ * @internal
  */
 export const workerStateEnum = {
   idle: 0,
   rendering: 1,
   error: 2,
+  buffering: 3,
 } as const satisfies Record<WorkerState, number>;
 
 /**
  * Reverse lookup from integer to WorkerState string.
- * @public
+ * @internal
  */
 export const workerStateNames: Record<number, WorkerState> = {
   [workerStateEnum.idle]: 'idle',
   [workerStateEnum.rendering]: 'rendering',
   [workerStateEnum.error]: 'error',
+  [workerStateEnum.buffering]: 'buffering',
 };
 
 /**
  * Int32Array index layout for the bidirectional GrowableSharedArrayBuffer signal channel.
  *
- * - Slot 0: abort generation (main -> worker, Atomics.store / Atomics.load)
+ * - Slot 0: abort generation (main -> worker, Atomics.add / Atomics.load)
  * - Slot 1: worker state enum (worker -> main, Atomics.store + Atomics.notify / Atomics.waitAsync)
  * - Slot 2: progress percent (worker -> main, Atomics.store, polled)
  * - Slot 3: render phase (worker -> main, Atomics.store, polled)
- * @public
+ * - Slot 4: abort reason (main -> worker, Atomics.store / Atomics.load)
+ * @internal
  */
 export const signalSlot = {
   abortGeneration: 0,
   workerState: 1,
   progressPercent: 2,
   renderPhase: 3,
+  abortReason: 4,
+} as const;
+
+/**
+ * Reason why the current render was aborted, written by the main thread
+ * and read by the worker to decide how to handle the abort (error vs. silent discard).
+ * @internal
+ */
+export const abortReason = {
+  none: 0,
+  superseded: 1,
+  timeout: 2,
 } as const;
 
 /**
  * Responses sent from the runtime worker back to the kernel machine (main thread).
  * Request-scoped responses include the `requestId` from the originating command.
- * @public
+ * @internal
  */
 export type RuntimeResponse =
-  | { type: 'initialized'; requestId: string }
+  | { type: 'initialized'; requestId: string; capabilities: CapabilitiesManifest }
   | {
       type: 'parametersResolved';
       requestId: string;
@@ -140,7 +215,7 @@ export type RuntimeResponse =
   | {
       type: 'geometryComputed';
       requestId: string;
-      result: HashedGeometryResult;
+      result: HashedGeometryResultTransport;
     }
   | { type: 'exported'; requestId: string; result: ExportGeometryResult }
   | { type: 'error'; requestId: string; issues: KernelIssue[] }
@@ -151,24 +226,21 @@ export type RuntimeResponse =
       detail?: Record<string, unknown>;
     }
   | {
+      type: 'activeKernelChanged';
+      kernelId: string | undefined;
+    }
+  | {
       type: 'stateChanged';
       state: WorkerState;
       detail?: string;
     }
   | {
       type: 'log';
-      level: LogLevel;
-      message: string;
-      origin?: LogOrigin;
-      data?: unknown;
+      entry: LogEntry;
     }
   | {
       type: 'logBatch';
-      entries: Array<{
-        level: LogLevel;
-        message: string;
-        origin?: LogOrigin;
-        data?: unknown;
-      }>;
+      entries: LogEntry[];
     }
-  | { type: 'telemetry'; entries: PerformanceEntryData[] };
+  | { type: 'telemetry'; entries: PerformanceEntryData[] }
+  | { type: 'capabilitiesUpdated'; capabilities: CapabilitiesManifest };

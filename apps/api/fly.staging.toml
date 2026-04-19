@@ -5,6 +5,8 @@
 
 app = 'tau-api-staging'
 primary_region = 'syd'
+kill_signal = 'SIGTERM'
+kill_timeout = '30s'
 
 [build]
 dockerfile = 'Dockerfile'
@@ -18,6 +20,8 @@ LANGSMITH_PROJECT = 'tau-api-staging'
 AUTH_URL = 'https://api.taucad.dev'
 LOG_SERVICE = 'fly'
 LOG_LEVEL = 'info'
+OTEL_METRICS_PORT = '9464'
+OTEL_EXPORTER_OTLP_COMPRESSION = 'gzip'
 # Additional CORS origins for Netlify preview deployments and review apps
 ADDITIONAL_CORS_ORIGINS = '["https://deploy-preview-*--taucad.netlify.app","https://tau-ui-pr-*.fly.dev"]'
 
@@ -28,6 +32,17 @@ auto_stop_machines = 'stop'
 auto_start_machines = true
 min_machines_running = 1
 processes = ['app']
+
+[[http_service.checks]]
+interval = "10s"
+grace_period = "30s"
+method = "GET"
+path = "/health/ready"
+timeout = "2s"
+
+[metrics]
+port = 9464
+path = "/metrics"
 
 [[vm]]
 memory = '1gb'

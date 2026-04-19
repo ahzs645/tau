@@ -15,6 +15,8 @@ import { createInProcessTransport } from '#transport/in-process-transport.js';
 import { replicad } from '#plugins/kernel-factories.js';
 import { esbuild } from '#plugins/bundler-factories.js';
 import type { BenchmarkCase } from '#benchmarks/benchmark-suite.js';
+import type { CpuProfile, CpuProfiler } from '#benchmarks/cpu-profiler.js';
+import type { ProfileAnalysis } from '#benchmarks/profile-analyzer.js';
 
 // =============================================================================
 // Types
@@ -33,14 +35,14 @@ export type BenchmarkResult = {
   stddev: number;
   telemetry: PerformanceEntryData[][];
   ocSummary?: Record<string, { calls: number; totalMs: number }>;
+  cpuProfile?: CpuProfile;
+  profileAnalysis?: ProfileAnalysis;
 };
 
 /** WASM binary size metadata for tracking size regressions. */
 export type WasmSizeInfo = {
   singleWasmBytes: number;
   singleJsBytes: number;
-  exceptionsWasmBytes?: number;
-  exceptionsJsBytes?: number;
 };
 
 /** Build provenance metadata linking benchmark results to build configuration. */
@@ -72,8 +74,12 @@ export type BenchmarkRunnerOptions = {
   iterations: number;
   ocTracing?: 'off' | 'summary' | 'per-call';
   /** WASM variant or custom config. Defaults to `'single'`. */
-  wasm?: 'single' | 'single-exceptions' | { wasmUrl: string; wasmBindingsUrl: string };
+  wasm?: 'single' | { wasmUrl: string; wasmBindingsUrl: string };
   onProgress?: (completed: number, total: number, caseName: string) => void;
+  /** Enable V8 CPU profiling for per-function timing breakdown. */
+  cpuProfile?: boolean;
+  /** CPU profiler sampling interval in microseconds (default: 100). */
+  cpuProfileInterval?: number;
 };
 
 // =============================================================================
@@ -160,7 +166,14 @@ export async function runBenchmarks(
   cases: BenchmarkCase[],
   options: BenchmarkRunnerOptions,
 ): Promise<BenchmarkRunResult> {
-  const { iterations, ocTracing = 'summary', wasm = 'single', onProgress } = options;
+  const {
+    iterations,
+    ocTracing = 'summary',
+    wasm = 'single',
+    onProgress,
+    cpuProfile: enableCpuProfile = false,
+    cpuProfileInterval = 100,
+  } = options;
   const totalWork = cases.length;
   const results: BenchmarkResult[] = [];
   const runStart = performance.now();
@@ -191,7 +204,15 @@ export async function runBenchmarks(
       telemetryBatches.push(entries);
     });
 
-    const totalRuns = iterations + 1; // +1 for warmup run (discarded)
+    const warmupRuns = 3;
+    const totalRuns = iterations + warmupRuns;
+
+    let profiler: CpuProfiler | undefined;
+    if (enableCpuProfile) {
+      const cpuProfilerModule = await import('#benchmarks/cpu-profiler.js');
+      profiler = new cpuProfilerModule.CpuProfiler();
+    }
+
     for (let iter = 0; iter < totalRuns; iter++) {
       performance.clearMeasures();
       performance.clearMarks();
@@ -203,6 +224,11 @@ export async function runBenchmarks(
         }
 
         client.notifyFileChanged(Object.keys(absoluteFiles));
+      }
+
+      if (profiler && iter === warmupRuns) {
+        globalThis.gc?.();
+        await profiler.start(cpuProfileInterval);
       }
 
       const start = performance.now();
@@ -217,15 +243,24 @@ export async function runBenchmarks(
         throw new Error(`Benchmark "${benchCase.name}" render failed (iteration ${iter}): ${messages}`);
       }
 
-      if (iter === 0) {
-        continue; // Discard warmup iteration to avoid cold-start skew
+      if (iter < warmupRuns) {
+        continue;
       }
 
       timings.push(elapsed);
       allTelemetry.push(telemetryBatches.flat());
     }
 
+    let cpuProfileResult: CpuProfile | undefined;
+    let profileAnalysis: ProfileAnalysis | undefined;
+    if (profiler) {
+      cpuProfileResult = await profiler.stop();
+      const { analyzeProfile } = await import('#benchmarks/profile-analyzer.js');
+      profileAnalysis = analyzeProfile(cpuProfileResult, allTelemetry);
+    }
+
     client.terminate();
+    globalThis.gc?.();
 
     const stats = computeStats(timings);
     const ocSummary = extractOcSummary(allTelemetry);
@@ -238,6 +273,8 @@ export async function runBenchmarks(
       ...stats,
       telemetry: allTelemetry,
       ocSummary,
+      cpuProfile: cpuProfileResult,
+      profileAnalysis,
     });
   }
 
@@ -286,8 +323,6 @@ async function collectWasmSizes(): Promise<WasmSizeInfo | undefined> {
     return {
       singleWasmBytes: singleWasm,
       singleJsBytes: jsSize('replicad_single.js'),
-      exceptionsWasmBytes: stat('replicad_with_exceptions.wasm'),
-      exceptionsJsBytes: jsSize('replicad_with_exceptions.js') || undefined,
     };
   } catch {
     return undefined;

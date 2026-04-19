@@ -5,6 +5,12 @@ import type { AnyActorRef } from 'xstate';
 import type * as THREE from 'three';
 import { screenshotCapabilityMachine, calculateOptimalGrid } from '#machines/screenshot-capability.machine.js';
 
+// Three/addons -> lottie_canvas.module.js calls HTMLCanvasElement.getContext()
+// during static init, which jsdom does not implement without the canvas npm
+// package. Stub the transitive import so the module graph loads cleanly.
+// eslint-disable-next-line @typescript-eslint/naming-convention -- Three.js export name
+vi.mock('three/addons', () => ({ LineSegments2: vi.fn() }));
+
 /* oxlint-disable @typescript-eslint/consistent-type-assertions -- test mocks use type assertions for complex third-party types */
 
 // ---------------------------------------------------------------------------

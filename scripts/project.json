@@ -1,20 +1,20 @@
 {
   "name": "scripts",
   "$schema": "../node_modules/nx/schemas/project-schema.json",
-  "sourceRoot": "scripts",
+  "sourceRoot": "scripts/src",
   "projectType": "library",
   "tags": ["scope:tooling", "type:scripts"],
   "targets": {
     "validate-frontmatter": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "node scripts/validate-frontmatter.ts"
+        "command": "node scripts/src/validate-frontmatter.ts"
       }
     },
     "validate-project-names": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "node scripts/validate-project-names.ts"
+        "command": "node scripts/src/validate-project-names.ts"
       }
     }
   }

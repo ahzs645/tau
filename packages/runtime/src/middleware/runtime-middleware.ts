@@ -6,6 +6,7 @@ import type {
   WrapCreateGeometryHook,
   WrapExportGeometryHook,
   WrapGetParametersHook,
+  GetMiddlewareDependenciesHook,
   KernelMiddlewareRuntime,
   MiddlewareState,
 } from '#types/runtime-middleware.types.js';
@@ -51,6 +52,8 @@ export type KernelMiddlewareOptions<
   stateSchema?: StateSchema;
   /** Optional Zod schema for middleware options with .default() values for each field. */
   optionsSchema?: OptionsSchema;
+  /** Hook to declare additional file dependencies for cache key computation */
+  getDependencies?: GetMiddlewareDependenciesHook<z.infer<OptionsSchema>>;
   /** Wrap-style hook for createGeometry with onion model execution */
   wrapCreateGeometry?: WrapCreateGeometryHook<z.infer<StateSchema>, z.infer<OptionsSchema>>;
   /** Wrap-style hook for exportGeometry with onion model execution */
@@ -83,6 +86,8 @@ export type KernelMiddleware<
   stateSchema?: StateSchema;
   /** Zod schema for validating and defaulting options (if provided) */
   optionsSchema?: OptionsSchema;
+  /** Hook to declare additional file dependencies for cache key computation */
+  getDependencies?: GetMiddlewareDependenciesHook<z.infer<OptionsSchema>>;
   /** Wrap-style hook for createGeometry with onion model execution */
   wrapCreateGeometry?: WrapCreateGeometryHook<z.infer<StateSchema>, z.infer<OptionsSchema>>;
   /** Wrap-style hook for exportGeometry with onion model execution */
@@ -128,6 +133,7 @@ export function defineMiddleware<
     enabled: options.enabled,
     stateSchema: options.stateSchema,
     optionsSchema: options.optionsSchema,
+    getDependencies: options.getDependencies,
     wrapCreateGeometry: options.wrapCreateGeometry,
     wrapExportGeometry: options.wrapExportGeometry,
     wrapGetParameters: options.wrapGetParameters,
@@ -251,6 +257,8 @@ export type CreateMiddlewareRuntimeOptions = {
   options?: Record<string, unknown>;
   /** Pre-created logger to avoid closure allocation per operation */
   logger?: RuntimeLogger;
+  /** Callback for middleware to register additional watch paths with optional debounce tiers */
+  registerWatchPath?: (absolutePath: string, options?: { debounceMs?: number }) => void;
 };
 
 /**
@@ -264,16 +272,25 @@ export function createMiddlewareRuntime<
   State extends Record<string, unknown> = EmptyState,
   Options extends Record<string, unknown> = EmptyState,
 >(runtimeOptions: CreateMiddlewareRuntimeOptions): KernelMiddlewareRuntime<State, Options> {
-  const { onLog, middlewareName, filesystem, dependencies, dependencyHash, stateSchema, options, logger } =
-    runtimeOptions;
+  const {
+    onLog,
+    middlewareName,
+    filesystem,
+    dependencies,
+    dependencyHash,
+    stateSchema,
+    options,
+    logger,
+    registerWatchPath,
+  } = runtimeOptions;
 
   return {
     logger: logger ?? createMiddlewareLogger(onLog, middlewareName),
     filesystem,
     state: createMiddlewareState<State>(stateSchema),
-
     options: (options ?? {}) as Options,
     dependencies,
     dependencyHash,
+    registerWatchPath: registerWatchPath ?? (() => undefined),
   };
 }

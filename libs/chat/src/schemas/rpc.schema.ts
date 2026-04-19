@@ -100,6 +100,8 @@ const readFileRpc = defineRpc({
     content: zod.string(),
     totalLines: zod.number(),
     startLine: zod.number().optional(),
+    createdAt: zod.string().optional(),
+    modifiedAt: zod.string().optional(),
   }),
 });
 
@@ -127,6 +129,7 @@ const directoryEntrySchema = zod.object({
   name: zod.string(),
   type: zod.enum(['file', 'dir']),
   size: zod.number(),
+  modifiedAt: zod.string().optional(),
 });
 
 const listDirectoryRpc = defineRpc({
@@ -159,6 +162,13 @@ const grepRpc = defineRpc({
   }),
 });
 
+const globFileEntrySchema = zod.object({
+  path: zod.string(),
+  isDirectory: zod.boolean().optional(),
+  size: zod.number().optional(),
+  modifiedAt: zod.string().optional(),
+});
+
 const globSearchRpc = defineRpc({
   input: zod.object({
     pattern: zod.string(),
@@ -166,6 +176,7 @@ const globSearchRpc = defineRpc({
   }),
   success: zod.object({
     files: zod.array(zod.string()),
+    entries: zod.array(globFileEntrySchema).optional(),
     totalFiles: zod.number(),
   }),
 });
@@ -209,6 +220,30 @@ const captureScreenshotRpc = defineRpc({
   }),
 });
 
+const appendFileRpc = defineRpc({
+  input: zod.object({
+    targetFile: zod.string(),
+    content: zod.string(),
+  }),
+  success: zod.object({
+    message: zod.string().optional(),
+    bytesWritten: zod.number(),
+  }),
+});
+
+const editFileRpc = defineRpc({
+  input: zod.object({
+    targetFile: zod.string(),
+    oldString: zod.string(),
+    newString: zod.string(),
+    replaceAll: zod.boolean().optional(),
+  }),
+  success: zod.object({
+    message: zod.string().optional(),
+    occurrences: zod.number(),
+  }),
+});
+
 // =============================================================================
 // RPC Schemas Registry
 // =============================================================================
@@ -234,6 +269,8 @@ export type RpcSchemasRegistry = {
   [rpcName.captureObservations]: RpcSchemaEntry<CaptureObservationsRpcInput, CaptureObservationsRpcResult>;
   [rpcName.fetchGeometry]: RpcSchemaEntry<FetchGeometryRpcInput, FetchGeometryRpcResult>;
   [rpcName.captureScreenshot]: RpcSchemaEntry<CaptureScreenshotRpcInput, CaptureScreenshotRpcResult>;
+  [rpcName.appendFile]: RpcSchemaEntry<AppendFileRpcInput, AppendFileRpcResult>;
+  [rpcName.editFile]: RpcSchemaEntry<EditFileRpcInput, EditFileRpcResult>;
 };
 
 /**
@@ -281,6 +318,14 @@ export const rpcSchemasRegistry: RpcSchemasRegistry = {
   [rpcName.captureScreenshot]: {
     inputSchema: captureScreenshotRpc.inputSchema,
     resultSchema: captureScreenshotRpc.resultSchema,
+  },
+  [rpcName.appendFile]: {
+    inputSchema: appendFileRpc.inputSchema,
+    resultSchema: appendFileRpc.resultSchema,
+  },
+  [rpcName.editFile]: {
+    inputSchema: editFileRpc.inputSchema,
+    resultSchema: editFileRpc.resultSchema,
   },
 };
 
@@ -404,3 +449,17 @@ export type CaptureScreenshotRpcInput = z.infer<typeof captureScreenshotRpc.inpu
 export type CaptureScreenshotRpcSuccess = z.infer<typeof captureScreenshotRpc.successSchema>;
 /** @public */
 export type CaptureScreenshotRpcResult = z.infer<typeof captureScreenshotRpc.resultSchema>;
+
+/** @public */
+export type AppendFileRpcInput = z.infer<typeof appendFileRpc.inputSchema>;
+/** @public */
+export type AppendFileRpcSuccess = z.infer<typeof appendFileRpc.successSchema>;
+/** @public */
+export type AppendFileRpcResult = z.infer<typeof appendFileRpc.resultSchema>;
+
+/** @public */
+export type EditFileRpcInput = z.infer<typeof editFileRpc.inputSchema>;
+/** @public */
+export type EditFileRpcSuccess = z.infer<typeof editFileRpc.successSchema>;
+/** @public */
+export type EditFileRpcResult = z.infer<typeof editFileRpc.resultSchema>;

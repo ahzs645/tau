@@ -36,9 +36,6 @@ export default defineKernel({
   async initialize(options, runtime) {
     /* load WASM/SDK, register modules */
   },
-  async canHandle({ filePath, extension }, runtime) {
-    /* detect file type — must be fast */
-  },
   async getDependencies({ filePath }, runtime) {
     /* resolve deps — usually runtime.bundler.resolveDependencies(filePath) for JS/TS */
   },
@@ -77,7 +74,7 @@ All kernel tests MUST use helpers from `#testing/kernel-testing.utils.js`. Do NO
 
 | Helper                                            | Purpose                                                                           |
 | ------------------------------------------------- | --------------------------------------------------------------------------------- |
-| `createMockKernelRuntime(options?)`               | Unit tests calling kernel methods directly (`canHandle`, `createGeometry`, etc.)  |
+| `createMockKernelRuntime(options?)`               | Unit tests calling kernel methods directly (`createGeometry`, etc.)               |
 | `createTestWorker(definition, files, options?)`   | Integration tests via `KernelRuntimeWorker` with seeded filesystem                |
 | `createGeometryFile(filename, basePath?)`         | Build `GeometryFile` for worker methods                                           |
 | `createGeometryTestHelpers()`                     | GLTF validation (`expectValidGltf`, `expectVertexCount`, `expectBoundingBoxSize`) |
@@ -90,7 +87,7 @@ All kernel tests MUST use helpers from `#testing/kernel-testing.utils.js`. Do NO
 ```typescript
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mock } from 'vitest-mock-extended';
-import type { KernelRuntime, CanHandleInput, CreateGeometryInput } from '#types/runtime-kernel.types.js';
+import type { KernelRuntime, CreateGeometryInput } from '#types/runtime-kernel.types.js';
 import { createMockKernelRuntime } from '#testing/kernel-testing.utils.js';
 import myKernel from '#kernels/my-kernel/my-kernel.kernel.js';
 
@@ -99,13 +96,6 @@ afterEach(() => {
 });
 
 describe('MyKernel', () => {
-  describe('canHandle', () => {
-    it('should return true for supported extension', async () => {
-      const result = await myKernel.canHandle!(mock<CanHandleInput>({ extension: 'ext' }), mock<KernelRuntime>(), {});
-      expect(result).toBe(true);
-    });
-  });
-
   describe('createGeometry', () => {
     it('should return geometry on success', async () => {
       const runtime = createMockKernelRuntime({
@@ -126,7 +116,6 @@ describe('MyKernel', () => {
 
 ### Minimum coverage
 
-- `canHandle` — positive and negative cases
 - `getParameters` — defaults extraction + empty fallback
 - `createGeometry` — happy path + parameterized + error cases
 - `exportGeometry` — supported and unsupported formats + no-geometry failure
@@ -348,7 +337,6 @@ Keep commits logically grouped (implementation, wiring, docs) if practical.
 
 - Forgot `tsdown` entry → build output missing
 - Forgot `kernels-entry.ts` export → consumer import fails
-- `canHandle` too broad/slow → kernel mis-selection
 - Missing `builtinModuleNames` for JS/TS kernels → transitive import detection fails
 - Missing `publishConfig` export → package consumers break
 - Added kernel to code but not to docs comparisons → docs drift

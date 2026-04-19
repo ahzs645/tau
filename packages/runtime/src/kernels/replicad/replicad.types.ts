@@ -23,5 +23,7 @@ export type GeometryReplicad = {
   };
   color?: string;
   opacity?: number;
+  metalness?: number;
+  roughness?: number;
   name: string;
 };

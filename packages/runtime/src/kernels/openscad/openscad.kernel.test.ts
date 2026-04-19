@@ -1,12 +1,15 @@
 /* oxlint-disable max-lines -- comprehensive kernel test suite */
 import { describe, it, expect } from 'vitest';
+import { NodeIO } from '@gltf-transform/core';
 import openscadKernel from '#kernels/openscad/openscad.kernel.js';
-import { createGeometryTestHelpers } from '#testing/kernel-geometry-testing.utils.js';
+import { createGeometryTestHelpers, extractGltfFromResult } from '#testing/kernel-geometry-testing.utils.js';
 import {
+  assertSuccess,
   createGeometryFile,
   createTestWorker,
   createTestGeometry,
   getTestParameters,
+  getTestFileSystem,
 } from '#testing/kernel-testing.utils.js';
 
 /* eslint-disable @typescript-eslint/naming-convention -- OpenSCAD uses snake_case for parameter names */
@@ -2077,6 +2080,280 @@ cube([10, 10, 10]);`,
         }
       });
     });
+  });
+});
+
+// =============================================================================
+// Unresolved dependency tracking
+// =============================================================================
+
+describe('OpenSCAD Kernel – unresolved dependency tracking', () => {
+  it('should include missing include paths in watch set', async () => {
+    const worker = await createWorker({
+      'assembly.scad': `
+        include <parts/base.scad>
+        include <parts/top.scad>
+        cube([10, 10, 10]);
+      `,
+    });
+
+    const geometryFile = createGeometryFile('assembly.scad');
+
+    await worker.render({
+      file: geometryFile,
+      parameters: {},
+    });
+
+    // OpenSCAD still renders the cube despite missing includes, but we
+    // need the watch set to include the unresolved paths so creating
+    // those files later triggers a re-render.
+    const watchedPaths = worker.getWatchedPaths();
+    expect(watchedPaths).toContain('/projects/test/assembly.scad');
+    expect(watchedPaths).toContain('/projects/test/parts/base.scad');
+    expect(watchedPaths).toContain('/projects/test/parts/top.scad');
+  });
+
+  it('should re-render when previously missing include file is created', async () => {
+    const worker = await createWorker({
+      'main.scad': `
+        include <lib/utils.scad>
+        cube([my_size, my_size, my_size]);
+      `,
+    });
+
+    const geometryFile = createGeometryFile('main.scad');
+
+    await worker.render({
+      file: geometryFile,
+      parameters: {},
+    });
+
+    // Write the missing include file directly to the live filesystem
+    const fs = getTestFileSystem();
+    await fs.mkdir('/projects/test/lib', { recursive: true });
+    await fs.writeFile('/projects/test/lib/utils.scad', 'my_size = 20;');
+
+    await worker.notifyFileChanged(['/projects/test/lib/utils.scad']);
+
+    const result2 = await worker.createGeometry({
+      file: geometryFile,
+      parameters: {},
+    });
+
+    expect(result2.success).toBe(true);
+  });
+});
+
+// =============================================================================
+// Tessellation
+// =============================================================================
+
+describe('Tessellation', () => {
+  const sphereCode = 'sphere(r=10);';
+
+  const getVertexCount = async (glbData: Uint8Array<ArrayBuffer>): Promise<number> => {
+    const document = await new NodeIO().readBinary(glbData);
+    let count = 0;
+    for (const mesh of document.getRoot().listMeshes()) {
+      for (const primitive of mesh.listPrimitives()) {
+        if (primitive.getMode() === 4) {
+          count += primitive.getAttribute('POSITION')!.getCount();
+        }
+      }
+    }
+
+    return count;
+  };
+
+  it('should produce denser mesh with higher segment count', async () => {
+    const worker = await createWorker({ 'sphere.scad': sphereCode });
+    const geometryFile = createGeometryFile('sphere.scad');
+
+    const coarseResult = await worker.createGeometry({
+      file: geometryFile,
+      parameters: {},
+      options: { tessellation: { segments: 8, minimumAngle: 30, minimumSize: 5 } },
+    });
+    assertSuccess(coarseResult);
+
+    const fineResult = await worker.createGeometry({
+      file: geometryFile,
+      parameters: {},
+      options: { tessellation: { segments: 64, minimumAngle: 3, minimumSize: 0.5 } },
+    });
+    assertSuccess(fineResult);
+
+    const coarseVertices = await getVertexCount(extractGltfFromResult(coarseResult)!);
+    const fineVertices = await getVertexCount(extractGltfFromResult(fineResult)!);
+
+    // Fine tessellation must produce significantly more vertices than coarse
+    expect(fineVertices).toBeGreaterThan(coarseVertices * 1.5);
+  });
+
+  it('should respect user-defined $fn in parameters over render option defaults', async () => {
+    const worker = await createWorker({ 'sphere.scad': sphereCode });
+    const geometryFile = createGeometryFile('sphere.scad');
+
+    // Render with high-quality render options but user $fn=8 in parameters
+    const result = await worker.createGeometry({
+      file: geometryFile,
+      parameters: { $fn: 8 },
+      options: { tessellation: { segments: 64, minimumAngle: 3, minimumSize: 0.5 } },
+    });
+    assertSuccess(result);
+    const userVertices = await getVertexCount(extractGltfFromResult(result)!);
+
+    // Also render with only $fn=8 in parameters (no render options)
+    const baselineResult = await worker.createGeometry({
+      file: geometryFile,
+      parameters: { $fn: 8 },
+    });
+    assertSuccess(baselineResult);
+    const baselineVertices = await getVertexCount(extractGltfFromResult(baselineResult)!);
+
+    // Both should produce the same count: user $fn=8 in parameters takes precedence
+    expect(userVertices).toBe(baselineVertices);
+  });
+
+  it('should inject render options when no user-defined $fn exists', async () => {
+    const worker = await createWorker({ 'sphere.scad': sphereCode });
+    const geometryFile = createGeometryFile('sphere.scad');
+
+    const withTessResult = await worker.createGeometry({
+      file: geometryFile,
+      parameters: {},
+      options: { tessellation: { segments: 64, minimumAngle: 3, minimumSize: 0.5 } },
+    });
+    assertSuccess(withTessResult);
+
+    const withoutTessResult = await worker.createGeometry({
+      file: geometryFile,
+      parameters: {},
+    });
+    assertSuccess(withoutTessResult);
+
+    const withTessVertices = await getVertexCount(extractGltfFromResult(withTessResult)!);
+    const withoutTessVertices = await getVertexCount(extractGltfFromResult(withoutTessResult)!);
+
+    // Tessellation injection should change the mesh density
+    expect(withTessVertices).not.toBe(withoutTessVertices);
+  });
+});
+
+// =============================================================================
+// Export Geometry
+// =============================================================================
+
+describe('Export', () => {
+  const sphereCode = 'sphere(r=10);';
+
+  const getVertexCount = async (glbData: Uint8Array<ArrayBuffer>): Promise<number> => {
+    const document = await new NodeIO().readBinary(glbData);
+    let count = 0;
+    for (const mesh of document.getRoot().listMeshes()) {
+      for (const primitive of mesh.listPrimitives()) {
+        if (primitive.getMode() === 4) {
+          count += primitive.getAttribute('POSITION')!.getCount();
+        }
+      }
+    }
+
+    return count;
+  };
+
+  it('should export GLB successfully', async () => {
+    const worker = await createWorker({ 'sphere.scad': sphereCode });
+    const geometryFile = createGeometryFile('sphere.scad');
+    await worker.createGeometry({ file: geometryFile, parameters: {} });
+
+    const exportResult = await worker.exportGeometry('glb');
+    assertSuccess(exportResult);
+    expect(exportResult.data.length).toBeGreaterThan(0);
+    expect(exportResult.data[0]?.bytes).toBeInstanceOf(Uint8Array);
+  });
+
+  it('should export GLTF successfully', async () => {
+    const worker = await createWorker({ 'sphere.scad': sphereCode });
+    const geometryFile = createGeometryFile('sphere.scad');
+    await worker.createGeometry({ file: geometryFile, parameters: {} });
+
+    const exportResult = await worker.exportGeometry('gltf');
+    assertSuccess(exportResult);
+    expect(exportResult.data.length).toBeGreaterThan(0);
+  });
+
+  it('should produce different face counts with different tessellation options on export', async () => {
+    const worker = await createWorker({ 'sphere.scad': sphereCode });
+    const geometryFile = createGeometryFile('sphere.scad');
+    await worker.createGeometry({ file: geometryFile, parameters: {} });
+
+    const coarseExport = await worker.exportGeometry('glb', {
+      tessellation: { segments: 8, minimumAngle: 30, minimumSize: 5 },
+    });
+    assertSuccess(coarseExport);
+
+    const fineExport = await worker.exportGeometry('glb', {
+      tessellation: { segments: 64, minimumAngle: 3, minimumSize: 0.5 },
+    });
+    assertSuccess(fineExport);
+
+    const coarseVertices = await getVertexCount(coarseExport.data[0]!.bytes);
+    const fineVertices = await getVertexCount(fineExport.data[0]!.bytes);
+
+    expect(fineVertices).toBeGreaterThan(coarseVertices * 1.5);
+  });
+
+  it('should always override user-defined $fn on export', async () => {
+    const userDefinedSegments = '$fn = 8;\nsphere(r=10);';
+    const worker = await createWorker({ 'sphere.scad': userDefinedSegments });
+    const geometryFile = createGeometryFile('sphere.scad');
+    await worker.createGeometry({ file: geometryFile, parameters: {} });
+
+    // Export with high segment count — should override user's $fn=8
+    const highQualityExport = await worker.exportGeometry('glb', {
+      tessellation: { segments: 64, minimumAngle: 3, minimumSize: 0.5 },
+    });
+    assertSuccess(highQualityExport);
+
+    // Export with user's own $fn=8
+    const lowQualityExport = await worker.exportGeometry('glb', {
+      tessellation: { segments: 8, minimumAngle: 30, minimumSize: 5 },
+    });
+    assertSuccess(lowQualityExport);
+
+    const highVertices = await getVertexCount(highQualityExport.data[0]!.bytes);
+    const lowVertices = await getVertexCount(lowQualityExport.data[0]!.bytes);
+
+    // High quality must produce significantly more vertices, proving override
+    expect(highVertices).toBeGreaterThan(lowVertices * 1.5);
+  });
+
+  it('should produce different GLB output for y-up vs z-up coordinate system', async () => {
+    const boxCode = 'cube([20, 10, 30]);';
+    const worker = await createWorker({ 'box.scad': boxCode });
+    const geometryFile = createGeometryFile('box.scad');
+    await worker.createGeometry({ file: geometryFile, parameters: {} });
+
+    const yUpExport = await worker.exportGeometry('glb', { coordinateSystem: 'y-up' });
+    const zUpExport = await worker.exportGeometry('glb', { coordinateSystem: 'z-up' });
+
+    assertSuccess(yUpExport);
+    assertSuccess(zUpExport);
+
+    const yUpBytes = yUpExport.data[0]!.bytes;
+    const zUpBytes = zUpExport.data[0]!.bytes;
+
+    // Different coordinate systems must produce different byte output
+    expect(Buffer.from(yUpBytes).equals(Buffer.from(zUpBytes))).toBe(false);
+  });
+
+  it('should return error when no geometry computed', async () => {
+    const worker = await createWorker({ 'empty.scad': '' });
+    const geometryFile = createGeometryFile('empty.scad');
+    await worker.createGeometry({ file: geometryFile, parameters: {} });
+
+    const exportResult = await worker.exportGeometry('glb');
+    expect(exportResult.success).toBe(false);
   });
 });
 

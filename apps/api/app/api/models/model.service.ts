@@ -1,12 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { OnModuleInit } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import ollama from 'ollama';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import type { ChatUsageCost, ChatUsageTokens } from '#api/chat/chat.schema.js';
+import type { Environment } from '#config/environment.config.ts';
 import type { ModelFamily, ProviderId } from '#api/providers/provider.schema.js';
 import { ProviderService } from '#api/providers/provider.service.js';
 import type { Model, ModelSupport } from '#api/models/model.schema.js';
 import { modelList } from '#api/models/model.constants.js';
+import { Span } from '#telemetry/tracer.service.js';
 
 export type CloudProviderId = Exclude<ProviderId, 'ollama'>;
 
@@ -15,21 +18,12 @@ export class ModelService implements OnModuleInit {
   public models: Model[] = [];
   private readonly logger = new Logger(ModelService.name);
 
-  public constructor(private readonly providerService: ProviderService) {}
+  public constructor(
+    private readonly providerService: ProviderService,
+    private readonly configService: ConfigService<Environment>,
+  ) {}
 
-  public async onModuleInit(): Promise<void> {
-    await this.getModels();
-    this.logger.log(`Loaded ${this.models.length} models`);
-  }
-
-  public async getModels(): Promise<Model[]> {
-    const ollamaModels = await this.getOllamaModels();
-    const models = Object.values(modelList).flatMap((model) => Object.values(model));
-    const combinedModels = [...models, ...ollamaModels];
-    this.models = combinedModels;
-    return combinedModels;
-  }
-
+  @Span()
   public buildModel(modelId: string): { model: BaseChatModel; support?: ModelSupport } {
     const modelConfig = this.models.find((model) => model.id === modelId);
 
@@ -49,6 +43,28 @@ export class ModelService implements OnModuleInit {
       model: modelClass,
       support: modelConfig.support,
     };
+  }
+
+  public async onModuleInit(): Promise<void> {
+    await this.getModels();
+    this.logger.log(`Loaded ${this.models.length} models`);
+  }
+
+  public async getModels(): Promise<Model[]> {
+    const ollamaEnabled = this.configService.get('OLLAMA_ENABLED', { infer: true });
+    const ollamaModels = ollamaEnabled ? await this.getOllamaModels() : [];
+    const models = Object.values(modelList).flatMap((model) => Object.values(model));
+    const combinedModels = [...models, ...ollamaModels];
+    this.models = combinedModels;
+    return combinedModels;
+  }
+
+  public getOtelProviderName(modelId: string): string | undefined {
+    const modelConfig = this.models.find((model) => model.id === modelId);
+    if (!modelConfig) {
+      return undefined;
+    }
+    return this.providerService.getProvider(modelConfig.provider.id).otelProviderName;
   }
 
   /**
@@ -87,6 +103,21 @@ export class ModelService implements OnModuleInit {
       cacheReadTokens: usage.cacheReadTokens,
       cacheWriteTokens: usage.cacheWriteTokens,
     };
+  }
+
+  public getContextWindow(modelId: string): number | undefined {
+    const modelConfig = this.models.find((model) => model.id === modelId);
+    return modelConfig?.details.contextWindow;
+  }
+
+  public getProviderId(modelId: string): ProviderId | undefined {
+    const modelConfig = this.models.find((model) => model.id === modelId);
+    return modelConfig?.provider.id;
+  }
+
+  public getKnowledgeCutoff(modelId: string): string | undefined {
+    const modelConfig = this.models.find((model) => model.id === modelId);
+    return modelConfig?.details.knowledgeCutoff;
   }
 
   public getModelCost(modelId: string, usage: ChatUsageTokens): ChatUsageCost {

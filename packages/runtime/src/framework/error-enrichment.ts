@@ -11,7 +11,7 @@
 import { SourceMapConsumer } from 'source-map-js';
 import type { KernelStackFrame, FrameContext, ErrorLocation } from '#types/runtime.types.js';
 import { named } from '#framework/named.js';
-import { vfsNamespacePrefix } from '#bundler/esbuild.constants.js';
+import { nodeExecFilePrefix, vfsNamespacePrefix } from '#bundler/esbuild.constants.js';
 
 // =============================================================================
 // Stack Trace Parsing
@@ -127,7 +127,7 @@ function defaultClassifyFrame(fileName: string): FrameContext {
  */
 export function createFrameClassifier(): (fileName: string) => FrameContext {
   return (fileName: string): FrameContext => {
-    if (fileName.startsWith('blob:') || fileName.startsWith('data:')) {
+    if (fileName.startsWith('blob:') || fileName.startsWith('data:') || fileName.includes(nodeExecFilePrefix)) {
       return 'user';
     }
 
@@ -195,7 +195,11 @@ function applySourceMapToFrames(options: {
 
     return frames.map((frame) => {
       const name = frame.fileName ?? '';
-      const isBundledFrame = name.startsWith('blob:') || name.startsWith('data:') || name === lastEntryName;
+      const isBundledFrame =
+        name.startsWith('blob:') ||
+        name.startsWith('data:') ||
+        name.includes(nodeExecFilePrefix) ||
+        name === lastEntryName;
 
       if (!isBundledFrame || !frame.lineNumber) {
         return frame;

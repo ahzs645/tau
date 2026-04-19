@@ -1,0 +1,136 @@
+{
+  "uid": "tau-redis",
+  "title": "Redis",
+  "tags": ["tau", "redis"],
+  "timezone": "browser",
+  "editable": true,
+  "templating": {
+    "list": [
+      {
+        "name": "service",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(up, service_name)",
+        "multi": true,
+        "includeAll": true,
+        "current": { "text": "All", "value": "$__all" }
+      },
+      {
+        "name": "instance",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "prometheus" },
+        "query": "label_values(up{service_name=~\"$service\"}, instance)",
+        "multi": true,
+        "includeAll": true,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "title": "Redis Info",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 0 },
+      "datasource": { "type": "redis-datasource", "uid": "redis" },
+      "targets": [{ "command": "info", "section": "server", "refId": "A", "type": "command" }],
+      "options": { "textMode": "value_and_name", "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "title": "Connected Clients",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 0 },
+      "datasource": { "type": "redis-datasource", "uid": "redis" },
+      "targets": [{ "command": "info", "section": "clients", "refId": "A", "type": "command" }]
+    },
+    {
+      "title": "Key Count",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 0 },
+      "datasource": { "type": "redis-datasource", "uid": "redis" },
+      "targets": [{ "command": "info", "section": "keyspace", "refId": "A", "type": "command" }]
+    },
+    {
+      "title": "Memory Usage",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "datasource": { "type": "redis-datasource", "uid": "redis" },
+      "targets": [{ "command": "info", "section": "memory", "refId": "A", "type": "command" }],
+      "fieldConfig": {
+        "defaults": { "unit": "decbytes" },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*human.*|.*peak.*perc.*|.*fragmentation.*|.*policy.*|.*allocator.*"
+            },
+            "properties": [{ "id": "custom.hidden", "value": true }]
+          }
+        ]
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "/^used_memory$/" },
+        "textMode": "value_and_name",
+        "graphMode": "none"
+      }
+    },
+    {
+      "title": "Operations/sec",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "datasource": { "type": "redis-datasource", "uid": "redis" },
+      "targets": [{ "command": "info", "section": "stats", "refId": "A", "type": "command" }],
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "/^instantaneous_ops_per_sec$/" },
+        "textMode": "value_and_name",
+        "graphMode": "none"
+      }
+    },
+    {
+      "title": "Stream Length (tau:socketio)",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 12, "x": 0, "y": 12 },
+      "datasource": { "type": "redis-datasource", "uid": "redis" },
+      "targets": [{ "command": "xlen", "keyName": "tau:socketio", "refId": "A", "type": "command" }]
+    },
+    {
+      "title": "Redis Connection State",
+      "type": "timeseries",
+      "gridPos": { "h": 4, "w": 12, "x": 12, "y": 12 },
+      "targets": [
+        { "expr": "redis_connection_state{service_name=~\"$service\"}", "legendFormat": "{{redis_role}}", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "min": 0, "max": 1 } }
+    },
+    {
+      "title": "Slow Log",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
+      "datasource": { "type": "redis-datasource", "uid": "redis" },
+      "targets": [{ "command": "slowlogGet", "refId": "A", "type": "command" }]
+    },
+    {
+      "title": "Error Logs",
+      "type": "logs",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 24 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [{ "expr": "{service_name=~\"$service\"} |= \"level\" | json | level = \"error\"", "refId": "A" }],
+      "options": {
+        "showTime": true,
+        "showLabels": true,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "sortOrder": "Descending"
+      }
+    },
+    {
+      "title": "Recent Traces",
+      "type": "traces",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 32 },
+      "datasource": { "type": "tempo", "uid": "tempo" },
+      "targets": [{ "query": "{resource.service.name=~\"$service\"}", "refId": "A", "queryType": "traceqlSearch" }]
+    }
+  ],
+  "schemaVersion": 39
+}

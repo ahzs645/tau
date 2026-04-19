@@ -37,78 +37,6 @@ const createGeometry = async (
 const geometryHelpers = createGeometryTestHelpers();
 
 describe('ManifoldWorker', () => {
-  describe('canHandle', () => {
-    it('should handle TypeScript files importing manifold-3d/manifoldCAD', async () => {
-      const worker = await createWorker({
-        'cube.ts': `
-          import { Manifold } from 'manifold-3d/manifoldCAD';
-
-          export default function main() {
-            return Manifold.cube([10, 10, 10], true);
-          }
-        `,
-      });
-
-      const result = await worker.canHandle(createGeometryFile('cube.ts'));
-      expect(result).toBe(true);
-    });
-
-    it('should handle JavaScript files requiring manifold-3d', async () => {
-      const worker = await createWorker({
-        'cube.js': `
-          const Module = require('manifold-3d');
-
-          async function main() {
-            const manifold = await Module.default();
-            manifold.setup();
-            return manifold.Manifold.cube([10, 10, 10], true);
-          }
-
-          module.exports = { main };
-        `,
-      });
-
-      const result = await worker.canHandle(createGeometryFile('cube.js'));
-      expect(result).toBe(true);
-    });
-
-    it('should handle files with dynamic imports of manifold-3d', async () => {
-      const worker = await createWorker({
-        'dynamic.ts': `
-          export default async function main() {
-            const module = await import('manifold-3d/manifoldCAD');
-            return module.Manifold.cube([10, 10, 10], true);
-          }
-        `,
-      });
-
-      const result = await worker.canHandle(createGeometryFile('dynamic.ts'));
-      expect(result).toBe(true);
-    });
-
-    it('should not handle TS files without manifold imports', async () => {
-      const worker = await createWorker({
-        'utils.ts': `
-          export function add(a: number, b: number): number {
-            return a + b;
-          }
-        `,
-      });
-
-      const result = await worker.canHandle(createGeometryFile('utils.ts'));
-      expect(result).toBe(false);
-    });
-
-    it('should not handle unsupported file extensions', async () => {
-      const worker = await createWorker({
-        'model.scad': 'cube([10, 10, 10]);',
-      });
-
-      const result = await worker.canHandle(createGeometryFile('model.scad'));
-      expect(result).toBe(false);
-    });
-  });
-
   describe('getParameters', () => {
     it('should extract defaultParams from ESM module', async () => {
       const { defaultParameters, jsonSchema } = await getParameters(
@@ -365,7 +293,7 @@ describe('ManifoldWorker', () => {
       }
     });
 
-    it('should export GLTF after successful geometry creation', async () => {
+    it('should return error for unsupported gltf format', async () => {
       const worker = await createWorker({
         'cube.ts': `
           import { Manifold } from 'manifold-3d/manifoldCAD';
@@ -383,9 +311,9 @@ describe('ManifoldWorker', () => {
       expect(createResult.success).toBe(true);
 
       const exportResult = await worker.exportGeometry('gltf');
-      expect(exportResult.success).toBe(true);
-      if (exportResult.success) {
-        expect(exportResult.data[0]?.mimeType).toBe('model/gltf+json');
+      expect(exportResult.success).toBe(false);
+      if (!exportResult.success) {
+        expect(exportResult.issues[0]?.message).toContain('gltf');
       }
     });
 

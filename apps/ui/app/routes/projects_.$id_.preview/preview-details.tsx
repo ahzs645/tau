@@ -1,5 +1,5 @@
 import { Download } from 'lucide-react';
-import type { Project, ExportFormat } from '@taucad/types';
+import type { Project, FileExtension } from '@taucad/types';
 import { Button } from '#components/ui/button.js';
 import { Badge } from '#components/ui/badge.js';
 import { Separator } from '#components/ui/separator.js';
@@ -7,7 +7,7 @@ import { Separator } from '#components/ui/separator.js';
 type PreviewDetailsProps = {
   readonly project: Project;
   readonly geometriesCount: number;
-  readonly onExport: (format: ExportFormat) => void;
+  readonly onExport: (format: FileExtension) => void;
 };
 
 export function PreviewDetails({ project, geometriesCount, onExport }: PreviewDetailsProps): React.JSX.Element {

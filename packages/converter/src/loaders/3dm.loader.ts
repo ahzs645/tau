@@ -849,7 +849,7 @@ export class ThreeDmLoader extends BaseLoader<Document> {
     return document
       .createMaterial()
       .setBaseColorFactor([color.r, color.g, color.b, 1])
-      .setMetallicFactor(cadMaterialDefaults.metallicFactor)
+      .setMetallicFactor(cadMaterialDefaults.metalnessFactor)
       .setRoughnessFactor(cadMaterialDefaults.roughnessFactor)
       .setDoubleSided(true);
   }

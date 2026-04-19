@@ -503,4 +503,45 @@ describe('WatchRegistry', () => {
       overflowRegistry.dispose();
     });
   });
+
+  describe('windowMs propagation', () => {
+    it('should pass windowMs to the underlying EventCoalescer', () => {
+      const slowRegistry = new WatchRegistry(bus, { windowMs: 500 });
+      const handler = vi.fn();
+      const request: WatchRequest = { paths: ['/src'], recursive: true };
+
+      slowRegistry.watch(request, handler);
+      bus.emit(written('/src/file.txt'));
+
+      vi.advanceTimersByTime(100);
+      expect(handler).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(400);
+      expect(handler).toHaveBeenCalledTimes(1);
+
+      slowRegistry.dispose();
+    });
+
+    it('should use different coalescing windows for different registry instances', () => {
+      const kernelRegistry = new WatchRegistry(bus, { windowMs: 75 });
+      const uiRegistry = new WatchRegistry(bus, { windowMs: 500 });
+      const kernelHandler = vi.fn();
+      const uiHandler = vi.fn();
+
+      kernelRegistry.watch({ paths: ['/src'], recursive: true }, kernelHandler);
+      uiRegistry.watch({ paths: ['/src'], recursive: true }, uiHandler);
+
+      bus.emit(written('/src/file.txt'));
+
+      vi.advanceTimersByTime(75);
+      expect(kernelHandler).toHaveBeenCalledTimes(1);
+      expect(uiHandler).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(425);
+      expect(uiHandler).toHaveBeenCalledTimes(1);
+
+      kernelRegistry.dispose();
+      uiRegistry.dispose();
+    });
+  });
 });

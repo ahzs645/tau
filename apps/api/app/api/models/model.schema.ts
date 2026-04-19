@@ -20,17 +20,31 @@ export const modelConfigurationSchema = z.object({
       }),
       z.object({
         type: z.literal('adaptive').describe('Adaptive thinking lets the model decide when to reason'),
+        display: z
+          .enum(['summarized', 'omitted'])
+          .describe('Whether thinking content is included in the response stream (Opus 4.7+)')
+          .optional(),
       }),
     ])
     .optional(),
   outputConfig: z
     .object({
-      effort: z.enum(['low', 'medium', 'high', 'max']).describe('The effort level for adaptive thinking').optional(),
+      effort: z
+        .enum(['low', 'medium', 'high', 'xhigh', 'max'])
+        .describe('The effort level for adaptive thinking')
+        .optional(),
     })
     .optional(),
   thinkingLevel: z
     .enum(['LOW', 'MEDIUM', 'HIGH', 'THINKING_LEVEL_UNSPECIFIED'])
     .describe('Gemini thinking level (Google-specific)')
+    .optional(),
+  reasoning: z
+    .object({
+      effort: z.enum(['low', 'medium', 'high']).describe('Reasoning effort level').optional(),
+      summary: z.enum(['auto', 'concise', 'detailed']).describe('Reasoning summary output').optional(),
+    })
+    .describe('OpenAI reasoning model configuration')
     .optional(),
 });
 
@@ -43,6 +57,7 @@ export const modelDetailsSchema = z.object({
   quantizationLevel: z.string().describe('The quantization level of the model').optional(),
   contextWindow: z.number().describe('The context window of the model'),
   maxTokens: z.number().describe('The max tokens the model is capable of generating'),
+  knowledgeCutoff: z.string().describe('Knowledge cutoff date in YYYY-MM format').optional(),
   cost: z.object({
     inputTokens: z.number().describe('The cost of the input tokens of the model'),
     outputTokens: z.number().describe('The cost of the output tokens of the model'),

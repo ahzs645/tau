@@ -110,7 +110,7 @@ export class ChatRpcSocketService {
       reconnection: true,
       reconnectionAttempts: Infinity,
       reconnectionDelay: 1000,
-      reconnectionDelayMax: 5_000,
+      reconnectionDelayMax: 5000,
       randomizationFactor: 0.5,
       timeout: 20_000,
       withCredentials: true,
@@ -173,18 +173,6 @@ export class ChatRpcSocketService {
    */
   public isChatActive(chatId: string): boolean {
     return this.chatHandlers.has(chatId);
-  }
-
-  /**
-   * Send an RPC response back to the server.
-   */
-  public sendRpcResponse(response: RpcResponse): void {
-    if (!this.socket?.connected) {
-      console.error('[ChatRpcSocket] Cannot send response - not connected');
-      return;
-    }
-
-    this.socket.emit('rpc_response', response);
   }
 
   /**
@@ -316,9 +304,8 @@ export class ChatRpcSocketService {
       this.setStatus('error', 'Failed to reconnect');
     });
 
-    // Handle incoming RPC requests
-    socket.on('rpc_request', (request: RpcRequest) => {
-      void this.handleRpcRequest(request);
+    socket.on('rpc_request', (request: RpcRequest, ack: (response: RpcResponse) => void) => {
+      void this.handleRpcRequest(request, ack);
     });
 
     // Handle server errors
@@ -387,8 +374,13 @@ export class ChatRpcSocketService {
     }
   }
 
-  private static readonly JOIN_ACK_TIMEOUT_MS = 5_000;
-  private static readonly JOIN_MAX_RETRIES = 3;
+  private static get joinAckTimeoutMs(): number {
+    return 5000;
+  }
+
+  private static get joinMaxRetries(): number {
+    return 3;
+  }
 
   /**
    * Emit a 'join' event with callback acknowledgment and retry on failure.
@@ -396,15 +388,20 @@ export class ChatRpcSocketService {
    */
   private async emitJoinWithRetry(chatId: string): Promise<void> {
     const { socket } = this;
-    if (!socket?.connected) return;
+    if (!socket?.connected) {
+      return;
+    }
 
-    for (let attempt = 0; attempt <= ChatRpcSocketService.JOIN_MAX_RETRIES; attempt++) {
-      if (!socket.connected) return;
+    /* oxlint-disable no-await-in-loop, @typescript-eslint/no-unnecessary-condition -- sequential retries with backoff; socket.connected can change between iterations */
+    for (let attempt = 0; attempt <= ChatRpcSocketService.joinMaxRetries; attempt++) {
+      if (!socket.connected) {
+        return;
+      }
 
-      const ack = await new Promise<{ success: boolean } | null>((resolve) => {
+      const ack = await new Promise<{ success: boolean } | undefined>((resolve) => {
         const timeout = setTimeout(() => {
-          resolve(null);
-        }, ChatRpcSocketService.JOIN_ACK_TIMEOUT_MS);
+          resolve(undefined);
+        }, ChatRpcSocketService.joinAckTimeoutMs);
 
         socket.emit('join', { chatId }, (response: { success: boolean }) => {
           clearTimeout(timeout);
@@ -412,49 +409,61 @@ export class ChatRpcSocketService {
         });
       });
 
-      if (ack?.success) return;
+      if (ack?.success) {
+        return;
+      }
 
-      if (attempt < ChatRpcSocketService.JOIN_MAX_RETRIES) {
+      if (attempt < ChatRpcSocketService.joinMaxRetries) {
         await new Promise<void>((resolve) => {
           setTimeout(
             () => {
               resolve();
             },
-            1_000 * (attempt + 1),
+            1000 * (attempt + 1),
           );
         });
       }
     }
+    /* oxlint-enable no-await-in-loop, @typescript-eslint/no-unnecessary-condition */
 
     console.error(
-      `[ChatRpcSocket] Failed to join chat ${chatId} after ${ChatRpcSocketService.JOIN_MAX_RETRIES + 1} attempts`,
+      `[ChatRpcSocket] Failed to join chat ${chatId} after ${ChatRpcSocketService.joinMaxRetries + 1} attempts`,
     );
   }
 
   /**
    * Handle an incoming RPC request.
-   * Routes to the appropriate handler based on chatId.
+   * Routes to the appropriate handler based on chatId and responds via the ack callback.
    */
-  private async handleRpcRequest(request: RpcRequest): Promise<void> {
+  private async handleRpcRequest(request: RpcRequest, ack: (response: RpcResponse) => void): Promise<void> {
     const { chatId } = request;
     const handler = this.chatHandlers.get(chatId);
 
     if (!handler) {
       console.warn(`[ChatRpcSocket] Received RPC request for unknown chat: ${chatId}`);
+      ack({
+        type: 'rpc_response',
+        requestId: request.requestId,
+        toolCallId: request.toolCallId,
+        result: undefined,
+        error: `No handler registered for chat ${chatId}`,
+      });
       return;
     }
 
+    const { traceContext } = request;
+
     try {
       const response = await handler(request);
-      this.sendRpcResponse(response);
+      ack({ ...response, ...(traceContext ? { traceContext } : {}) });
     } catch (execError) {
-      // Send error response
-      this.sendRpcResponse({
+      ack({
         type: 'rpc_response',
         requestId: request.requestId,
         toolCallId: request.toolCallId,
         result: undefined,
         error: execError instanceof Error ? execError.message : 'Unknown error',
+        ...(traceContext ? { traceContext } : {}),
       });
     }
   }

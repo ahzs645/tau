@@ -1,8 +1,15 @@
-import { useEffect, useRef, useState } from 'react';
-import type { Geometry } from '@taucad/types';
-import type { RuntimeClient, RuntimeClientOptions, GetParametersResult } from '@taucad/runtime';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { FileExtension, Geometry } from '@taucad/types';
+import type {
+  RuntimeClient,
+  CapabilitiesManifest,
+  RuntimeClientOptions,
+  ExportResult,
+  KernelPlugin,
+  TranscoderPlugin,
+} from '@taucad/runtime';
 import { createRuntimeClient } from '@taucad/runtime';
-import type { JSONSchema7 } from 'json-schema';
+import type { JSONSchema7 } from '@taucad/json-schema';
 
 /**
  * Status of a transient render operation.
@@ -21,8 +28,9 @@ export type RenderStatus = 'idle' | 'loading' | 'success' | 'error';
  * @public
  */
 export type UseRenderOptions = {
-  /** Runtime client configuration (kernels, bundlers, middleware, tessellation). */
-  readonly clientOptions: RuntimeClientOptions;
+  /** Runtime client configuration (kernels, bundlers, middleware). */
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any -- accept any kernel/transcoder generics
+  readonly clientOptions: RuntimeClientOptions<any, any>;
   /** Filename-to-content map of source code to render. */
   readonly code: Record<string, string>;
   /** Entry point filename. Required when `code` has multiple keys; inferred for single-key maps. */
@@ -49,6 +57,10 @@ export type UseRenderResult = {
   readonly defaultParameters: Record<string, unknown>;
   /** JSON Schema describing the model's parameters. */
   readonly jsonSchema: JSONSchema7 | undefined;
+  /** Export the last render result to the specified format. Only available after a successful render. */
+  readonly exportGeometry: (format: FileExtension, options?: Record<string, unknown>) => Promise<ExportResult>;
+  /** Capabilities manifest from the runtime worker, available after initialization. */
+  readonly capabilities: CapabilitiesManifest | undefined;
 };
 
 const emptyGeometries: Geometry[] = [];
@@ -93,21 +105,28 @@ export function useRender(options: UseRenderOptions): UseRenderResult {
   const [defaultParameters, setDefaultParameters] = useState<Record<string, unknown>>(emptyParameters);
   const [jsonSchema, setJsonSchema] = useState<JSONSchema7 | undefined>();
 
-  const clientRef = useRef<RuntimeClient | undefined>(undefined);
+  const [capabilities, setCapabilities] = useState<CapabilitiesManifest | undefined>();
+  // oxlint-disable-next-line @typescript-eslint/no-unnecessary-type-arguments -- intentional: documents the wide-default erasure form per R6
+  const clientRef = useRef<RuntimeClient<KernelPlugin[], TranscoderPlugin[]> | undefined>(undefined);
 
   useEffect(() => {
     const client = createRuntimeClient(clientOptions);
     clientRef.current = client;
 
-    const unsubscribe = client.on('parametersResolved', (result: GetParametersResult) => {
+    const unsubParams = client.on('parametersResolved', (result) => {
       if (result.success) {
         setDefaultParameters(result.data.defaultParameters);
         setJsonSchema(result.data.jsonSchema as JSONSchema7);
       }
     });
 
+    const unsubCaps = client.on('capabilities', (manifest) => {
+      setCapabilities(manifest);
+    });
+
     return () => {
-      unsubscribe();
+      unsubParams();
+      unsubCaps();
       client.terminate();
       clientRef.current = undefined;
     };
@@ -137,6 +156,7 @@ export function useRender(options: UseRenderOptions): UseRenderResult {
           setGeometries(result.data);
           setError(undefined);
           setStatus('success');
+          setCapabilities(client.capabilities);
         } else {
           const firstIssue = result.issues[0];
           setError(new Error(firstIssue?.message ?? 'Render failed'));
@@ -158,5 +178,16 @@ export function useRender(options: UseRenderOptions): UseRenderResult {
     };
   }, [code, file, parameters, enabled]);
 
-  return { geometries, status, error, defaultParameters, jsonSchema };
+  const exportGeometry = useCallback(
+    async (format: FileExtension, formatOptions?: Record<string, unknown>): Promise<ExportResult> => {
+      const client = clientRef.current;
+      if (!client) {
+        return { success: false, issues: [{ message: 'Runtime client not initialized', severity: 'error' }] };
+      }
+      return client.export(format, formatOptions);
+    },
+    [],
+  );
+
+  return { geometries, status, error, defaultParameters, jsonSchema, exportGeometry, capabilities };
 }

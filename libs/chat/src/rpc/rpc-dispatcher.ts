@@ -11,6 +11,8 @@ import { handleGetKernelResult } from '#rpc/handlers/handle-get-kernel-result.js
 import { handleCaptureObservations } from '#rpc/handlers/handle-capture-observations.js';
 import { handleFetchGeometry } from '#rpc/handlers/handle-fetch-geometry.js';
 import { handleCaptureScreenshot } from '#rpc/handlers/handle-capture-screenshot.js';
+import { handleAppendFile } from '#rpc/handlers/handle-append-file.js';
+import { handleEditFile } from '#rpc/handlers/handle-edit-file.js';
 
 /** @public */
 export type RpcDispatcher = {
@@ -70,6 +72,14 @@ export function createRpcDispatcher(deps: RpcDependencies): RpcDispatcher {
 
         case rpcName.captureScreenshot: {
           return handleCaptureScreenshot(rpcCall.args, deps.graphics);
+        }
+
+        case rpcName.appendFile: {
+          return handleAppendFile(rpcCall.args, deps.fileSystem);
+        }
+
+        case rpcName.editFile: {
+          return handleEditFile(rpcCall.args, deps.fileSystem);
         }
       }
     },

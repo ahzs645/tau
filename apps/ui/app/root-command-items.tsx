@@ -11,7 +11,7 @@ import { openSettingsDialog } from '#hooks/use-settings-dialog.js';
 
 export function RootCommandPaletteItems({ match }: { readonly match: UIMatch }): undefined {
   const { data: authData } = useAuthenticate({ enabled: false });
-  const { projects: projects } = useProjects();
+  const { projects } = useProjects();
   const { signIn, signOut } = useAuthLinks();
   const location = useLocation();
 

@@ -44,7 +44,6 @@ function createMockProxy() {
     unlink: vi.fn(),
     rmdir: vi.fn(),
     getDirectoryStat: vi.fn(async () => []),
-    reconfigure: vi.fn(),
     dispose: vi.fn(),
     setDirectoryHandle: vi.fn(),
     readShallowDirectory: vi.fn(async () => []),

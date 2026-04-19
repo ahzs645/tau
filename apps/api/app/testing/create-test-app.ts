@@ -20,6 +20,10 @@ import { ToolService } from '#api/tools/tool.service.js';
 import { FileEditService } from '#api/file-edit/file-edit.service.js';
 import { GeometryAnalysisService } from '#api/analysis/geometry-analysis.service.js';
 import { authInstanceKey } from '#constants/auth.constant.js';
+import { MetricsService } from '#telemetry/metrics.js';
+import { TracerService } from '#telemetry/tracer.service.js';
+import { CompactionService } from '#api/chat/compaction.service.js';
+import { TauRpcBackendFactory } from '#api/chat/tau-rpc-backend.js';
 import { HeadlessChatRpcService } from '#testing/headless-chat-rpc.service.js';
 import { createHeadlessRpcFileSystem } from '#testing/headless-rpc-filesystem.js';
 import { createHeadlessRuntimeClient } from '#testing/headless-runtime-client.js';
@@ -70,7 +74,11 @@ const mockAuthInstance = {
     ToolService,
     FileEditService,
     GeometryAnalysisService,
+    MetricsService,
+    TracerService,
     CheckpointerService,
+    CompactionService,
+    TauRpcBackendFactory,
     { provide: authInstanceKey, useValue: mockAuthInstance },
     { provide: APP_PIPE, useClass: ZodValidationPipe },
   ],

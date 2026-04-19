@@ -3,11 +3,11 @@ import { createContext, useContext, useMemo, useCallback, useEffect, useRef, use
 import { useActorRef, useSelector } from '@xstate/react';
 import { waitFor } from 'xstate';
 import type { SnapshotFrom } from 'xstate';
-import type { FileTreeEntry, FileSystemBackend, FileStatEntry } from '@taucad/types';
+import type { FileTreeEntry, FileSystemBackend, FileStatEntry, FileStat } from '@taucad/types';
 import { fileManagerMachine } from '#machines/file-manager.machine.js';
 import type { FileWriteSource, FileManagerRef, FileManagerProxy } from '#machines/file-manager.machine.types.js';
-import type { FileTreeNode } from '@taucad/filesystem';
-import { storeDirectoryHandle, getStoredDirectoryHandle, requestHandlePermission } from '#filesystem/handle-store.js';
+import type { FileTreeNode, MountOptions } from '@taucad/filesystem';
+import { getStoredDirectoryHandle } from '#filesystem/handle-store.js';
 import { useCookie } from '#hooks/use-cookie.js';
 import { cookieName } from '#constants/cookie.constants.js';
 import type { FileContentService } from '#lib/file-content-service.js';
@@ -41,16 +41,9 @@ type DeleteFileOptions = {
   source: FileWriteSource;
 };
 
-/**
- * Status of the webaccess (File System Access API) connection.
- * - 'disconnected': No directory handle stored or available
- * - 'connected': Directory handle is available and has permission
- * - 'needs-permission': Directory handle exists but needs user gesture to re-grant permission
- */
-export type WebAccessStatus = 'disconnected' | 'connected' | 'needs-permission';
-
 type FileManagerContextType = {
   fileManagerRef: FileManagerRef;
+  backendType: FileSystemBackend;
   contentService: FileContentService | undefined;
   treeService: FileTreeService | undefined;
   writeFile: (path: string, data: Uint8Array<ArrayBuffer>, options: WriteFileOptions) => Promise<void>;
@@ -59,15 +52,14 @@ type FileManagerContextType = {
   renameFile: (oldPath: string, newPath: string) => Promise<void>;
   duplicateFile: (sourcePath: string, destinationPath: string) => Promise<void>;
   deleteFile: (path: string, options: DeleteFileOptions) => Promise<void>;
+  stat: (path: string) => Promise<FileStat>;
   exists: (path: string) => Promise<boolean>;
   readdir: (path: string) => Promise<string[]>;
   getDirectoryStat: (path: string) => Promise<FileStatEntry[]>;
   getZippedDirectory: (path: string) => Promise<Blob>;
   copyDirectory: (sourcePath: string, destinationPath: string) => Promise<void>;
-  reconfigureBackend: (backend: FileSystemBackend) => Promise<void>;
-  selectDirectory: () => Promise<void>;
-  reconnectDirectory: () => Promise<boolean>;
-  webAccessStatus: WebAccessStatus;
+  mount: (prefix: string, backend: FileSystemBackend, options?: MountOptions) => Promise<void>;
+  unmount: (prefix: string) => void;
   connectedDirectoryName: string | undefined;
   readShallowDirectory: (path: string, backend: FileSystemBackend) => Promise<FileTreeNode[]>;
 };
@@ -75,6 +67,22 @@ type FileManagerContextType = {
 const FileManagerContext = createContext<FileManagerContextType | undefined>(undefined);
 
 const SharedWorkerContext = createContext<Worker | undefined>(undefined);
+
+/**
+ * Gate component that defers rendering until the parent FileManagerProvider's
+ * worker is available via SharedWorkerContext. Prevents nested
+ * FileManagerProviders from creating duplicate workers during the window
+ * between root mount and root worker initialization.
+ */
+export function SharedWorkerGate({ children }: { readonly children: ReactNode }): React.ReactNode | undefined {
+  const worker = useContext(SharedWorkerContext);
+
+  if (!worker) {
+    return undefined;
+  }
+
+  return children;
+}
 
 export function FileManagerProvider({
   children,
@@ -109,10 +117,11 @@ export function FileManagerProvider({
 
   const contentService = useSelector(fileManagerRef, (state) => state.context.contentService);
   const treeService = useSelector(fileManagerRef, (state) => state.context.treeService);
+  const backendType = useSelector(fileManagerRef, (state) => state.context.backendType);
 
   /**
-   * Wait for machine ready and return proxy. Used only for admin operations
-   * (reconfigure, setDirectoryHandle) that are not file I/O.
+   * Wait for machine ready and return proxy. Used for admin operations
+   * (mount, unmount, readShallowDirectory) that are not file I/O.
    */
   const getReadiedProxy = useCallback(async (): Promise<FileManagerProxy> => {
     const snapshot = await waitFor(
@@ -213,6 +222,16 @@ export function FileManagerProvider({
     [treeService],
   );
 
+  const stat = useCallback(
+    async (path: string): Promise<FileStat> => {
+      if (!treeService) {
+        throw new Error('Tree service not initialized');
+      }
+      return treeService.stat(path);
+    },
+    [treeService],
+  );
+
   const getDirectoryStat = useCallback(
     async (path: string): Promise<FileStatEntry[]> => {
       if (!treeService) {
@@ -243,88 +262,25 @@ export function FileManagerProvider({
     [contentService],
   );
 
-  const reconfigureBackend = useCallback(
-    async (backend: FileSystemBackend): Promise<void> => {
+  const mount = useCallback(
+    async (prefix: string, backend: FileSystemBackend, options?: MountOptions): Promise<void> => {
       const proxy = await getReadiedProxy();
-
-      if (backend !== 'webaccess') {
-        treeService?.stopPolling();
-      }
-
-      await proxy.reconfigure(backend);
-
-      fileManagerRef.send({ type: 'setBackendType', backendType: backend });
-
-      if (backend === 'webaccess') {
-        treeService?.startPolling();
-      }
-
-      treeService?.scheduleRefresh('');
+      await proxy.mount(prefix, backend, options);
     },
-    [fileManagerRef, getReadiedProxy, treeService],
+    [getReadiedProxy],
+  );
+
+  const unmount = useCallback(
+    (prefix: string): void => {
+      void (async () => {
+        const proxy = await getReadiedProxy();
+        proxy.unmount(prefix);
+      })();
+    },
+    [getReadiedProxy],
   );
 
   const [connectedDirectoryName, setConnectedDirectoryName] = useState<string | undefined>(undefined);
-
-  const machineWebAccessNeedsPermission = useSelector(
-    fileManagerRef,
-    (state) => state.context.webAccessNeedsPermission,
-  );
-  const machineBackendType = useSelector(fileManagerRef, (state) => state.context.backendType);
-
-  const webAccessStatus: WebAccessStatus = useMemo(() => {
-    if (machineWebAccessNeedsPermission) {
-      return 'needs-permission';
-    }
-
-    if (machineBackendType === 'webaccess') {
-      return 'connected';
-    }
-
-    return 'disconnected';
-  }, [machineWebAccessNeedsPermission, machineBackendType]);
-
-  const selectDirectory = useCallback(async (): Promise<void> => {
-    const handle = await globalThis.window.showDirectoryPicker({
-      mode: 'readwrite',
-    });
-
-    await storeDirectoryHandle(handle);
-
-    const proxy = await getReadiedProxy();
-    proxy.setDirectoryHandle(handle);
-    await proxy.reconfigure('webaccess');
-
-    setConnectedDirectoryName(handle.name);
-    fileManagerRef.send({ type: 'setBackendType', backendType: 'webaccess' });
-
-    treeService?.startPolling();
-    treeService?.scheduleRefresh('');
-  }, [fileManagerRef, getReadiedProxy, treeService]);
-
-  const reconnectDirectory = useCallback(async (): Promise<boolean> => {
-    const handle = await getStoredDirectoryHandle();
-    if (!handle) {
-      return false;
-    }
-
-    const granted = await requestHandlePermission(handle);
-    if (!granted) {
-      return false;
-    }
-
-    const proxy = await getReadiedProxy();
-    proxy.setDirectoryHandle(handle);
-    await proxy.reconfigure('webaccess');
-
-    setConnectedDirectoryName(handle.name);
-    fileManagerRef.send({ type: 'setBackendType', backendType: 'webaccess' });
-
-    treeService?.startPolling();
-    treeService?.scheduleRefresh('');
-
-    return true;
-  }, [fileManagerRef, getReadiedProxy, treeService]);
 
   const readShallowDirectory = useCallback(
     async (path: string, backend: FileSystemBackend): Promise<FileTreeNode[]> => {
@@ -359,6 +315,7 @@ export function FileManagerProvider({
   const value = useMemo<FileManagerContextType>(
     () => ({
       fileManagerRef,
+      backendType,
       contentService,
       treeService,
       writeFile,
@@ -367,20 +324,20 @@ export function FileManagerProvider({
       renameFile,
       duplicateFile,
       deleteFile,
+      stat,
       exists,
       readdir,
       getDirectoryStat,
       getZippedDirectory,
       copyDirectory,
-      reconfigureBackend,
-      selectDirectory,
-      reconnectDirectory,
-      webAccessStatus,
+      mount,
+      unmount,
       connectedDirectoryName,
       readShallowDirectory,
     }),
     [
       fileManagerRef,
+      backendType,
       contentService,
       treeService,
       writeFile,
@@ -389,15 +346,14 @@ export function FileManagerProvider({
       renameFile,
       duplicateFile,
       deleteFile,
+      stat,
       exists,
       readdir,
       getDirectoryStat,
       getZippedDirectory,
       copyDirectory,
-      reconfigureBackend,
-      selectDirectory,
-      reconnectDirectory,
-      webAccessStatus,
+      mount,
+      unmount,
       connectedDirectoryName,
       readShallowDirectory,
     ],
@@ -422,6 +378,15 @@ export function useFileManager(): FileManagerContextType {
   }
 
   return context;
+}
+
+/**
+ * Non-throwing variant of `useFileManager`. Returns `undefined` when called
+ * outside a `FileManagerProvider` instead of throwing. Used by components
+ * that optionally read from the file manager context (e.g. `FileSelector`).
+ */
+export function useOptionalFileManager(): FileManagerContextType | undefined {
+  return useContext(FileManagerContext);
 }
 
 /**

@@ -74,7 +74,7 @@ describe('stringToColor', () => {
   });
 
   it('should generate well-distributed colors for similar inputs', () => {
-    const extensions = ['stl', 'step', 'stp', 'stl-binary'];
+    const extensions = ['stl', 'step', 'stp', 'gltf'];
     const colors = extensions.map((extension) => stringToColor(extension));
     const hues = colors.map((color) => {
       const hueRegex = /(\d+)deg/;

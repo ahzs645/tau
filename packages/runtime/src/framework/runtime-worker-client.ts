@@ -3,24 +3,25 @@
  * Wraps a RuntimeTransport with request/response correlation and Promise-based methods.
  */
 
-import type { GeometryFile, ExportFormat, LogOrigin } from '@taucad/types';
+import type { FileExtension, GeometryFile, LogEntry } from '@taucad/types';
 import type {
-  HashedGeometryResult,
   ExportGeometryResult,
   GetParametersResult,
   KernelIssue,
   MiddlewareRegistrations,
   BundlerRegistrations,
+  CapabilitiesManifest,
 } from '#types/runtime.types.js';
-import type { Tessellation } from '#types/runtime-kernel.types.js';
 import type {
   RuntimeResponse,
   RuntimeCommand,
   PerformanceEntryData,
   RenderPhase,
   WorkerState,
+  HashedGeometryResultTransport,
+  TranscoderModuleEntry,
 } from '#types/runtime-protocol.types.js';
-import { signalSlot, workerStateNames } from '#types/runtime-protocol.types.js';
+import { signalSlot, abortReason, workerStateNames } from '#types/runtime-protocol.types.js';
 import { waitForSlotChange } from '#framework/async-polyfills.js';
 import { signalBufferByteLength, signalBufferMaxByteLength } from '#framework/runtime-framework.constants.js';
 import type { RuntimeTransport } from '#transport/runtime-transport.js';
@@ -73,10 +74,35 @@ export function isRenderAbortedError(error: unknown): error is RenderAbortedErro
 }
 
 /**
+ * Error thrown when a render exceeds the configured wall-clock timeout.
+ * @public
+ */
+export class RenderTimeoutError extends Error {
+  public constructor(timeoutMs: number) {
+    super(
+      `Render timed out after ${timeoutMs / 1000} seconds. ` +
+        'Increase the timeout in viewer settings or simplify the model geometry.',
+    );
+    this.name = 'RenderTimeoutError';
+  }
+}
+
+/**
+ * Realm-safe type guard -- checks `error.name` instead of prototype chain.
+ *
+ * @param error - the value to test
+ * @returns `true` when the error is a {@link RenderTimeoutError}
+ * @public
+ */
+export function isRenderTimeoutError(error: unknown): error is RenderTimeoutError {
+  return error instanceof Error && error.name === 'RenderTimeoutError';
+}
+
+/**
  * Callback for worker log events.
  * @public
  */
-export type OnLogCallback = (log: { level: string; message: string; origin?: LogOrigin; data?: unknown }) => void;
+export type OnLogCallback = (log: LogEntry) => void;
 
 /**
  * Callback for worker telemetry events.
@@ -107,10 +133,12 @@ export class RuntimeWorkerClient {
   private readonly onLog: OnLogCallback;
   private readonly onTelemetry?: OnTelemetryCallback;
   private readonly onStateChanged?: OnStateChangedCallback;
-  private readonly onGeometryComputed?: (result: HashedGeometryResult) => void;
+  private readonly onGeometryComputed?: (result: HashedGeometryResultTransport) => void;
   private readonly onParametersResolvedCb?: (result: GetParametersResult) => void;
   private readonly onProgressCb?: OnProgressCallback;
   private readonly onErrorCb?: (issues: KernelIssue[]) => void;
+  private readonly onActiveKernelChangedCb?: (kernelId: string | undefined) => void;
+  private readonly onCapabilitiesUpdatedCb?: (capabilities: CapabilitiesManifest) => void;
   /* oxlint-enable @typescript-eslint/parameter-properties -- re-enable after constructor fields */
 
   private nextRequestId = 0;
@@ -119,10 +147,14 @@ export class RuntimeWorkerClient {
   private readonly signalBuffer: SharedArrayBuffer | undefined;
   private readonly signalView: Int32Array | undefined;
   private stateMonitorTerminated = false;
+  private lastReportedState?: WorkerState;
+  private renderTimeoutMs = 0;
+  private renderTimeoutTimer: ReturnType<typeof setTimeout> | undefined;
 
+  private _capabilities: CapabilitiesManifest | undefined;
   private pendingInit?: { resolve: () => void; reject: (error: Error) => void };
   private pendingRender?: {
-    resolve: (result: HashedGeometryResult) => void;
+    resolve: (result: HashedGeometryResultTransport) => void;
     reject: (error: Error) => void;
     onParametersResolved?: (result: GetParametersResult) => void;
     onProgress?: OnProgressCallback;
@@ -146,10 +178,12 @@ export class RuntimeWorkerClient {
     options?: {
       onTelemetry?: OnTelemetryCallback;
       onStateChanged?: OnStateChangedCallback;
-      onGeometryComputed?: (result: HashedGeometryResult) => void;
+      onGeometryComputed?: (result: HashedGeometryResultTransport) => void;
       onParametersResolved?: (result: GetParametersResult) => void;
       onProgress?: OnProgressCallback;
       onError?: (issues: KernelIssue[]) => void;
+      onActiveKernelChanged?: (kernelId: string | undefined) => void;
+      onCapabilitiesUpdated?: (capabilities: CapabilitiesManifest) => void;
     },
   ) {
     this.transport = transport;
@@ -160,6 +194,8 @@ export class RuntimeWorkerClient {
     this.onParametersResolvedCb = options?.onParametersResolved;
     this.onProgressCb = options?.onProgress;
     this.onErrorCb = options?.onError;
+    this.onActiveKernelChangedCb = options?.onActiveKernelChanged;
+    this.onCapabilitiesUpdatedCb = options?.onCapabilitiesUpdated;
 
     try {
       // GrowableSharedArrayBuffer: maxByteLength allows future expansion without worker restart
@@ -187,6 +223,11 @@ export class RuntimeWorkerClient {
     fileSystemPort: MessagePort;
     middlewareEntries: MiddlewareRegistrations;
     bundlerEntries?: BundlerRegistrations;
+    transcoderModules?: TranscoderModuleEntry[];
+    /** SharedArrayBuffer for the geometry pool (zero-IPC geometry data exchange). */
+    geometryPoolBuffer?: SharedArrayBuffer;
+    /** SharedArrayBuffer for the file pool (zero-IPC file content caching). */
+    filePoolBuffer?: SharedArrayBuffer;
   }): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       this.pendingInit = {
@@ -202,8 +243,11 @@ export class RuntimeWorkerClient {
         options: input.options,
         middlewareEntries: input.middlewareEntries,
         bundlerEntries: input.bundlerEntries,
+        transcoderModules: input.transcoderModules,
         fileSystemPort: input.fileSystemPort,
         signalBuffer: this.signalBuffer,
+        geometryPoolBuffer: input.geometryPoolBuffer,
+        filePoolBuffer: input.filePoolBuffer,
       };
       this.transport.send(command, [input.fileSystemPort]);
     });
@@ -216,9 +260,10 @@ export class RuntimeWorkerClient {
    * @returns The new abort generation value.
    */
   public incrementAbortGeneration(): number {
-    this.abortGeneration++;
     if (this.signalView) {
-      Atomics.store(this.signalView, signalSlot.abortGeneration, this.abortGeneration);
+      this.abortGeneration = Atomics.add(this.signalView, signalSlot.abortGeneration, 1) + 1;
+    } else {
+      this.abortGeneration++;
     }
     return this.abortGeneration;
   }
@@ -259,9 +304,9 @@ export class RuntimeWorkerClient {
     parameters: Record<string, unknown>;
     onParametersResolved?: (result: GetParametersResult) => void;
     onProgress?: OnProgressCallback;
-    tessellation?: Tessellation;
-  }): Promise<HashedGeometryResult> {
-    return new Promise<HashedGeometryResult>((resolve, reject) => {
+    options?: Record<string, unknown>;
+  }): Promise<HashedGeometryResultTransport> {
+    return new Promise<HashedGeometryResultTransport>((resolve, reject) => {
       this.pendingRender = {
         resolve,
         reject,
@@ -275,7 +320,7 @@ export class RuntimeWorkerClient {
         requestId,
         file: input.file,
         params: input.parameters,
-        tessellation: input.tessellation,
+        options: input.options,
       };
       this.transport.send(command);
     });
@@ -301,15 +346,18 @@ export class RuntimeWorkerClient {
    *
    * @param file - The geometry file to render
    * @param parameters - Parameters for the render
-   * @param tessellation - Optional tessellation quality settings
+   * @param options - Optional render options
    */
-  public setFile(file: GeometryFile, parameters: Record<string, unknown>, tessellation?: Tessellation): void {
+  public setFile(file: GeometryFile, parameters?: Record<string, unknown>, options?: Record<string, unknown>): void {
+    if (this.signalView) {
+      Atomics.store(this.signalView, signalSlot.abortReason, abortReason.superseded);
+    }
     this.incrementAbortGeneration();
     const command: RuntimeCommand = {
       type: 'setFile',
       file,
-      parameters,
-      tessellation,
+      parameters: parameters ?? {},
+      options,
     };
     this.transport.send(command);
   }
@@ -321,6 +369,9 @@ export class RuntimeWorkerClient {
    * @param parameters - Updated parameters for the render
    */
   public setParameters(parameters: Record<string, unknown>): void {
+    if (this.signalView) {
+      Atomics.store(this.signalView, signalSlot.abortReason, abortReason.superseded);
+    }
     this.incrementAbortGeneration();
     const command: RuntimeCommand = {
       type: 'setParameters',
@@ -350,23 +401,40 @@ export class RuntimeWorkerClient {
   }
 
   /**
+   * Set the wall-clock render timeout enforced by the main thread.
+   * When the timer fires, the abort generation is incremented via SharedArrayBuffer
+   * and the abort reason is set to `timeout`, causing the worker's cooperative
+   * abort checks to throw.
+   *
+   * @param timeoutMs - Timeout in milliseconds. 0 disables the timeout.
+   */
+  public setRenderTimeout(timeoutMs: number): void {
+    this.renderTimeoutMs = timeoutMs;
+  }
+
+  /**
    * Send an export command to the worker.
    *
-   * @param format - Export file format
-   * @param tessellation - Optional tessellation quality for export meshing
+   * @param format - Export file format identifier (e.g. 'stl', 'step', 'glb')
+   * @param options - Format-specific export options. May include `tessellation`.
    * @returns Export result with blob data
    */
-  public async exportGeometry(format: ExportFormat, tessellation?: Tessellation): Promise<ExportGeometryResult> {
+  public async exportGeometry(format: FileExtension, options?: Record<string, unknown>): Promise<ExportGeometryResult> {
     return new Promise<ExportGeometryResult>((resolve, reject) => {
       this.pendingExport = { resolve, reject };
       const command: RuntimeCommand = {
         type: 'export',
         requestId: String(this.nextRequestId++),
         format,
-        tessellation,
+        options,
       };
       this.transport.send(command);
     });
+  }
+
+  /** Capabilities manifest from the worker, available after initialization. */
+  public get capabilities(): CapabilitiesManifest | undefined {
+    return this._capabilities;
   }
 
   /** Send a cleanup command to the worker. */
@@ -377,6 +445,7 @@ export class RuntimeWorkerClient {
 
   /** Terminate the transport connection, rejecting any in-flight promises. */
   public terminate(): void {
+    this.clearRenderTimeout();
     this.stateMonitorTerminated = true;
     if (this.signalView) {
       Atomics.notify(this.signalView, signalSlot.workerState);
@@ -389,6 +458,41 @@ export class RuntimeWorkerClient {
     this.pendingExport?.reject(error);
     this.pendingExport = undefined;
     this.transport.close();
+  }
+
+  private startRenderTimeout(): void {
+    this.clearRenderTimeout();
+    if (this.renderTimeoutMs <= 0 || !this.signalView) {
+      return;
+    }
+    this.renderTimeoutTimer = setTimeout(() => {
+      if (this.signalView) {
+        Atomics.store(this.signalView, signalSlot.abortReason, abortReason.timeout);
+      }
+      this.incrementAbortGeneration();
+    }, this.renderTimeoutMs);
+  }
+
+  private clearRenderTimeout(): void {
+    if (this.renderTimeoutTimer !== undefined) {
+      clearTimeout(this.renderTimeoutTimer);
+      this.renderTimeoutTimer = undefined;
+    }
+  }
+
+  private reportState(state: WorkerState, detail?: string): void {
+    if (state === this.lastReportedState && !detail) {
+      return;
+    }
+    this.lastReportedState = state;
+
+    if (state === 'rendering') {
+      this.startRenderTimeout();
+    } else if (state === 'idle' || state === 'error') {
+      this.clearRenderTimeout();
+    }
+
+    this.onStateChanged?.(state, detail);
   }
 
   private startStateMonitor(): void {
@@ -407,7 +511,7 @@ export class RuntimeWorkerClient {
           currentState = newState;
           const stateName = workerStateNames[newState];
           if (stateName) {
-            this.onStateChanged?.(stateName);
+            this.reportState(stateName);
           }
         }
       }
@@ -419,6 +523,7 @@ export class RuntimeWorkerClient {
   private handleMessage(response: RuntimeResponse): void {
     switch (response.type) {
       case 'initialized': {
+        this._capabilities = response.capabilities;
         this.pendingInit?.resolve();
         this.pendingInit = undefined;
         break;
@@ -434,10 +539,6 @@ export class RuntimeWorkerClient {
       }
 
       case 'geometryComputed': {
-        console.log('[RuntimeClient] geometryComputed received', {
-          hasPendingRender: Boolean(this.pendingRender),
-          success: response.result.success,
-        });
         if (this.pendingRender) {
           this.pendingRender.resolve(response.result);
           this.pendingRender = undefined;
@@ -454,12 +555,8 @@ export class RuntimeWorkerClient {
       }
 
       case 'log': {
-        this.onLog({
-          level: response.level,
-          message: response.message,
-          origin: response.origin,
-          data: response.data,
-        });
+        const { entry } = response;
+        this.onLog(entry);
         break;
       }
 
@@ -486,7 +583,8 @@ export class RuntimeWorkerClient {
       }
 
       case 'error': {
-        const errorMessage = response.issues.map((index: KernelIssue) => index.message).join('; ');
+        const { issues } = response;
+        const errorMessage = issues.map((issue: KernelIssue) => issue.message).join('; ');
         const error = new Error(errorMessage);
 
         if (this.pendingInit) {
@@ -499,14 +597,25 @@ export class RuntimeWorkerClient {
           this.pendingExport.reject(error);
           this.pendingExport = undefined;
         } else {
-          this.onErrorCb?.(response.issues);
+          this.onErrorCb?.(issues);
         }
 
         break;
       }
 
       case 'stateChanged': {
-        this.onStateChanged?.(response.state, response.detail);
+        this.reportState(response.state, response.detail);
+        break;
+      }
+
+      case 'activeKernelChanged': {
+        this.onActiveKernelChangedCb?.(response.kernelId);
+        break;
+      }
+
+      case 'capabilitiesUpdated': {
+        this._capabilities = response.capabilities;
+        this.onCapabilitiesUpdatedCb?.(response.capabilities);
         break;
       }
     }

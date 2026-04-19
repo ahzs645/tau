@@ -82,17 +82,19 @@ import { getFileExtension, encodeTextFile } from '#utils/filesystem.utils.js';
 import { downloadBlob, asBuffer } from '@taucad/utils/file';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import { useFileTreeMap } from '#hooks/use-file-tree.js';
+import { useKeybinding } from '#hooks/use-keyboard.js';
+import type { KeyCombination } from '#utils/keys.utils.js';
+import { KeyShortcut } from '#components/ui/key-shortcut.js';
 import { parentDirectory } from '@taucad/utils/path';
 
-type TreeItemData = {
-  path: string;
-  name: string;
-  isFolder: boolean;
-  content?: Uint8Array<ArrayBuffer>;
-  gitStatus?: FileItem['gitStatus'];
-};
+import type { TreeItemData } from '#routes/projects_.$id/chat-editor-file-tree.utils.js';
+import { getItemData, isPathFolder } from '#routes/projects_.$id/chat-editor-file-tree.utils.js';
 
 const rootId = '';
+
+const confirmDeleteKeyCombination = {
+  key: 'Enter',
+} satisfies KeyCombination;
 
 type PendingFolder = {
   parentPath: string; // '' for root
@@ -280,6 +282,8 @@ export const ChatEditorFileTree = memo(function ({
     };
   }, [projectRef, editorRef, contentService, projectId, readFile]);
 
+  const { treeService } = fileManager;
+
   const fileTreeMap = useFileTreeMap();
   const fileTree = useMemo((): FileItem[] => {
     if (fileTreeMap.size === 0) {
@@ -295,7 +299,7 @@ export const ChatEditorFileTree = memo(function ({
       path: entry.path,
       content: new Uint8Array(),
       language: getIconIdFromExtension(getFileExtension(entry.path)),
-      isDirectory: false,
+      isDirectory: entry.type === 'dir',
       gitStatus: fileStatuses.get(entry.path)?.status,
     }));
   }, [fileTreeMap, gitRef]);
@@ -304,7 +308,31 @@ export const ChatEditorFileTree = memo(function ({
   const openFiles = useSelector(editorRef, (state) => state.context.openFiles);
 
   // Tree state management
-  const [expandedItems, setExpandedItems] = useState<string[]>(() => [rootId]);
+  const [expandedItems, setExpandedItemsRaw] = useState<string[]>(() => [rootId]);
+  const previousExpandedRef = useRef<Set<string>>(new Set([rootId]));
+
+  const setExpandedItems = useCallback(
+    (updater: string[] | ((previous: string[]) => string[])) => {
+      setExpandedItemsRaw((previous) => {
+        const next = typeof updater === 'function' ? updater(previous) : updater;
+        const previousSet = previousExpandedRef.current;
+        const newlyExpanded = next.filter((id) => id !== rootId && !previousSet.has(id));
+
+        if (treeService && newlyExpanded.length > 0) {
+          for (const path of newlyExpanded) {
+            if (!treeService.hasChildrenLoaded(path)) {
+              void treeService.loadDirectory(path);
+            }
+          }
+        }
+
+        previousExpandedRef.current = new Set(next);
+        return next;
+      });
+    },
+    [treeService],
+  );
+
   const [selectedItems, setSelectedItems] = useState<string[]>([]);
   const [focusedItem, setFocusedItem] = useState<string | undefined>(undefined);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -316,6 +344,7 @@ export const ChatEditorFileTree = memo(function ({
   const [itemsToDelete, setItemsToDelete] = useState<string[]>([]);
 
   // Reveal active file by expanding all parent directories (VSCode-style)
+  // Also triggers loadDirectory for unloaded ancestor directories.
   useEffect(() => {
     if (!activeFilePath) {
       return;
@@ -335,8 +364,16 @@ export const ChatEditorFileTree = memo(function ({
       parentPaths.push(current);
     }
 
-    // Expand all parent directories
     if (parentPaths.length > 0) {
+      // Load unloaded ancestor directories before expanding
+      if (treeService) {
+        for (const path of parentPaths) {
+          if (!treeService.hasChildrenLoaded(path)) {
+            void treeService.loadDirectory(path);
+          }
+        }
+      }
+
       setExpandedItems((previous) => {
         const newExpanded = new Set(previous);
         for (const path of parentPaths) {
@@ -346,7 +383,7 @@ export const ChatEditorFileTree = memo(function ({
         return [...newExpanded];
       });
     }
-  }, [activeFilePath]);
+  }, [activeFilePath, treeService, setExpandedItems]);
 
   // Build virtual folder structure from flat file paths
   const allPaths = useMemo(() => {
@@ -374,24 +411,7 @@ export const ChatEditorFileTree = memo(function ({
   const dataLoader = useMemo(
     () => ({
       getItem(itemId: string): TreeItemData {
-        if (itemId === rootId) {
-          return { path: rootId, name: 'Root', isFolder: true };
-        }
-
-        const file = fileTree.find((f) => f.path === itemId);
-        if (file) {
-          return {
-            path: file.path,
-            name: file.name,
-            isFolder: false,
-            content: file.content,
-            gitStatus: file.gitStatus,
-          };
-        }
-
-        // Virtual folder
-        const name = itemId.split('/').pop() ?? itemId;
-        return { path: itemId, name, isFolder: true };
+        return getItemData(fileTree, rootId, itemId);
       },
 
       getChildren(itemId: string): string[] {
@@ -414,14 +434,13 @@ export const ChatEditorFileTree = memo(function ({
           return isImmediateChild;
         });
 
-        // Sort alphabetically (folders first, then files)
+        // Sort folders first, then alphabetically
         return children.sort((a, b) => {
           const aName = a.split('/').pop() ?? a;
           const bName = b.split('/').pop() ?? b;
-          const aIsFolder = allPaths.has(a) && fileTree.every((f) => f.path !== a);
-          const bIsFolder = allPaths.has(b) && fileTree.every((f) => f.path !== b);
+          const aIsFolder = isPathFolder(a, fileTree, allPaths);
+          const bIsFolder = isPathFolder(b, fileTree, allPaths);
 
-          // Folders first
           if (aIsFolder && !bIsFolder) {
             return -1;
           }
@@ -430,7 +449,6 @@ export const ChatEditorFileTree = memo(function ({
             return 1;
           }
 
-          // Then alphabetically
           return aName.localeCompare(bName, undefined, { sensitivity: 'base' });
         });
       },
@@ -789,8 +807,8 @@ export const ChatEditorFileTree = memo(function ({
   }, []);
 
   const confirmDelete = useCallback(() => {
-    // Collect all paths that will be deleted (including nested files in folders)
     const deletedPaths = new Set<string>();
+
     for (const path of itemsToDelete) {
       if (path === rootId) {
         continue;
@@ -798,23 +816,21 @@ export const ChatEditorFileTree = memo(function ({
 
       deletedPaths.add(path);
 
-      // Check if path is a folder by seeing if it's not in fileTree (files are in fileTree, folders are virtual)
-      const isFolder = !fileTree.some((f) => f.path === path);
+      const entry = fileTreeMap.get(path);
+      const isFolder = entry?.type === 'dir';
 
-      if (isFolder) {
-        // Delete all files in folder
-        const nested = fileTree.filter((f) => f.path.startsWith(`${path}/`));
-        for (const file of nested) {
-          deletedPaths.add(file.path);
-          // Delete file from fileManager - calls worker directly
-          void deleteFile(file.path, { source: 'user' });
-          // Close file in fileExplorer if it's open
-          editorRef.send({ type: 'closeFile', path: file.path });
+      if (isFolder && treeService) {
+        // Recursive delete via worker (has complete filesystem knowledge)
+        void treeService.deleteDirectory(path);
+        // Close any open files under this directory
+        for (const [key] of fileTreeMap) {
+          if (key.startsWith(`${path}/`)) {
+            deletedPaths.add(key);
+            editorRef.send({ type: 'closeFile', path: key });
+          }
         }
       } else {
-        // Delete file from fileManager - calls worker directly
         void deleteFile(path, { source: 'user' });
-        // Close file in fileExplorer if it's open
         editorRef.send({ type: 'closeFile', path });
       }
     }
@@ -822,15 +838,16 @@ export const ChatEditorFileTree = memo(function ({
     setDeleteDialogOpen(false);
     setItemsToDelete([]);
 
-    // Clean up stale references to deleted items
     setSelectedItems((previous) => previous.filter((p) => !deletedPaths.has(p)));
 
-    // Set focus to first remaining item (not undefined) so tree.updateDomFocus() has a valid target
     const firstRemainingItem = tree.getItems().find((i) => i.getId() !== rootId && !deletedPaths.has(i.getId()));
     setFocusedItem(firstRemainingItem?.getId());
+  }, [editorRef, deleteFile, fileTreeMap, treeService, itemsToDelete, tree]);
 
-    // Focus restoration is handled by DialogContent's onCloseAutoFocus
-  }, [editorRef, deleteFile, fileTree, itemsToDelete, tree]);
+  const { formattedKeyCombination: confirmDeleteKeyLabel } = useKeybinding(confirmDeleteKeyCombination, confirmDelete, {
+    enabled: deleteDialogOpen,
+    scope: 'global',
+  });
 
   const handleDuplicate = useCallback(
     (items: Array<ItemInstance<TreeItemData>>) => {
@@ -1035,8 +1052,12 @@ export const ChatEditorFileTree = memo(function ({
           </AlertDialogHeader>
           <AlertDialogFooter className='gap-2'>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction className={buttonVariants({ variant: 'destructive' })} onClick={confirmDelete}>
+            <AlertDialogAction
+              className={buttonVariants({ variant: 'destructive', className: 'pr-3' })}
+              onClick={confirmDelete}
+            >
               Delete
+              <KeyShortcut variant='tooltip'>{confirmDeleteKeyLabel}</KeyShortcut>
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -1057,7 +1078,7 @@ export const ChatEditorFileTree = memo(function ({
               >
                 <Search className='size-4' />
               </FloatingPanelMenuButton>
-              <DropdownMenu>
+              <DropdownMenu modal={false}>
                 <FloatingPanelMenuButton asChild tooltip='Create new file' aria-label='Create new file'>
                   <DropdownMenuTrigger>
                     <FilePlus className='size-4' />
@@ -1504,12 +1525,12 @@ function TreeItem({
             ) : null}
           </div>
           {isFolder ? null : (
-            <DropdownMenu>
+            <DropdownMenu modal={false}>
               <DropdownMenuTrigger asChild>
                 <Button
-                  variant='ghost'
+                  variant='secondary'
                   size='icon'
-                  className='absolute top-1/2 right-1 size-5 -translate-y-1/2 opacity-0 group-hover/file:opacity-100'
+                  className='absolute top-1/2 right-1 size-5 -translate-y-1/2 opacity-0 group-hover/file:opacity-50 hover:bg-secondary hover:opacity-100'
                   onClick={(event) => {
                     event.stopPropagation();
                   }}

@@ -5,6 +5,7 @@ import type { FastifyInstance } from 'fastify';
 import { WebSocketServer, WebSocket } from 'ws';
 import { KernelsService } from '#api/kernels/kernels.service.js';
 import { DevWebSocketService } from '#api/websocket/dev-websocket.service.js';
+import { Span } from '#telemetry/tracer.service.js';
 
 const zooWebSocketPath = '/v1/kernels/zoo';
 
@@ -51,6 +52,19 @@ export class KernelsGateway implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Handle Zoo API proxy connections.
+   */
+  @Span()
+  private handleZooProxy(socket: WebSocket, queryParameters: URLSearchParams): void {
+    this.logger.debug('Client connected to Zoo proxy');
+    this.kernelsService.createZooProxy(socket, queryParameters);
+
+    socket.on('close', () => {
+      this.logger.debug('Client disconnected from Zoo proxy');
+    });
+  }
+
+  /**
    * Initialize WebSocket handler for development mode.
    * Uses the shared DevWebSocketService.
    */
@@ -89,17 +103,5 @@ export class KernelsGateway implements OnModuleInit, OnModuleDestroy {
     });
 
     this.logger.log(`Zoo WebSocket proxy registered at ${zooWebSocketPath} (production mode)`);
-  }
-
-  /**
-   * Handle Zoo API proxy connections.
-   */
-  private handleZooProxy(socket: WebSocket, queryParameters: URLSearchParams): void {
-    this.logger.debug('Client connected to Zoo proxy');
-    this.kernelsService.createZooProxy(socket, queryParameters);
-
-    socket.on('close', () => {
-      this.logger.debug('Client disconnected from Zoo proxy');
-    });
   }
 }

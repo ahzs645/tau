@@ -175,6 +175,7 @@ const config = [
       'experiments/**',
       '**/wasm/**',
       'repos/**',
+      '**/reports/**',
     ],
   },
 

@@ -10,6 +10,7 @@ import { ensureMatcapTextureLoaded } from '#components/geometry/graphics/three/m
 import { calculateFovDistanceCompensation } from '#components/geometry/graphics/three/utils/math.utils.js';
 import { computeViewFittingZoom } from '#components/geometry/graphics/three/utils/camera.utils.js';
 import { defaultStageOptions } from '#components/geometry/graphics/three/stage.js';
+import { sceneTag, hasSceneTag, findBySceneTag } from '#components/geometry/graphics/three/utils/scene-tags.js';
 
 // Capture mode discriminator
 type CaptureMode = 'threejs' | 'svg';
@@ -468,6 +469,26 @@ async function captureSvgScreenshots(svgElement: SVGSVGElement, options?: Screen
 // ---------------------------------------------------------------------------
 
 /**
+ * Remove objects from a cloned scene that are unsafe to traverse after cloning.
+ *
+ * TransformControls (and subclasses) override `updateMatrixWorld` and
+ * unconditionally access `this.camera`, which is `undefined` on cloned
+ * instances because `Object3D.clone()` calls `new this.constructor()`
+ * without arguments.
+ */
+export function removeCloneUnsafeObjects(scene: THREE.Scene): void {
+  const toRemove: THREE.Object3D[] = [];
+  scene.traverse((object) => {
+    if ('isTransformControls' in object) {
+      toRemove.push(object);
+    }
+  });
+  for (const object of toRemove) {
+    object.removeFromParent();
+  }
+}
+
+/**
  * Core screenshot capture logic.
  * Renders each camera angle into a temporary canvas and returns data URLs.
  */
@@ -535,6 +556,7 @@ async function captureScreenshots({
     antialias: true,
     logarithmicDepthBuffer: true,
     preserveDrawingBuffer: true,
+    stencil: true,
   });
 
   try {
@@ -547,14 +569,16 @@ async function captureScreenshots({
     screenshotRenderer.outputColorSpace = gl.outputColorSpace;
     screenshotRenderer.toneMapping = THREE.NoToneMapping;
     screenshotRenderer.toneMappingExposure = 1;
+    screenshotRenderer.localClippingEnabled = gl.localClippingEnabled;
 
     const dataUrls: string[] = [];
 
     const screenshotScene = scene.clone();
+    removeCloneUnsafeObjects(screenshotScene);
 
     if (config.output.isPreview) {
       screenshotScene.traverse((object) => {
-        if (object.userData['isPreviewOnly']) {
+        if (hasSceneTag(object, sceneTag.previewOnly)) {
           object.visible = false;
         }
       });
@@ -566,7 +590,19 @@ async function captureScreenshots({
     screenshotScene.environment = null;
     screenshotScene.environmentIntensity = 0;
 
+    // Temporarily hide section-view helpers (cap planes, stencil groups) so they
+    // don't inflate the bounding box — their large plane geometry would push the
+    // camera too far away, producing blank screenshots.
+    const sectionViewHelpers = findBySceneTag(screenshotScene, sceneTag.sectionViewHelper);
+    for (const helper of sectionViewHelpers) {
+      helper.visible = false;
+    }
+
     const boundingBox = new THREE.Box3().setFromObject(screenshotScene);
+
+    for (const helper of sectionViewHelpers) {
+      helper.visible = true;
+    }
     const geometryCenter = new THREE.Vector3();
     const boundingSphere = new THREE.Sphere();
     boundingBox.getCenter(geometryCenter);

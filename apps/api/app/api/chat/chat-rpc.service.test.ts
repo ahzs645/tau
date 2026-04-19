@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mock } from 'vitest-mock-extended';
 import type { Socket } from 'socket.io';
 import { ChatRpcService, rpcExecutionTimeoutMs, abortCleanupDelayMs } from '#api/chat/chat-rpc.service.js';
+import { MetricsService } from '#telemetry/metrics.js';
+
+const mockMetricsService = new MetricsService();
 
 let requestIdCounter = 0;
 
@@ -19,8 +22,21 @@ vi.mock('@taucad/chat', () => ({
   },
 }));
 
+const defaultUserId = 'user_owner';
+
 function createMockSocket(id: string, connected = true): Socket {
-  return mock<Socket>({ id, connected, emit: vi.fn() });
+  const emitWithAck = vi.fn();
+  const timeoutFunction = vi.fn(() => ({ emitWithAck }));
+  const socket = mock<Socket>({ id, connected, emit: vi.fn() });
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-assignment -- vitest mock for timeout().emitWithAck chain
+  socket.timeout = timeoutFunction as any;
+  Object.defineProperty(socket, '_emitWithAck', { value: emitWithAck });
+  return socket;
+}
+
+function getEmitWithAck(socket: Socket): ReturnType<typeof vi.fn> {
+  // oxlint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-return -- accessing private mock property
+  return (socket as any)._emitWithAck;
 }
 
 describe('ChatRpcService', () => {
@@ -29,7 +45,7 @@ describe('ChatRpcService', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     requestIdCounter = 0;
-    service = new ChatRpcService();
+    service = new ChatRpcService(mockMetricsService);
   });
 
   afterEach(() => {
@@ -58,7 +74,7 @@ describe('ChatRpcService', () => {
     });
 
     it('should return NO_CONNECTION RPC error when socket is disconnected', async () => {
-      service.registerConnection('chat_123', createMockSocket('s1', false));
+      service.registerConnection('chat_123', createMockSocket('s1', false), defaultUserId);
 
       const result = await service.sendRpcRequest({
         chatId: 'chat_123',
@@ -89,18 +105,27 @@ describe('ChatRpcService', () => {
       });
     });
 
-    it('should emit rpc_request to connected socket', async () => {
+    it('should call emitWithAck on connected socket', async () => {
       const socket = createMockSocket('s1');
-      service.registerConnection('chat_1', socket);
+      service.registerConnection('chat_1', socket, defaultUserId);
 
-      void service.sendRpcRequest({
+      const ack = getEmitWithAck(socket);
+      ack.mockResolvedValueOnce({
+        type: 'rpc_response',
+        requestId: 'req_test_1',
+        toolCallId: 'call_1',
+        result: { content: 'hello' },
+      });
+
+      await service.sendRpcRequest({
         chatId: 'chat_1',
         toolCallId: 'call_1',
         rpcName: 'read_file',
         args: { targetFile: 'a.txt' },
       });
 
-      expect(socket.emit).toHaveBeenCalledWith(
+      expect(socket.timeout).toHaveBeenCalledWith(rpcExecutionTimeoutMs);
+      expect(ack).toHaveBeenCalledWith(
         'rpc_request',
         expect.objectContaining({ rpcName: 'read_file', chatId: 'chat_1' }),
       );
@@ -111,50 +136,69 @@ describe('ChatRpcService', () => {
   // RPC timeout
   // ---------------------------------------------------------------------------
   describe('RPC timeout', () => {
-    it('should resolve with TIMEOUT error after 60 seconds', async () => {
+    it('should resolve with TIMEOUT error when emitWithAck rejects (socket still connected)', async () => {
       const socket = createMockSocket('s1');
-      service.registerConnection('chat_1', socket);
+      service.registerConnection('chat_1', socket, defaultUserId);
 
-      const resultPromise = service.sendRpcRequest({
+      const ack = getEmitWithAck(socket);
+      ack.mockRejectedValueOnce(new Error('operation has timed out'));
+
+      const result = await service.sendRpcRequest({
         chatId: 'chat_1',
         toolCallId: 'call_1',
         rpcName: 'read_file',
         args: { targetFile: 'a.txt' },
       });
 
-      vi.advanceTimersByTime(rpcExecutionTimeoutMs);
-
-      const result = await resultPromise;
       expect(result).toMatchObject({
         errorCode: 'TIMEOUT',
         rpcName: 'read_file',
       });
     });
 
-    it('should not resolve with TIMEOUT if response arrives before deadline', async () => {
+    it('should resolve with CLIENT_DISCONNECTED when emitWithAck rejects and socket is disconnected', async () => {
       const socket = createMockSocket('s1');
-      service.registerConnection('chat_1', socket);
+      service.registerConnection('chat_1', socket, defaultUserId);
 
-      const resultPromise = service.sendRpcRequest({
+      const ack = getEmitWithAck(socket);
+      ack.mockImplementationOnce(async () => {
+        Object.defineProperty(socket, 'connected', { value: false, configurable: true });
+        throw new Error('socket disconnected');
+      });
+
+      const result = await service.sendRpcRequest({
         chatId: 'chat_1',
         toolCallId: 'call_1',
         rpcName: 'read_file',
         args: { targetFile: 'a.txt' },
       });
 
-      // Respond before timeout
-      service.handleRpcResponse({
+      expect(result).toMatchObject({
+        errorCode: 'CLIENT_DISCONNECTED',
+        rpcName: 'read_file',
+      });
+    });
+
+    it('should resolve with validated result when emitWithAck succeeds', async () => {
+      const socket = createMockSocket('s1');
+      service.registerConnection('chat_1', socket, defaultUserId);
+
+      const ack = getEmitWithAck(socket);
+      ack.mockResolvedValueOnce({
         type: 'rpc_response',
         requestId: 'req_test_1',
         toolCallId: 'call_1',
         result: { content: 'hello' },
       });
 
-      const result = await resultPromise;
-      expect(result).toEqual({ content: 'hello' });
+      const result = await service.sendRpcRequest({
+        chatId: 'chat_1',
+        toolCallId: 'call_1',
+        rpcName: 'read_file',
+        args: { targetFile: 'a.txt' },
+      });
 
-      // Advancing past the timeout should not cause issues
-      vi.advanceTimersByTime(rpcExecutionTimeoutMs);
+      expect(result).toEqual({ content: 'hello' });
     });
   });
 
@@ -162,10 +206,63 @@ describe('ChatRpcService', () => {
   // registerConnection
   // ---------------------------------------------------------------------------
   describe('registerConnection', () => {
-    it('should register a socket connection without throwing', () => {
-      expect(() => {
-        service.registerConnection('chat_123', createMockSocket('s1'));
-      }).not.toThrow();
+    it('should register a socket connection and return true', () => {
+      const result = service.registerConnection('chat_123', createMockSocket('s1'), 'user_a');
+      expect(result).toBe(true);
+    });
+
+    it('should allow same user to register from multiple sockets', () => {
+      const s1 = createMockSocket('s1');
+      const s2 = createMockSocket('s2');
+      expect(service.registerConnection('chat_1', s1, 'user_a')).toBe(true);
+      expect(service.registerConnection('chat_1', s2, 'user_a')).toBe(true);
+    });
+
+    it('should reject a different user from joining an owned chat', () => {
+      const s1 = createMockSocket('s1');
+      const s2 = createMockSocket('s2');
+      expect(service.registerConnection('chat_1', s1, 'user_a')).toBe(true);
+      expect(service.registerConnection('chat_1', s2, 'user_b')).toBe(false);
+    });
+
+    it('should clear ownership when last socket disconnects', () => {
+      const s1 = createMockSocket('s1');
+      service.registerConnection('chat_1', s1, 'user_a');
+      service.handleSocketDisconnect(s1);
+
+      const s2 = createMockSocket('s2');
+      expect(service.registerConnection('chat_1', s2, 'user_b')).toBe(true);
+    });
+
+    it('should clear ownership when last socket unregisters', () => {
+      const s1 = createMockSocket('s1');
+      service.registerConnection('chat_1', s1, 'user_a');
+      service.unregisterConnection('chat_1', s1);
+
+      const s2 = createMockSocket('s2');
+      expect(service.registerConnection('chat_1', s2, 'user_b')).toBe(true);
+    });
+
+    it('should not clear ownership when a non-last socket disconnects', () => {
+      const s1 = createMockSocket('s1');
+      const s2 = createMockSocket('s2');
+      service.registerConnection('chat_1', s1, 'user_a');
+      service.registerConnection('chat_1', s2, 'user_a');
+      service.unregisterConnection('chat_1', s1);
+
+      const s3 = createMockSocket('s3');
+      expect(service.registerConnection('chat_1', s3, 'user_b')).toBe(false);
+    });
+
+    it('should clear ownership on onModuleDestroy', () => {
+      const s1 = createMockSocket('s1');
+      service.registerConnection('chat_1', s1, 'user_a');
+      service.onModuleDestroy();
+
+      const service2 = new ChatRpcService(mockMetricsService);
+      const s2 = createMockSocket('s2');
+      expect(service2.registerConnection('chat_1', s2, 'user_b')).toBe(true);
+      service2.onModuleDestroy();
     });
   });
 
@@ -178,54 +275,26 @@ describe('ChatRpcService', () => {
     });
 
     it('should return false when socket is disconnected', () => {
-      service.registerConnection('chat_123', createMockSocket('s1', false));
+      service.registerConnection('chat_123', createMockSocket('s1', false), defaultUserId);
       expect(service.isConnected('chat_123')).toBe(false);
     });
 
     it('should return true when socket is connected', () => {
-      service.registerConnection('chat_123', createMockSocket('s1'));
+      service.registerConnection('chat_123', createMockSocket('s1'), defaultUserId);
       expect(service.isConnected('chat_123')).toBe(true);
     });
   });
 
   // ---------------------------------------------------------------------------
-  // handleRpcResponse
+  // emitWithAck response handling
   // ---------------------------------------------------------------------------
-  describe('handleRpcResponse', () => {
-    it('should resolve pending request with validated result', async () => {
+  describe('emitWithAck response handling', () => {
+    it('should resolve with UNHANDLED_CLIENT_ERROR when client reports error via ack', async () => {
       const socket = createMockSocket('s1');
-      service.registerConnection('chat_1', socket);
+      service.registerConnection('chat_1', socket, defaultUserId);
 
-      const resultPromise = service.sendRpcRequest({
-        chatId: 'chat_1',
-        toolCallId: 'call_1',
-        rpcName: 'read_file',
-        args: { targetFile: 'a.txt' },
-      });
-
-      service.handleRpcResponse({
-        type: 'rpc_response',
-        requestId: 'req_test_1',
-        toolCallId: 'call_1',
-        result: { content: 'hello' },
-      });
-
-      const result = await resultPromise;
-      expect(result).toEqual({ content: 'hello' });
-    });
-
-    it('should resolve with UNHANDLED_CLIENT_ERROR when client reports error', async () => {
-      const socket = createMockSocket('s1');
-      service.registerConnection('chat_1', socket);
-
-      const resultPromise = service.sendRpcRequest({
-        chatId: 'chat_1',
-        toolCallId: 'call_1',
-        rpcName: 'read_file',
-        args: { targetFile: 'a.txt' },
-      });
-
-      service.handleRpcResponse({
+      const ack = getEmitWithAck(socket);
+      ack.mockResolvedValueOnce({
         type: 'rpc_response',
         requestId: 'req_test_1',
         toolCallId: 'call_1',
@@ -233,23 +302,18 @@ describe('ChatRpcService', () => {
         error: 'Something went wrong on the client',
       });
 
-      const result = await resultPromise;
+      const result = await service.sendRpcRequest({
+        chatId: 'chat_1',
+        toolCallId: 'call_1',
+        rpcName: 'read_file',
+        args: { targetFile: 'a.txt' },
+      });
+
       expect(result).toMatchObject({
         errorCode: 'UNHANDLED_CLIENT_ERROR',
         message: 'Something went wrong on the client',
         rpcName: 'read_file',
       });
-    });
-
-    it('should not crash when receiving response for unknown requestId', () => {
-      expect(() => {
-        service.handleRpcResponse({
-          type: 'rpc_response',
-          requestId: 'req_unknown',
-          toolCallId: 'call_1',
-          result: {},
-        });
-      }).not.toThrow();
     });
   });
 
@@ -296,7 +360,15 @@ describe('ChatRpcService', () => {
       vi.advanceTimersByTime(abortCleanupDelayMs);
 
       const socket = createMockSocket('s1');
-      service.registerConnection('chat_123', socket);
+      service.registerConnection('chat_123', socket, defaultUserId);
+
+      const ack = getEmitWithAck(socket);
+      ack.mockResolvedValueOnce({
+        type: 'rpc_response',
+        requestId: 'req_test_2',
+        toolCallId: 'call_2',
+        result: { content: 'hello' },
+      });
 
       void service.sendRpcRequest({
         chatId: 'chat_123',
@@ -305,12 +377,12 @@ describe('ChatRpcService', () => {
         args: { targetFile: 'test.txt' },
       });
 
-      expect(socket.emit).toHaveBeenCalledWith('rpc_request', expect.objectContaining({ rpcName: 'read_file' }));
+      expect(ack).toHaveBeenCalledWith('rpc_request', expect.objectContaining({ rpcName: 'read_file' }));
     });
 
     it('should clear stale abort entry when a new signal is registered for the same chat', async () => {
       const socket = createMockSocket('s1');
-      service.registerConnection('chat_123', socket);
+      service.registerConnection('chat_123', socket, defaultUserId);
 
       const controllerA = new AbortController();
       service.registerAbortSignal('chat_123', controllerA.signal);
@@ -330,6 +402,14 @@ describe('ChatRpcService', () => {
       const controllerB = new AbortController();
       service.registerAbortSignal('chat_123', controllerB.signal);
 
+      const ack = getEmitWithAck(socket);
+      ack.mockResolvedValueOnce({
+        type: 'rpc_response',
+        requestId: 'req_test_2',
+        toolCallId: 'call_2',
+        result: { content: 'hello' },
+      });
+
       void service.sendRpcRequest({
         chatId: 'chat_123',
         toolCallId: 'call_2',
@@ -337,12 +417,12 @@ describe('ChatRpcService', () => {
         args: { targetFile: 'test.txt' },
       });
 
-      expect(socket.emit).toHaveBeenCalledWith('rpc_request', expect.objectContaining({ rpcName: 'read_file' }));
+      expect(ack).toHaveBeenCalledWith('rpc_request', expect.objectContaining({ rpcName: 'read_file' }));
     });
 
     it('should reject RPCs after abort and accept them after re-registration', async () => {
       const socket = createMockSocket('s1');
-      service.registerConnection('chat_123', socket);
+      service.registerConnection('chat_123', socket, defaultUserId);
 
       const controllerA = new AbortController();
       service.registerAbortSignal('chat_123', controllerA.signal);
@@ -362,6 +442,14 @@ describe('ChatRpcService', () => {
       const controllerB = new AbortController();
       service.registerAbortSignal('chat_123', controllerB.signal);
 
+      const ack = getEmitWithAck(socket);
+      ack.mockResolvedValueOnce({
+        type: 'rpc_response',
+        requestId: 'req_test_2',
+        toolCallId: 'call_2',
+        result: { content: 'hello' },
+      });
+
       void service.sendRpcRequest({
         chatId: 'chat_123',
         toolCallId: 'call_2',
@@ -369,26 +457,24 @@ describe('ChatRpcService', () => {
         args: { targetFile: 'test.txt' },
       });
 
-      expect(socket.emit).toHaveBeenCalledWith('rpc_request', expect.objectContaining({ rpcName: 'read_file' }));
+      expect(ack).toHaveBeenCalledWith('rpc_request', expect.objectContaining({ rpcName: 'read_file' }));
     });
 
-    it('should reject pending in-flight RPCs when abort signal fires', async () => {
+    it('should reject new RPCs after abort signal fires', async () => {
       const socket = createMockSocket('s1');
-      service.registerConnection('chat_1', socket);
+      service.registerConnection('chat_1', socket, defaultUserId);
 
       const controller = new AbortController();
       service.registerAbortSignal('chat_1', controller.signal);
+      controller.abort();
 
-      const resultPromise = service.sendRpcRequest({
+      const result = await service.sendRpcRequest({
         chatId: 'chat_1',
         toolCallId: 'call_1',
         rpcName: 'read_file',
         args: { targetFile: 'a.txt' },
       });
 
-      controller.abort();
-
-      const result = await resultPromise;
       expect(result).toMatchObject({
         errorCode: 'CLIENT_DISCONNECTED',
         rpcName: 'read_file',
@@ -397,46 +483,32 @@ describe('ChatRpcService', () => {
 
     it('should remove old abort listener when re-registering so it does not fire', async () => {
       const socket = createMockSocket('s1');
-      service.registerConnection('chat_1', socket);
+      service.registerConnection('chat_1', socket, defaultUserId);
 
-      // Register signal A
       const controllerA = new AbortController();
       service.registerAbortSignal('chat_1', controllerA.signal);
 
-      // Register signal B for the same chatId — should detach listener from signal A
       const controllerB = new AbortController();
       service.registerAbortSignal('chat_1', controllerB.signal);
 
-      // Start an RPC request (belongs to the new signal B session)
-      const resultPromise = service.sendRpcRequest({
-        chatId: 'chat_1',
-        toolCallId: 'call_1',
-        rpcName: 'read_file',
-        args: { targetFile: 'a.txt' },
-      });
-
-      // Abort signal A — this should NOT affect the current request
-      // because the old listener was removed on re-registration
+      // Abort signal A — should NOT block RPCs since listener was detached
       controllerA.abort();
 
-      // The RPC should still be in-flight (not rejected)
-      // Verify by checking the socket still has the request and no error was returned yet
-      expect(socket.emit).toHaveBeenCalledWith(
-        'rpc_request',
-        expect.objectContaining({ rpcName: 'read_file', chatId: 'chat_1' }),
-      );
-
-      // Now respond to the pending request successfully
-      service.handleRpcResponse({
+      const ack = getEmitWithAck(socket);
+      ack.mockResolvedValueOnce({
         type: 'rpc_response',
         requestId: 'req_test_1',
         toolCallId: 'call_1',
         result: { content: 'success' },
       });
 
-      const result = await resultPromise;
-      // If the old listener was NOT removed, this would be CLIENT_DISCONNECTED.
-      // Mock resultSchema returns { content: 'hello' } for validated result.
+      const result = await service.sendRpcRequest({
+        chatId: 'chat_1',
+        toolCallId: 'call_1',
+        rpcName: 'read_file',
+        args: { targetFile: 'a.txt' },
+      });
+
       expect(result).toEqual({ content: 'hello' });
     });
   });
@@ -447,7 +519,7 @@ describe('ChatRpcService', () => {
   describe('timer management', () => {
     it('should cancel stale cleanup timer when a new signal is registered', async () => {
       const socket = createMockSocket('s1');
-      service.registerConnection('chat_1', socket);
+      service.registerConnection('chat_1', socket, defaultUserId);
 
       // Abort request A — schedules Timer A (5s)
       const controllerA = new AbortController();
@@ -477,7 +549,7 @@ describe('ChatRpcService', () => {
 
     it('should not prematurely clear abort entry when stale timer fires', async () => {
       const socket = createMockSocket('s1');
-      service.registerConnection('chat_1', socket);
+      service.registerConnection('chat_1', socket, defaultUserId);
 
       // Abort request A at t=0 → Timer A fires at t=5s
       const controllerA = new AbortController();
@@ -508,18 +580,27 @@ describe('ChatRpcService', () => {
 
       // At t=8s — Timer B fires, abort entry is cleaned up
       vi.advanceTimersByTime(3000);
+
+      const ack = getEmitWithAck(socket);
+      ack.mockResolvedValueOnce({
+        type: 'rpc_response',
+        requestId: 'req_test_2',
+        toolCallId: 'call_2',
+        result: { content: 'hello' },
+      });
+
       void service.sendRpcRequest({
         chatId: 'chat_1',
         toolCallId: 'call_2',
         rpcName: 'read_file',
         args: { targetFile: 'a.txt' },
       });
-      expect(socket.emit).toHaveBeenCalledWith('rpc_request', expect.objectContaining({ rpcName: 'read_file' }));
+      expect(ack).toHaveBeenCalledWith('rpc_request', expect.objectContaining({ rpcName: 'read_file' }));
     });
 
     it('should handle rapid abort-register-abort cycles without timer interference', async () => {
       const socket = createMockSocket('s1');
-      service.registerConnection('chat_1', socket);
+      service.registerConnection('chat_1', socket, defaultUserId);
 
       // Cycle 1: register + abort
       const c1 = new AbortController();
@@ -554,19 +635,26 @@ describe('ChatRpcService', () => {
       // Advance past Timer C3 (1 more second → t=6s total)
       vi.advanceTimersByTime(1000);
 
-      // Now unblocked
+      const ack = getEmitWithAck(socket);
+      ack.mockResolvedValueOnce({
+        type: 'rpc_response',
+        requestId: 'req_test_2',
+        toolCallId: 'call_2',
+        result: { content: 'hello' },
+      });
+
       void service.sendRpcRequest({
         chatId: 'chat_1',
         toolCallId: 'call_2',
         rpcName: 'read_file',
         args: { targetFile: 'a.txt' },
       });
-      expect(socket.emit).toHaveBeenCalledWith('rpc_request', expect.objectContaining({ rpcName: 'read_file' }));
+      expect(ack).toHaveBeenCalledWith('rpc_request', expect.objectContaining({ rpcName: 'read_file' }));
     });
 
     it('should cancel previous cleanup timer when scheduling a new one for the same chatId', async () => {
       const socket = createMockSocket('s1');
-      service.registerConnection('chat_1', socket);
+      service.registerConnection('chat_1', socket, defaultUserId);
 
       const c1 = new AbortController();
       c1.abort();
@@ -593,13 +681,21 @@ describe('ChatRpcService', () => {
       // At t=7s — Timer B fires (5s after t=2s registration)
       vi.advanceTimersByTime(2000);
 
+      const ack = getEmitWithAck(socket);
+      ack.mockResolvedValueOnce({
+        type: 'rpc_response',
+        requestId: 'req_test_2',
+        toolCallId: 'call_2',
+        result: { content: 'hello' },
+      });
+
       void service.sendRpcRequest({
         chatId: 'chat_1',
         toolCallId: 'call_2',
         rpcName: 'read_file',
         args: { targetFile: 'a.txt' },
       });
-      expect(socket.emit).toHaveBeenCalledWith('rpc_request', expect.objectContaining({ rpcName: 'read_file' }));
+      expect(ack).toHaveBeenCalledWith('rpc_request', expect.objectContaining({ rpcName: 'read_file' }));
     });
   });
 
@@ -607,96 +703,69 @@ describe('ChatRpcService', () => {
   // Disconnect handling
   // ---------------------------------------------------------------------------
   describe('disconnect handling', () => {
-    it('should reject pending requests when last socket disconnects via unregisterConnection', async () => {
+    it('should return NO_CONNECTION after last socket unregisters', async () => {
       const socket = createMockSocket('s1');
-      service.registerConnection('chat_1', socket);
+      service.registerConnection('chat_1', socket, defaultUserId);
+      service.unregisterConnection('chat_1', socket);
 
-      const resultPromise = service.sendRpcRequest({
+      const result = await service.sendRpcRequest({
         chatId: 'chat_1',
         toolCallId: 'call_1',
         rpcName: 'read_file',
         args: { targetFile: 'a.txt' },
       });
 
-      service.unregisterConnection('chat_1', socket);
-
-      const result = await resultPromise;
       expect(result).toMatchObject({
-        errorCode: 'CLIENT_DISCONNECTED',
+        errorCode: 'NO_CONNECTION',
         rpcName: 'read_file',
       });
     });
 
-    it('should not reject pending requests when a non-last socket disconnects', () => {
+    it('should not lose connection when a non-last socket disconnects', () => {
       const socket1 = createMockSocket('s1');
       const socket2 = createMockSocket('s2');
-      service.registerConnection('chat_1', socket1);
-      service.registerConnection('chat_1', socket2);
+      service.registerConnection('chat_1', socket1, defaultUserId);
+      service.registerConnection('chat_1', socket2, defaultUserId);
 
-      void service.sendRpcRequest({
-        chatId: 'chat_1',
-        toolCallId: 'call_1',
-        rpcName: 'read_file',
-        args: { targetFile: 'a.txt' },
-      });
-
-      // Remove one socket — still one remaining
       service.unregisterConnection('chat_1', socket1);
 
-      // Chat should still be connected
       expect(service.isConnected('chat_1')).toBe(true);
     });
 
-    it('should reject pending requests when last socket is removed via handleSocketDisconnect', async () => {
+    it('should return NO_CONNECTION after handleSocketDisconnect removes last socket', async () => {
       const socket = createMockSocket('s1');
-      service.registerConnection('chat_1', socket);
+      service.registerConnection('chat_1', socket, defaultUserId);
+      service.handleSocketDisconnect(socket);
 
-      const resultPromise = service.sendRpcRequest({
+      const result = await service.sendRpcRequest({
         chatId: 'chat_1',
         toolCallId: 'call_1',
         rpcName: 'read_file',
         args: { targetFile: 'a.txt' },
       });
 
-      service.handleSocketDisconnect(socket);
-
-      const result = await resultPromise;
       expect(result).toMatchObject({
-        errorCode: 'CLIENT_DISCONNECTED',
+        errorCode: 'NO_CONNECTION',
         rpcName: 'read_file',
       });
     });
 
-    it('should not affect other chats when one chat socket disconnects', async () => {
+    it('should not affect other chats when one chat socket disconnects', () => {
       const socket1 = createMockSocket('s1');
       const socket2 = createMockSocket('s2');
-      service.registerConnection('chat_1', socket1);
-      service.registerConnection('chat_2', socket2);
+      service.registerConnection('chat_1', socket1, defaultUserId);
+      service.registerConnection('chat_2', socket2, defaultUserId);
 
-      void service.sendRpcRequest({
-        chatId: 'chat_1',
-        toolCallId: 'call_1',
-        rpcName: 'read_file',
-        args: { targetFile: 'a.txt' },
-      });
-      void service.sendRpcRequest({
-        chatId: 'chat_2',
-        toolCallId: 'call_2',
-        rpcName: 'read_file',
-        args: { targetFile: 'b.txt' },
-      });
-
-      // Disconnect socket for chat_1 only
       service.handleSocketDisconnect(socket1);
 
-      // `chat_2` should still be connected
+      expect(service.isConnected('chat_1')).toBe(false);
       expect(service.isConnected('chat_2')).toBe(true);
     });
 
     it('should clean up socket from multiple chat rooms on disconnect', () => {
       const socket = createMockSocket('s1');
-      service.registerConnection('chat_1', socket);
-      service.registerConnection('chat_2', socket);
+      service.registerConnection('chat_1', socket, defaultUserId);
+      service.registerConnection('chat_2', socket, defaultUserId);
 
       service.handleSocketDisconnect(socket);
 
@@ -709,30 +778,25 @@ describe('ChatRpcService', () => {
   // onModuleDestroy
   // ---------------------------------------------------------------------------
   describe('onModuleDestroy', () => {
-    it('should resolve all pending requests with CLIENT_DISCONNECTED', async () => {
+    it('should clear connections so subsequent RPCs get NO_CONNECTION', async () => {
       const socket = createMockSocket('s1');
-      service.registerConnection('chat_1', socket);
+      service.registerConnection('chat_1', socket, defaultUserId);
 
-      const resultPromise = service.sendRpcRequest({
+      service.onModuleDestroy();
+
+      const result = await service.sendRpcRequest({
         chatId: 'chat_1',
         toolCallId: 'call_1',
         rpcName: 'read_file',
         args: { targetFile: 'a.txt' },
       });
 
-      service.onModuleDestroy();
-
-      const result = await resultPromise;
-      expect(result).toMatchObject({
-        errorCode: 'CLIENT_DISCONNECTED',
-        message: 'Server is shutting down. RPC request cancelled.',
-        rpcName: 'read_file',
-      });
+      expect(result).toMatchObject({ errorCode: 'NO_CONNECTION' });
     });
 
     it('should clear all abort cleanup timers so none fire after destroy', async () => {
       const socket = createMockSocket('s1');
-      service.registerConnection('chat_1', socket);
+      service.registerConnection('chat_1', socket, defaultUserId);
 
       // Abort to schedule a 5s cleanup timer
       const controller = new AbortController();
@@ -743,23 +807,30 @@ describe('ChatRpcService', () => {
       service.onModuleDestroy();
 
       // Re-create the service and register a new connection
-      const service2 = new ChatRpcService();
+      const service2 = new ChatRpcService(mockMetricsService);
       const socket2 = createMockSocket('s2');
-      service2.registerConnection('chat_1', socket2);
+      service2.registerConnection('chat_1', socket2, defaultUserId);
 
       // Advance past the cleanup window — the old timer should NOT fire
       // (it would have called abortedChats.delete on the OLD service, but we
       // verify no errors occur)
       vi.advanceTimersByTime(abortCleanupDelayMs);
 
-      // The new service should have a clean state
+      const ack2 = getEmitWithAck(socket2);
+      ack2.mockResolvedValueOnce({
+        type: 'rpc_response',
+        requestId: 'req_test_1',
+        toolCallId: 'call_1',
+        result: { content: 'hello' },
+      });
+
       void service2.sendRpcRequest({
         chatId: 'chat_1',
         toolCallId: 'call_1',
         rpcName: 'read_file',
         args: { targetFile: 'a.txt' },
       });
-      expect(socket2.emit).toHaveBeenCalledWith('rpc_request', expect.objectContaining({ rpcName: 'read_file' }));
+      expect(ack2).toHaveBeenCalledWith('rpc_request', expect.objectContaining({ rpcName: 'read_file' }));
 
       service2.onModuleDestroy();
     });

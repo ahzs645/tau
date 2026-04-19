@@ -35,7 +35,7 @@ export const useChatConstants: Parameters<typeof useChat>[0] = {
  * @param dataUrl
  * @returns
  */
-const extractMimeTypeFromDataUrl = (dataUrl: string): string => {
+export const extractMimeTypeFromDataUrl = (dataUrl: string): string => {
   const mimeType = dataUrl.split(',')[0]?.split(':')[1]?.split(';')[0];
   if (!mimeType) {
     throw new Error('Invalid data URL');
@@ -260,6 +260,14 @@ function serializePart(part: MyMessagePart): string {
 
     case 'data-usage': {
       // Usage is aggregated in serializeMessage; no per-part segment
+      return '';
+    }
+
+    case 'data-context-compaction': {
+      return '';
+    }
+
+    case 'data-context-usage': {
       return '';
     }
 

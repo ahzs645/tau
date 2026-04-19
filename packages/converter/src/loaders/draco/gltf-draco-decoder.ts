@@ -194,7 +194,7 @@ export class GltfDracoDecoder {
     } else {
       // Mesh material
       material.setBaseColorFactor([...cadMaterialDefaults.baseColorFactor]);
-      material.setMetallicFactor(cadMaterialDefaults.metallicFactor);
+      material.setMetallicFactor(cadMaterialDefaults.metalnessFactor);
       material.setRoughnessFactor(cadMaterialDefaults.roughnessFactor);
     }
 

@@ -1,24 +1,19 @@
 import { Clipboard, Download, GalleryThumbnails, ImageDown } from 'lucide-react';
 import { useCallback, useEffect, useRef } from 'react';
-import { useSelector, useActorRef } from '@xstate/react';
+import { useSelector } from '@xstate/react';
 import { createActor } from 'xstate';
 import type { UIMatch } from 'react-router';
-import type { ExportFormat } from '@taucad/types';
-import { fileExtensionFromExportFormat } from '@taucad/types/constants';
 import { useProject, useMainGraphics } from '#hooks/use-project.js';
 import { toast } from '#components/ui/sonner.js';
 import { downloadBlob } from '@taucad/utils/file';
 import { screenshotRequestMachine } from '#machines/screenshot-request.machine.js';
-import { exportGeometryMachine } from '#machines/export-geometry.machine.js';
-import { SvgIcon } from '#components/icons/svg-icon.js';
-import { Format3D } from '#components/icons/format-3d.js';
 import { useCommandPaletteItems } from '#components/layout/command-palette.js';
 import type { CommandPaletteItem } from '#components/layout/command-palette.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import { useFileTreeMap } from '#hooks/use-file-tree.js';
 
 export function ProjectCommandPaletteItems({ match }: { readonly match: UIMatch }): undefined {
-  const { compilationUnits, mainEntryFile, updateThumbnail, projectRef } = useProject();
+  const { compilationUnits, mainEntryFile, updateThumbnail, projectRef, editorRef } = useProject();
   const mainGraphicsRef = useMainGraphics();
   const cadActor = compilationUnits.get(mainEntryFile);
   const fileManager = useFileManager();
@@ -29,11 +24,6 @@ export function ProjectCommandPaletteItems({ match }: { readonly match: UIMatch 
 
   const isScreenshotReady = useSelector(mainGraphicsRef, (state) => state?.context.isScreenshotReady ?? false);
   const fileCount = fileTree.size;
-
-  // Create export geometry machine instance
-  const exportActorRef = useActorRef(exportGeometryMachine, {
-    input: { cadRef: cadActor },
-  });
 
   // Track active screenshot actors for lifecycle cleanup
   const activeScreenshotActorsRef = useRef(new Set<{ stop: () => void }>());
@@ -49,40 +39,15 @@ export function ProjectCommandPaletteItems({ match }: { readonly match: UIMatch 
     };
   }, []);
 
-  const handleExport = useCallback(
-    async (filename: string, format: ExportFormat) => {
-      const fileExtension = fileExtensionFromExportFormat[format];
-      const filenameWithExtension = `${filename}.${fileExtension}`;
-      toast.promise(
-        new Promise<Blob>((resolve, reject) => {
-          exportActorRef.send({
-            type: 'requestExport',
-            format,
-            onSuccess(blob) {
-              downloadBlob(blob, filenameWithExtension);
-              resolve(blob);
-            },
-            onError(error) {
-              reject(new Error(error));
-            },
-          });
-        }),
-        {
-          loading: `Downloading ${filenameWithExtension}...`,
-          success: `Downloaded ${filenameWithExtension}`,
-          error(error) {
-            let message = `Failed to download ${filenameWithExtension}`;
-            if (error instanceof Error) {
-              message = `${message}: ${error.message}`;
-            }
-
-            return message;
-          },
-        },
-      );
-    },
-    [exportActorRef],
-  );
+  const handleOpenExporter = useCallback(() => {
+    editorRef.send({
+      type: 'setPanelState',
+      panelState: {
+        openPanels: { converter: true },
+        mobileActiveTab: 'converter',
+      },
+    });
+  }, [editorRef]);
 
   const handleDownloadZip = useCallback(async () => {
     if (!project) {
@@ -294,43 +259,11 @@ export function ProjectCommandPaletteItems({ match }: { readonly match: UIMatch 
     match.id,
     (): CommandPaletteItem[] => [
       {
-        id: 'download-stl',
-        label: 'Download STL',
+        id: 'export',
+        label: 'Export',
         group: 'Export',
-        icon: <Format3D extension='stl' />,
-        action: async () => handleExport(projectName, 'stl'),
-        disabled: geometries.length === 0,
-      },
-      {
-        id: 'download-step',
-        label: 'Download STEP',
-        group: 'Export',
-        icon: <Format3D extension='step' />,
-        action: async () => handleExport(projectName, 'step'),
-        disabled: geometries.length === 0,
-      },
-      {
-        id: 'download-gltf',
-        label: 'Download GLTF',
-        group: 'Export',
-        icon: <SvgIcon id='gltf' />,
-        action: async () => handleExport(projectName, 'gltf'),
-        disabled: geometries.length === 0,
-      },
-      {
-        id: 'download-glb',
-        label: 'Download GLB',
-        group: 'Export',
-        icon: <SvgIcon id='gltf' />,
-        action: async () => handleExport(projectName, 'glb'),
-        disabled: geometries.length === 0,
-      },
-      {
-        id: 'download-3mf',
-        label: 'Download 3MF',
-        group: 'Export',
-        icon: <Format3D extension='3mf' />,
-        action: async () => handleExport(projectName, '3mf'),
+        icon: <Download />,
+        action: handleOpenExporter,
         disabled: geometries.length === 0,
       },
       {
@@ -373,10 +306,10 @@ export function ProjectCommandPaletteItems({ match }: { readonly match: UIMatch 
       handleCopyPngToClipboard,
       handleDownloadPng,
       projectName,
-      handleExport,
+      handleOpenExporter,
       geometries,
-      project,
       handleDownloadZip,
+      fileCount,
     ],
   );
 

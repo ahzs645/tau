@@ -52,13 +52,6 @@ export async function loadGltfWithMaterial(options: LoadGltfOptions): Promise<Lo
 
   try {
     const loader = new GLTFLoader();
-
-    // Check for SharedArrayBuffer which isn't supported
-    if (typeof SharedArrayBuffer === 'function' && geometry.content.buffer instanceof SharedArrayBuffer) {
-      console.warn('[loadGltfWithMaterial] SharedArrayBuffer not supported');
-      return undefined;
-    }
-
     const gltf = await loader.parseAsync(geometry.content.buffer, '');
 
     const material = new THREE.MeshStandardMaterial({

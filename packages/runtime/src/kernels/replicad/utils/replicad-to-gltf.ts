@@ -1,237 +1,99 @@
-import type { Primitive } from '@gltf-transform/core';
-import { Document, NodeIO } from '@gltf-transform/core';
 import { cadMaterialDefaults } from '@taucad/types/constants';
 import { normalizeColor } from '#kernels/replicad/utils/normalize-color.js';
 import { transformNormalArray, transformVertexArray } from '#framework/common.js';
 import type { GeometryReplicad } from '#kernels/replicad/replicad.types.js';
+import { writeGlb, writeGltfJson } from '#utils/glb-writer.js';
+import type { GlbInput, GlbNode, GlbPrimitive } from '#utils/glb-writer.js';
 
 /**
- * Create a glTF primitive directly from replicad Shape3D data.
- * This preserves the original triangulation from replicad without re-triangulating.
+ * `sRGB` EOTF: decode a single sRGB channel value to linear light.
  *
- * @param document - the glTF document to create the primitive in
- * @param geometry - the replicad geometry with face and color data
- * @returns the constructed glTF primitive
+ * @param channel - the sRGB channel value
+ * @returns the linear light value
  */
-function createPrimitiveFromReplicadShape(document: Document, geometry: GeometryReplicad): Primitive {
-  const { faces } = geometry;
-  const { vertices: vertexData, triangles, normals } = faces;
-
-  // Convert flat arrays to typed arrays and transform coordinates
-  const positions = transformVertexArray(vertexData);
-  const indices = new Uint32Array(triangles);
-  // Use transformNormalArray for normals (rotation only, no scaling)
-  // Normals are direction vectors that must remain unit length for correct lighting
-  const normalsArray = transformNormalArray(normals);
-
-  // Handle color - normalize and convert to RGB array
-  let baseColor: [number, number, number, number] = [0.8, 0.8, 0.8, 1]; // Default light gray
-  if (geometry.color) {
-    try {
-      const normalizedColor = normalizeColor(geometry.color);
-      // Convert hex to RGB (normalize color returns hex)
-      const hex = normalizedColor.color;
-      const r = Number.parseInt(hex.slice(1, 3), 16) / 255;
-      const g = Number.parseInt(hex.slice(3, 5), 16) / 255;
-      const b = Number.parseInt(hex.slice(5, 7), 16) / 255;
-      // Use alpha from normalization, but allow geometry.opacity to override
-      const alpha = geometry.opacity ?? normalizedColor.alpha;
-      baseColor = [r, g, b, alpha];
-    } catch (error) {
-      console.warn('Failed to parse color:', geometry.color, error);
-      throw new Error('Failed to parse color', { cause: error });
-    }
-  }
-
-  // Create material
-  const material = document
-    .createMaterial()
-    .setDoubleSided(true)
-    .setMetallicFactor(cadMaterialDefaults.metallicFactor)
-    .setRoughnessFactor(cadMaterialDefaults.roughnessFactor)
-    .setBaseColorFactor(baseColor);
-
-  if (geometry.color) {
-    material.setName(geometry.color);
-  } else {
-    material.setName(`default`);
-  }
-
-  // Set alpha mode based on opacity
-  if (baseColor[3] < 1) {
-    material.setAlphaMode('BLEND');
-  } else {
-    material.setAlphaMode('OPAQUE');
-  }
-
-  // Create primitive with replicad's triangulated data
-  const primitive = document
-    .createPrimitive()
-    .setMode(4) // TRIANGLES mode
-    .setMaterial(material)
-    .setAttribute('POSITION', document.createAccessor().setType('VEC3').setArray(positions))
-    .setIndices(document.createAccessor().setType('SCALAR').setArray(indices));
-
-  // Add normals
-  primitive.setAttribute('NORMAL', document.createAccessor().setType('VEC3').setArray(normalsArray));
-
-  return primitive;
+function srgbToLinear(channel: number): number {
+  return channel <= 0.040_45 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
 }
 
 /**
- * Create line primitive from replicad edge data.
+ * Build a GlbNode from a single replicad geometry (surface + optional edge lines).
  *
- * @param document - the glTF document to create the primitive in
- * @param edges - the replicad edge line data
- * @param name - the name used for the line material and primitive
- * @returns the line primitive, or undefined if there are no edges
+ * @param geometry - the replicad geometry with face, edge, and color data
+ * @param geometryIndex - fallback index for unnamed geometries
+ * @returns the GlbNode, or undefined if the geometry has no renderable data
  */
-function createLinePrimitiveFromReplicadEdges(
-  document: Document,
-  edges: GeometryReplicad['edges'],
-  name: string,
-): Primitive | undefined {
-  if (edges.lines.length === 0) {
+function buildNodeFromReplicadGeometry(geometry: GeometryReplicad, geometryIndex: number): GlbNode | undefined {
+  const primitives: GlbPrimitive[] = [];
+  const { faces, edges } = geometry;
+
+  if (faces.vertices.length > 0 && faces.triangles.length > 0) {
+    const positions = transformVertexArray(faces.vertices);
+    const normals = transformNormalArray(faces.normals);
+    const indices = new Uint32Array(faces.triangles);
+
+    let baseColor: [number, number, number, number] = [...cadMaterialDefaults.baseColorFactor];
+    if (geometry.color) {
+      try {
+        const normalizedColor = normalizeColor(geometry.color);
+        const hex = normalizedColor.color;
+        const r = srgbToLinear(Number.parseInt(hex.slice(1, 3), 16) / 255);
+        const g = srgbToLinear(Number.parseInt(hex.slice(3, 5), 16) / 255);
+        const b = srgbToLinear(Number.parseInt(hex.slice(5, 7), 16) / 255);
+        const alpha = geometry.opacity ?? normalizedColor.alpha;
+        baseColor = [r, g, b, alpha];
+      } catch (error) {
+        console.warn('Failed to parse color:', geometry.color, error);
+        throw new Error('Failed to parse color', { cause: error });
+      }
+    }
+
+    primitives.push({
+      mode: 4,
+      positions,
+      normals,
+      indices,
+      material: {
+        baseColorFactor: baseColor,
+        metallicFactor: geometry.metalness ?? cadMaterialDefaults.metalnessFactor,
+        roughnessFactor: geometry.roughness ?? cadMaterialDefaults.roughnessFactor,
+        doubleSided: true,
+        alphaMode: baseColor[3] < 1 ? 'BLEND' : 'OPAQUE',
+        name: geometry.color ?? 'default',
+      },
+    });
+  }
+
+  if (edges.lines.length > 0) {
+    const linePositions = transformVertexArray(edges.lines);
+    const lineIndices = new Uint32Array(linePositions.length / 3);
+    for (let index = 0; index < lineIndices.length; index++) {
+      lineIndices[index] = index;
+    }
+
+    const nodeName = geometry.name || `Shape_${geometryIndex}`;
+    primitives.push({
+      mode: 1,
+      positions: linePositions,
+      indices: lineIndices,
+      material: {
+        baseColorFactor: [0.141, 0.259, 0.141, 1],
+        metallicFactor: 0,
+        roughnessFactor: 1,
+        doubleSided: true,
+        alphaMode: 'OPAQUE',
+        name: `outline-${nodeName}`,
+      },
+    });
+  }
+
+  if (primitives.length === 0) {
     return undefined;
   }
 
-  // Convert edges to typed arrays and transform coordinates
-  const linePositions = transformVertexArray(edges.lines);
-
-  // Create line indices - each pair of positions forms a line
-  const lineIndices = new Uint32Array(linePositions.length / 3);
-  for (let index = 0; index < lineIndices.length; index++) {
-    lineIndices[index] = index;
-  }
-
-  const lineMaterial = document
-    .createMaterial()
-    .setDoubleSided(true)
-    .setAlphaMode('OPAQUE')
-    .setMetallicFactor(0)
-    .setRoughnessFactor(1)
-    .setName(`outline-${name}`)
-    .setBaseColorFactor([0.141, 0.259, 0.141, 1]); // #244224 color
-
-  const linePrimitive = document
-    .createPrimitive()
-    .setMode(1) // LINES mode
-    .setMaterial(lineMaterial)
-    .setName(`outline-${name}`)
-    .setAttribute('POSITION', document.createAccessor().setType('VEC3').setArray(linePositions))
-    .setIndices(document.createAccessor().setType('SCALAR').setArray(lineIndices));
-
-  return linePrimitive;
-}
-
-/**
- * Create a GLTF document directly from replicad Shape3D data.
- * This preserves the original triangulation without re-triangulating.
- *
- * Always produces spec-compliant GLTF with Y-up coordinates and meter units.
- *
- * @param geometries - array of replicad geometry objects to convert
- * @returns the constructed glTF document
- */
-function createGltfDocumentFromReplicadShapes(geometries: GeometryReplicad[]): Document {
-  const document = new Document();
-  document.createBuffer();
-
-  const scene = document.createScene();
-
-  // Process each geomtry as a separate mesh to preserve individual materials/colors
-  for (const [geometryIndex, geomtry] of geometries.entries()) {
-    const mesh = document.createMesh();
-
-    // Add main surface primitive
-    if (geomtry.faces.vertices.length > 0 && geomtry.faces.triangles.length > 0) {
-      const surfacePrimitive = createPrimitiveFromReplicadShape(document, geomtry);
-      mesh.addPrimitive(surfacePrimitive);
-    }
-
-    // Add line primitive for edges if available
-    const linePrimitive = createLinePrimitiveFromReplicadEdges(document, geomtry.edges, geomtry.name);
-    if (linePrimitive) {
-      mesh.addPrimitive(linePrimitive);
-    }
-
-    // Add mesh to scene only if it has primitives
-    if (mesh.listPrimitives().length > 0) {
-      const node = document.createNode().setMesh(mesh);
-
-      // Set node name if geomtry has a name
-      if (geomtry.name) {
-        node.setName(geomtry.name);
-      } else {
-        node.setName(`Shape_${geometryIndex}`);
-      }
-
-      scene.addChild(node);
-    }
-  }
-
-  return document;
-}
-
-/**
- * Convert replicad geometries to GLB blob format (preserving original triangulation).
- *
- * Always produces spec-compliant GLTF with Y-up coordinates and meter units.
- *
- * @param geometries - array of replicad geometry objects to convert
- * @returns the GLB binary data
- */
-async function createGlbFromReplicadShapes(geometries: GeometryReplicad[]): Promise<Uint8Array<ArrayBuffer>> {
-  const document = createGltfDocumentFromReplicadShapes(geometries);
-  const glbBuffer = await new NodeIO().writeBinary(document);
-  return glbBuffer;
-}
-
-/**
- * Convert replicad geometries to GLTF blob format (preserving original triangulation).
- *
- * Always produces spec-compliant GLTF with Y-up coordinates and meter units.
- *
- * @param geometries - array of replicad geometry objects to convert
- * @returns the GLTF JSON data as a UTF-8 encoded byte array
- */
-async function createGltfFromReplicadShapes(geometries: GeometryReplicad[]): Promise<Uint8Array<ArrayBuffer>> {
-  const document = createGltfDocumentFromReplicadShapes(geometries);
-
-  // Use writeJSON which returns both the JSON and binary data
-  const gltfData = await new NodeIO().writeJSON(document);
-
-  // For a self-contained GLTF file, we need to embed the binary data as base64
-  const gltfJson = gltfData.json;
-
-  // If there are resources, embed them as data URIs
-  const { resources } = gltfData;
-  const buffers = gltfJson.buffers ?? [];
-
-  for (const [resourceKey, resourceData] of Object.entries(resources)) {
-    // Find the buffer that references this resource
-    const bufferIndex = buffers.findIndex((buffer) => buffer.uri === resourceKey);
-    const buffer = buffers[bufferIndex];
-    if (buffer) {
-      // Convert binary data to base64 using browser-compatible method
-      const uint8Array = resourceData;
-      let binaryString = '';
-      for (const byte of uint8Array) {
-        binaryString += String.fromCodePoint(byte);
-      }
-      // oxlint-disable-next-line no-restricted-globals -- btoa is available in browsers
-
-      // oxlint-disable-next-line no-restricted-globals -- btoa is available in browsers
-      const base64Data = btoa(binaryString);
-
-      buffer.uri = `data:application/octet-stream;base64,${base64Data}`;
-    }
-  }
-
-  // Convert to pretty-printed JSON string
-  const gltfEmbeddedData = new TextEncoder().encode(JSON.stringify(gltfJson, undefined, 2));
-
-  return gltfEmbeddedData;
+  return {
+    name: geometry.name || `Shape_${geometryIndex}`,
+    primitives,
+  };
 }
 
 /**
@@ -248,13 +110,24 @@ async function createGltfFromReplicadShapes(geometries: GeometryReplicad[]): Pro
  * @param format - Output format: 'glb' for binary, 'gltf' for JSON
  * @returns GLTF blob
  */
-export async function convertReplicadGeometriesToGltf(
+export function convertReplicadGeometriesToGltf(
   geometries: GeometryReplicad[],
   format: 'glb' | 'gltf' = 'glb',
-): Promise<Uint8Array<ArrayBuffer>> {
-  if (format === 'gltf') {
-    return createGltfFromReplicadShapes(geometries);
+): Uint8Array<ArrayBuffer> {
+  const nodes: GlbNode[] = [];
+
+  for (const [index, geometry] of geometries.entries()) {
+    const node = buildNodeFromReplicadGeometry(geometry, index);
+    if (node) {
+      nodes.push(node);
+    }
   }
 
-  return createGlbFromReplicadShapes(geometries);
+  const input: GlbInput = { nodes };
+
+  if (format === 'gltf') {
+    return writeGltfJson(input);
+  }
+
+  return writeGlb(input);
 }

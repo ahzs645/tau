@@ -12,7 +12,7 @@ import {
   generateJsonBracketHighlightColors,
   generateJsonThemeRules,
 } from '#lib/monaco-json.lib.js';
-import { highlighter } from '#lib/shiki.lib.js';
+import { getHighlighter } from '#lib/shiki.lib.js';
 import { registry } from '#lib/monaco-language-registry.js';
 import { monacoLanguages } from '#lib/monaco.constants.js';
 import { kclContribution } from '#lib/kcl-language/kcl-register-language.js';
@@ -51,12 +51,15 @@ export const configureMonaco = async (): Promise<void> => {
 
   globalThis.self.MonacoEnvironment = {
     getWorker(_, label) {
-      if (label === 'json') {
+      if (label === 'json' || label === 'jsonc') {
         return new JsonWorker();
       }
 
       if (label === 'typescript' || label === 'javascript') {
-        return new TsWorker();
+        performance.mark('ts-worker:create');
+        const worker = new TsWorker();
+        performance.measure('ts-worker:cold-start', 'ts-worker:create');
+        return worker;
       }
 
       return new EditorWorker();
@@ -102,6 +105,8 @@ export const configureMonaco = async (): Promise<void> => {
   // Phase 1: Register language metadata for all contributions (idempotent)
   registry.registerAll(monaco);
 
+  const highlighter = await getHighlighter();
+
   // Register Shiki highlighter globally. The idempotency guard above ensures
   // this only runs once, preventing monkey-patch wrapper multiplication on
   // monaco.editor.create and monaco.editor.setTheme.
@@ -110,7 +115,14 @@ export const configureMonaco = async (): Promise<void> => {
   // Override Shiki's JSON tokenizer to preserve TextMate scope granularity
   // and add depth-based key colorization.
   const jsonGrammar = highlighter.getLanguage('json');
-  monaco.languages.setTokensProvider('json', createJsonTokensProvider(jsonGrammar));
+  const jsonTokensProvider = createJsonTokensProvider(jsonGrammar);
+  monaco.languages.setTokensProvider('json', jsonTokensProvider);
+
+  // JSONL (newline-delimited JSON): register as a distinct language so it
+  // gets JSON syntax highlighting without the JSON language service validation
+  // that would flag multi-root documents as errors.
+  monaco.languages.register({ id: 'jsonl', aliases: ['JSON Lines'], extensions: ['.jsonl'] });
+  monaco.languages.setTokensProvider('jsonl', jsonTokensProvider);
 
   // Augment GitHub themes with JSON-specific depth and value rules
   // derived from each theme's own scope colors.

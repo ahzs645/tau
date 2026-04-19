@@ -3,10 +3,10 @@
  * Tests the wrap-style hook with onion model execution.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import type { GetParametersResult } from '#types/runtime.types.js';
 import type { Dependency } from '#types/runtime-dependency.types.js';
-import { parameterCacheMiddleware } from '#middleware/parameter-cache.middleware.js';
+import { parameterCacheMiddleware, parameterMemoryCache } from '#middleware/parameter-cache.middleware.js';
 import {
   createMockRuntime,
   createMockInput,
@@ -87,6 +87,10 @@ function createCacheContext(options?: {
 }
 
 describe('parameterCacheMiddleware', () => {
+  beforeEach(() => {
+    parameterMemoryCache.clear();
+  });
+
   describe('wrapGetParameters', () => {
     describe('cache hit', () => {
       it('should return cached result and not call handler', async () => {
@@ -391,6 +395,68 @@ describe('parameterCacheMiddleware', () => {
           `/test/project/.tau/cache/parameters/${dependencyHash}.json`,
           'utf8',
         );
+      });
+    });
+
+    describe('memory cache', () => {
+      it('should return from memory cache on second call without filesystem access', async () => {
+        const handlerResult = createSuccessResult({ defaultParameters: { fresh: true } });
+        const { input, runtime } = createCacheContext({ cacheExists: false });
+        const handler = createMockGetParametersHandler(handlerResult);
+
+        const { wrapGetParameters } = parameterCacheMiddleware;
+
+        await wrapGetParameters!(input, handler, runtime);
+
+        runtime.filesystem.mocks.readFile.mockClear();
+        runtime.filesystem.mocks.writeFile.mockClear();
+
+        const result = await wrapGetParameters!(input, handler, runtime);
+
+        expect(handler).toHaveBeenCalledOnce();
+        expect(runtime.filesystem.mocks.readFile).not.toHaveBeenCalled();
+        expect(runtime.filesystem.mocks.writeFile).not.toHaveBeenCalled();
+        expect(result.success).toBe(true);
+        if (result.success) {
+          expect(result.data.defaultParameters).toEqual({ fresh: true });
+        }
+      });
+
+      it('should populate memory cache on filesystem cache hit', async () => {
+        const cachedResult = createSuccessResult({ defaultParameters: { cached: true } });
+        const { input, runtime } = createCacheContext({
+          cacheExists: true,
+          cachedResult,
+        });
+        const handler = createMockGetParametersHandler();
+
+        const { wrapGetParameters } = parameterCacheMiddleware;
+
+        await wrapGetParameters!(input, handler, runtime);
+
+        runtime.filesystem.mocks.readFile.mockClear();
+
+        const result = await wrapGetParameters!(input, handler, runtime);
+
+        expect(runtime.filesystem.mocks.readFile).not.toHaveBeenCalled();
+        expect(result.success).toBe(true);
+        if (result.success) {
+          expect(result.data.defaultParameters).toEqual({ cached: true });
+        }
+      });
+
+      it('should log memory cache hit', async () => {
+        const handlerResult = createSuccessResult();
+        const { input, runtime } = createCacheContext({ cacheExists: false });
+        const handler = createMockGetParametersHandler(handlerResult);
+
+        const { wrapGetParameters } = parameterCacheMiddleware;
+
+        await wrapGetParameters!(input, handler, runtime);
+
+        await wrapGetParameters!(input, handler, runtime);
+
+        expect(runtime.logger.debug).toHaveBeenCalledWith(expect.stringContaining('memory cache hit'));
       });
     });
   });

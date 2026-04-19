@@ -32,7 +32,7 @@ export const ChatTextareaDesktopImages = memo(function ({
         >
           <ImagePreview src={image} alt='Uploaded' dialogProps={{ [focusTrapAttribute]: focusTrapAttribute }}>
             <ImagePreviewTrigger>
-              <div className='flex h-6 cursor-pointer items-center justify-center overflow-hidden rounded-xs border bg-background hover:bg-accent/50'>
+              <div className='flex h-6 cursor-pointer items-center justify-center overflow-hidden rounded-xs border bg-background hover:bg-accent'>
                 <ImagePreviewImage className='size-6 border-r object-cover' />
                 <span className='px-1 text-xs'>Image</span>
               </div>

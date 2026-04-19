@@ -1,7 +1,6 @@
 import { useCallback } from 'react';
 import { useActorRef, useSelector } from '@xstate/react';
-import type { ExportFormat } from '@taucad/types';
-import { fileExtensionFromExportFormat } from '@taucad/types/constants';
+import type { FileExtension } from '@taucad/types';
 import { exportGeometryMachine } from '#machines/export-geometry.machine.js';
 import { downloadBlob } from '@taucad/utils/file';
 import { toast } from '#components/ui/sonner.js';
@@ -12,7 +11,7 @@ import { useCadPreview } from '#hooks/use-cad-preview.js';
  */
 export type UseCadExportResult = {
   /** Trigger a geometry export in the given format. Downloads the file automatically. */
-  readonly exportGeometry: (format: ExportFormat, filename?: string) => void;
+  readonly exportGeometry: (format: FileExtension, filename?: string) => void;
   /** Whether an export is currently in progress. */
   readonly isExporting: boolean;
 };
@@ -44,9 +43,8 @@ export function useCadExport(defaultFilename = 'model'): UseCadExportResult {
   const isExporting = useSelector(exportActorRef, (s) => s.value === 'exporting');
 
   const exportGeometry = useCallback(
-    (format: ExportFormat, filename?: string) => {
-      const fileExtension = fileExtensionFromExportFormat[format];
-      const fullFilename = `${filename ?? defaultFilename}.${fileExtension}`;
+    (format: FileExtension, filename?: string) => {
+      const fullFilename = `${filename ?? defaultFilename}.${format}`;
 
       toast.promise(
         new Promise<Blob>((resolve, reject) => {

@@ -21,62 +21,62 @@ describe('OpenCascade Kernel', { timeout: 30_000 }, () => {
 
   beforeAll(async () => {
     worker = await createTestWorker(opencascadeKernel, {
-      'box-import.ts': `import { BRepPrimAPI_MakeBox_2 } from 'opencascade';\nexport default function main() { return new BRepPrimAPI_MakeBox_2(10, 10, 10).Shape(); }`,
-      'box-import-js.ts': `import { BRepPrimAPI_MakeBox_2 } from 'opencascade.js';\nexport default function main() { return new BRepPrimAPI_MakeBox_2(10, 10, 10).Shape(); }`,
+      'box-import.ts': `import { BRepPrimAPI_MakeBox } from 'opencascade.js';\nexport default function main() { return new BRepPrimAPI_MakeBox(10, 10, 10).Shape(); }`,
+      'box-import-js.ts': `import { BRepPrimAPI_MakeBox } from 'opencascade.js';\nexport default function main() { return new BRepPrimAPI_MakeBox(10, 10, 10).Shape(); }`,
       'no-import.ts': `export default function main() { return { x: 1 }; }`,
       'model.scad': `cube([10, 10, 10]);`,
-      'box-require.js': `const { BRepPrimAPI_MakeBox_2 } = require('opencascade');\nmodule.exports = function main() { return new BRepPrimAPI_MakeBox_2(10, 10, 10).Shape(); }`,
+      'box-require.js': `const { BRepPrimAPI_MakeBox } = require('opencascade.js');\nmodule.exports = function main() { return new BRepPrimAPI_MakeBox(10, 10, 10).Shape(); }`,
       'params.ts': `
-import { BRepPrimAPI_MakeBox_2 } from 'opencascade';
+import { BRepPrimAPI_MakeBox } from 'opencascade.js';
 export const defaultParams = { width: 10, height: 20, depth: 30 };
 export default function main(params = defaultParams) {
-  return new BRepPrimAPI_MakeBox_2(params.width, params.height, params.depth).Shape();
+  return new BRepPrimAPI_MakeBox(params.width, params.height, params.depth).Shape();
 }`,
       'no-params.ts': `
-import { BRepPrimAPI_MakeBox_2 } from 'opencascade';
+import { BRepPrimAPI_MakeBox } from 'opencascade.js';
 export default function main() {
-  return new BRepPrimAPI_MakeBox_2(10, 20, 30).Shape();
+  return new BRepPrimAPI_MakeBox(10, 20, 30).Shape();
 }`,
       'box.ts': `
-import { BRepPrimAPI_MakeBox_2 } from 'opencascade';
+import { BRepPrimAPI_MakeBox } from 'opencascade.js';
 export default function main() {
-  const box = new BRepPrimAPI_MakeBox_2(10, 20, 30);
+  const box = new BRepPrimAPI_MakeBox(10, 20, 30);
   return box.Shape();
 }`,
       'multi.ts': `
-import { BRepPrimAPI_MakeBox_2 } from 'opencascade';
+import { BRepPrimAPI_MakeBox } from 'opencascade.js';
 export default function main() {
-  const box1 = new BRepPrimAPI_MakeBox_2(10, 10, 10);
-  const box2 = new BRepPrimAPI_MakeBox_2(20, 20, 20);
+  const box1 = new BRepPrimAPI_MakeBox(10, 10, 10);
+  const box2 = new BRepPrimAPI_MakeBox(20, 20, 20);
   return [box1.Shape(), box2.Shape()];
 }`,
       'named.ts': `
-import { BRepPrimAPI_MakeBox_2 } from 'opencascade';
+import { BRepPrimAPI_MakeBox } from 'opencascade.js';
 export default function main() {
-  const box = new BRepPrimAPI_MakeBox_2(10, 10, 10);
+  const box = new BRepPrimAPI_MakeBox(10, 10, 10);
   return [{ shape: box.Shape(), name: 'MyBox', color: '#ff0000' }];
 }`,
       'parameterized.ts': `
-import { BRepPrimAPI_MakeBox_2 } from 'opencascade';
+import { BRepPrimAPI_MakeBox } from 'opencascade.js';
 export const defaultParams = { size: 10 };
 export default function main(params = defaultParams) {
-  return new BRepPrimAPI_MakeBox_2(params.size, params.size, params.size).Shape();
+  return new BRepPrimAPI_MakeBox(params.size, params.size, params.size).Shape();
 }`,
       'assembly.ts': `
-import { BRepPrimAPI_MakeBox_2 } from 'opencascade';
+import { BRepPrimAPI_MakeBox } from 'opencascade.js';
 export default function main() {
-  const box1 = new BRepPrimAPI_MakeBox_2(10, 10, 10);
-  const box2 = new BRepPrimAPI_MakeBox_2(20, 20, 20);
+  const box1 = new BRepPrimAPI_MakeBox(10, 10, 10);
+  const box2 = new BRepPrimAPI_MakeBox(20, 20, 20);
   return [
     { shape: box1.Shape(), name: 'SmallBox' },
     { shape: box2.Shape(), name: 'LargeBox' },
   ];
 }`,
       'fuse.ts': `
-import { BRepPrimAPI_MakeBox_2, Message_ProgressRange, BRepAlgoAPI_Fuse } from 'opencascade';
+import { BRepPrimAPI_MakeBox, Message_ProgressRange, BRepAlgoAPI_Fuse } from 'opencascade.js';
 export default function main() {
-  const box1 = new BRepPrimAPI_MakeBox_2(10, 10, 10).Shape();
-  const box2 = new BRepPrimAPI_MakeBox_2(10, 10, 10).Shape();
+  const box1 = new BRepPrimAPI_MakeBox(10, 10, 10).Shape();
+  const box2 = new BRepPrimAPI_MakeBox(10, 10, 10).Shape();
   const progress = new Message_ProgressRange();
   const fused = new BRepAlgoAPI_Fuse(box1, box2, progress);
   const result = fused.Shape();
@@ -85,10 +85,10 @@ export default function main() {
   return result;
 }`,
       'common.ts': `
-import { BRepPrimAPI_MakeBox_2, Message_ProgressRange, BRepAlgoAPI_Common } from 'opencascade';
+import { BRepPrimAPI_MakeBox, Message_ProgressRange, BRepAlgoAPI_Common } from 'opencascade.js';
 export default function main() {
-  const box1 = new BRepPrimAPI_MakeBox_2(20, 20, 20).Shape();
-  const box2 = new BRepPrimAPI_MakeBox_2(10, 10, 10).Shape();
+  const box1 = new BRepPrimAPI_MakeBox(20, 20, 20).Shape();
+  const box2 = new BRepPrimAPI_MakeBox(10, 10, 10).Shape();
   const progress = new Message_ProgressRange();
   const common = new BRepAlgoAPI_Common(box1, box2, progress);
   const result = common.Shape();
@@ -97,10 +97,10 @@ export default function main() {
   return result;
 }`,
       'cut.ts': `
-import { BRepPrimAPI_MakeBox_2, Message_ProgressRange, BRepAlgoAPI_Cut } from 'opencascade';
+import { BRepPrimAPI_MakeBox, Message_ProgressRange, BRepAlgoAPI_Cut } from 'opencascade.js';
 export default function main() {
-  const box1 = new BRepPrimAPI_MakeBox_2(20, 20, 20).Shape();
-  const box2 = new BRepPrimAPI_MakeBox_2(10, 10, 10).Shape();
+  const box1 = new BRepPrimAPI_MakeBox(20, 20, 20).Shape();
+  const box2 = new BRepPrimAPI_MakeBox(10, 10, 10).Shape();
   const progress = new Message_ProgressRange();
   const cut = new BRepAlgoAPI_Cut(box1, box2, progress);
   const result = cut.Shape();
@@ -109,14 +109,14 @@ export default function main() {
   return result;
 }`,
       'fillet.ts': `
-import { BRepPrimAPI_MakeBox_2, BRepFilletAPI_MakeFillet, ChFi3d_FilletShape, TopExp_Explorer, TopAbs_ShapeEnum, TopoDS } from 'opencascade';
+import { BRepPrimAPI_MakeBox, BRepFilletAPI_MakeFillet, ChFi3d_FilletShape, TopExp_Explorer, TopAbs_ShapeEnum, TopoDS } from 'opencascade.js';
 export default function main() {
-  const box = new BRepPrimAPI_MakeBox_2(20, 20, 20).Shape();
+  const box = new BRepPrimAPI_MakeBox(20, 20, 20).Shape();
   const fillet = new BRepFilletAPI_MakeFillet(box, ChFi3d_FilletShape.ChFi3d_Rational);
   const explorer = new TopExp_Explorer(box, TopAbs_ShapeEnum.TopAbs_EDGE, TopAbs_ShapeEnum.TopAbs_SHAPE);
   if (explorer.More()) {
     const edge = TopoDS.Edge(explorer.Current());
-    fillet.Add_2(2, edge);
+    fillet.Add(2, edge);
   }
   explorer.delete();
   const result = fillet.Shape();
@@ -124,11 +124,11 @@ export default function main() {
   return result;
 }`,
       'transform.ts': `
-import { BRepPrimAPI_MakeBox_2, gp_Trsf, gp_Vec_4, BRepBuilderAPI_Transform } from 'opencascade';
+import { BRepPrimAPI_MakeBox, gp_Trsf, gp_Vec, BRepBuilderAPI_Transform } from 'opencascade.js';
 export default function main() {
-  const box = new BRepPrimAPI_MakeBox_2(10, 10, 10).Shape();
+  const box = new BRepPrimAPI_MakeBox(10, 10, 10).Shape();
   const trsf = new gp_Trsf();
-  const vec = new gp_Vec_4(50, 50, 50);
+  const vec = new gp_Vec(50, 50, 50);
   trsf.SetTranslation(vec);
   const transformed = new BRepBuilderAPI_Transform(box, trsf, true, false);
   const result = transformed.Shape();
@@ -138,51 +138,20 @@ export default function main() {
   return result;
 }`,
       'compound.ts': `
-import { TopoDS_Builder, TopoDS_Compound, BRepPrimAPI_MakeBox_2 } from 'opencascade';
+import { TopoDS_Builder, TopoDS_Compound, BRepPrimAPI_MakeBox } from 'opencascade.js';
 export default function main() {
   const builder = new TopoDS_Builder();
   const compound = new TopoDS_Compound();
   builder.MakeCompound(compound);
-  const box1 = new BRepPrimAPI_MakeBox_2(10, 10, 10).Shape();
-  const box2 = new BRepPrimAPI_MakeBox_2(5, 5, 5).Shape();
+  const box1 = new BRepPrimAPI_MakeBox(10, 10, 10).Shape();
+  const box2 = new BRepPrimAPI_MakeBox(5, 5, 5).Shape();
   builder.Add(compound, box1);
   builder.Add(compound, box2);
   return compound;
 }`,
       'empty.ts': `
-import init from 'opencascade';
+import init from 'opencascade.js';
 export default function main() {}`,
-    });
-  });
-
-  // =============================================================================
-  // canHandle
-  // =============================================================================
-
-  describe('canHandle', () => {
-    it('should handle files importing from opencascade', async () => {
-      const result = await worker.canHandle(createGeometryFile('box-import.ts'));
-      expect(result).toBe(true);
-    });
-
-    it('should handle files importing from opencascade.js', async () => {
-      const result = await worker.canHandle(createGeometryFile('box-import-js.ts'));
-      expect(result).toBe(true);
-    });
-
-    it('should not handle files without opencascade imports', async () => {
-      const result = await worker.canHandle(createGeometryFile('no-import.ts'));
-      expect(result).toBe(false);
-    });
-
-    it('should not handle non-JS/TS files', async () => {
-      const result = await worker.canHandle(createGeometryFile('model.scad'));
-      expect(result).toBe(false);
-    });
-
-    it('should handle files using require', async () => {
-      const result = await worker.canHandle(createGeometryFile('box-require.js'));
-      expect(result).toBe(true);
     });
   });
 
@@ -278,7 +247,7 @@ export default function main() {}`,
       const createResult = await worker.createGeometry({ file: geometryFile, parameters: {} });
       assertSuccess(createResult, 'createGeometry for STL-binary export');
 
-      const exportResult = await worker.exportGeometry('stl-binary');
+      const exportResult = await worker.exportGeometry('stl', { binary: true });
       assertSuccess(exportResult, 'STL-binary export');
       expect(exportResult.data.length).toBeGreaterThan(0);
     });
@@ -308,9 +277,10 @@ export default function main() {}`,
       const createResult = await worker.createGeometry({ file: geometryFile, parameters: {} });
       assertSuccess(createResult, 'createGeometry for assembly export');
 
-      const exportResult = await worker.exportGeometry('step-assembly');
-      assertSuccess(exportResult, 'STEP assembly export');
-      expect(exportResult.data.length).toBe(2);
+      const exportResult = await worker.exportGeometry('step');
+      assertSuccess(exportResult, 'STEP export');
+      expect(exportResult.data.length).toBe(1);
+      expect(exportResult.data[0]?.name).toBe('assembly');
     });
 
     it('should return error for unsupported export format', async () => {
@@ -321,6 +291,66 @@ export default function main() {}`,
       // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- intentionally invalid format for error-path testing
       const exportResult = await worker.exportGeometry('obj' as unknown as 'step');
       expect(exportResult.success).toBe(false);
+    });
+
+    // -- Tessellation --
+
+    it('should respect tessellation parameter for GLB export', async () => {
+      const geometryFile = createGeometryFile('fillet.ts');
+      await worker.createGeometry({ file: geometryFile, parameters: {} });
+
+      const coarseExport = await worker.exportGeometry('glb', {
+        tessellation: { linearTolerance: 1, angularTolerance: 60 },
+      });
+      assertSuccess(coarseExport, 'coarse GLB export');
+
+      const fineExport = await worker.exportGeometry('glb', {
+        tessellation: { linearTolerance: 0.001, angularTolerance: 5 },
+      });
+      assertSuccess(fineExport, 'fine GLB export');
+
+      const coarseSize = coarseExport.data[0]!.bytes.byteLength;
+      const fineSize = fineExport.data[0]!.bytes.byteLength;
+
+      // Finer tessellation must produce a larger GLB (more triangles on curved fillet surfaces)
+      expect(fineSize).toBeGreaterThan(coarseSize);
+    });
+
+    it('should respect tessellation parameter for STL export', async () => {
+      const geometryFile = createGeometryFile('fillet.ts');
+      await worker.createGeometry({ file: geometryFile, parameters: {} });
+
+      const coarseExport = await worker.exportGeometry('stl', {
+        tessellation: { linearTolerance: 1, angularTolerance: 60 },
+      });
+      assertSuccess(coarseExport, 'coarse STL export');
+
+      const fineExport = await worker.exportGeometry('stl', {
+        tessellation: { linearTolerance: 0.001, angularTolerance: 5 },
+      });
+      assertSuccess(fineExport, 'fine STL export');
+
+      const coarseSize = coarseExport.data[0]!.bytes.byteLength;
+      const fineSize = fineExport.data[0]!.bytes.byteLength;
+
+      expect(fineSize).toBeGreaterThan(coarseSize);
+    });
+
+    // -- Coordinate system --
+
+    it('should produce different GLB output for y-up vs z-up coordinate system', async () => {
+      const geometryFile = createGeometryFile('box.ts');
+      await worker.createGeometry({ file: geometryFile, parameters: {} });
+
+      const yUpExport = await worker.exportGeometry('glb', { coordinateSystem: 'y-up' });
+      const zUpExport = await worker.exportGeometry('glb', { coordinateSystem: 'z-up' });
+
+      assertSuccess(yUpExport, 'y-up GLB export');
+      assertSuccess(zUpExport, 'z-up GLB export');
+
+      const yUpBytes = yUpExport.data[0]!.bytes;
+      const zUpBytes = zUpExport.data[0]!.bytes;
+      expect(yUpBytes).not.toEqual(zUpBytes);
     });
 
     // -- Boolean operations --

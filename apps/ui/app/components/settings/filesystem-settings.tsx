@@ -7,7 +7,7 @@
  */
 
 import { useState, useCallback, useEffect } from 'react';
-import { FolderOpen } from 'lucide-react';
+import { FolderOpen, HardDrive } from 'lucide-react';
 import type { FileSystemBackend } from '@taucad/types';
 import { Button } from '#components/ui/button.js';
 import { Card, CardContent, CardHeader, CardTitle } from '#components/ui/card.js';
@@ -94,6 +94,24 @@ export function FileSystemSettings(): React.JSX.Element {
     }
   }, []);
 
+  const [storageUsage, setStorageUsage] = useState<{ used: number; quota: number } | undefined>(undefined);
+
+  useEffect(() => {
+    const estimateStorage = async (): Promise<void> => {
+      try {
+        const estimate = await navigator.storage.estimate();
+        setStorageUsage({
+          used: estimate.usage ?? 0,
+          quota: estimate.quota ?? 0,
+        });
+      } catch {
+        // Storage estimation not available
+      }
+    };
+
+    void estimateStorage();
+  }, []);
+
   return (
     <div className='flex flex-col gap-6 pb-6'>
       {/* Default Backend */}
@@ -157,6 +175,45 @@ export function FileSystemSettings(): React.JSX.Element {
           </CardContent>
         </Card>
       ) : undefined}
+
+      {/* Storage Usage */}
+      {storageUsage ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Storage Usage</CardTitle>
+          </CardHeader>
+          <CardContent className='flex flex-col gap-4'>
+            <div className='flex items-center gap-3'>
+              <HardDrive className='size-5 shrink-0 text-muted-foreground' />
+              <div className='flex flex-1 flex-col gap-1.5'>
+                <div className='flex items-center justify-between text-sm'>
+                  <span>{formatBytes(storageUsage.used)} used</span>
+                  <span className='text-muted-foreground'>{formatBytes(storageUsage.quota)} available</span>
+                </div>
+                <div className='h-2 w-full overflow-hidden rounded-full bg-muted'>
+                  <div
+                    className='h-full rounded-full bg-primary transition-all'
+                    style={{
+                      width: `${storageUsage.quota > 0 ? Math.min((storageUsage.used / storageUsage.quota) * 100, 100).toFixed(1) : 0}%`,
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+            <p className='text-xs text-muted-foreground'>Browser-estimated storage across IndexedDB and OPFS.</p>
+          </CardContent>
+        </Card>
+      ) : undefined}
     </div>
   );
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes === 0) {
+    return '0 B';
+  }
+  const units = ['B', 'KB', 'MB', 'GB'];
+  const exponent = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const value = bytes / 1024 ** exponent;
+  return `${value.toFixed(exponent === 0 ? 0 : 1)} ${units[exponent]}`;
 }

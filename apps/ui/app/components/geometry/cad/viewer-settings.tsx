@@ -17,6 +17,7 @@ import { cn } from '#utils/ui.utils.js';
 import { InfoTooltip } from '#components/ui/info-tooltip.js';
 import { axesColors } from '#constants/color.constants.js';
 import { useGraphics, useGraphicsSelector } from '#hooks/use-graphics.js';
+import { useCad, useCadSelector } from '#hooks/use-cad.js';
 
 // Up direction options
 type UpDirection = 'x' | 'y' | 'z';
@@ -79,7 +80,8 @@ export function ViewerSettings({ className, overflowControls }: ViewerSettingsPr
     state.context.geometries.some((geometry) => geometry.format === 'svg'),
   );
 
-  const renderTimeout = 30;
+  const cadRef = useCad();
+  const renderTimeout = useCadSelector((state) => state.context.renderTimeout, 30);
 
   const handleMeshToggle = useCallback(
     (checked: boolean) => {
@@ -137,9 +139,12 @@ export function ViewerSettings({ className, overflowControls }: ViewerSettingsPr
     [graphicsRef],
   );
 
-  const handleRenderTimeoutChange = useCallback((_value: string) => {
-    // Render timeout is now managed internally by the autonomous runtime worker
-  }, []);
+  const handleRenderTimeoutChange = useCallback(
+    (value: string) => {
+      cadRef?.send({ type: 'setRenderTimeout', seconds: Number(value) });
+    },
+    [cadRef],
+  );
 
   // Get current timeout option for display (default to 30s if not found)
   const currentTimeoutOption = useMemo(

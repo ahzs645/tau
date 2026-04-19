@@ -122,8 +122,8 @@ describe('decodeOcException', () => {
     const mockOcInstance = {
       OCJS: {
         getStandard_FailureData: vi.fn().mockReturnValue({
-          // oxlint-disable-next-line new-cap -- Mock of OpenCASCADE C++ bindings
-          GetMessageString: () => 'shape is null',
+          // `what()` is the supported API; deprecated `GetMessageString` is omitted from the mock.
+          what: () => 'shape is null',
           // oxlint-disable-next-line new-cap -- Mock of OpenCASCADE C++ bindings
           GetStackString: () => 'at BRepAlgoAPI_Fuse',
           // oxlint-disable-next-line new-cap -- Mock of OpenCASCADE C++ bindings
@@ -250,6 +250,22 @@ describe('formatRuntimeErrorWithOc', () => {
 
     expect(result.type).toBe('runtime');
     expect(result.message).toBe('string error');
+  });
+
+  it('should produce a descriptive kernel error for undecodable WebAssembly.Exception', () => {
+    const fakeException = Object.create(WebAssembly.Exception.prototype) as unknown as WebAssembly.Exception;
+    const helpers = createMockOcFormatArgs();
+
+    const result = formatRuntimeErrorWithOc({
+      error: fakeException,
+      ocInstance: emptyOcInstance,
+      ...helpers,
+    });
+
+    expect(result.type).toBe('kernel');
+    expect(result.severity).toBe('error');
+    expect(result.message).toContain('KernelError:');
+    expect(result.message).not.toBe('[object WebAssembly.Exception]');
   });
 });
 /* eslint-enable @typescript-eslint/naming-convention -- re-enable after mock block */

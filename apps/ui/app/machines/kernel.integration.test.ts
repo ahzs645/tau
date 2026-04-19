@@ -14,10 +14,11 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import {
   ProviderRegistry,
-  WriteCoordinator,
+  ResourceQueue,
   DirectoryTreeCache,
   ChangeEventBus,
   FileService,
+  MountTable,
 } from '@taucad/filesystem';
 import { createBridgeServer, createBridgeProxy } from '@taucad/runtime/filesystem';
 import { createRuntimeClient } from '@taucad/runtime';
@@ -26,6 +27,9 @@ import { replicad, tau } from '@taucad/runtime/kernels';
 import { esbuild } from '@taucad/runtime/bundler';
 import { createInProcessTransport } from '@taucad/runtime/transport';
 import type { HashedGeometryResult } from '@taucad/runtime/types';
+
+type TestKernels = readonly [ReturnType<typeof replicad>, ReturnType<typeof tau>];
+type TestRuntimeClient = RuntimeClient<TestKernels>;
 
 const hollowBoxSource = `
 import { drawRoundedRectangle } from 'replicad';
@@ -50,25 +54,25 @@ export default function main(p = defaultParams): Shape3D {
 
 async function createFileService(): Promise<FileService> {
   const providerRegistry = new ProviderRegistry();
-  // Switch to memory BEFORE constructing FileService, since the constructor
-  // eagerly calls _syncCaseSensitivity → getActiveProvider(). The default
-  // backend is 'indexeddb' which requires IDBFactory (browser-only).
-  await providerRegistry.switchActiveProvider('memory');
+  const provider = await providerRegistry.createMountProvider('memory');
+  const mountTable = new MountTable();
+  mountTable.mount('/', provider, { backend: 'memory' });
 
-  const writeCoordinator = new WriteCoordinator();
+  const resourceQueue = new ResourceQueue();
   const treeCache = new DirectoryTreeCache();
   const eventBus = new ChangeEventBus();
 
   return new FileService({
     providerRegistry,
-    writeCoordinator,
+    resourceQueue,
     treeCache,
     eventBus,
+    mountTable,
   });
 }
 
 describe('Kernel Integration — FileService bridge', { timeout: 120_000 }, () => {
-  let client: RuntimeClient | undefined;
+  let client: TestRuntimeClient | undefined;
 
   afterEach(() => {
     client?.terminate();

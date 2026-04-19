@@ -15,7 +15,7 @@ the combined work is subject to GPL-2.0-or-later terms.
 
 By using Tau, you agree to comply with the license terms of all included dependencies.
 
-*Generated on 2026-03-12*
+*Generated on 2026-04-19*
 
 ## Summary
 
@@ -25,18 +25,18 @@ By using Tau, you agree to comply with the license terms of all included depende
 | GPL-2.0-or-later | 1 |
 | LGPL-2.1-only | 1 |
 | LGPL-3.0-or-later | 2 |
-| Apache-2.0 | 22 |
+| Apache-2.0 | 36 |
 | (MIT OR CC0-1.0) | 1 |
 | 0BSD | 1 |
 | BlueOak-1.0.0 | 1 |
 | BSD-2-Clause | 1 |
 | BSD-3-Clause | 3 |
-| ISC | 3 |
+| ISC | 4 |
 | SEE LICENSE IN LICENSE | 1 |
 | SIL OPEN FONT LICENSE | 1 |
-| UNKNOWN | 3 |
+| UNKNOWN | 4 |
 | Unlicense | 2 |
-| MIT | 217 |
+| MIT | 239 |
 
 ## (MIT OR GPL-3.0-or-later)
 
@@ -69,7 +69,7 @@ By using Tau, you agree to comply with the license terms of all included depende
 > GPL-licensed packages require that derivative works be distributed under compatible licenses.
 > Source code is available at: https://github.com/taucad/tau
 
-- **opencascade.js** v2.0.0-beta.b5ff984 — [Repository](https://github.com/donalffons/opencascade.js)
+- **@taucad/opencascade.js** v3.0.0-beta.0 — [Repository](https://github.com/taucad/opencascade.js)
 
 ## LGPL-3.0-or-later
 
@@ -86,23 +86,37 @@ By using Tau, you agree to comply with the license terms of all included depende
 > Apache-2.0 licensed packages require preservation of copyright notices and disclaimers.
 
 - **@ai-sdk/cerebras** v2.0.34 — [Repository](https://github.com/vercel/ai)
-- **@ai-sdk/langchain** v2.0.105 — [Repository](https://github.com/vercel/ai)
+- **@ai-sdk/langchain** v2.0.147 — [Repository](https://github.com/vercel/ai)
 - **@ai-sdk/openai** v3.0.33 — [Repository](https://github.com/vercel/ai)
 - **@ai-sdk/provider-utils** v4.0.15 — [Repository](https://github.com/vercel/ai)
 - **@ai-sdk/react** v3.0.101 — [Repository](https://github.com/vercel/ai)
 - **@ai-sdk/ui-utils** v1.2.11 — [Repository](https://github.com/vercel/ai)
+- **@opentelemetry/api** v1.9.0 — [Repository](https://github.com/open-telemetry/opentelemetry-js)
+- **@opentelemetry/auto-instrumentations-node** v0.71.0 — [Repository](https://github.com/open-telemetry/opentelemetry-js-contrib)
+- **@opentelemetry/exporter-logs-otlp-http** v0.213.0 — [Repository](https://github.com/open-telemetry/opentelemetry-js)
+- **@opentelemetry/exporter-prometheus** v0.213.0 — [Repository](https://github.com/open-telemetry/opentelemetry-js)
+- **@opentelemetry/exporter-trace-otlp-http** v0.213.0 — [Repository](https://github.com/open-telemetry/opentelemetry-js)
+- **@opentelemetry/instrumentation-pino** v0.59.0 — [Repository](https://github.com/open-telemetry/opentelemetry-js-contrib)
+- **@opentelemetry/instrumentation-socket.io** v0.60.0 — [Repository](https://github.com/open-telemetry/opentelemetry-js-contrib)
+- **@opentelemetry/resources** v2.6.0 — [Repository](https://github.com/open-telemetry/opentelemetry-js)
+- **@opentelemetry/sdk-logs** v0.213.0 — [Repository](https://github.com/open-telemetry/opentelemetry-js)
+- **@opentelemetry/sdk-metrics** v2.6.0 — [Repository](https://github.com/open-telemetry/opentelemetry-js)
+- **@opentelemetry/sdk-node** v0.213.0 — [Repository](https://github.com/open-telemetry/opentelemetry-js)
 - **@playwright/test** v1.58.2 — [Repository](https://github.com/microsoft/playwright)
 - **@rjsf/core** v5.24.13 — [Repository](https://github.com/rjsf-team/react-jsonschema-form)
 - **@rjsf/utils** v5.24.13 — [Repository](https://github.com/rjsf-team/react-jsonschema-form)
 - **@rjsf/validator-ajv8** v5.24.13 — [Repository](https://github.com/rjsf-team/react-jsonschema-form)
+- **@traceloop/instrumentation-langchain** v0.22.6 — [Repository](https://github.com/traceloop/openllmetry-js)
 - **@typescript/native-preview** v7.0.0-dev.20260223.1 — [Repository](https://github.com/microsoft/typescript-go)
 - **ai** v6.0.99 — [Repository](https://github.com/vercel/ai)
 - **bson** v6.10.4 — [Repository](https://github.com/mongodb/js-bson)
 - **class-variance-authority** v0.7.1 — [Repository](https://github.com/joe-bell/cva)
 - **comlink** v4.4.2 — [Repository](https://github.com/GoogleChromeLabs/comlink)
 - **drizzle-orm** v0.44.7 — [Repository](https://github.com/drizzle-team/drizzle-orm)
+- **fake-indexeddb** v6.2.5 — [Repository](https://github.com/dumbmatter/fakeIndexedDB)
 - **manifold-3d** v3.3.2 — [Repository](https://github.com/elalish/manifold)
 - **openai** v4.104.0 — [Repository](https://github.com/openai/openai-node)
+- **pdf-parse** v2.4.5 — [Repository](https://github.com/mehmet-kozan/pdf-parse)
 - **reflect-metadata** v0.2.2 — [Repository](https://github.com/rbuckton/reflect-metadata)
 - **rxjs** v7.8.2 — [Repository](https://github.com/reactivex/rxjs)
 - **streamdown** v1.6.11 — [Repository](https://github.com/vercel/streamdown)
@@ -136,6 +150,7 @@ By using Tau, you agree to comply with the license terms of all included depende
 
 - **@msgpack/msgpack** v3.1.3 — [Repository](https://github.com/msgpack/msgpack-javascript)
 - **eslint-plugin-no-barrel-files** v1.2.2 — [Repository](https://github.com/art0rz/eslint-plugin-no-barrel-files)
+- **knip** v6.0.4 — [Repository](https://github.com/webpro-nl/knip)
 - **lucide-react** v0.552.0 — [Repository](https://github.com/lucide-icons/lucide)
 
 ## SEE LICENSE IN LICENSE
@@ -149,7 +164,8 @@ By using Tau, you agree to comply with the license terms of all included depende
 ## UNKNOWN
 
 - **@taucad/chat** v0.1.0
-- **@taucad/kcl-wasm-lib** v0.1.111 — [Repository](https://github.com/taucad/modeling-app)
+- **@taucad/kcl-wasm-lib** v0.1.130 — [Repository](https://github.com/taucad/modeling-app)
+- **@taucad/oxlint** v0.1.0
 - **@taucad/utils** v0.1.0
 
 ## Unlicense
@@ -164,6 +180,7 @@ By using Tau, you agree to comply with the license terms of all included depende
 - **@eslint-community/eslint-plugin-eslint-comments** v4.7.1 — [Repository](https://github.com/eslint-community/eslint-plugin-eslint-comments)
 - **@fastify/cors** v11.2.0 — [Repository](https://github.com/fastify/fastify-cors)
 - **@fastify/helmet** v13.0.2 — [Repository](https://github.com/fastify/fastify-helmet)
+- **@fastify/otel** v0.17.1 — [Repository](https://github.com/fastify/otel)
 - **@gltf-transform/core** v4.3.0 — [Repository](https://github.com/donmccurdy/glTF-Transform)
 - **@gltf-transform/extensions** v4.3.0 — [Repository](https://github.com/donmccurdy/glTF-Transform)
 - **@gltf-transform/functions** v4.3.0 — [Repository](https://github.com/donmccurdy/glTF-Transform)
@@ -173,17 +190,17 @@ By using Tau, you agree to comply with the license terms of all included depende
 - **@inkjs/ui** v2.0.0 — [Repository](https://github.com/vadimdemedes/ink-ui)
 - **@jscad/modeling** v2.13.0 — [Repository](https://github.com/jscad/OpenJSCAD.org)
 - **@kittycad/lib** v2.0.48 — [Repository](https://github.com/KittyCAD/kittycad.ts)
-- **@langchain/anthropic** v1.3.20 — [Repository](https://github.com/langchain-ai/langchainjs)
+- **@langchain/anthropic** v1.3.26 — [Repository](https://github.com/langchain-ai/langchainjs)
 - **@langchain/cerebras** v1.0.2 — [Repository](https://github.com/langchain-ai/langchainjs)
 - **@langchain/classic** v1.0.20 — [Repository](https://github.com/langchain-ai/langchainjs)
 - **@langchain/community** v1.1.19 — [Repository](https://github.com/langchain-ai/langchainjs)
-- **@langchain/core** v1.1.28 — [Repository](https://github.com/langchain-ai/langchainjs)
+- **@langchain/core** v1.1.37 — [Repository](https://github.com/langchain-ai/langchainjs)
 - **@langchain/google-vertexai** v2.1.27 — [Repository](https://github.com/langchain-ai/langchainjs)
 - **@langchain/langgraph** v1.1.5 — [Repository](https://github.com/langchain-ai/langgraphjs)
 - **@langchain/langgraph-checkpoint** v1.0.0 — [Repository](https://github.com/langchain-ai/langgraphjs)
 - **@langchain/langgraph-checkpoint-postgres** v1.0.1 — [Repository](https://github.com/langchain-ai/langgraphjs)
 - **@langchain/ollama** v1.2.4 — [Repository](https://github.com/langchain-ai/langchainjs)
-- **@langchain/openai** v1.2.10 — [Repository](https://github.com/langchain-ai/langchainjs)
+- **@langchain/openai** v1.4.0 — [Repository](https://github.com/langchain-ai/langchainjs)
 - **@langchain/tavily** v1.2.0 — [Repository](https://github.com/langchain-ai/langchainjs)
 - **@monaco-editor/react** v4.7.0 — [Repository](https://github.com/suren-atoyan/monaco-react)
 - **@morphllm/morphsdk** v0.2.118
@@ -194,6 +211,7 @@ By using Tau, you agree to comply with the license terms of all included depende
 - **@nestjs/platform-socket.io** v11.1.14 — [Repository](https://github.com/nestjs/nest)
 - **@nestjs/platform-ws** v11.1.14 — [Repository](https://github.com/nestjs/nest)
 - **@nestjs/schematics** v11.0.9 — [Repository](https://github.com/nestjs/schematics)
+- **@nestjs/terminus** v11.1.1 — [Repository](https://github.com/nestjs/terminus)
 - **@nestjs/testing** v11.1.14 — [Repository](https://github.com/nestjs/nest)
 - **@nestjs/websockets** v11.1.14 — [Repository](https://github.com/nestjs/nest)
 - **@netlify/vite-plugin-react-router** v2.1.3 — [Repository](https://github.com/netlify/remix-compute)
@@ -210,6 +228,7 @@ By using Tau, you agree to comply with the license terms of all included depende
 - **@nx/web** v22.5.2 — [Repository](https://github.com/nrwl/nx)
 - **@nx/webpack** v22.5.2 — [Repository](https://github.com/nrwl/nx)
 - **@octokit/rest** v22.0.1 — [Repository](https://github.com/octokit/rest.js)
+- **@oxc-node/core** v0.0.35 — [Repository](https://github.com/oxc-project/oxc-node)
 - **@panzoom/panzoom** v4.6.1 — [Repository](https://github.com/timmywil/panzoom)
 - **@protontech/eslint-plugin-enforce-uint8array-arraybuffer** v2.0.0 — [Repository](https://github.com/ProtonMail/eslint-plugin-enforce-uint8array-arraybuffer)
 - **@react-router/dev** v7.12.0 — [Repository](https://github.com/remix-run/react-router)
@@ -227,7 +246,8 @@ By using Tau, you agree to comply with the license terms of all included depende
 - **@shikijs/monaco** v3.22.0 — [Repository](https://github.com/shikijs/shiki)
 - **@shikijs/themes** v3.22.0 — [Repository](https://github.com/shikijs/shiki)
 - **@shikijs/transformers** v3.22.0 — [Repository](https://github.com/shikijs/shiki)
-- **@socket.io/redis-adapter** v8.3.0 — [Repository](https://github.com/socketio/socket.io-redis-adapter)
+- **@size-limit/file** v12.0.1 — [Repository](https://github.com/ai/size-limit)
+- **@socket.io/redis-streams-adapter** v0.3.1 — [Repository](https://github.com/socketio/socket.io-redis-streams-adapter)
 - **@statelyai/inspect** v0.4.0 — [Repository](https://github.com/statelyai/inspect)
 - **@tailwindcss/typography** v0.5.19 — [Repository](https://github.com/tailwindlabs/tailwindcss-typography)
 - **@tailwindcss/vite** v4.2.1 — [Repository](https://github.com/tailwindlabs/tailwindcss)
@@ -240,6 +260,17 @@ By using Tau, you agree to comply with the license terms of all included depende
 - **@testing-library/jest-dom** v6.6.3 — [Repository](https://github.com/testing-library/jest-dom)
 - **@testing-library/react** v16.2.0 — [Repository](https://github.com/testing-library/react-testing-library)
 - **@testing-library/user-event** v14.6.1 — [Repository](https://github.com/testing-library/user-event)
+- **@tiptap/core** v3.20.4 — [Repository](https://github.com/ueberdosis/tiptap)
+- **@tiptap/extension-document** v3.20.4 — [Repository](https://github.com/ueberdosis/tiptap)
+- **@tiptap/extension-hard-break** v3.20.4 — [Repository](https://github.com/ueberdosis/tiptap)
+- **@tiptap/extension-history** v3.20.4 — [Repository](https://github.com/ueberdosis/tiptap)
+- **@tiptap/extension-mention** v3.20.4 — [Repository](https://github.com/ueberdosis/tiptap)
+- **@tiptap/extension-paragraph** v3.20.4 — [Repository](https://github.com/ueberdosis/tiptap)
+- **@tiptap/extension-placeholder** v3.20.4 — [Repository](https://github.com/ueberdosis/tiptap)
+- **@tiptap/extension-text** v3.20.4 — [Repository](https://github.com/ueberdosis/tiptap)
+- **@tiptap/pm** v3.20.4 — [Repository](https://github.com/ueberdosis/tiptap)
+- **@tiptap/react** v3.20.4 — [Repository](https://github.com/ueberdosis/tiptap)
+- **@tiptap/suggestion** v3.20.4 — [Repository](https://github.com/ueberdosis/tiptap)
 - **@types/culori** v4.0.1 — [Repository](https://github.com/DefinitelyTyped/DefinitelyTyped)
 - **@types/draco3dgltf** v1.4.3 — [Repository](https://github.com/DefinitelyTyped/DefinitelyTyped)
 - **@types/emscripten** v1.41.5 — [Repository](https://github.com/DefinitelyTyped/DefinitelyTyped)
@@ -256,12 +287,14 @@ By using Tau, you agree to comply with the license terms of all included depende
 - **@types/react-dom** v19.0.4 — [Repository](https://github.com/DefinitelyTyped/DefinitelyTyped)
 - **@types/safe-regex** v1.1.6 — [Repository](https://github.com/DefinitelyTyped/DefinitelyTyped)
 - **@types/three** v0.178.1 — [Repository](https://github.com/DefinitelyTyped/DefinitelyTyped)
+- **@types/turndown** v5.0.6 — [Repository](https://github.com/DefinitelyTyped/DefinitelyTyped)
 - **@types/uzip** v0.20201231.2 — [Repository](https://github.com/DefinitelyTyped/DefinitelyTyped)
 - **@types/ws** v8.18.1 — [Repository](https://github.com/DefinitelyTyped/DefinitelyTyped)
 - **@typescript/vfs** v1.6.4 — [Repository](https://github.com/microsoft/TypeScript-Website)
 - **@vitest/coverage-v8** v4.1.0-beta.6 — [Repository](https://github.com/vitest-dev/vitest)
 - **@vitest/ui** v4.1.0-beta.6 — [Repository](https://github.com/vitest-dev/vitest)
 - **@xstate/react** v5.0.5 — [Repository](https://github.com/statelyai/xstate)
+- **@xyflow/react** v12.10.1 — [Repository](https://github.com/xyflow/xyflow)
 - **allotment** v1.20.5 — [Repository](https://github.com/johnwalley/allotment)
 - **autoprefixer** v10.4.21 — [Repository](https://github.com/postcss/autoprefixer)
 - **better-auth** v1.4.19 — [Repository](https://github.com/better-auth/better-auth)
@@ -273,6 +306,7 @@ By using Tau, you agree to comply with the license terms of all included depende
 - **copy-files-from-to** v3.14.0 — [Repository](https://github.com/webextensions/copy-files-from-to)
 - **culori** v4.0.2 — [Repository](https://github.com/Evercoder/culori)
 - **date-fns** v4.1.0 — [Repository](https://github.com/date-fns/date-fns)
+- **deepagents** v1.8.4 — [Repository](https://github.com/langchain-ai/deepagentsjs)
 - **deepmerge** v4.3.1 — [Repository](https://github.com/TehShrike/deepmerge)
 - **dockview-react** v4.13.1 — [Repository](https://github.com/mathuo/dockview)
 - **drizzle-kit** v0.31.9 — [Repository](https://github.com/drizzle-team/drizzle-orm)
@@ -305,6 +339,7 @@ By using Tau, you agree to comply with the license terms of all included depende
 - **jsdom** v26.0.0 — [Repository](https://github.com/jsdom/jsdom)
 - **json-rpc-2.0** v1.7.1 — [Repository](https://github.com/shogowada/json-rpc-2.0)
 - **json-schema-default** v1.0.2 — [Repository](https://github.com/mdornseif/json-schema-default)
+- **katex** v0.16.38 — [Repository](https://github.com/KaTeX/KaTeX)
 - **ky** v1.14.3 — [Repository](https://github.com/sindresorhus/ky)
 - **langchain** v1.2.27 — [Repository](https://github.com/langchain-ai/langchainjs)
 - **lint-staged** v16.3.2 — [Repository](https://github.com/lint-staged/lint-staged)
@@ -339,12 +374,14 @@ By using Tau, you agree to comply with the license terms of all included depende
 - **react-shiki** v0.7.4 — [Repository](https://github.com/avgvstvs96/react-shiki)
 - **react-virtuoso** v4.18.1 — [Repository](https://github.com/petyosi/react-virtuoso)
 - **recharts** v3.7.0 — [Repository](https://github.com/recharts/recharts)
+- **remark-math** v6.0.0 — [Repository](https://github.com/remarkjs/remark-math/tree/main/packages/remark-math)
 - **remix-themes** v2.0.4 — [Repository](https://github.com/abereghici/remix-themes)
-- **replicad** v0.21.0-v8.7
-- **replicad-opencascadejs** v0.21.0-v8.25
+- **replicad** v0.21.0-v8.55
+- **replicad-opencascadejs** v0.21.0-v8.55
 - **rollup-plugin-visualizer** v6.0.5 — [Repository](https://github.com/btd/rollup-plugin-visualizer)
 - **safe-regex** v2.1.1 — [Repository](https://github.com/davisjam/safe-regex)
 - **shiki** v3.22.0 — [Repository](https://github.com/shikijs/shiki)
+- **size-limit** v12.0.1 — [Repository](https://github.com/ai/size-limit)
 - **socket.io** v4.8.3 — [Repository](https://github.com/socketio/socket.io)
 - **socket.io-client** v4.8.3 — [Repository](https://github.com/socketio/socket.io)
 - **sonner** v2.0.7 — [Repository](https://github.com/emilkowalski/sonner)
@@ -357,6 +394,7 @@ By using Tau, you agree to comply with the license terms of all included depende
 - **ts-node** v10.9.2 — [Repository](https://github.com/TypeStrong/ts-node)
 - **tsdown** v0.15.12 — [Repository](https://github.com/rolldown/tsdown)
 - **tsx** v4.21.0 — [Repository](https://github.com/privatenumber/tsx)
+- **turndown** v7.2.4 — [Repository](https://github.com/mixmark-io/turndown)
 - **tw-animate-css** v1.4.0 — [Repository](https://github.com/Wombosvideo/tw-animate-css)
 - **typescript-eslint** v8.56.1 — [Repository](https://github.com/typescript-eslint/typescript-eslint)
 - **uint8array-extras** v1.5.0 — [Repository](https://github.com/sindresorhus/uint8array-extras)

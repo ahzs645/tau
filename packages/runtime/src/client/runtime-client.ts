@@ -5,17 +5,42 @@
  * and plugin configuration. This is the primary API for consumers.
  */
 
-import type { GeometryFile, ExportFormat, ExportFile, LogOrigin } from '@taucad/types';
-import type { HashedGeometryResult, GetParametersResult, KernelResult, KernelIssue } from '#types/runtime.types.js';
-import type { RuntimeFileSystemBase, Tessellation } from '#types/runtime-kernel.types.js';
-import type { PerformanceEntryData, RenderPhase, WorkerState } from '#types/runtime-protocol.types.js';
+import type { FileExtension, Geometry, GeometryFile, ExportFile, LogEntry } from '@taucad/types';
+import type {
+  HashedGeometryResult,
+  GetParametersResult,
+  KernelResult,
+  KernelIssue,
+  CapabilitiesManifest,
+  ExportRoute,
+} from '#types/runtime.types.js';
+import type { RuntimeFileSystemBase } from '#types/runtime-kernel.types.js';
+import type {
+  PerformanceEntryData,
+  RenderPhase,
+  WorkerState,
+  GeometryTransport,
+  HashedGeometryResultTransport,
+} from '#types/runtime-protocol.types.js';
 import { RuntimeWorkerClient } from '#framework/runtime-worker-client.js';
 import type { BridgeHandle } from '#framework/runtime-filesystem-bridge.js';
 import { createBridgePort } from '#framework/runtime-filesystem-bridge.js';
 import { fromMemoryFS } from '#filesystem/from-memory-fs.js';
 import { createWorkerTransport } from '#transport/worker-transport.js';
 import type { RuntimeTransport } from '#transport/runtime-transport.js';
-import type { KernelPlugin, MiddlewarePlugin, BundlerPlugin } from '#plugins/plugin-types.js';
+import type {
+  KernelPlugin,
+  MiddlewarePlugin,
+  BundlerPlugin,
+  TranscoderPlugin,
+  CollectKernelIds,
+  CollectRenderOptions,
+  ExportFormatsFor,
+  ExportOptionsFor,
+  KnownTargetFormats,
+} from '#plugins/plugin-types.js';
+import { SharedPool } from '@taucad/memory';
+import type { SharedPoolOptions } from '@taucad/memory';
 
 // =============================================================================
 // RenderInput Types
@@ -41,8 +66,8 @@ export type CodeInput<T extends Record<string, string>> = {
   code: T;
   /** Parameters for the model's main function. @default \{\} */
   parameters?: Record<string, unknown>;
-  /** Tessellation quality override. */
-  tessellation?: Tessellation;
+  /** Kernel-specific render options. */
+  options?: Record<string, unknown>;
   /** Not applicable in inline mode (client auto-manages). @internal */
   changedPaths?: never;
 } & (string extends keyof T
@@ -51,10 +76,10 @@ export type CodeInput<T extends Record<string, string>> = {
     }
   : true extends IsUnion<keyof T>
     ? {
-        /** Entry point filename. Required for multi-file code. */ file: string;
+        /** Entry point filename. Required for multi-file code. */ file: keyof T;
       }
     : {
-        /** Entry point filename. Optional for single-file code (inferred from the only key). */ file?: string;
+        /** Entry point filename. Optional for single-file code (inferred from the only key). */ file?: keyof T;
       });
 
 /**
@@ -71,8 +96,8 @@ export type FileInput = {
   file: string | GeometryFile;
   /** Parameters for the model's main function. @default \{\} */
   parameters?: Record<string, unknown>;
-  /** Tessellation quality override. */
-  tessellation?: Tessellation;
+  /** Kernel-specific render options. */
+  options?: Record<string, unknown>;
 };
 
 /**
@@ -109,16 +134,55 @@ function resolveFileString(file: string): GeometryFile {
 }
 
 /**
- * Options for creating a RuntimeClient.
+ * Rank export fidelity for tiebreak: lower wins. `brep` outranks `mesh`.
+ * @param fidelity - Route fidelity classification
+ * @returns 0 for brep, 1 for mesh
+ */
+function fidelityRank(fidelity: ExportRoute['fidelity']): number {
+  return fidelity === 'brep' ? 0 : 1;
+}
+
+/**
+ * Rank route directness for tiebreak: direct (no transcoder) outranks transcoded.
+ * @param route - Candidate export route
+ * @returns 0 for direct routes, 1 for transcoded routes
+ */
+function directnessRank(route: ExportRoute): number {
+  return route.transcoderId === undefined ? 0 : 1;
+}
+
+/**
+ * Configuration for a shared-memory pool.
  * @public
  */
-export type RuntimeClientOptions = {
+export type SharedMemoryConfig = SharedPoolOptions & {
+  /** Size of the SharedArrayBuffer to allocate in bytes. */
+  bytes: number;
+};
+
+/**
+ * Options for creating a RuntimeClient.
+ *
+ * Generic over kernel and transcoder plugin tuples to preserve phantom type
+ * information through option building and client creation.
+ *
+ * @template Kernels - Kernel plugin tuple type (preserves FormatMap and RenderOptions phantoms)
+ * @template Transcoders - Transcoder plugin tuple type (preserves EdgeMap phantoms)
+ * @public
+ */
+// oxlint-disable @typescript-eslint/no-explicit-any -- variance: default accepts any plugin generic
+export type RuntimeClientOptions<
+  Kernels extends KernelPlugin<any, any, any>[] = KernelPlugin[],
+  Transcoders extends TranscoderPlugin<any, any, any>[] = TranscoderPlugin[],
+> = {
   /** Kernel plugins to register (order determines selection priority). */
-  kernels: KernelPlugin[];
+  kernels: [...Kernels];
   /** Middleware plugins (order determines onion-model wrapping). */
   middleware?: MiddlewarePlugin[];
   /** Bundler plugins (multiple supported, routed by file extension). */
   bundlers?: BundlerPlugin[];
+  /** Transcoder plugins for bytes-to-bytes format conversion. */
+  transcoders?: [...Transcoders];
   /** Custom transport. Defaults to a Web Worker transport using the built-in worker URL. */
   transport?: RuntimeTransport;
   /**
@@ -127,35 +191,40 @@ export type RuntimeClientOptions = {
    */
   fileSystem?: RuntimeFileSystemBase;
   /**
-   * Tessellation quality defaults for preview and export pipelines.
-   * When undefined, each kernel applies its own built-in defaults.
-   * Per-call overrides via `callOptions.tessellation` take precedence.
+   * Wall-clock render timeout in seconds. 0 disables the timeout.
+   * Enforced by the main-thread RuntimeWorkerClient via SharedArrayBuffer — the
+   * worker's cooperative abort proxy throws when the timeout fires.
    */
-  tessellation?: {
-    /** Tessellation quality for preview rendering (client.render). */
-    preview?: Tessellation;
-    /** Tessellation quality for file export (client.export). */
-    export?: Tessellation;
+  renderTimeout?: number;
+  /**
+   * Shared memory configuration for zero-IPC geometry data exchange.
+   * Allocates a SharedArrayBuffer and creates a SharedPool on both the main thread and the worker.
+   *
+   * File pool SABs are owned by the file manager (domain-driven allocation) and
+   * passed through via `connect({ filePoolBuffer })`.
+   */
+  sharedMemory?: {
+    /** Geometry pool for zero-copy geometry data transfer between worker and main thread. */
+    geometry?: SharedMemoryConfig;
   };
 };
+// oxlint-enable @typescript-eslint/no-explicit-any
 
 /**
  * Connection options for `RuntimeClient.connect()`.
  *
  * - `{ fileSystem }` -- main-thread relay: the client creates a MessagePort bridge internally.
  * - `{ port }` -- direct bridge: pass a pre-existing MessagePort (e.g., from `createFileSystemBridge`).
+ *
+ * `filePoolBuffer` is an optional SharedArrayBuffer allocated by the file manager for
+ * zero-IPC file content caching. When provided, it is forwarded to the kernel worker
+ * so the filesystem bridge can resolve file reads from shared memory.
  * @public
  */
 export type ConnectOptions =
   //
-  { fileSystem: RuntimeFileSystemBase } | { port: MessagePort };
-
-type LogEntry = {
-  level: string;
-  message: string;
-  origin?: LogOrigin;
-  data?: unknown;
-};
+  | { fileSystem: RuntimeFileSystemBase; filePoolBuffer?: SharedArrayBuffer }
+  | { port: MessagePort; filePoolBuffer?: SharedArrayBuffer };
 
 type EventHandlers = {
   log: Set<(entry: LogEntry) => void>;
@@ -165,14 +234,70 @@ type EventHandlers = {
   geometry: Set<(result: HashedGeometryResult) => void>;
   state: Set<(state: WorkerState, detail?: string) => void>;
   error: Set<(issues: KernelIssue[]) => void>;
+  capabilities: Set<(manifest: CapabilitiesManifest) => void>;
+  activeKernel: Set<(kernelId: string | undefined) => void>;
 };
 
 /**
  * High-level runtime client interface.
  * Lazy, Promise-based, event-subscribable.
+ *
+ * The `Kernels` and `Transcoders` generics flow through as a top-level type
+ * bag from {@link createRuntimeClient}. Each leaf method (`routesFor`,
+ * `bestRouteFor`, `render`, `export`, `on('capabilities')`,
+ * `on('activeKernel')`) projects narrow types out of the bag via the
+ * `Known*` / `CollectKernelIds` / `CollectRenderOptions` / `MergeExportMap`
+ * helpers. Wide defaults preserve today's `FileExtension`/`Record<string,
+ * unknown>`/`string` shape so consumers without typed plugins still
+ * type-check.
+ *
+ * @template Kernels - Tuple of registered `KernelPlugin`s (carries `FormatMap`/`RenderOptions`/`Id`)
+ * @template Transcoders - Tuple of registered `TranscoderPlugin`s (carries `EdgeMap`/`Id`)
  * @public
  */
-export type RuntimeClient = {
+// oxlint-disable @typescript-eslint/no-explicit-any -- variance: default accepts any plugin generic
+export type RuntimeClient<
+  Kernels extends readonly KernelPlugin<any, any, any>[] = KernelPlugin[],
+  Transcoders extends readonly TranscoderPlugin<any, any, any>[] = TranscoderPlugin[],
+> = {
+  /** Shared memory pool for zero-IPC geometry data exchange. Populated during connect(). */
+  readonly geometryPool: SharedPool | undefined;
+
+  /** Capabilities manifest from the worker, available after initialization. */
+  readonly capabilities: CapabilitiesManifest<Kernels, Transcoders> | undefined;
+
+  /** Active kernel ID from the worker, available after the first render selects a kernel. */
+  readonly activeKernelId: CollectKernelIds<Kernels> | undefined;
+
+  /**
+   * Returns every {@link ExportRoute} from the current capabilities manifest
+   * whose `targetFormat` matches `format`, preserving manifest order.
+   *
+   * Returns an empty array when no manifest has been received yet or when no
+   * route matches the requested format. Consumers building format pickers
+   * should subscribe to `'capabilities'` to refresh derived UI state.
+   */
+  routesFor(format: KnownTargetFormats<Kernels, Transcoders>): ReadonlyArray<ExportRoute<Kernels, Transcoders>>;
+
+  /**
+   * Selects the best {@link ExportRoute} for `format` using the framework
+   * tiebreak rules:
+   *
+   * 1. When `kernelId` is supplied, prefer routes for that kernel; fall back
+   *    to the manifest-order routes when no candidate matches.
+   * 2. Prefer `brep` fidelity over `mesh` fidelity.
+   * 3. Prefer direct routes (`transcoderId === undefined`) over transcoded
+   *    routes.
+   * 4. Otherwise return the first manifest-order match.
+   *
+   * Returns `undefined` when no route matches the requested format or when
+   * the manifest has not yet been received.
+   */
+  bestRouteFor(
+    format: KnownTargetFormats<Kernels, Transcoders>,
+    kernelId?: CollectKernelIds<Kernels>,
+  ): ExportRoute<Kernels, Transcoders> | undefined;
+
   /**
    * Connect to the runtime worker and initialize with a filesystem.
    *
@@ -190,45 +315,50 @@ export type RuntimeClient = {
    * Auto-creates an in-memory filesystem, writes code, connects, and renders.
    * Cannot be used with a port-based connection.
    */
-  render<T extends Record<string, string>>(input: CodeInput<T>): Promise<HashedGeometryResult>;
+  render<T extends Record<string, string>>(
+    input: CodeInput<T> & { options?: CollectRenderOptions<Kernels> },
+  ): Promise<HashedGeometryResult>;
 
   /**
    * Render geometry from the connected filesystem.
    *
    * `file` can be a string shorthand (e.g., `'/src/main.ts'`) or a `GeometryFile`.
    * Cache invalidation is handled automatically by the worker's filesystem watch subscription.
-   *
-   * Tessellation resolution: input.tessellation > options.tessellation.preview > undefined (kernel default).
    */
-  render(input: FileInput): Promise<HashedGeometryResult>;
+  render(input: FileInput & { options?: CollectRenderOptions<Kernels> }): Promise<HashedGeometryResult>;
 
   /**
    * Export geometry from inline code (self-rendering).
    *
-   * Internally renders the code first, then exports. The render uses the
-   * client-level preview tessellation default; the export uses
-   * `input.tessellation` or the client-level export default.
+   * Internally renders the code first, then exports.
    */
-  export<T extends Record<string, string>>(format: ExportFormat, input: CodeInput<T>): Promise<ExportResult>;
+  export<T extends Record<string, string>>(
+    format: KnownTargetFormats<Kernels, Transcoders>,
+    input: CodeInput<T>,
+  ): Promise<ExportResult>;
 
   /**
    * Export geometry from the connected filesystem (self-rendering).
    *
    * Internally renders the file first, then exports.
    */
-  export(format: ExportFormat, input: FileInput): Promise<ExportResult>;
+  export(format: KnownTargetFormats<Kernels, Transcoders>, input: FileInput): Promise<ExportResult>;
 
   /**
    * Export geometry from the last render in the specified format.
    *
-   * Tessellation resolution: callOptions.tessellation > options.tessellation.export > undefined (kernel default).
+   * When `Kernels`/`Transcoders` carry type information (from typed plugins),
+   * the options are type-checked against the declared per-format schemas
+   * via {@link MergeExportMap}.
    *
-   * @param format - Export format (e.g., 'stl', 'step', '3mf')
-   * @param callOptions - Per-call overrides
-   * @param callOptions.tessellation - Optional tessellation quality override for this export
+   * @param format - Export format identifier (e.g., 'stl', 'step', '3mf')
+   * @param options - Per-call format-specific options
    * @returns Export result with a single ExportFile
    */
-  export(format: ExportFormat, callOptions?: { tessellation?: Tessellation }): Promise<ExportResult>;
+  export<F extends ExportFormatsFor<Kernels, Transcoders>>(
+    format: F,
+    options?: ExportOptionsFor<Kernels, Transcoders, F>,
+  ): Promise<ExportResult>;
 
   /**
    * Set the active file for autonomous rendering (filesystem mode).
@@ -236,9 +366,13 @@ export type RuntimeClient = {
    *
    * @param file - File path string or GeometryFile
    * @param parameters - Parameters for the model
-   * @param tessellation - Optional tessellation quality
+   * @param options - Optional kernel-specific render options
    */
-  setFile(file: string | GeometryFile, parameters?: Record<string, unknown>, tessellation?: Tessellation): void;
+  setFile(
+    file: string | GeometryFile,
+    parameters?: Record<string, unknown>,
+    options?: CollectRenderOptions<Kernels>,
+  ): void;
 
   /**
    * Update parameters for autonomous rendering (filesystem mode).
@@ -247,6 +381,16 @@ export type RuntimeClient = {
    * @param parameters - Updated parameters for the model
    */
   setParameters(parameters: Record<string, unknown>): void;
+
+  /**
+   * Set the wall-clock render timeout enforced by the main-thread RuntimeWorkerClient.
+   * When the timer fires, the abort generation is incremented via SharedArrayBuffer
+   * and the abort reason is set to `timeout`, causing the worker's cooperative
+   * abort proxy to throw.
+   *
+   * @param seconds - Timeout in seconds. 0 disables the timeout.
+   */
+  setRenderTimeout(seconds: number): void;
 
   /**
    * Proactive cache invalidation without triggering a render.
@@ -272,12 +416,15 @@ export type RuntimeClient = {
   on(event: 'telemetry', handler: (entries: PerformanceEntryData[]) => void): () => void;
   on(event: 'parametersResolved', handler: (result: GetParametersResult) => void): () => void;
   on(event: 'error', handler: (issues: KernelIssue[]) => void): () => void;
+  on(event: 'capabilities', handler: (manifest: CapabilitiesManifest<Kernels, Transcoders>) => void): () => void;
+  on(event: 'activeKernel', handler: (kernelId: CollectKernelIds<Kernels> | undefined) => void): () => void;
 
   /**
    * Terminate the worker and clean up all resources.
    */
   terminate(): void;
 };
+// oxlint-enable @typescript-eslint/no-explicit-any
 
 /**
  * Create a high-level runtime client.
@@ -322,8 +469,25 @@ export type RuntimeClient = {
  * });
  * ```
  */
+// oxlint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-restricted-types -- variance + empty-tuple default
+export function createRuntimeClient<
+  const Kernels extends KernelPlugin<any, any, any>[],
+  const Transcoders extends TranscoderPlugin<any, any, any>[] = [],
+>(options: RuntimeClientOptions<Kernels, Transcoders>): RuntimeClient<Kernels, Transcoders>;
+// oxlint-enable @typescript-eslint/no-explicit-any, @typescript-eslint/no-restricted-types
+// SAFETY (R7 — see docs/research/runtime-type-bag-propagation.md):
+// The implementation signature returns the wide-default `RuntimeClient`
+// (= `RuntimeClient<KernelPlugin[], TranscoderPlugin[]>`) because the worker
+// physically emits a wide `CapabilitiesManifest` over `postMessage` — no
+// generic information survives the wire. The public overload narrows the
+// return to `RuntimeClient<Kernels, Transcoders>`. This is a *witness*
+// narrowing, not a structural lie: every concrete value the worker emits is
+// already a member of the narrower carrier, so the seam is sound by
+// construction. Compile-time proof lives in `define-plugin.test-d.ts`
+// (`describe('Worker boundary witness narrowing (R7)')`).
+// oxlint-disable-next-line tau-lint/require-public-export-jsdoc -- false positive
 export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClient {
-  const { kernels, middleware = [], bundlers = [] } = options;
+  const { kernels, middleware = [], bundlers = [], transcoders = [] } = options;
 
   let workerClient: RuntimeWorkerClient | undefined;
   let transport: RuntimeTransport | undefined;
@@ -331,6 +495,12 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
   let connected = false;
   let connectedViaPort = false;
   let managedFileSystem: RuntimeFileSystemBase | undefined;
+
+  let _geometryPool: SharedPool | undefined;
+  let _geometryPoolBuffer: SharedArrayBuffer | undefined;
+  let poolsInitialized = false;
+  let _capabilities: CapabilitiesManifest | undefined;
+  let _activeKernelId: string | undefined;
 
   const handlers: EventHandlers = {
     log: new Set(),
@@ -340,6 +510,8 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
     geometry: new Set(),
     state: new Set(),
     error: new Set(),
+    capabilities: new Set(),
+    activeKernel: new Set(),
   };
 
   function getWorkerUrl(): string {
@@ -377,8 +549,8 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
             handler(state, detail);
           }
         },
-        onGeometryComputed(result) {
-          emitGeometry(result);
+        onGeometryComputed(transportResult) {
+          emitGeometry(resolveTransportResult(transportResult, _geometryPool));
         },
         onParametersResolved(result) {
           for (const handler of handlers.parametersResolved) {
@@ -393,6 +565,18 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
         onError(issues) {
           for (const handler of handlers.error) {
             handler(issues);
+          }
+        },
+        onActiveKernelChanged(kernelId) {
+          _activeKernelId = kernelId;
+          for (const handler of handlers.activeKernel) {
+            handler(kernelId);
+          }
+        },
+        onCapabilitiesUpdated(capabilities) {
+          _capabilities = capabilities;
+          for (const handler of handlers.capabilities) {
+            handler(capabilities);
           }
         },
       },
@@ -418,6 +602,12 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
       options: b.options,
     }));
 
+    const transcoderModules = transcoders.map((t) => ({
+      id: t.id,
+      moduleUrl: t.moduleUrl,
+      options: t.options,
+    }));
+
     let fileSystemPort: MessagePort;
     if ('port' in resolvedOptions) {
       fileSystemPort = resolvedOptions.port;
@@ -427,19 +617,81 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
       fileSystemPort = fileSystemBridge.port;
     }
 
+    if (!poolsInitialized && options.sharedMemory) {
+      try {
+        const { geometry } = options.sharedMemory;
+        if (geometry) {
+          _geometryPoolBuffer = new SharedArrayBuffer(geometry.bytes);
+          _geometryPool = new SharedPool(_geometryPoolBuffer, {
+            maxEntries: geometry.maxEntries,
+            maxEntryBytes: geometry.maxEntryBytes,
+            eviction: geometry.eviction,
+          });
+        }
+      } catch {
+        // SAB unavailable (non-secure context or missing COEP/COOP headers).
+        // All geometry transport falls back to inline postMessage delivery.
+      }
+      poolsInitialized = true;
+    }
+
     await workerClient.initialize({
       options: { kernelModules },
       fileSystemPort,
       middlewareEntries,
       bundlerEntries,
+      transcoderModules: transcoderModules.length > 0 ? transcoderModules : undefined,
+      geometryPoolBuffer: _geometryPoolBuffer,
+      filePoolBuffer: resolvedOptions.filePoolBuffer,
     });
+
+    _capabilities = workerClient.capabilities;
+    if (_capabilities) {
+      for (const handler of handlers.capabilities) {
+        handler(_capabilities);
+      }
+    }
+
+    if (options.renderTimeout !== undefined) {
+      workerClient.setRenderTimeout(options.renderTimeout * 1000);
+    }
 
     connected = true;
     return workerClient;
   }
 
+  function resolveGeometry(geo: GeometryTransport, geometryPool: SharedPool | undefined): Geometry {
+    if (geo.format !== 'gltf') {
+      return geo;
+    }
+
+    const { content, hash } = geo;
+    if (content.delivery === 'inline') {
+      return { format: 'gltf', content: content.bytes, hash };
+    }
+
+    const view = geometryPool?.resolveCopy(content.key);
+    if (!view) {
+      throw new Error(`SharedPool entry not found: key=${content.key}`);
+    }
+    return { format: 'gltf', content: view, hash };
+  }
+
+  function resolveTransportResult(
+    transport: HashedGeometryResultTransport,
+    geometryPool: SharedPool | undefined,
+  ): HashedGeometryResult {
+    if (!transport.success) {
+      return transport;
+    }
+
+    return {
+      ...transport,
+      data: transport.data.map((geo) => resolveGeometry(geo, geometryPool)),
+    };
+  }
+
   function emitGeometry(result: HashedGeometryResult): void {
-    console.log('[RuntimeClient] emitGeometry', { success: result.success, handlerCount: handlers.geometry.size });
     for (const handler of handlers.geometry) {
       handler(result);
     }
@@ -448,10 +700,10 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
   async function executeRender(input: {
     file: GeometryFile;
     parameters: Record<string, unknown>;
-    tessellation: Tessellation | undefined;
+    options: Record<string, unknown> | undefined;
     client: RuntimeWorkerClient;
   }): Promise<HashedGeometryResult> {
-    const result = await input.client.render({
+    const transportResult = await input.client.render({
       file: input.file,
       parameters: input.parameters,
       onParametersResolved(parametersResult) {
@@ -464,10 +716,11 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
           handler(phase, detail);
         }
       },
-      tessellation: input.tessellation,
+      options: input.options,
     });
-    emitGeometry(result);
-    return result;
+    const resolved = resolveTransportResult(transportResult, _geometryPool);
+    emitGeometry(resolved);
+    return resolved;
   }
 
   return {
@@ -476,7 +729,6 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
     },
 
     async render(input: CodeInput<Record<string, string>> | FileInput): Promise<HashedGeometryResult> {
-      // Auto-cancel any in-flight render (latest-wins semantics)
       if (workerClient) {
         try {
           workerClient.cancelPendingRender();
@@ -485,11 +737,10 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
         }
       }
 
-      const tessellation = input.tessellation ?? options.tessellation?.preview;
+      const { options } = input;
       const parameters = input.parameters ?? {};
 
       if (input.code) {
-        // --- Inline code mode ---
         if (connectedViaPort) {
           throw new Error(
             'Inline code rendering is not supported with port-based connections. Use file-mode rendering with a connected filesystem instead.',
@@ -521,12 +772,11 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
         return executeRender({
           file: resolvedFile,
           parameters,
-          tessellation,
+          options,
           client,
         });
       }
 
-      // --- Filesystem mode ---
       const fileInput = input;
       const client = await ensureConnected();
 
@@ -535,31 +785,28 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
       return executeRender({
         file: resolvedFile,
         parameters,
-        tessellation,
+        options,
         client,
       });
     },
 
     async export(
-      format: ExportFormat,
-      inputOrOptions?: CodeInput<Record<string, string>> | FileInput | { tessellation?: Tessellation },
+      format: FileExtension,
+      inputOrOptions?: CodeInput<Record<string, string>> | FileInput | Record<string, unknown>,
     ): Promise<ExportResult> {
       let selfRendered = false;
       if (inputOrOptions && 'code' in inputOrOptions && inputOrOptions.code) {
-        await this.render(inputOrOptions);
+        await this.render(inputOrOptions as CodeInput<Record<string, string>>);
         selfRendered = true;
       } else if (inputOrOptions && 'file' in inputOrOptions && inputOrOptions.file) {
-        await this.render(inputOrOptions);
+        await this.render(inputOrOptions as FileInput);
         selfRendered = true;
       }
 
-      const tessellation = selfRendered
-        ? options.tessellation?.export
-        : ((inputOrOptions as { tessellation?: Tessellation } | undefined)?.tessellation ??
-          options.tessellation?.export);
+      const options = selfRendered ? undefined : (inputOrOptions as Record<string, unknown> | undefined);
 
       const client = await ensureConnected();
-      const internalResult = await client.exportGeometry(format, tessellation);
+      const internalResult = await client.exportGeometry(format, options);
       if (internalResult.success) {
         return {
           success: true,
@@ -571,14 +818,21 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
       return internalResult;
     },
 
-    setFile(file: string | GeometryFile, parameters: Record<string, unknown> = {}, tessellation?: Tessellation): void {
+    setFile(
+      file: string | GeometryFile,
+      parameters: Record<string, unknown> = {},
+      options?: Record<string, unknown>,
+    ): void {
       const resolvedFile = typeof file === 'string' ? resolveFileString(file) : file;
-      const resolvedTessellation = tessellation ?? options.tessellation?.preview;
-      workerClient?.setFile(resolvedFile, parameters, resolvedTessellation);
+      workerClient?.setFile(resolvedFile, parameters, options);
     },
 
     setParameters(parameters: Record<string, unknown>): void {
       workerClient?.setParameters(parameters);
+    },
+
+    setRenderTimeout(seconds: number): void {
+      workerClient?.setRenderTimeout(seconds * 1000);
     },
 
     notifyFileChanged(paths: string[]): void {
@@ -592,9 +846,83 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
       }
 
       set.add(handler);
+
+      if (event === 'capabilities' && _capabilities !== undefined) {
+        (handler as (manifest: CapabilitiesManifest) => void)(_capabilities);
+      } else if (event === 'activeKernel' && _activeKernelId !== undefined) {
+        (handler as (kernelId: string | undefined) => void)(_activeKernelId);
+      }
+
       return () => {
         set.delete(handler);
       };
+    },
+
+    routesFor(format: FileExtension): readonly ExportRoute[] {
+      if (!_capabilities) {
+        return [];
+      }
+      return _capabilities.routes.filter((route) => route.targetFormat === format);
+    },
+
+    bestRouteFor(format: FileExtension, kernelId?: string): ExportRoute | undefined {
+      if (!_capabilities) {
+        return undefined;
+      }
+      const matches = _capabilities.routes.filter((route) => route.targetFormat === format);
+      if (matches.length === 0) {
+        return undefined;
+      }
+
+      const kernelMatches = kernelId ? matches.filter((route) => route.kernelId === kernelId) : matches;
+      const candidates = kernelMatches.length > 0 ? kernelMatches : matches;
+
+      const indexed = candidates.map((route, index) => ({ route, index }));
+      indexed.sort((a, b) => {
+        const fidelityDelta = fidelityRank(a.route.fidelity) - fidelityRank(b.route.fidelity);
+        if (fidelityDelta !== 0) {
+          return fidelityDelta;
+        }
+        const directnessDelta = directnessRank(a.route) - directnessRank(b.route);
+        if (directnessDelta !== 0) {
+          return directnessDelta;
+        }
+        return a.index - b.index;
+      });
+
+      return indexed[0]?.route;
+    },
+
+    /**
+     * Capabilities manifest from the worker, available after initialization.
+     *
+     * SAFETY (R7): `_capabilities` stores the wide-default
+     * `CapabilitiesManifest` emitted over the worker boundary. The public
+     * overload of `createRuntimeClient` narrows the return to
+     * `CapabilitiesManifest<Kernels, Transcoders>`. The narrowing is a
+     * structural witness, not a lie — see the SAFETY block on
+     * `createRuntimeClient` and the witness-narrowing tests in
+     * `define-plugin.test-d.ts`.
+     *
+     * @returns Capabilities manifest from the worker
+     */
+    get capabilities() {
+      return _capabilities;
+    },
+
+    /** Active kernel ID from the worker, available after the first render selects a kernel.
+     * @returns Active kernel ID or undefined if no kernel is selected
+     */
+    get activeKernelId() {
+      return _activeKernelId;
+    },
+
+    /**
+     * Shared memory pool for zero-IPC geometry data exchange.
+     * @returns Shared memory pool for zero-IPC geometry data exchange
+     */
+    get geometryPool() {
+      return _geometryPool;
     },
 
     terminate(): void {

@@ -9,6 +9,8 @@ related:
   - docs/policy/diagram-policy.md
   - docs/policy/accessibility-policy.md
   - docs/policy/rendering-pipeline-policy.md
+  - docs/policy/rendering-policy.md
+  - docs/policy/react-policy.md
 ---
 
 # UI Policy
@@ -151,7 +153,10 @@ Use `0.01ms` rather than `0s` to preserve `transitionend` and `animationend` eve
 
 ## References
 
+- [UX Policy](ux-policy.md) — Interaction design: inline editing, progressive disclosure, confirmation patterns
 - [Color Policy](color-policy.md) — OKLCH system, chroma ranges, contrast requirements
 - [Diagram Policy](diagram-policy.md) — Mermaid diagram styling and authoring
 - [Accessibility Policy](accessibility-policy.md) — ARIA conventions, E2E selectors
 - [Rendering Pipeline Policy](rendering-pipeline-policy.md) — PBR defaults, materials, tone mapping
+- [Rendering Policy](rendering-policy.md) — Virtualization, content budgets, scroll management
+- [React Policy](react-policy.md) — Component memoization, state management, hook patterns

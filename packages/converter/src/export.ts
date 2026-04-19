@@ -2,12 +2,15 @@ import type { ExportFile, FileExtension } from '@taucad/types';
 import type { BaseExporter } from '#exporters/base.exporter.js';
 import { GltfExporter } from '#exporters/gltf.exporter.js';
 import { AssimpExporter } from '#exporters/assimp.exporter.js';
+import type { SupportedExportFormat } from '#formats.js';
 
 type ExportConfig = {
   exporter: BaseExporter<unknown>;
 };
 
 const exportConfigs = {
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- valid file format
+  '3mf': { exporter: new AssimpExporter().initialize({ format: '3mf' }) },
   // eslint-disable-next-line @typescript-eslint/naming-convention -- valid file format
   '3ds': { exporter: new AssimpExporter().initialize({ format: '3ds' }) },
   dae: { exporter: new AssimpExporter().initialize({ format: 'dae' }) },
@@ -31,34 +34,27 @@ const exportConfigs = {
   x: { exporter: new AssimpExporter().initialize({ format: 'x' }) },
   x3d: { exporter: new AssimpExporter().initialize({ format: 'x3d' }) },
 
-  // '3mf': { exporter: new AssimpExporter().initialize({ format: '3mf' }) }, // Fix assimp 3mf exporter
   // '3dm': { exporter: new AssimpExporter().initialize({ format: '3dm' }) }, // Integrate 3dm exporter into assimp
-} as const satisfies Partial<Record<FileExtension, ExportConfig>>;
-
-/**
- * File extension recognized by the converter's export pipeline. Use with `exportFiles()` to produce output files.
- */
-export type SupportedExportFormat = keyof typeof exportConfigs;
-
-/** All file extensions supported by the export pipeline, derived from the export configuration registry. */
-export const supportedExportFormats = Object.keys(exportConfigs) as SupportedExportFormat[];
+} as const satisfies Record<SupportedExportFormat, ExportConfig> & Partial<Record<FileExtension, ExportConfig>>;
 
 /**
  * Exports GLB data to the specified format.
  *
  * @param glbData - the GLB data as Uint8Array to export
  * @param format - the target export format
+ * @param exportProperties - optional Assimp export properties (e.g. `{ '3MF_EXPORT_UNIT': 'centimeter' }`)
  * @returns A promise that resolves to an array of exported files.
  * @throws Error if the underlying exporter fails
  */
 export const exportFiles = async (
   glbData: Uint8Array<ArrayBuffer>,
   format: SupportedExportFormat,
+  exportProperties?: Record<string, boolean | number | string>,
 ): Promise<ExportFile[]> => {
   const config = exportConfigs[format];
 
   try {
-    return await config.exporter.parseAsync(glbData);
+    return await config.exporter.parseAsync(glbData, { exportProperties });
   } catch (error) {
     throw new Error(`Failed to export ${format}: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }

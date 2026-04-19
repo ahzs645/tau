@@ -1,5 +1,5 @@
-import { useMemo } from 'react';
-import { useFileTreeMap } from '#hooks/use-file-tree.js';
+import { useState, useEffect } from 'react';
+import { useFileManager } from '#hooks/use-file-manager.js';
 
 type PreviewFileEntry = {
   path: string;
@@ -9,19 +9,33 @@ type PreviewFileEntry = {
 
 /**
  * Hook to read the file list from the file manager for the preview route.
+ * Uses `getCachedFileItems` (centralized cache) with `subscribeTree` for invalidation.
  */
 export function usePreviewFileList(): PreviewFileEntry[] {
-  const fileTree = useFileTreeMap();
+  const { treeService } = useFileManager();
+  const [files, setFiles] = useState<PreviewFileEntry[]>([]);
 
-  return useMemo(() => {
-    if (fileTree.size === 0) {
-      return [];
+  useEffect(() => {
+    if (!treeService) {
+      return;
     }
 
-    return [...fileTree.values()].map((entry) => ({
-      path: entry.path,
-      name: entry.name,
-      size: entry.size,
-    }));
-  }, [fileTree]);
+    const sync = (): void => {
+      const items = treeService.getCachedFileItems();
+      setFiles(
+        items.map((item) => ({
+          path: item.path,
+          name: item.path.split('/').pop() ?? item.path,
+          size: item.size,
+        })),
+      );
+    };
+
+    sync();
+    const unsubscribe = treeService.subscribeTree(sync);
+
+    return unsubscribe;
+  }, [treeService]);
+
+  return files;
 }

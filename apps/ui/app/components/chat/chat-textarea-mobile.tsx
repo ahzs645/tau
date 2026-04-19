@@ -1,5 +1,5 @@
 import { memo, useState } from 'react';
-import { Plus, CircuitBoard, Wrench, Paperclip, ChevronRight } from 'lucide-react';
+import { Plus, Wrench, Paperclip, ChevronRight } from 'lucide-react';
 import type { ToolSelection } from '@taucad/chat';
 import { kernelConfigurations } from '@taucad/types/constants';
 import { Button } from '#components/ui/button.js';
@@ -11,7 +11,6 @@ import { ChatModelSelector } from '#components/chat/chat-model-selector.js';
 import { ChatKernelSelector } from '#components/chat/chat-kernel-selector.js';
 import { ChatToolSelector } from '#components/chat/chat-tool-selector.js';
 import { ChatContextActions } from '#components/chat/chat-context-actions.js';
-import { ChatTextareaContextMenu } from '#components/chat/chat-textarea-context-menu.js';
 import { ChatTextareaMobileImages } from '#components/chat/chat-textarea-mobile-images.js';
 import { ChatTextareaSubmitButton } from '#components/chat/chat-textarea-submit-button.js';
 import { focusTrapAttribute } from '#components/chat/chat-textarea-types.js';
@@ -178,7 +177,7 @@ export const ChatTextareaMobile = memo(function ({
         'relative flex size-full flex-row items-end gap-1 border bg-background',
         'overflow-hidden',
         'shadow-md',
-        'focus-within:border-primary',
+        'focus-within:border-primary/50',
         'h-auto min-h-9 p-1.25 md:min-h-10',
         className,
         'rounded-2xl',
@@ -218,7 +217,7 @@ export const ChatTextareaMobile = memo(function ({
                     <div className={menuItemClassName}>
                       <span className='flex w-full items-center justify-between'>
                         <div className='flex items-center gap-2'>
-                          <CircuitBoard className='size-4' />
+                          <SvgIcon id={selectedModel?.details.family ?? 'anthropic'} className='size-4 grayscale' />
                           <div className='flex flex-col items-start'>
                             <span>{selectedModel?.name ?? 'Select model'}</span>
                             <span className='text-xs text-muted-foreground'>AI model for responses</span>
@@ -245,7 +244,7 @@ export const ChatTextareaMobile = memo(function ({
                       <div className={menuItemClassName}>
                         <span className='flex w-full items-center justify-between'>
                           <div className='flex items-center gap-2'>
-                            <SvgIcon id={kernel?.id ?? selectedKernel?.id ?? 'openscad'} className='size-4' />
+                            <SvgIcon id={kernel?.id ?? selectedKernel?.id ?? 'openscad'} className='size-4 grayscale' />
                             <div className='flex flex-col items-start'>
                               <span>{kernel?.name ?? selectedKernel?.name ?? 'OpenSCAD'}</span>
                               <span className='text-xs text-muted-foreground'>CAD kernel for code execution</span>
@@ -359,21 +358,25 @@ export const ChatTextareaMobile = memo(function ({
         </div>
       </div>
 
-      {/* Context Menu */}
+      {/* Context Menu (inline popover for @ mentions) */}
       {showContextMenu ? (
-        <ChatTextareaContextMenu
-          searchQuery={contextSearchQuery}
-          selectedIndex={selectedMenuIndex}
-          onSelectedIndexChange={setSelectedMenuIndex}
-          onAddImage={handleContextImageAdd}
-          onAddText={handleContextMenuSelect}
-          onClose={() => {
-            setShowContextMenu(false);
-            setAtSymbolPosition(-1);
-            setContextSearchQuery('');
-            setSelectedMenuIndex(0);
-          }}
-        />
+        <div className='absolute bottom-full left-0 z-50 mb-1 w-full rounded-md border bg-popover p-1 shadow-md'>
+          <ChatContextActions
+            asPopoverMenu
+            searchQuery={contextSearchQuery}
+            selectedIndex={selectedMenuIndex}
+            onSelectedIndexChange={setSelectedMenuIndex}
+            addImage={handleContextImageAdd}
+            addText={handleContextMenuSelect}
+            onSelectItem={handleContextMenuSelect}
+            onClose={() => {
+              setShowContextMenu(false);
+              setAtSymbolPosition(-1);
+              setContextSearchQuery('');
+              setSelectedMenuIndex(0);
+            }}
+          />
+        </div>
       ) : null}
 
       {/* Drag and drop feedback */}

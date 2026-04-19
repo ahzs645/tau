@@ -17,8 +17,6 @@ type ViewContextType = {
   setIsKernelOpen: (value: boolean | ((current: boolean) => boolean)) => void;
   isConverterOpen: boolean;
   setIsConverterOpen: (value: boolean | ((current: boolean) => boolean)) => void;
-  isGitOpen: boolean;
-  setIsGitOpen: (value: boolean | ((current: boolean) => boolean)) => void;
   isDetailsOpen: boolean;
   setIsDetailsOpen: (value: boolean | ((current: boolean) => boolean)) => void;
 };
@@ -98,14 +96,6 @@ export function ViewContextProvider({ children }: { readonly children: React.Rea
     [editorRef, openPanels.converter],
   );
 
-  const setIsGitOpen = useCallback(
-    (value: boolean | ((current: boolean) => boolean)) => {
-      const newValue = typeof value === 'function' ? value(openPanels.git) : value;
-      editorRef.send({ type: 'setPanelState', panelState: { openPanels: { git: newValue } } });
-    },
-    [editorRef, openPanels.git],
-  );
-
   const setIsDetailsOpen = useCallback(
     (value: boolean | ((current: boolean) => boolean)) => {
       const newValue = typeof value === 'function' ? value(openPanels.details) : value;
@@ -131,8 +121,6 @@ export function ViewContextProvider({ children }: { readonly children: React.Rea
       setIsKernelOpen,
       isConverterOpen: openPanels.converter,
       setIsConverterOpen,
-      isGitOpen: openPanels.git,
-      setIsGitOpen,
       isDetailsOpen: openPanels.details,
       setIsDetailsOpen,
     }),
@@ -145,7 +133,6 @@ export function ViewContextProvider({ children }: { readonly children: React.Rea
       setIsExplorerOpen,
       setIsKernelOpen,
       setIsConverterOpen,
-      setIsGitOpen,
       setIsDetailsOpen,
     ],
   );

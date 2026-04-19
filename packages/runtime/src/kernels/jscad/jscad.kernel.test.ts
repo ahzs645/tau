@@ -39,224 +39,7 @@ const createGeometry = async (
 // Create geometry test helpers instance for geometry assertions
 const geometryHelpers = createGeometryTestHelpers();
 
-// =============================================================================
-// Tests: canHandle - File Type Detection
-// =============================================================================
-
 describe('JscadWorker', () => {
-  describe('canHandle', () => {
-    describe('Should handle files with @jscad/modeling imports', () => {
-      it('should handle TypeScript file with named import from @jscad/modeling', async () => {
-        const worker = await createWorker({
-          'cube.ts': `
-            import { primitives } from '@jscad/modeling';
-            export default function main() {
-              return primitives.cube({ size: 10 });
-            }
-          `,
-        });
-        const result = await worker.canHandle(createGeometryFile('cube.ts'));
-        expect(result).toBe(true);
-      });
-
-      it('should handle JavaScript file with named import from @jscad/modeling', async () => {
-        const worker = await createWorker({
-          'cube.js': `
-            import { primitives } from '@jscad/modeling';
-            export default function main() {
-              return primitives.cube({ size: 10 });
-            }
-          `,
-        });
-        const result = await worker.canHandle(createGeometryFile('cube.js'));
-        expect(result).toBe(true);
-      });
-
-      it('should handle file with namespace import from @jscad/modeling', async () => {
-        const worker = await createWorker({
-          'cube.ts': `
-            import * as jscad from '@jscad/modeling';
-            export default function main() {
-              return jscad.primitives.cube({ size: 10 });
-            }
-          `,
-        });
-        const result = await worker.canHandle(createGeometryFile('cube.ts'));
-        expect(result).toBe(true);
-      });
-
-      it('should handle file with require statement for @jscad/modeling', async () => {
-        const worker = await createWorker({
-          'cube.js': `
-            const jscad = require('@jscad/modeling');
-            const { cube } = jscad.primitives;
-            function main() {
-              return cube({ size: 10 });
-            }
-            module.exports = { main };
-          `,
-        });
-        const result = await worker.canHandle(createGeometryFile('cube.js'));
-        expect(result).toBe(true);
-      });
-
-      it('should handle file with destructured require from @jscad/modeling', async () => {
-        const worker = await createWorker({
-          'cube.js': `
-            const { primitives } = require('@jscad/modeling');
-            function main() {
-              return primitives.cube({ size: 10 });
-            }
-            module.exports = { main };
-          `,
-        });
-        const result = await worker.canHandle(createGeometryFile('cube.js'));
-        expect(result).toBe(true);
-      });
-    });
-
-    describe('Should handle files with @jscad/modeling submodule imports', () => {
-      it('should handle TypeScript file with import from @jscad/modeling/primitives', async () => {
-        const worker = await createWorker({
-          'cube.ts': `
-            import { cube } from '@jscad/modeling/primitives';
-
-            export default function main() {
-              return cube({ size: 10 });
-            }
-          `,
-        });
-        const result = await worker.canHandle(createGeometryFile('cube.ts'));
-        expect(result).toBe(true);
-      });
-
-      it('should handle file with multiple submodule imports', async () => {
-        const worker = await createWorker({
-          'main.ts': `
-            import { cylinder, polygon } from '@jscad/modeling/primitives';
-            import { rotateZ } from '@jscad/modeling/transforms';
-            import { extrudeLinear } from '@jscad/modeling/extrusions';
-            import { union, subtract } from '@jscad/modeling/booleans';
-            import { vec2 } from '@jscad/modeling/maths';
-            import { degToRad } from '@jscad/modeling/utils';
-            import type { Vec2 } from '@jscad/modeling/maths/vec2';
-            import type { Geom3 } from '@jscad/modeling/geometries/geom3';
-
-            export default function main() {
-              return cylinder({ height: 10, radius: 5 });
-            }
-          `,
-        });
-        const result = await worker.canHandle(createGeometryFile('main.ts'));
-        expect(result).toBe(true);
-      });
-
-      it('should handle file with type-only imports alongside submodule value imports', async () => {
-        const worker = await createWorker({
-          'cube.ts': `
-            import { cube } from '@jscad/modeling/primitives';
-            import type { Geom3 } from '@jscad/modeling';
-
-            export const defaultParams = { size: 20 };
-
-            export default function main(p = defaultParams): Geom3 {
-              return cube({ size: p.size });
-            }
-          `,
-        });
-        const result = await worker.canHandle(createGeometryFile('cube.ts'));
-        expect(result).toBe(true);
-      });
-
-      it('should handle JavaScript file with require from @jscad/modeling/primitives', async () => {
-        const worker = await createWorker({
-          'cube.js': `
-            const { cube } = require('@jscad/modeling/primitives');
-
-            function main() {
-              return cube({ size: 10 });
-            }
-
-            module.exports = { main };
-          `,
-        });
-        const result = await worker.canHandle(createGeometryFile('cube.js'));
-        expect(result).toBe(true);
-      });
-    });
-
-    describe('Should NOT handle files without @jscad/modeling or unsupported extensions', () => {
-      it('should not handle TSX file (JSX/TSX not supported)', async () => {
-        const worker = await createWorker({
-          'component.tsx': `
-            import { primitives } from '@jscad/modeling';
-            export default function main() {
-              return primitives.cube({ size: 10 });
-            }
-          `,
-        });
-        const result = await worker.canHandle(createGeometryFile('component.tsx'));
-        expect(result).toBe(false);
-      });
-
-      it('should not handle JSX file (JSX/TSX not supported)', async () => {
-        const worker = await createWorker({
-          'component.jsx': `
-            import { primitives } from '@jscad/modeling';
-            export default function main() {
-              return primitives.cube({ size: 10 });
-            }
-          `,
-        });
-        const result = await worker.canHandle(createGeometryFile('component.jsx'));
-        expect(result).toBe(false);
-      });
-
-      it('should not handle TypeScript file without @jscad/modeling imports', async () => {
-        const worker = await createWorker({
-          'utils.ts': `
-            export function add(a: number, b: number) { return a + b; }
-          `,
-        });
-        const result = await worker.canHandle(createGeometryFile('utils.ts'));
-        expect(result).toBe(false);
-      });
-
-      it('should not handle non-JS/TS file extensions', async () => {
-        const worker = await createWorker({
-          'model.scad': `
-            cube([10, 10, 10]);
-          `,
-        });
-        const result = await worker.canHandle(createGeometryFile('model.scad'));
-        expect(result).toBe(false);
-      });
-
-      it('should not handle KCL files', async () => {
-        const worker = await createWorker({
-          'model.kcl': `
-            box = cube([10, 10, 10])
-          `,
-        });
-        const result = await worker.canHandle(createGeometryFile('model.kcl'));
-        expect(result).toBe(false);
-      });
-
-      it('should not handle file with replicad imports', async () => {
-        const worker = await createWorker({
-          'box.ts': `
-            import { drawRoundedRectangle } from 'replicad';
-            export default function main() {
-              return drawRoundedRectangle(50, 30).sketchOnPlane().extrude(10);
-            }
-          `,
-        });
-        const result = await worker.canHandle(createGeometryFile('box.ts'));
-        expect(result).toBe(false);
-      });
-    });
-  });
-
   // ===========================================================================
   // Tests: Parameter Extraction
   // ===========================================================================
@@ -1161,7 +944,7 @@ module.exports = { main, getParameterDefinitions }
   // ===========================================================================
 
   describe('exportGeometry', () => {
-    it('should export to GLTF format', async () => {
+    it('should return error for unsupported gltf format', async () => {
       const worker = await createWorker({
         'cube.ts': `
           import { primitives } from '@jscad/modeling';
@@ -1172,7 +955,6 @@ module.exports = { main, getParameterDefinitions }
         `,
       });
 
-      // First create geometry
       const geometryFile = createGeometryFile('cube.ts');
       const createResult = await worker.createGeometry({
         file: geometryFile,
@@ -1180,14 +962,10 @@ module.exports = { main, getParameterDefinitions }
       });
       expect(createResult.success).toBe(true);
 
-      // Then export
       const exportResult = await worker.exportGeometry('gltf');
-      expect(exportResult.success).toBe(true);
-      if (exportResult.success) {
-        expect(exportResult.data).toBeDefined();
-        expect(exportResult.data.length).toBeGreaterThan(0);
-        expect(exportResult.data[0]?.bytes).toBeInstanceOf(Uint8Array);
-        expect(exportResult.data[0]?.mimeType).toBe('model/gltf+json');
+      expect(exportResult.success).toBe(false);
+      if (!exportResult.success) {
+        expect(exportResult.issues[0]?.message).toContain('gltf');
       }
     });
 
@@ -1875,6 +1653,64 @@ module.exports = { main, getParameterDefinitions }
         await geometryHelpers.expectMeshCount(result, 1);
       });
     });
+  });
+});
+
+// =============================================================================
+// serializeHandle / deserializeHandle
+// =============================================================================
+
+describe('serializeHandle', () => {
+  it('should serialize nativeHandle to compact binary arrays', async () => {
+    const result = await createGeometry(
+      {
+        'box.ts': `
+          const { cuboid } = require('@jscad/modeling').primitives;
+          module.exports = { main: () => cuboid({ size: [20, 20, 20] }) };
+        `,
+      },
+      'box.ts',
+    );
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      return;
+    }
+
+    expect(result.serializedHandle).toBeDefined();
+    const serialized = result.serializedHandle as Array<{ type: string; data: Float32Array }>;
+    expect(serialized).toHaveLength(1);
+    expect(serialized[0]!.type).toBe('geom3');
+    expect(serialized[0]!.data).toBeInstanceOf(Float32Array);
+    expect(serialized[0]!.data.length).toBeGreaterThan(0);
+  });
+
+  it('should serialize multiple shapes', async () => {
+    const result = await createGeometry(
+      {
+        'shapes.ts': `
+          const { cuboid, sphere } = require('@jscad/modeling').primitives;
+          module.exports = { main: () => [cuboid({ size: [10, 10, 10] }), sphere({ radius: 5 })] };
+        `,
+      },
+      'shapes.ts',
+    );
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      return;
+    }
+
+    expect(result.serializedHandle).toBeDefined();
+    const serialized = result.serializedHandle as Array<{ type: string; data: Float32Array }>;
+    expect(serialized).toHaveLength(2);
+    expect(serialized[0]!.type).toBe('geom3');
+    expect(serialized[1]!.type).toBe('geom3');
+  });
+
+  it('should have serializeHandle and deserializeHandle defined on the kernel', () => {
+    expect(jscadKernel.serializeHandle).toBeDefined();
+    expect(jscadKernel.deserializeHandle).toBeDefined();
   });
 });
 

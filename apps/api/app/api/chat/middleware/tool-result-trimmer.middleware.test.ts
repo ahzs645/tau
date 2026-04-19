@@ -1,14 +1,8 @@
 import { ToolMessage, HumanMessage, AIMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { toolName } from '@taucad/chat/constants';
-import type {
-  TestModelOutput,
-  TestFailure,
-  CreateFileOutput,
-  EditFileOutput,
-  GetKernelResultOutput,
-  ScreenshotOutput,
-} from '@taucad/chat';
+import type { TestModelOutput, TestFailure } from '@taucad/testing';
+import type { CreateFileOutput, EditFileOutput, GetKernelResultOutput, ScreenshotOutput } from '@taucad/chat';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { toolResultTrimmerMiddleware } from '#api/chat/middleware/tool-result-trimmer.middleware.js';
 
@@ -593,9 +587,13 @@ describe('toolResultTrimmerMiddleware', () => {
         _trimmed: true,
       });
 
-      // Latest screenshot: converted to multimodal image blocks (not trimmed to JSON)
-      const latestContent = toolMessages[1]!.content;
+      // Latest screenshot: converted to multimodal image blocks with inspection directive
+      const latestContent = toolMessages[1]!.content as Array<Record<string, unknown>>;
       expect(Array.isArray(latestContent)).toBe(true);
+      expect(latestContent[0]).toHaveProperty('type', 'text');
+      expect(latestContent[0]).toHaveProperty('text');
+      expect(latestContent[0]!['text']).toContain('quality inspector');
+      expect(latestContent[1]).toHaveProperty('type', 'image_url');
     });
 
     it('should trim screenshot by content shape detection when name is missing', async () => {
@@ -658,6 +656,35 @@ describe('toolResultTrimmerMiddleware', () => {
         images: [],
         _trimmed: true,
       });
+    });
+
+    it('should not inject image blocks when dataUrl values are offloaded placeholders', async () => {
+      const offloadedOutput = {
+        images: [{ view: 'composite', dataUrl: '[offloaded: 50000 chars]' }],
+        _offloadedTo: '.tau/offloaded-tool-results/call_ss_offloaded.txt',
+      };
+
+      const messages: BaseMessage[] = [
+        new ToolMessage({
+          content: JSON.stringify(offloadedOutput),
+          // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
+          tool_call_id: 'call_ss_offloaded',
+          name: toolName.screenshot,
+        }),
+      ];
+
+      await callWrapModelCall({ messages }, handler);
+
+      const [request] = handler.mock.calls[0] as [TestRequest];
+      const resultMessage = request.messages[0] as ToolMessage;
+
+      // Content stays as string JSON (no multimodal image blocks injected)
+      expect(typeof resultMessage.content).toBe('string');
+      const parsed = JSON.parse(resultMessage.content as string) as Record<string, unknown>;
+      const images = parsed['images'] as Array<Record<string, unknown>>;
+      expect(images).toHaveLength(1);
+      expect(images[0]!['view']).toBe('composite');
+      expect(images[0]!['dataUrl']).toBe('[offloaded: 50000 chars]');
     });
   });
 });

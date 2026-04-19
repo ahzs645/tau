@@ -1,0 +1,119 @@
+import { describe, it, expect } from 'vitest';
+import { contextPayloadSchema, skillMetadataSchema } from '#schemas/context-payload.schema.js';
+
+describe('skillMetadataSchema', () => {
+  it('should accept a valid skill entry', () => {
+    const result = skillMetadataSchema.safeParse({
+      name: 'my-skill',
+      description: 'Does useful things',
+      path: '.tau/skills/my-skill',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data).toEqual({
+      name: 'my-skill',
+      description: 'Does useful things',
+      path: '.tau/skills/my-skill',
+    });
+  });
+
+  it('should accept skill entry with optional source', () => {
+    const result = skillMetadataSchema.safeParse({
+      name: 'sourced',
+      description: 'Has a source',
+      path: '.tau/skills/sourced',
+      source: 'project',
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data?.source).toBe('project');
+  });
+
+  it('should reject skill entry missing name', () => {
+    const result = skillMetadataSchema.safeParse({
+      description: 'No name field',
+      path: '.tau/skills/x',
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('should reject skill entry missing description', () => {
+    const result = skillMetadataSchema.safeParse({
+      name: 'incomplete',
+      path: '.tau/skills/incomplete',
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('should reject skill entry missing path', () => {
+    const result = skillMetadataSchema.safeParse({
+      name: 'no-path',
+      description: 'Missing path field',
+    });
+
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('contextPayloadSchema', () => {
+  it('should accept valid context payload with skills and memory', () => {
+    const agentsKey = '.tau/AGENTS.md';
+    const result = contextPayloadSchema.safeParse({
+      skills: [
+        { name: 'skill-a', description: 'First skill', path: '.tau/skills/skill-a' },
+        { name: 'skill-b', description: 'Second skill', path: '.tau/skills/skill-b' },
+      ],
+      memory: { [agentsKey]: '# Rules\n\nUse early returns.' },
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data?.skills).toHaveLength(2);
+    expect(result.data?.memory?.[agentsKey]).toContain('early returns');
+  });
+
+  it('should accept payload with only skills', () => {
+    const result = contextPayloadSchema.safeParse({
+      skills: [{ name: 'solo', description: 'Only skill', path: '.tau/skills/solo' }],
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data?.skills).toHaveLength(1);
+    expect(result.data?.memory).toBeUndefined();
+  });
+
+  it('should accept payload with only memory', () => {
+    const agentsKey = '.tau/AGENTS.md';
+    const result = contextPayloadSchema.safeParse({
+      memory: { [agentsKey]: 'Memory content' },
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data?.skills).toBeUndefined();
+    expect(result.data?.memory?.[agentsKey]).toBe('Memory content');
+  });
+
+  it('should accept empty payload', () => {
+    const result = contextPayloadSchema.safeParse({});
+
+    expect(result.success).toBe(true);
+    expect(result.data?.skills).toBeUndefined();
+    expect(result.data?.memory).toBeUndefined();
+  });
+
+  it('should accept payload with empty skills array', () => {
+    const result = contextPayloadSchema.safeParse({ skills: [] });
+
+    expect(result.success).toBe(true);
+    expect(result.data?.skills).toEqual([]);
+  });
+
+  it('should reject payload with invalid skill entry in array', () => {
+    const result = contextPayloadSchema.safeParse({
+      skills: [{ name: 'valid', description: 'ok', path: 'p' }, { description: 'missing name' }],
+    });
+
+    expect(result.success).toBe(false);
+  });
+});

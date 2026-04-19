@@ -80,7 +80,7 @@ Permissions-Policy = "accelerometer=(), camera=(), geolocation=(), gyroscope=(),
 # Cross-Origin Policies
 Cross-Origin-Opener-Policy = "same-origin"
 Cross-Origin-Resource-Policy = "same-origin"
-Cross-Origin-Embedder-Policy = "credentialless"
+Cross-Origin-Embedder-Policy = "require-corp"
 # JavaScript Profiling
 Document-Policy = "js-profiling"
 # Content Security Policy (CSP) - Start with report-only mode

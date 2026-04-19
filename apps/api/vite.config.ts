@@ -5,6 +5,7 @@ import { defineConfig } from 'vite';
 import { nxViteTsPaths } from '@nx/vite/plugins/nx-tsconfig-paths.plugin';
 import { viteStaticCopy } from 'vite-plugin-static-copy';
 import { VitePluginNode as vitePluginNode } from 'vite-plugin-node';
+import { oxcRuntimeEsm } from '@taucad/vite/oxc-runtime-esm';
 import { tsModuleUrlServePlugin } from '@taucad/vite/ts-module-url';
 import { corsBaseConfiguration } from '#constants/cors.constant.js';
 
@@ -28,6 +29,7 @@ export default defineConfig(({ mode }) => {
       },
     },
     plugins: [
+      oxcRuntimeEsm(),
       tsModuleUrlServePlugin(),
       nxViteTsPaths(),
       viteStaticCopy({

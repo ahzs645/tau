@@ -1,11 +1,7 @@
 // oxlint-disable typescript-eslint/no-unsafe-return -- OpenCascadeInstance proxy returns any-typed values by design
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import {
-  setAbortContext,
-  clearAbortContext,
-  wrapOcForExceptions,
-  wrapOcWithTracing,
-} from '#kernels/replicad/oc-tracing.js';
+import { wrapOcForExceptions, wrapOcWithTracing } from '#kernels/replicad/oc-tracing.js';
+import { setAbortContext, clearAbortContext } from '#framework/cooperative-abort.js';
 import { RenderAbortedError, isRenderAbortedError } from '#framework/runtime-worker-client.js';
 import { signalSlot } from '#types/runtime-protocol.types.js';
 import type { RuntimeSpanTracer, SpanHandle } from '#types/runtime-tracer.types.js';

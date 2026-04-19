@@ -1,12 +1,25 @@
-import JSZip from 'jszip';
 import type { FileStat, FileStatEntry, FileSystemBackend } from '@taucad/types';
-import type { FileTreeNode, ProviderFileStat, TreeEntry, WatchRequest, WatchEvent } from '#types.js';
+import type {
+  FileTreeNode,
+  ProviderFileStat,
+  TreeEntry,
+  WatchRequest,
+  WatchEvent,
+  FileReadStreamOptions,
+} from '#types.js';
 import type { ProviderRegistry } from '#provider-registry.js';
-import type { WriteCoordinator } from '#write-coordinator.js';
+import type { ResourceQueue } from '#resource-queue.js';
 import type { DirectoryTreeCache } from '#directory-tree-cache.js';
 import type { ChangeEventBus } from '#change-event-bus.js';
+import { InMemoryFileTree } from '#in-memory-file-tree.js';
 import { WatchRegistry } from '#watch-registry.js';
+import { bufferToStream } from '#providers/stream-utils.js';
+import { CrossTabCoordinator } from '#cross-tab-coordinator.js';
+import type { SharedPool } from '@taucad/memory';
+import type { MountTable, MountOptions, MountResolution } from '#mount-table.js';
 import { parentDirectory, joinPath, normalizePath } from '@taucad/utils/path';
+
+const kernelCoalescingWindowMs = 75;
 
 function toFileStat(stat: ProviderFileStat): FileStat {
   return {
@@ -32,10 +45,16 @@ export type MkdirOptions = {
  */
 export class FileService {
   private readonly _registry: ProviderRegistry;
-  private readonly _writeCoordinator: WriteCoordinator;
+  private readonly _resourceQueue: ResourceQueue;
   private readonly _treeCache: DirectoryTreeCache;
   private readonly _eventBus: ChangeEventBus;
   private readonly _watchRegistry: WatchRegistry;
+  private readonly _crossTabCoordinator: CrossTabCoordinator;
+  private _filePool: SharedPool | undefined;
+  private readonly _mountTable: MountTable;
+  private readonly _inMemoryTree = new InMemoryFileTree();
+  /** Absolute path passed to the first {@link getDirectoryStat} that populated the tree; in-memory paths are relative to this root. */
+  private _directoryStatRoot: string | undefined;
 
   /**
    * Create a FileService with injected dependencies.
@@ -44,16 +63,33 @@ export class FileService {
    */
   public constructor(options: {
     providerRegistry: ProviderRegistry;
-    writeCoordinator: WriteCoordinator;
+    resourceQueue: ResourceQueue;
     treeCache: DirectoryTreeCache;
     eventBus: ChangeEventBus;
+    crossTabCoordinator?: CrossTabCoordinator;
+    /** Writer-side shared file pool for zero-IPC cached reads across threads. */
+    filePool?: SharedPool;
+    /** Mount table for multi-backend path routing. */
+    mountTable: MountTable;
   }) {
     this._registry = options.providerRegistry;
-    this._writeCoordinator = options.writeCoordinator;
+    this._resourceQueue = options.resourceQueue;
     this._treeCache = options.treeCache;
     this._eventBus = options.eventBus;
-    this._watchRegistry = new WatchRegistry(options.eventBus);
-    void this._syncCaseSensitivity();
+    this._watchRegistry = new WatchRegistry(options.eventBus, { windowMs: kernelCoalescingWindowMs });
+    this._crossTabCoordinator = options.crossTabCoordinator ?? new CrossTabCoordinator();
+    this._filePool = options.filePool;
+    this._mountTable = options.mountTable;
+  }
+
+  /**
+   * Set or replace the shared file pool for zero-IPC cached reads.
+   * Enables late binding when the SharedArrayBuffer arrives after construction.
+   *
+   * @param pool - Writer-side shared file pool.
+   */
+  public setFilePool(pool: SharedPool): void {
+    this._filePool = pool;
   }
 
   // --- Read operations (direct to provider, no serialization) ---
@@ -67,32 +103,78 @@ export class FileService {
    */
   public async readFile(
     filepath: string,
-    options?: 'utf8' | { encoding: 'utf8' },
+    options?: 'utf8' | { encoding?: 'utf8'; signal?: AbortSignal },
   ): Promise<string | Uint8Array<ArrayBuffer>> {
-    const provider = await this._registry.getActiveProvider();
-    const encoding = options === 'utf8' || (typeof options === 'object' && 'encoding' in options) ? 'utf8' : undefined;
+    const signal = typeof options === 'object' ? options.signal : undefined;
+    if (signal?.aborted) {
+      throw new DOMException('The operation was aborted.', 'AbortError');
+    }
+
+    const { provider, path: resolvedPath } = this._resolveProvider(filepath);
+    const encoding =
+      options === 'utf8' || (typeof options === 'object' && options.encoding === 'utf8') ? 'utf8' : undefined;
 
     if (encoding === 'utf8') {
-      return provider.readFile(filepath, 'utf8');
+      return provider.readFile(resolvedPath, 'utf8');
     }
-    return provider.readFile(filepath);
+    const data = await provider.readFile(resolvedPath);
+    this._filePool?.store(filepath, data);
+    return data;
   }
 
   /**
    * Read multiple files in parallel, returning a map of path to raw bytes.
    *
    * @param paths - Absolute file paths to read.
+   * @param options - Optional abort signal for cancellation.
    * @returns Map from path to file content.
    */
-  public async readFiles(paths: string[]): Promise<Record<string, Uint8Array<ArrayBuffer>>> {
-    const provider = await this._registry.getActiveProvider();
+  public async readFiles(
+    paths: string[],
+    options?: { signal?: AbortSignal },
+  ): Promise<Record<string, Uint8Array<ArrayBuffer>>> {
+    if (options?.signal?.aborted) {
+      throw new DOMException('The operation was aborted.', 'AbortError');
+    }
+
     const results = await Promise.all(
       paths.map(async (filepath) => {
-        const data = await provider.readFile(filepath);
+        if (options?.signal?.aborted) {
+          throw new DOMException('The operation was aborted.', 'AbortError');
+        }
+        const { provider, path: resolvedPath } = this._resolveProvider(filepath);
+        const data = await provider.readFile(resolvedPath);
         return [filepath, data] as const;
       }),
     );
     return Object.fromEntries(results);
+  }
+
+  /**
+   * Stream a file as `ReadableStream<Uint8Array>`.
+   * Routes to the provider's native `readFileStream` when available (capability-based),
+   * otherwise falls back to wrapping `readFile` output in a chunked stream.
+   *
+   * @param filepath - Absolute path to the file.
+   * @param options - Position, length, and signal for cancellation.
+   * @returns Readable stream of file content.
+   */
+  public async readFileStream(
+    filepath: string,
+    options?: FileReadStreamOptions,
+  ): Promise<ReadableStream<Uint8Array<ArrayBuffer>>> {
+    if (options?.signal?.aborted) {
+      throw new DOMException('The operation was aborted.', 'AbortError');
+    }
+
+    const { provider, path: resolvedPath } = this._resolveProvider(filepath);
+
+    if (provider.readFileStream) {
+      return provider.readFileStream(resolvedPath, options);
+    }
+
+    const buffer = await provider.readFile(resolvedPath);
+    return bufferToStream(buffer, options);
   }
 
   /**
@@ -102,8 +184,18 @@ export class FileService {
    * @returns Array of entry names (not full paths).
    */
   public async readdir(path: string): Promise<string[]> {
-    const provider = await this._registry.getActiveProvider();
-    return provider.readdir(path);
+    const { provider, path: resolvedPath } = this._resolveProvider(path);
+    const entries = await provider.readdir(resolvedPath);
+
+    const childMounts = this._mountTable.getMountsUnder(path);
+    for (const mount of childMounts) {
+      const mountName = mount.prefix.split('/').pop();
+      if (mountName && !entries.includes(mountName)) {
+        entries.push(mountName);
+      }
+    }
+
+    return entries;
   }
 
   /**
@@ -113,8 +205,8 @@ export class FileService {
    * @returns Stat information (type, size, mtime).
    */
   public async stat(path: string): Promise<FileStat> {
-    const provider = await this._registry.getActiveProvider();
-    return toFileStat(await provider.stat(path));
+    const { provider, path: resolvedPath } = this._resolveProvider(path);
+    return toFileStat(await provider.stat(resolvedPath));
   }
 
   /**
@@ -124,8 +216,8 @@ export class FileService {
    * @returns Stat information (type, size, mtime).
    */
   public async lstat(path: string): Promise<FileStat> {
-    const provider = await this._registry.getActiveProvider();
-    return toFileStat(await provider.lstat(path));
+    const { provider, path: resolvedPath } = this._resolveProvider(path);
+    return toFileStat(await provider.lstat(resolvedPath));
   }
 
   /**
@@ -135,8 +227,8 @@ export class FileService {
    * @returns `true` if the entry exists.
    */
   public async exists(path: string): Promise<boolean> {
-    const provider = await this._registry.getActiveProvider();
-    return provider.exists(path);
+    const { provider, path: resolvedPath } = this._resolveProvider(path);
+    return provider.exists(resolvedPath);
   }
 
   /**
@@ -146,12 +238,11 @@ export class FileService {
    * @returns Map from path to existence boolean.
    */
   public async batchExists(paths: string[]): Promise<Record<string, boolean>> {
-    const provider = await this._registry.getActiveProvider();
     const results = await Promise.all(
-      paths.map(async (path) => ({
-        path,
-        exists: await provider.exists(path),
-      })),
+      paths.map(async (path) => {
+        const { provider, path: resolvedPath } = this._resolveProvider(path);
+        return { path, exists: await provider.exists(resolvedPath) };
+      }),
     );
     const existsMap: Record<string, boolean> = {};
     for (const { path, exists } of results) {
@@ -160,29 +251,34 @@ export class FileService {
     return existsMap;
   }
 
-  // --- Write operations (serialized via WriteCoordinator) ---
+  // --- Write operations (serialized via per-file ResourceQueue) ---
 
   /**
    * Write data to a file, creating parent directories as needed.
-   * Serialized through the {@link WriteCoordinator}.
+   * Serialized per file path through the {@link ResourceQueue}.
    *
    * @param path - Absolute file path.
    * @param data - File content as raw bytes or a UTF-8 string.
    * @returns Resolves when the write completes.
    */
   public async writeFile(path: string, data: Uint8Array<ArrayBuffer> | string): Promise<void> {
-    return this._writeCoordinator.serialized(async () => {
-      const provider = await this._registry.getActiveProvider();
-      await this._ensureParentDir(provider, path);
-      await provider.writeFile(path, data);
+    return this._crossTabCoordinator.withWriteLock(path, async () =>
+      this._resourceQueue.queueFor(path, async () => {
+        const { provider, path: resolvedPath, backend: resolvedBackend } = this._resolveProvider(path);
+        await this._ensureParentDir(provider, resolvedPath);
+        await provider.writeFile(resolvedPath, data);
 
-      this._treeCache.invalidate(parentDirectory(path));
-      this._eventBus.emit({
-        type: 'fileWritten',
-        path,
-        backend: this._registry.activeBackend,
-      });
-    });
+        this._filePool?.invalidate(path);
+        const size = typeof data === 'string' ? new TextEncoder().encode(data).byteLength : data.byteLength;
+        this._inMemoryTreeAddFile(path, size);
+        this._treeCache.invalidate(parentDirectory(path));
+        this._eventBus.emit({
+          type: 'fileWritten',
+          path,
+          backend: resolvedBackend,
+        });
+      }),
+    );
   }
 
   /**
@@ -192,30 +288,35 @@ export class FileService {
    * @returns Resolves when all writes complete.
    */
   public async writeFiles(files: Record<string, { content: Uint8Array<ArrayBuffer> | string }>): Promise<void> {
-    return this._writeCoordinator.serialized(async () => {
-      const provider = await this._registry.getActiveProvider();
-      const createdDirectories = new Set<string>();
+    const entries = Object.entries(files);
+    if (entries.length === 0) {
+      return;
+    }
 
-      for (const [path, file] of Object.entries(files)) {
-        const directory = parentDirectory(path);
-        if (directory !== '/' && !createdDirectories.has(directory)) {
-          // oxlint-disable-next-line no-await-in-loop -- Sequential writes required to prevent ZenFS race condition
-          await this._ensureDirectoryExistsInternal(provider, directory);
-          createdDirectories.add(directory);
-        }
-        // oxlint-disable-next-line no-await-in-loop -- Sequential writes required to prevent ZenFS race condition
-        await provider.writeFile(path, file.content);
-      }
+    const resolvedBackend = this._mountTable.resolve('/').backend;
+    await Promise.all(
+      entries.map(async ([path, file]) =>
+        this._resourceQueue.queueFor(path, async () => {
+          const { provider, path: resolvedPath } = this._resolveProvider(path);
+          await this._ensureParentDir(provider, resolvedPath);
+          await provider.writeFile(resolvedPath, file.content);
+          const size =
+            typeof file.content === 'string'
+              ? new TextEncoder().encode(file.content).byteLength
+              : file.content.byteLength;
+          this._inMemoryTreeAddFile(path, size);
+        }),
+      ),
+    );
 
-      const parentDirectories = new Set(Object.keys(files).map((p) => parentDirectory(p)));
-      for (const directory of parentDirectories) {
-        this._treeCache.invalidate(directory);
-      }
-      this._eventBus.emit({
-        type: 'directoryChanged',
-        path: '/',
-        backend: this._registry.activeBackend,
-      });
+    const parentDirectories = new Set(entries.map(([p]) => parentDirectory(p)));
+    for (const directory of parentDirectories) {
+      this._treeCache.invalidate(directory);
+    }
+    this._eventBus.emit({
+      type: 'directoryChanged',
+      path: '/',
+      backend: resolvedBackend,
     });
   }
 
@@ -227,15 +328,22 @@ export class FileService {
    * @returns Resolves when the directory is created.
    */
   public async mkdir(path: string, options?: MkdirOptions): Promise<void> {
-    return this._writeCoordinator.serialized(async () => {
-      const provider = await this._registry.getActiveProvider();
-      await provider.mkdir(path, options?.recursive ? { recursive: true } : undefined);
+    return this._resourceQueue.queueFor(path, async () => {
+      const { provider, path: resolvedPath, backend: resolvedBackend } = this._resolveProvider(path);
+      await provider.mkdir(resolvedPath, options?.recursive ? { recursive: true } : undefined);
 
-      this._treeCache.invalidate(parentDirectory(path));
+      this._inMemoryTreeAddDirectory(path);
+
+      if (options?.recursive) {
+        this._treeCache.invalidateAncestors(path);
+      } else {
+        this._treeCache.invalidate(parentDirectory(path));
+      }
+
       this._eventBus.emit({
         type: 'directoryChanged',
         path: parentDirectory(path),
-        backend: this._registry.activeBackend,
+        backend: resolvedBackend,
       });
     });
   }
@@ -248,10 +356,22 @@ export class FileService {
    * @returns Resolves when the rename completes.
    */
   public async rename(from: string, to: string): Promise<void> {
-    return this._writeCoordinator.serialized(async () => {
-      const provider = await this._registry.getActiveProvider();
-      await provider.rename(from, to);
+    return this._resourceQueue.queueFor(from, async () => {
+      const source = this._resolveProvider(from);
+      const target = this._resolveProvider(to);
 
+      if (source.provider === target.provider) {
+        await source.provider.rename(source.path, target.path);
+      } else {
+        console.warn('[FileService] Cross-mount rename: copy+delete', from, '->', to);
+        const data = await source.provider.readFile(source.path);
+        await target.provider.writeFile(target.path, data);
+        await source.provider.unlink(source.path);
+      }
+
+      this._filePool?.invalidate(from);
+      this._filePool?.invalidate(to);
+      this._inMemoryTreeRename(from, to);
       this._treeCache.invalidate(parentDirectory(from));
       this._treeCache.invalidate(parentDirectory(to));
       this._treeCache.invalidateSubtree(from);
@@ -259,7 +379,7 @@ export class FileService {
         type: 'fileRenamed',
         oldPath: from,
         newPath: to,
-        backend: this._registry.activeBackend,
+        backend: source.backend,
       });
     });
   }
@@ -271,15 +391,17 @@ export class FileService {
    * @returns Resolves when the file is deleted.
    */
   public async unlink(path: string): Promise<void> {
-    return this._writeCoordinator.serialized(async () => {
-      const provider = await this._registry.getActiveProvider();
-      await provider.unlink(path);
+    return this._resourceQueue.queueFor(path, async () => {
+      const { provider, path: resolvedPath, backend: resolvedBackend } = this._resolveProvider(path);
+      await provider.unlink(resolvedPath);
 
+      this._filePool?.invalidate(path);
+      this._inMemoryTreeRemoveFile(path);
       this._treeCache.invalidate(parentDirectory(path));
       this._eventBus.emit({
         type: 'fileDeleted',
         path,
-        backend: this._registry.activeBackend,
+        backend: resolvedBackend,
       });
     });
   }
@@ -291,16 +413,17 @@ export class FileService {
    * @returns Resolves when the directory is removed.
    */
   public async rmdir(path: string): Promise<void> {
-    return this._writeCoordinator.serialized(async () => {
-      const provider = await this._registry.getActiveProvider();
-      await provider.rmdir(path);
+    return this._resourceQueue.queueFor(path, async () => {
+      const { provider, path: resolvedPath, backend: resolvedBackend } = this._resolveProvider(path);
+      await provider.rmdir(resolvedPath);
 
+      this._inMemoryTreeRemoveDirectory(path);
       this._treeCache.invalidateSubtree(path);
       this._treeCache.invalidate(parentDirectory(path));
       this._eventBus.emit({
         type: 'directoryChanged',
         path: parentDirectory(path),
-        backend: this._registry.activeBackend,
+        backend: resolvedBackend,
       });
     });
   }
@@ -314,9 +437,10 @@ export class FileService {
    * @returns Resolves when the directory exists.
    */
   public async ensureDirectoryExists(path: string): Promise<void> {
-    return this._writeCoordinator.serialized(async () => {
-      const provider = await this._registry.getActiveProvider();
-      await this._ensureDirectoryExistsInternal(provider, path);
+    return this._resourceQueue.queueFor(path, async () => {
+      const { provider, path: resolvedPath } = this._resolveProvider(path);
+      await this._ensureDirectoryExistsInternal(provider, resolvedPath);
+      this._inMemoryTreeAddDirectory(path);
     });
   }
 
@@ -328,17 +452,20 @@ export class FileService {
    * @returns Resolves when the copy completes.
    */
   public async duplicateFile(sourcePath: string, destinationPath: string): Promise<void> {
-    return this._writeCoordinator.serialized(async () => {
-      const provider = await this._registry.getActiveProvider();
-      const data = await provider.readFile(sourcePath);
-      await this._ensureParentDir(provider, destinationPath);
-      await provider.writeFile(destinationPath, data);
+    return this._resourceQueue.queueFor(destinationPath, async () => {
+      const source = this._resolveProvider(sourcePath);
+      const destination = this._resolveProvider(destinationPath);
+      const data = await source.provider.readFile(source.path);
+      await this._ensureParentDir(destination.provider, destination.path);
+      await destination.provider.writeFile(destination.path, data);
 
+      const size = data.byteLength;
+      this._inMemoryTreeAddFile(destinationPath, size);
       this._treeCache.invalidate(parentDirectory(destinationPath));
       this._eventBus.emit({
         type: 'fileWritten',
         path: destinationPath,
-        backend: this._registry.activeBackend,
+        backend: destination.backend,
       });
     });
   }
@@ -351,24 +478,28 @@ export class FileService {
    * @returns Resolves when the copy completes.
    */
   public async copyDirectory(sourcePath: string, destinationPath: string): Promise<void> {
-    return this._writeCoordinator.serialized(async () => {
-      const provider = await this._registry.getActiveProvider();
-      const files = await this._getDirectoryContentsInternal(provider, sourcePath);
+    return this._resourceQueue.queueFor(destinationPath, async () => {
+      const source = this._resolveProvider(sourcePath);
+      const files = await this._getDirectoryContentsInternal(source.provider, source.path);
 
       for (const [relativePath, content] of Object.entries(files)) {
         const destinationFile = joinPath(destinationPath, relativePath);
-        // oxlint-disable-next-line no-await-in-loop -- Sequential writes required to prevent ZenFS race condition
-        await this._ensureParentDir(provider, destinationFile);
-        // oxlint-disable-next-line no-await-in-loop -- Sequential writes required to prevent ZenFS race condition
-        await provider.writeFile(destinationFile, content);
+        // oxlint-disable-next-line no-await-in-loop -- Sequential writes required
+        const destination = this._resolveProvider(destinationFile);
+        // oxlint-disable-next-line no-await-in-loop -- Sequential writes required
+        await this._ensureParentDir(destination.provider, destination.path);
+        // oxlint-disable-next-line no-await-in-loop -- Sequential writes required
+        await destination.provider.writeFile(destination.path, content);
+        this._inMemoryTreeAddFile(destinationFile, content.byteLength);
       }
 
       this._treeCache.invalidate(parentDirectory(destinationPath));
       this._treeCache.invalidateSubtree(destinationPath);
+      const destinationResolution = this._resolveProvider(destinationPath);
       this._eventBus.emit({
         type: 'directoryChanged',
         path: parentDirectory(destinationPath),
-        backend: this._registry.activeBackend,
+        backend: destinationResolution.backend,
       });
     });
   }
@@ -380,12 +511,12 @@ export class FileService {
    * @returns Map of relative paths to file contents (empty if directory missing).
    */
   public async getDirectoryContents(path: string): Promise<Record<string, Uint8Array<ArrayBuffer>>> {
-    const provider = await this._registry.getActiveProvider();
-    const directoryExists = await provider.exists(path);
+    const { provider, path: resolvedPath } = this._resolveProvider(path);
+    const directoryExists = await provider.exists(resolvedPath);
     if (!directoryExists) {
       return {};
     }
-    return this._getDirectoryContentsInternal(provider, path);
+    return this._getDirectoryContentsInternal(provider, resolvedPath);
   }
 
   /**
@@ -395,6 +526,8 @@ export class FileService {
    * @returns ZIP archive as a `Blob`.
    */
   public async getZippedDirectory(path: string): Promise<Blob> {
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- JSZip is the library's class name
+    const { default: JSZip } = await import('jszip');
     const zip = new JSZip();
     const files = await this.getDirectoryContents(path);
     for (const [relativePath, content] of Object.entries(files)) {
@@ -410,36 +543,60 @@ export class FileService {
    * On cache miss, reads from provider and caches. Returns sorted FileTreeNode array.
    *
    * @param path - Absolute directory path.
+   * @param options - Optional abort signal for cancellation.
    * @returns Sorted array of file tree nodes.
    */
-  public async readDirectory(path: string): Promise<FileTreeNode[]> {
+  public async readDirectory(path: string, options?: { signal?: AbortSignal }): Promise<FileTreeNode[]> {
+    if (options?.signal?.aborted) {
+      throw new DOMException('The operation was aborted.', 'AbortError');
+    }
+
     const cached = this._treeCache.get(path);
     if (cached) {
       return this._treeEntriesToNodes(cached);
     }
 
-    const provider = await this._registry.getActiveProvider();
-    let entries: string[];
+    const { provider, path: resolvedPath } = this._resolveProvider(path);
+    const entryMap = new Map<string, TreeEntry>();
+
     try {
-      entries = await provider.readdir(path);
+      if (provider.readdirWithStats) {
+        const statsEntries = await provider.readdirWithStats(resolvedPath);
+        for (const entry of statsEntries) {
+          entryMap.set(entry.name, {
+            name: entry.name,
+            type: entry.isDirectory ? 'directory' : 'file',
+            size: entry.size,
+            mtimeMs: entry.mtimeMs,
+          });
+        }
+      } else {
+        const entries = await provider.readdir(resolvedPath);
+        for (const entry of entries) {
+          const fullPath = joinPath(resolvedPath, entry);
+          try {
+            // oxlint-disable-next-line no-await-in-loop -- Sequential stat required for tree building
+            const stat = await provider.stat(fullPath);
+            entryMap.set(entry, {
+              name: entry,
+              type: stat.isDirectory ? 'directory' : 'file',
+              size: stat.size,
+              mtimeMs: stat.mtimeMs,
+            });
+          } catch {
+            // Skip entries that can't be stat'd (deleted between readdir and stat)
+          }
+        }
+      }
     } catch {
       return [];
     }
 
-    const entryMap = new Map<string, TreeEntry>();
-    for (const entry of entries) {
-      const fullPath = joinPath(path, entry);
-      try {
-        // oxlint-disable-next-line no-await-in-loop -- Sequential stat required for tree building
-        const stat = await provider.stat(fullPath);
-        entryMap.set(entry, {
-          name: entry,
-          type: stat.isDirectory ? 'directory' : 'file',
-          size: stat.size,
-          mtimeMs: stat.mtimeMs,
-        });
-      } catch {
-        // Skip entries that can't be stat'd (deleted between readdir and stat)
+    const childMounts = this._mountTable.getMountsUnder(path);
+    for (const mount of childMounts) {
+      const mountName = mount.prefix.split('/').pop();
+      if (mountName && !entryMap.has(mountName)) {
+        entryMap.set(mountName, { name: mountName, type: 'directory', size: 0, mtimeMs: Date.now() });
       }
     }
 
@@ -451,38 +608,68 @@ export class FileService {
    * Recursively collect stat information for every file under a directory.
    *
    * @param path - Absolute directory path to walk.
+   * @param options - Optional abort signal for long walks.
    * @returns Flat array of file stat entries with relative paths.
    */
-  public async getDirectoryStat(path: string): Promise<FileStatEntry[]> {
-    const provider = await this._registry.getActiveProvider();
-    const fileStats: FileStatEntry[] = [];
+  public async getDirectoryStat(path: string, options?: { signal?: AbortSignal }): Promise<FileStatEntry[]> {
+    const normalizedPath = normalizePath(path);
 
-    const collectStats = async (currentPath: string, basePath: string): Promise<void> => {
-      const entries = await provider.readdir(currentPath);
-      for (const entry of entries) {
-        const fullPath = joinPath(currentPath, entry);
-        // oxlint-disable-next-line no-await-in-loop -- Sequential stat required for recursive tree walk
-        const stat = await provider.stat(fullPath);
-        if (stat.isFile) {
-          const relativePath = basePath === '/' ? fullPath.slice(1) : fullPath.slice(basePath.length + 1);
-          const segments = relativePath.split('/');
-          const filename = segments.at(-1) ?? relativePath;
-          fileStats.push({
-            path: relativePath,
-            name: filename,
-            type: 'file',
-            size: stat.size,
-            mtimeMs: stat.mtimeMs,
-          });
-        } else {
-          // oxlint-disable-next-line no-await-in-loop -- Sequential stat required for recursive tree walk
-          await collectStats(fullPath, basePath);
-        }
+    if (this._inMemoryTree.isBuilt && this._directoryStatRoot !== undefined) {
+      const treeRelativePath = this._toTreeRelative(normalizedPath);
+      if (treeRelativePath !== undefined) {
+        return this._inMemoryTree.getDirectoryStat(treeRelativePath);
       }
-    };
 
-    await collectStats(path, path);
+      const { provider, path: resolvedPath } = this._resolveProvider(normalizedPath);
+      return this._collectDirectoryStatsFromProvider(
+        provider,
+        { walkPath: resolvedPath, basePath: resolvedPath },
+        options,
+      );
+    }
+
+    const { provider, path: resolvedPath } = this._resolveProvider(normalizedPath);
+    const fileStats = await this._collectDirectoryStatsFromProvider(
+      provider,
+      { walkPath: resolvedPath, basePath: resolvedPath },
+      options,
+    );
+
+    this._directoryStatRoot = normalizedPath;
+    this._inMemoryTree.build(
+      fileStats.map((f) => ({
+        path: f.path,
+        type: 'file',
+        size: f.size,
+        mtimeMs: f.mtimeMs,
+      })),
+    );
+
     return fileStats;
+  }
+
+  /**
+   * Search the in-memory file tree for entries whose paths contain the query substring.
+   * Synchronous — runs entirely against the already-warm {@link InMemoryFileTree}.
+   *
+   * @param basePath - Absolute root path (must match or be under the scan root).
+   * @param query - Case-insensitive substring to match against relative file paths.
+   * @param options - Search options: `maxResults` (default 100), `includeDirectories` (default false).
+   * @returns Matching entries with paths relative to the tree root.
+   */
+  public searchFiles(
+    basePath: string,
+    query: string,
+    options?: { maxResults?: number; includeDirectories?: boolean },
+  ): FileStatEntry[] {
+    if (!this._inMemoryTree.isBuilt) {
+      return [];
+    }
+    const treeRelativePath = this._toTreeRelative(normalizePath(basePath));
+    if (treeRelativePath === undefined) {
+      return [];
+    }
+    return this._inMemoryTree.searchFiles(query, options);
   }
 
   /**
@@ -510,27 +697,37 @@ export class FileService {
       return [];
     }
 
-    let entries: string[];
+    const nodes: FileTreeNode[] = [];
     try {
-      entries = await provider.readdir(path);
+      if (provider.readdirWithStats) {
+        const statsEntries = await provider.readdirWithStats(path);
+        for (const entry of statsEntries) {
+          const fullPath = path === '/' ? `/${entry.name}` : `${path}/${entry.name}`;
+          if (entry.isDirectory) {
+            nodes.push({ id: fullPath, name: entry.name, children: [] });
+          } else {
+            nodes.push({ id: fullPath, name: entry.name });
+          }
+        }
+      } else {
+        const entries = await provider.readdir(path);
+        for (const entry of entries) {
+          const fullPath = path === '/' ? `/${entry}` : `${path}/${entry}`;
+          try {
+            // oxlint-disable-next-line no-await-in-loop -- Sequential stat required for tree building
+            const stat = await provider.stat(fullPath);
+            if (stat.isDirectory) {
+              nodes.push({ id: fullPath, name: entry, children: [] });
+            } else {
+              nodes.push({ id: fullPath, name: entry });
+            }
+          } catch {
+            // Skip entries that can't be stat'd
+          }
+        }
+      }
     } catch {
       return [];
-    }
-
-    const nodes: FileTreeNode[] = [];
-    for (const entry of entries) {
-      const fullPath = path === '/' ? `/${entry}` : `${path}/${entry}`;
-      try {
-        // oxlint-disable-next-line no-await-in-loop -- Sequential stat required for tree building
-        const stat = await provider.stat(fullPath);
-        if (stat.isDirectory) {
-          nodes.push({ id: fullPath, name: entry, children: [] });
-        } else {
-          nodes.push({ id: fullPath, name: entry });
-        }
-      } catch {
-        // Skip entries that can't be stat'd
-      }
     }
 
     return nodes.sort((a, b) => {
@@ -582,16 +779,35 @@ export class FileService {
   // --- Backend management ---
 
   /**
-   * Switch the active storage backend, clearing caches and emitting a reset.
+   * Dynamically mount a path prefix on a new provider instance of the given backend.
+   * The caller owns the path convention; FileService is domain-agnostic.
    *
-   * @param backend - Backend to switch to.
+   * @param prefix - Absolute path prefix to mount (e.g. `/data`, `/projects/abc`).
+   * @param backend - Storage backend for the new mount.
+   * @param options - Optional mount options (preservePath, etc.).
    */
-  public async reconfigure(backend: FileSystemBackend): Promise<void> {
-    await this._registry.switchActiveProvider(backend);
-    this._treeCache.clear();
-    await this._syncCaseSensitivity();
-    this._watchRegistry.emitResetAll();
-    this._eventBus.emit({ type: 'backendChanged', backend });
+  public async mount(prefix: string, backend: FileSystemBackend, options?: MountOptions): Promise<void> {
+    const provider = await this._registry.createMountProvider(backend);
+    this._mountTable.mount(prefix, provider, { backend, ...options });
+
+    if (prefix === '/') {
+      this._watchRegistry.setCaseSensitive(provider.capabilities.caseSensitive ?? true);
+    }
+  }
+
+  /**
+   * Remove a dynamic mount, disposing the provider that backs it.
+   *
+   * @param prefix - The mount prefix to remove.
+   */
+  public unmount(prefix: string): void {
+    try {
+      const { provider } = this._mountTable.resolve(prefix);
+      this._mountTable.unmount(prefix);
+      provider.dispose();
+    } catch {
+      this._mountTable.unmount(prefix);
+    }
   }
 
   /**
@@ -622,6 +838,147 @@ export class FileService {
 
   // --- Private helpers ---
 
+  /**
+   * Convert an absolute path to a path relative to {@link _directoryStatRoot} (scan root).
+   * Used so incremental in-memory updates match paths stored by {@link InMemoryFileTree.build}.
+   *
+   * @param absolutePath - Normalized absolute filesystem path.
+   * @returns Path relative to the scan root, `''` for the root itself, or `undefined` if outside the tree.
+   */
+  private _toTreeRelative(absolutePath: string): string | undefined {
+    if (this._directoryStatRoot === undefined) {
+      return undefined;
+    }
+
+    const root = normalizePath(this._directoryStatRoot);
+    const abs = normalizePath(absolutePath);
+
+    if (abs === root) {
+      return '';
+    }
+
+    if (root === '/') {
+      return abs.startsWith('/') ? abs.slice(1) : abs;
+    }
+
+    const rootPrefix = `${root}/`;
+    if (abs.startsWith(rootPrefix)) {
+      return abs.slice(rootPrefix.length);
+    }
+
+    return undefined;
+  }
+
+  private async _collectDirectoryStatsFromProvider(
+    provider: {
+      readdir(path: string): Promise<string[]>;
+      stat(path: string): Promise<ProviderFileStat>;
+      readdirWithStats?(path: string): Promise<Array<{ name: string } & ProviderFileStat>>;
+    },
+    scan: { walkPath: string; basePath: string },
+    options?: { signal?: AbortSignal },
+  ): Promise<FileStatEntry[]> {
+    const { walkPath, basePath } = scan;
+    const fileStats: FileStatEntry[] = [];
+
+    const collectStats = async (currentPath: string, innerBasePath: string): Promise<void> => {
+      if (options?.signal?.aborted) {
+        throw new DOMException('The operation was aborted.', 'AbortError');
+      }
+
+      if (provider.readdirWithStats) {
+        const statsEntries = await provider.readdirWithStats(currentPath);
+        for (const entry of statsEntries) {
+          if (options?.signal?.aborted) {
+            throw new DOMException('The operation was aborted.', 'AbortError');
+          }
+
+          const fullPath = joinPath(currentPath, entry.name);
+          if (entry.isFile) {
+            const relativePath = innerBasePath === '/' ? fullPath.slice(1) : fullPath.slice(innerBasePath.length + 1);
+            const segments = relativePath.split('/');
+            const filename = segments.at(-1) ?? relativePath;
+            fileStats.push({
+              path: relativePath,
+              name: filename,
+              type: 'file',
+              size: entry.size,
+              mtimeMs: entry.mtimeMs,
+            });
+          } else {
+            // oxlint-disable-next-line no-await-in-loop -- Sequential stat required for recursive tree walk
+            await collectStats(fullPath, innerBasePath);
+          }
+        }
+      } else {
+        const entries = await provider.readdir(currentPath);
+        for (const entry of entries) {
+          if (options?.signal?.aborted) {
+            throw new DOMException('The operation was aborted.', 'AbortError');
+          }
+
+          const fullPath = joinPath(currentPath, entry);
+          // oxlint-disable-next-line no-await-in-loop -- Sequential stat required for recursive tree walk
+          const stat = await provider.stat(fullPath);
+          if (stat.isFile) {
+            const relativePath = innerBasePath === '/' ? fullPath.slice(1) : fullPath.slice(innerBasePath.length + 1);
+            const segments = relativePath.split('/');
+            const filename = segments.at(-1) ?? relativePath;
+            fileStats.push({
+              path: relativePath,
+              name: filename,
+              type: 'file',
+              size: stat.size,
+              mtimeMs: stat.mtimeMs,
+            });
+          } else {
+            // oxlint-disable-next-line no-await-in-loop -- Sequential stat required for recursive tree walk
+            await collectStats(fullPath, innerBasePath);
+          }
+        }
+      }
+    };
+
+    await collectStats(walkPath, basePath);
+    return fileStats;
+  }
+
+  private _inMemoryTreeAddFile(absolutePath: string, size: number): void {
+    const treeRelativePath = this._toTreeRelative(normalizePath(absolutePath));
+    if (treeRelativePath !== undefined) {
+      this._inMemoryTree.addFile(treeRelativePath, size);
+    }
+  }
+
+  private _inMemoryTreeAddDirectory(absolutePath: string): void {
+    const treeRelativePath = this._toTreeRelative(normalizePath(absolutePath));
+    if (treeRelativePath !== undefined) {
+      this._inMemoryTree.addDirectory(treeRelativePath);
+    }
+  }
+
+  private _inMemoryTreeRename(from: string, to: string): void {
+    const relativeFromPath = this._toTreeRelative(normalizePath(from));
+    const relativeToPath = this._toTreeRelative(normalizePath(to));
+    if (relativeFromPath !== undefined && relativeToPath !== undefined) {
+      this._inMemoryTree.rename(relativeFromPath, relativeToPath);
+    }
+  }
+
+  private _inMemoryTreeRemoveFile(absolutePath: string): void {
+    const treeRelativePath = this._toTreeRelative(normalizePath(absolutePath));
+    if (treeRelativePath !== undefined) {
+      this._inMemoryTree.removeFile(treeRelativePath);
+    }
+  }
+
+  private _inMemoryTreeRemoveDirectory(absolutePath: string): void {
+    const treeRelativePath = this._toTreeRelative(normalizePath(absolutePath));
+    if (treeRelativePath !== undefined) {
+      this._inMemoryTree.removeDirectory(treeRelativePath);
+    }
+  }
+
   private _treeEntriesToNodes(entries: Map<string, TreeEntry>): FileTreeNode[] {
     const nodes: FileTreeNode[] = [];
     for (const [, entry] of entries) {
@@ -644,13 +1001,15 @@ export class FileService {
     });
   }
 
-  private async _syncCaseSensitivity(): Promise<void> {
-    try {
-      const provider = await this._registry.getActiveProvider();
-      this._watchRegistry.setCaseSensitive(provider.capabilities.caseSensitive ?? true);
-    } catch {
-      // Fallback: assume case-sensitive
-    }
+  /**
+   * Resolve the provider and provider-relative path for an absolute virtual path
+   * via the mount table. Throws immediately if no mount matches.
+   *
+   * @param path - Absolute virtual path.
+   * @returns Resolved provider and provider-relative path.
+   */
+  private _resolveProvider(path: string): MountResolution {
+    return this._mountTable.resolve(path);
   }
 
   private async _ensureParentDir(

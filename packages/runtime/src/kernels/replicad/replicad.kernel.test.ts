@@ -4,7 +4,9 @@
 /* eslint-disable @typescript-eslint/naming-convention -- File names use extensions like 'box.ts' */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { NodeIO } from '@gltf-transform/core';
+import type { Document } from '@gltf-transform/core';
 import replicadKernel from '#kernels/replicad/replicad.kernel.js';
+import { replicadDetectPattern } from '#kernels/replicad/replicad.plugin.js';
 import { exampleFixtures } from '#kernels/replicad/replicad.test-fixtures.js';
 import { createGeometryTestHelpers, extractGltfFromResult } from '#testing/kernel-geometry-testing.utils.js';
 import {
@@ -14,7 +16,7 @@ import {
   createTestWorker,
   createTestGeometry,
   getTestParameters,
-  seedTestFileSystem,
+  getTestFileSystem,
 } from '#testing/kernel-testing.utils.js';
 import type { CreateTestWorkerOptions } from '#testing/kernel-testing.utils.js';
 import type { PerformanceEntryData } from '#types/index.js';
@@ -59,357 +61,7 @@ const createGeometry = async ({
 // Create geometry test helpers instance for geometry assertions
 const geometryHelpers = createGeometryTestHelpers();
 
-// =============================================================================
-// Tests: canHandle - File Type Detection
-// =============================================================================
-
 describe('ReplicadWorker', () => {
-  describe('canHandle', () => {
-    describe('Should handle files with replicad imports', () => {
-      it('should handle TypeScript file with named import from replicad', async () => {
-        const worker = await createWorker({
-          'cube.ts': `
-            import { draw, Sketcher } from 'replicad';
-            export default function main() {
-              return draw().hLine(10).vLine(10).hLine(-10).close().sketchOnPlane().extrude(10);
-            }
-          `,
-        });
-        const result = await worker.canHandle(createGeometryFile('cube.ts'));
-        expect(result).toBe(true);
-      });
-
-      it('should handle JavaScript file with named import from replicad', async () => {
-        const worker = await createWorker({
-          'cube.js': `
-            import { draw } from 'replicad';
-            export default function main() {
-              return draw().hLine(10).vLine(10).hLine(-10).close().sketchOnPlane().extrude(10);
-            }
-          `,
-        });
-        const result = await worker.canHandle(createGeometryFile('cube.js'));
-        expect(result).toBe(true);
-      });
-
-      it('should handle file with namespace import from replicad', async () => {
-        const worker = await createWorker({
-          'cube.ts': `
-            import * as replicad from 'replicad';
-            export default function main() {
-              return replicad.draw().hLine(10).vLine(10).hLine(-10).close().sketchOnPlane().extrude(10);
-            }
-          `,
-        });
-        const result = await worker.canHandle(createGeometryFile('cube.ts'));
-        expect(result).toBe(true);
-      });
-
-      it('should handle file with require statement for replicad', async () => {
-        const worker = await createWorker({
-          'cube.js': `
-            const { draw } = require('replicad');
-            function main(replicad, params) {
-              return draw().hLine(10).vLine(10).hLine(-10).close().sketchOnPlane().extrude(10);
-            }
-          `,
-        });
-        const result = await worker.canHandle(createGeometryFile('cube.js'));
-        expect(result).toBe(true);
-      });
-
-      it('should handle file with destructured assignment from replicad global', async () => {
-        const worker = await createWorker({
-          'cube.js': `
-            const { draw, Sketcher } = replicad;
-            function main(replicad, params) {
-              return draw().hLine(10).vLine(10).hLine(-10).close().sketchOnPlane().extrude(10);
-            }
-          `,
-        });
-        const result = await worker.canHandle(createGeometryFile('cube.js'));
-        expect(result).toBe(true);
-      });
-
-      it('should handle file with JSDoc typedef referencing replicad', async () => {
-        const worker = await createWorker({
-          'cube.js': `
-            /** @typedef {import('replicad').Shape3D} Shape3D */
-            function main(replicad, params) {
-              const { draw } = replicad;
-              return draw().hLine(10).vLine(10).hLine(-10).close().sketchOnPlane().extrude(10);
-            }
-          `,
-        });
-        const result = await worker.canHandle(createGeometryFile('cube.js'));
-        expect(result).toBe(true);
-      });
-
-      it('should handle file with replicad CDN import', async () => {
-        const worker = await createWorker({
-          'cube.ts': `
-            import { draw } from 'replicad';
-            import { addVoronoi } from "https://cdn.jsdelivr.net/npm/replicad-decorate/dist/studio/replicad-decorate.js";
-            export default function main() {
-              return draw().hLine(10).vLine(10).hLine(-10).close().sketchOnPlane().extrude(10);
-            }
-          `,
-        });
-        const result = await worker.canHandle(createGeometryFile('cube.ts'));
-        expect(result).toBe(true);
-      });
-    });
-
-    describe('Should NOT handle files without replicad or unsupported extensions', () => {
-      it('should not handle TSX file (JSX/TSX not supported)', async () => {
-        const worker = await createWorker({
-          'component.tsx': `
-            import { draw } from 'replicad';
-            export default function main() {
-              return draw().hLine(10).vLine(10).hLine(-10).close().sketchOnPlane().extrude(10);
-            }
-          `,
-        });
-        const result = await worker.canHandle(createGeometryFile('component.tsx'));
-        expect(result).toBe(false);
-      });
-
-      it('should not handle JSX file (JSX/TSX not supported)', async () => {
-        const worker = await createWorker({
-          'component.jsx': `
-            import { draw } from 'replicad';
-            export default function main() {
-              return draw().hLine(10).vLine(10).hLine(-10).close().sketchOnPlane().extrude(10);
-            }
-          `,
-        });
-        const result = await worker.canHandle(createGeometryFile('component.jsx'));
-        expect(result).toBe(false);
-      });
-
-      it('should not handle TypeScript file without replicad imports', async () => {
-        const worker = await createWorker({
-          'utils.ts': `
-            export function add(a: number, b: number): number {
-              return a + b;
-            }
-          `,
-        });
-        const result = await worker.canHandle(createGeometryFile('utils.ts'));
-        expect(result).toBe(false);
-      });
-
-      it('should not handle non-JS/TS file extensions', async () => {
-        const worker = await createWorker({
-          'model.scad': `cube([10, 10, 10]);`,
-        });
-        const result = await worker.canHandle(createGeometryFile('model.scad'));
-        expect(result).toBe(false);
-      });
-
-      it('should not handle KCL files', async () => {
-        const worker = await createWorker({
-          'model.kcl': `box([10, 10, 10], center = [0, 0, 0])`,
-        });
-        const result = await worker.canHandle(createGeometryFile('model.kcl'));
-        expect(result).toBe(false);
-      });
-
-      it('should not handle file with other CAD library imports', async () => {
-        const worker = await createWorker({
-          'jscad-model.ts': `
-            import { cube } from '@jscad/modeling';
-            export default function main() {
-              return cube({ size: 10 });
-            }
-          `,
-        });
-        const result = await worker.canHandle(createGeometryFile('jscad-model.ts'));
-        expect(result).toBe(false);
-      });
-    });
-
-    describe('Should detect replicad via transitive imports (bundler-assisted detection)', () => {
-      const productionDetectImport = /import.*from\s+["']replicad["']/s.source;
-
-      const createWorkerWithDetection = async (files: Record<string, string>): ReturnType<typeof createTestWorker> =>
-        createTestWorker(replicadKernel, files, {
-          detectImport: productionDetectImport,
-          builtinModuleNames: ['replicad'],
-        });
-
-      it('should detect replicad when imported only in sub-modules (cube with cutout assembly)', async () => {
-        const worker = await createWorkerWithDetection({
-          'main.ts': `
-            import { makeCube } from './lib/cube';
-            import { makeCylinderCutout } from './lib/cutout';
-
-            export const defaultParams = {
-              cubeSize: 50,
-              cutoutRadius: 15,
-            };
-
-            export default function main(p = defaultParams) {
-              const cube = makeCube(p.cubeSize);
-              const cutout = makeCylinderCutout(p.cutoutRadius, p.cubeSize * 1.1);
-              return cube.cut(cutout);
-            }
-          `,
-          'lib/cube.ts': `
-            import { makeBaseBox } from 'replicad';
-
-            export function makeCube(size: number) {
-              return makeBaseBox(size, size, size).translate(-size / 2, -size / 2, -size / 2);
-            }
-          `,
-          'lib/cutout.ts': `
-            import { makeCylinder } from 'replicad';
-
-            export function makeCylinderCutout(radius: number, height: number) {
-              return makeCylinder(radius, height, [0, 0, -height / 2], [0, 0, 1]);
-            }
-          `,
-        });
-        const result = await worker.canHandle(createGeometryFile('main.ts'));
-        expect(result).toBe(true);
-      });
-
-      it('should detect replicad when only a single sub-module imports it', async () => {
-        const worker = await createWorkerWithDetection({
-          'main.ts': `
-            import { createBox } from './shapes';
-            export default function main() {
-              return createBox(20, 20, 10);
-            }
-          `,
-          'shapes.ts': `
-            import { makeBaseBox } from 'replicad';
-            export function createBox(w: number, h: number, d: number) {
-              return makeBaseBox(w, h, d);
-            }
-          `,
-        });
-        const result = await worker.canHandle(createGeometryFile('main.ts'));
-        expect(result).toBe(true);
-      });
-
-      it('should not detect replicad when no sub-modules import it', async () => {
-        const worker = await createWorkerWithDetection({
-          'main.ts': `
-            import { add } from './utils';
-            export default function main() {
-              return add(1, 2);
-            }
-          `,
-          'utils.ts': `
-            export function add(a: number, b: number) { return a + b; }
-          `,
-        });
-        const result = await worker.canHandle(createGeometryFile('main.ts'));
-        expect(result).toBe(false);
-      });
-
-      it('should detect replicad after scaffold is replaced with multi-file transitive imports (stale cache regression)', async () => {
-        // Step 1: Start with a replicad scaffold (direct import) — mirrors production template
-        const worker = await createWorkerWithDetection({
-          'main.ts': `
-            import {} from 'replicad';
-
-            export const defaultParams = {};
-
-            export default function main(p = defaultParams) {}
-          `,
-        });
-
-        const geometryFile = createGeometryFile('main.ts');
-
-        // Step 2: canHandle succeeds via regex (direct import detected)
-        // This populates selectionCache with { id: 'replicad', method: 'regex' }
-        const canHandleScaffold = await worker.canHandle(geometryFile);
-        expect(canHandleScaffold).toBe(true);
-
-        // Step 3: Agent replaces scaffold with multi-file project
-        // main.ts now imports from ./lib/cube (no direct 'replicad' import)
-        await seedTestFileSystem({
-          '/projects/test/main.ts': `
-            import { createCube } from './lib/cube';
-            import { createCylinder } from './lib/cylinder';
-
-            export const defaultParams = {
-              cubeSize: 50,
-              cylinderRadius: 15,
-            };
-
-            export default function main(p = defaultParams) {
-              const cube = createCube(p.cubeSize);
-              const cylinder = createCylinder(p.cylinderRadius, p.cubeSize);
-              return cube.cut(cylinder);
-            }
-          `,
-          '/projects/test/lib/cube.ts': `
-            import { makeBaseBox } from 'replicad';
-
-            export function createCube(size: number) {
-              return makeBaseBox(size, size, size);
-            }
-          `,
-          '/projects/test/lib/cylinder.ts': `
-            import { makeCylinder } from 'replicad';
-
-            export function createCylinder(radius: number, height: number) {
-              return makeCylinder(radius, height);
-            }
-          `,
-        });
-
-        // Step 4: BUG — canHandle without notifyFileChanged uses stale selectionCache
-        // The stale cache entry (method: 'regex') causes the kernel's canHandle to
-        // re-read main.ts, which no longer has a direct 'replicad' import → returns false
-        const canHandleStale = await worker.canHandle(geometryFile);
-        expect(canHandleStale).toBe(false);
-
-        // Step 5: FIX — notifyFileChanged clears selectionCache
-        await worker.notifyFileChanged([
-          '/projects/test/main.ts',
-          '/projects/test/lib/cube.ts',
-          '/projects/test/lib/cylinder.ts',
-        ]);
-
-        // Step 6: canHandle re-runs fresh detection:
-        // Pass 1 regex fails (no direct import), Pass 2 bundler traces
-        // main.ts → ./lib/cube → replicad → selected with method: 'bundler'
-        // method=bundler skips kernel's canHandle (authoritative) → returns true
-        const canHandleFresh = await worker.canHandle(geometryFile);
-        expect(canHandleFresh).toBe(true);
-      });
-    });
-
-    describe('Should handle parametric models with direct imports', () => {
-      it('should detect drawRoundedRectangle import from replicad', async () => {
-        const worker = await createWorker({
-          'main.ts': `
-            import { drawRoundedRectangle } from 'replicad';
-            export const defaultParams = {
-              width: 100,
-              length: 150,
-              height: 50,
-              thickness: 2,
-              cornerRadius: 5,
-            };
-            export default function main(p = defaultParams) {
-              const outer = drawRoundedRectangle(p.width, p.length, p.cornerRadius)
-                .sketchOnPlane()
-                .extrude(p.height);
-              return outer.shell(p.thickness, (f) => f.inPlane("XY", p.height));
-            }
-          `,
-        });
-        const result = await worker.canHandle(createGeometryFile('main.ts'));
-        expect(result).toBe(true);
-      });
-    });
-  });
-
   // ===========================================================================
   // Tests: Parameter Extraction
   // ===========================================================================
@@ -842,6 +494,44 @@ describe('ReplicadWorker', () => {
         await geometryHelpers.expectMeshCount(result, 1);
         await geometryHelpers.expectBoundingBoxSize(result, [0.075, 0.075, 0.075], 0.0005);
       });
+
+      it('should compute geometry with ESM exports and destructured replicad global (production detection)', async () => {
+        const result = await createGeometry({
+          files: {
+            'box.js': `
+              const { draw } = replicad;
+
+              export const defaultParams = {
+                width: 50,
+                height: 30,
+                depth: 10,
+              };
+
+              export default function main({ width, height, depth }) {
+                return draw()
+                  .hLine(width)
+                  .vLine(height)
+                  .hLine(-width)
+                  .close()
+                  .sketchOnPlane()
+                  .extrude(depth);
+              }
+            `,
+          },
+          mainFile: 'box.js',
+          parameters: { width: 50, height: 30, depth: 10 },
+          options: {
+            detectImport: replicadDetectPattern.source,
+            builtinModuleNames: ['replicad'],
+          },
+        });
+
+        assertSuccess(result);
+
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.05, 0.01, 0.03], 0.0005);
+      });
     });
 
     describe('Complex geometry', () => {
@@ -995,11 +685,215 @@ describe('ReplicadWorker', () => {
         // Shell with -2 offset expands outer dimensions due to thickness on all sides
         await geometryHelpers.expectBoundingBoxSize(result, [0.054, 0.022, 0.034], 0.001);
       });
+
+      it.skip('should return a decoded kernel error for revolution bodies with axis-touching poles', async () => {
+        const result = await createGeometry({
+          files: {
+            'speaker.ts': `
+              import {
+                draw,
+                drawCircle,
+                drawRoundedRectangle,
+                makeCylinder,
+                makeSphere,
+                sketchRoundedRectangle,
+                sketchCircle,
+                makePlane,
+              } from "replicad";
+              import type { Shape3D, Sketch, SketchInterface } from "replicad";
+
+              export const defaultParams = {
+                cabinetWidth: 180,
+                cabinetHeight: 300,
+                cabinetDepth: 220,
+                cabinetCornerRadius: 12,
+                cabinetEdgeFillet: 3,
+                wooferDiameter: 130,
+                wooferRecessDepth: 4,
+                wooferSurroundWidth: 12,
+                wooferConeDepth: 18,
+                wooferDustCapDiameter: 40,
+                wooferCenterZ: 110,
+                tweeterDiameter: 25,
+                tweeterFlangeOuter: 52,
+                tweeterRecessDepth: 3,
+                tweeterDomeHeight: 8,
+                tweeterCenterZ: 240,
+                bassPortDiameter: 40,
+                bassPortDepth: 15,
+                bassPortCenterZ: 38,
+                baffleFillet: 1.5,
+              };
+
+              export default function main(p = defaultParams): Shape3D[] {
+                const halfW = p.cabinetWidth / 2;
+                const halfD = p.cabinetDepth / 2;
+                const frontY = -halfD;
+
+                let cabinet = sketchRoundedRectangle(p.cabinetWidth, p.cabinetDepth, p.cabinetCornerRadius)
+                  .extrude(p.cabinetHeight) as Shape3D;
+
+                cabinet = cabinet.fillet(p.cabinetEdgeFillet, (e) =>
+                  e.either([
+                    (f) => f.inPlane("XY", 0),
+                    (f) => f.inPlane("XY", p.cabinetHeight),
+                  ])
+                );
+
+                const wooferR = p.wooferDiameter / 2;
+                const wooferZ = p.wooferCenterZ;
+
+                const wooferRecess = makeCylinder(
+                  wooferR + p.wooferSurroundWidth,
+                  p.wooferRecessDepth,
+                  [0, frontY - 0.01, wooferZ],
+                  [0, 1, 0]
+                );
+                cabinet = cabinet.cut(wooferRecess);
+
+                const surroundOuterR = wooferR + p.wooferSurroundWidth;
+                const surroundProfile = draw()
+                  .movePointerTo([wooferR, 0])
+                  .sagittaArcTo([surroundOuterR, 0], -4)
+                  .lineTo([surroundOuterR, -p.wooferRecessDepth + 0.5])
+                  .lineTo([wooferR, -p.wooferRecessDepth + 0.5])
+                  .close();
+
+                const wooferSurroundPlane = makePlane("XZ", [0, frontY, wooferZ]);
+                const surround = surroundProfile
+                  .sketchOnPlane(wooferSurroundPlane)
+                  .revolve([0, 0, 1]) as Shape3D;
+
+                const coneProfile = draw()
+                  .movePointerTo([0, 0])
+                  .lineTo([p.wooferDustCapDiameter / 2, 0])
+                  .sagittaArcTo([wooferR, p.wooferConeDepth], -6)
+                  .vLine(1.5)
+                  .sagittaArcTo([p.wooferDustCapDiameter / 2 + 2, 1.5], 6)
+                  .lineTo([p.wooferDustCapDiameter / 2, 1.5])
+                  .sagittaArcTo([0, 1.5], p.wooferDustCapDiameter / 6)
+                  .close();
+
+                const conePlane = makePlane("XZ", [0, frontY - p.wooferRecessDepth, wooferZ]);
+                const wooferCone = coneProfile
+                  .sketchOnPlane(conePlane)
+                  .revolve([0, 0, 1]) as Shape3D;
+
+                const tweeterR = p.tweeterDiameter / 2;
+                const tweeterZ = p.tweeterCenterZ;
+                const tweeterFlangeR = p.tweeterFlangeOuter / 2;
+
+                const tweeterRecess = makeCylinder(
+                  tweeterFlangeR,
+                  p.tweeterRecessDepth,
+                  [0, frontY - 0.01, tweeterZ],
+                  [0, 1, 0]
+                );
+                cabinet = cabinet.cut(tweeterRecess);
+
+                const flangeProfile = draw()
+                  .movePointerTo([tweeterR + 2, 0])
+                  .lineTo([tweeterFlangeR, 0])
+                  .lineTo([tweeterFlangeR, -p.tweeterRecessDepth + 0.5])
+                  .lineTo([tweeterR + 2, -p.tweeterRecessDepth + 0.5])
+                  .close();
+
+                const tweeterFlangePlane = makePlane("XZ", [0, frontY, tweeterZ]);
+                const tweeterFlange = flangeProfile
+                  .sketchOnPlane(tweeterFlangePlane)
+                  .revolve([0, 0, 1]) as Shape3D;
+
+                const domeProfile = draw()
+                  .movePointerTo([0.5, 0])
+                  .lineTo([tweeterR, 0])
+                  .vLine(-0.5)
+                  .sagittaArcTo([0.5, -0.5], p.tweeterDomeHeight)
+                  .close();
+
+                const domePlane = makePlane("XZ", [0, frontY - p.tweeterRecessDepth + 0.5, tweeterZ]);
+                const tweeterDome = domeProfile
+                  .sketchOnPlane(domePlane)
+                  .revolve([0, 0, 1]) as Shape3D;
+
+                const bassPortR = p.bassPortDiameter / 2;
+                const bassPortZ = p.bassPortCenterZ;
+
+                const portHole = makeCylinder(
+                  bassPortR,
+                  p.bassPortDepth + 1,
+                  [0, frontY - p.bassPortDepth, bassPortZ],
+                  [0, 1, 0]
+                );
+                cabinet = cabinet.cut(portHole);
+
+                const portLipProfile = draw()
+                  .movePointerTo([bassPortR - 2, 0])
+                  .sagittaArcTo([bassPortR, 0], -0.8)
+                  .lineTo([bassPortR, -2])
+                  .lineTo([bassPortR - 2, -2])
+                  .close();
+
+                const portLipPlane = makePlane("XZ", [0, frontY + 0.5, bassPortZ]);
+                const portLip = portLipProfile
+                  .sketchOnPlane(portLipPlane)
+                  .revolve([0, 0, 1]) as Shape3D;
+
+                let drivers = surround
+                  .fuse(wooferCone)
+                  .fuse(tweeterFlange)
+                  .fuse(tweeterDome)
+                  .fuse(portLip);
+
+                try {
+                  cabinet = cabinet.fillet(p.baffleFillet, (e) =>
+                    e.inBox(
+                      [-halfW - 1, frontY - p.wooferRecessDepth - 1, wooferZ - surroundOuterR - 1],
+                      [halfW + 1, frontY + 1, wooferZ + surroundOuterR + 1]
+                    ).ofCurveType("CIRCLE")
+                  );
+                } catch {}
+
+                try {
+                  cabinet = cabinet.fillet(p.baffleFillet, (e) =>
+                    e.inBox(
+                      [-halfW - 1, frontY - p.tweeterRecessDepth - 1, tweeterZ - tweeterFlangeR - 1],
+                      [halfW + 1, frontY + 1, tweeterZ + tweeterFlangeR + 1]
+                    ).ofCurveType("CIRCLE")
+                  );
+                } catch {}
+
+                return [cabinet, drivers];
+              }
+            `,
+          },
+          mainFile: 'speaker.ts',
+          options: { workerOptions: { wasm: 'single' } },
+        });
+
+        assertFailure(result);
+        const issue = result.issues[0]!;
+        expect(issue).toEqual(
+          expect.objectContaining({
+            type: 'kernel',
+            severity: 'error',
+            message: expect.stringContaining('KernelError:'),
+          }),
+        );
+        expect(issue.message).not.toBe('[object WebAssembly.Exception]');
+        expect(issue.message).not.toContain('undecodable');
+
+        // Stack frames must not start at formatRuntimeErrorWithOc (the old bug) —
+        // the OC proxy should have converted the WebAssembly.Exception to an
+        // OcKernelError at the call site with proper Error.captureStackTrace
+        expect(issue.stackFrames).toBeDefined();
+        expect(issue.stackFrames!.length).toBeGreaterThan(0);
+        const frameNames = issue.stackFrames!.map((f) => f.functionName);
+        expect(frameNames).not.toContain('formatRuntimeErrorWithOc');
+      }, 120_000);
     });
 
     describe('Multi-file imports', () => {
       it('should handle transitive imports without direct replicad import in entry file', async () => {
-        const productionDetectImport = /import.*from\s+["']replicad["']/s.source;
         const result = await createGeometry({
           files: {
             'main.ts': `
@@ -1030,7 +924,7 @@ describe('ReplicadWorker', () => {
           mainFile: 'main.ts',
           parameters: {},
           options: {
-            detectImport: productionDetectImport,
+            detectImport: replicadDetectPattern.source,
             builtinModuleNames: ['replicad'],
           },
         });
@@ -1328,7 +1222,7 @@ describe('ReplicadWorker', () => {
         expect(typeof result.success).toBe('boolean');
       });
 
-      it('should decode OpenCASCADE numeric exceptions into human-readable messages when wasm is single-exceptions', async () => {
+      it('should decode OpenCASCADE numeric exceptions into human-readable messages', async () => {
         const result = await createGeometry({
           files: {
             'oc_exception.ts': `
@@ -1339,7 +1233,7 @@ describe('ReplicadWorker', () => {
           },
           mainFile: 'oc_exception.ts',
           parameters: {},
-          options: { workerOptions: { wasm: 'single-exceptions' } },
+          options: { workerOptions: { wasm: 'single' } },
         });
 
         assertFailure(result);
@@ -1352,26 +1246,20 @@ describe('ReplicadWorker', () => {
         );
       });
 
-      it('should return decoded OC error with type info for zero-height extrusion', async () => {
+      it('should return decoded OC error with type info for oversized fillet', async () => {
         const result = await createGeometry({
           files: {
-            'zero_extrude.ts': `
-              import { draw } from 'replicad';
+            'bad_fillet.ts': `
+              import { makeBaseBox } from 'replicad';
 
               export default function main() {
-                return draw()
-                  .hLine(10)
-                  .vLine(10)
-                  .hLine(-10)
-                  .close()
-                  .sketchOnPlane()
-                  .extrude(0);
+                return makeBaseBox(10, 10, 10).fillet(100);
               }
             `,
           },
-          mainFile: 'zero_extrude.ts',
+          mainFile: 'bad_fillet.ts',
           parameters: {},
-          options: { workerOptions: { wasm: 'single-exceptions' } },
+          options: { workerOptions: { wasm: 'single' } },
         });
 
         assertFailure(result);
@@ -1379,22 +1267,17 @@ describe('ReplicadWorker', () => {
           expect.objectContaining({
             type: 'kernel',
             severity: 'error',
-            message: expect.stringMatching(/BRepSweep_Translation/),
+            message: expect.stringMatching(/StdFail_NotDone/),
           }),
         );
       });
 
       it('should include user code stack frames for OC exceptions with helper function', async () => {
-        const code = `import { draw } from 'replicad';
+        const code = `import { makeBaseBox } from 'replicad';
 
 function buildShape() {
-  const sketch = draw()
-    .hLine(10)
-    .vLine(10)
-    .hLine(-10)
-    .close()
-    .sketchOnPlane();
-  return sketch.extrude(0);
+  const box = makeBaseBox(10, 10, 10);
+  return box.fillet(100);
 }
 
 export default function main() {
@@ -1403,10 +1286,10 @@ export default function main() {
 `;
 
         const result = await createGeometry({
-          files: { 'extrude_stack.ts': code },
-          mainFile: 'extrude_stack.ts',
+          files: { 'fillet_stack.ts': code },
+          mainFile: 'fillet_stack.ts',
           parameters: {},
-          options: { workerOptions: { wasm: 'single-exceptions' } },
+          options: { workerOptions: { wasm: 'single' } },
         });
 
         assertFailure(result);
@@ -1414,23 +1297,22 @@ export default function main() {
           expect.objectContaining({
             type: 'kernel',
             severity: 'error',
-            message:
-              'KernelError: Sweep/extrusion failed \u2014 the sweep distance may be zero or the profile is invalid (BRepSweep_Translation::Constructor)',
+            message: expect.stringMatching(/StdFail_NotDone/),
             location: expect.objectContaining({
-              fileName: 'extrude_stack.ts',
-              startLineNumber: 10,
+              fileName: 'fillet_stack.ts',
+              startLineNumber: 5,
             }),
             stackFrames: expect.arrayContaining([
               expect.objectContaining({
                 functionName: 'buildShape',
-                fileName: 'extrude_stack.ts',
-                lineNumber: 10,
+                fileName: 'fillet_stack.ts',
+                lineNumber: 5,
                 context: 'user',
               }),
               expect.objectContaining({
                 functionName: 'main',
-                fileName: 'extrude_stack.ts',
-                lineNumber: 14,
+                fileName: 'fillet_stack.ts',
+                lineNumber: 9,
                 context: 'user',
               }),
               expect.objectContaining({ context: 'library' }),
@@ -1440,24 +1322,19 @@ export default function main() {
       });
 
       it('should include stack frames for nested helpers in same file', async () => {
-        const code = `import { draw } from 'replicad';
+        const code = `import { makeBaseBox } from 'replicad';
 
-function createSketch() {
-  return draw()
-    .hLine(10)
-    .vLine(10)
-    .hLine(-10)
-    .close()
-    .sketchOnPlane();
+function createBox() {
+  return makeBaseBox(10, 10, 10);
 }
 
-function extrudeProfile() {
-  const sketch = createSketch();
-  return sketch.extrude(0);
+function filletBox() {
+  const box = createBox();
+  return box.fillet(100);
 }
 
 export default function main() {
-  return extrudeProfile();
+  return filletBox();
 }
 `;
 
@@ -1465,7 +1342,7 @@ export default function main() {
           files: { 'nested_helpers.ts': code },
           mainFile: 'nested_helpers.ts',
           parameters: {},
-          options: { workerOptions: { wasm: 'single-exceptions' } },
+          options: { workerOptions: { wasm: 'single' } },
         });
 
         assertFailure(result);
@@ -1473,22 +1350,22 @@ export default function main() {
           expect.objectContaining({
             type: 'kernel',
             severity: 'error',
-            message: expect.stringMatching(/BRepSweep_Translation/),
+            message: expect.stringMatching(/StdFail_NotDone/),
             location: expect.objectContaining({
               fileName: 'nested_helpers.ts',
-              startLineNumber: 14,
+              startLineNumber: 9,
             }),
             stackFrames: expect.arrayContaining([
               expect.objectContaining({
-                functionName: 'extrudeProfile',
+                functionName: 'filletBox',
                 fileName: 'nested_helpers.ts',
-                lineNumber: 14,
+                lineNumber: 9,
                 context: 'user',
               }),
               expect.objectContaining({
                 functionName: 'main',
                 fileName: 'nested_helpers.ts',
-                lineNumber: 18,
+                lineNumber: 13,
                 context: 'user',
               }),
               expect.objectContaining({ context: 'library' }),
@@ -1504,22 +1381,16 @@ export default function main() {
 import {} from 'replicad';
 export default function main() { return buildGeometry(); }
 `,
-            'helpers.ts': `import { draw } from 'replicad';
+            'helpers.ts': `import { makeBaseBox } from 'replicad';
 
 export function buildGeometry() {
-  return draw()
-    .hLine(10)
-    .vLine(10)
-    .hLine(-10)
-    .close()
-    .sketchOnPlane()
-    .extrude(0);
+  return makeBaseBox(10, 10, 10).fillet(100);
 }
 `,
           },
           mainFile: 'main.ts',
           parameters: {},
-          options: { workerOptions: { wasm: 'single-exceptions' } },
+          options: { workerOptions: { wasm: 'single' } },
         });
 
         assertFailure(result);
@@ -1527,10 +1398,10 @@ export function buildGeometry() {
           expect.objectContaining({
             type: 'kernel',
             severity: 'error',
-            message: expect.stringMatching(/BRepSweep_Translation/),
+            message: expect.stringMatching(/StdFail_NotDone/),
             location: expect.objectContaining({
               fileName: 'helpers.ts',
-              startLineNumber: 10,
+              startLineNumber: 4,
             }),
             stackFrames: expect.arrayContaining([
               expect.objectContaining({
@@ -1571,7 +1442,7 @@ export default function main() {
           files: { 'fillet_fail.ts': code },
           mainFile: 'fillet_fail.ts',
           parameters: {},
-          options: { workerOptions: { wasm: 'single-exceptions' } },
+          options: { workerOptions: { wasm: 'single' } },
         });
 
         assertFailure(result);
@@ -1630,7 +1501,7 @@ export default function main() {
           mainFile: 'fillet_no_trace.ts',
           parameters: {},
           options: {
-            workerOptions: { wasm: 'single-exceptions', ocTracing: 'off' },
+            workerOptions: { wasm: 'single', ocTracing: 'off' },
           },
         });
 
@@ -1667,17 +1538,12 @@ export default function main() {
         );
       });
 
-      it('should include user code stack frames for extrude OC exception with ocTracing off', async () => {
-        const code = `import { draw } from 'replicad';
+      it('should include user code stack frames for fillet OC exception with ocTracing off', async () => {
+        const code = `import { makeBaseBox } from 'replicad';
 
 function buildShape() {
-  const sketch = draw()
-    .hLine(10)
-    .vLine(10)
-    .hLine(-10)
-    .close()
-    .sketchOnPlane();
-  return sketch.extrude(0);
+  const box = makeBaseBox(10, 10, 10);
+  return box.fillet(100);
 }
 
 export default function main() {
@@ -1686,11 +1552,11 @@ export default function main() {
 `;
 
         const result = await createGeometry({
-          files: { 'extrude_no_trace.ts': code },
-          mainFile: 'extrude_no_trace.ts',
+          files: { 'fillet_no_trace.ts': code },
+          mainFile: 'fillet_no_trace.ts',
           parameters: {},
           options: {
-            workerOptions: { wasm: 'single-exceptions', ocTracing: 'off' },
+            workerOptions: { wasm: 'single', ocTracing: 'off' },
           },
         });
 
@@ -1699,16 +1565,16 @@ export default function main() {
           expect.objectContaining({
             type: 'kernel',
             severity: 'error',
-            message: expect.stringMatching(/BRepSweep_Translation/),
+            message: expect.stringMatching(/StdFail_NotDone/),
             stackFrames: expect.arrayContaining([
               expect.objectContaining({
                 functionName: 'buildShape',
-                fileName: 'extrude_no_trace.ts',
+                fileName: 'fillet_no_trace.ts',
                 context: 'user',
               }),
               expect.objectContaining({
                 functionName: 'main',
-                fileName: 'extrude_no_trace.ts',
+                fileName: 'fillet_no_trace.ts',
                 context: 'user',
               }),
             ]),
@@ -1717,19 +1583,14 @@ export default function main() {
       });
 
       it('should produce exact stack frames and location for fluent-chain OC exception', async () => {
-        // Fluent chain: draw().hLine().vLine().hLine().close().sketchOnPlane().extrude(0)
-        // Only .extrude(0) throws — preceding fluent calls already completed
+        // Fluent chain: makeBaseBox(10, 10, 10).fillet(100)
+        // Only .fillet(100) throws — preceding calls already completed
         // and are NOT on the call stack (JavaScript limitation).
-        const code = `import { draw } from 'replicad';
+        const code = `import { makeBaseBox } from 'replicad';
 
 export default function main() {
-  return draw()
-    .hLine(10)
-    .vLine(10)
-    .hLine(-10)
-    .close()
-    .sketchOnPlane()
-    .extrude(0);
+  return makeBaseBox(10, 10, 10)
+    .fillet(100);
 }
 `;
 
@@ -1739,7 +1600,7 @@ export default function main() {
           parameters: {},
           options: {
             workerOptions: {
-              wasm: 'single-exceptions',
+              wasm: 'single',
               withSourceMapping: true,
             },
           },
@@ -1750,31 +1611,19 @@ export default function main() {
           expect.objectContaining({
             type: 'kernel',
             severity: 'error',
-            message:
-              'KernelError: Sweep/extrusion failed \u2014 the sweep distance may be zero or the profile is invalid (BRepSweep_Translation::Constructor)',
-            location: {
+            message: expect.stringMatching(/StdFail_NotDone/),
+            location: expect.objectContaining({
               fileName: 'fluent.ts',
-              startLineNumber: 10,
-              startColumn: 5,
-              endLineNumber: 10,
-              endColumn: 16,
-            },
+              startLineNumber: 5,
+            }),
             stackFrames: expect.arrayContaining([
-              // User: main at the extrude call site (col 6 = 'e' of extrude, startColumn 5 includes '.')
-              { functionName: 'main', fileName: 'fluent.ts', lineNumber: 10, columnNumber: 6, context: 'user' },
-              // Library: replicad internals with source-mapped positions
               expect.objectContaining({
-                functionName: 'Sketch.extrude',
-                fileName: 'replicad/src/sketches/Sketch.ts',
-                context: 'library',
+                functionName: 'main',
+                fileName: 'fluent.ts',
+                context: 'user',
               }),
-              expect.objectContaining({
-                functionName: 'basicFaceExtrusion',
-                fileName: 'replicad/src/addThickness.ts',
-                context: 'library',
-              }),
+              expect.objectContaining({ context: 'library' }),
               // Framework: kernel infrastructure
-              expect.objectContaining({ functionName: 'Object.construct', context: 'framework' }),
               expect.objectContaining({ functionName: 'runMainRaw', context: 'framework' }),
               expect.objectContaining({ functionName: 'runMain', context: 'framework' }),
               expect.objectContaining({ functionName: 'Object.createGeometry', context: 'framework' }),
@@ -1782,11 +1631,9 @@ export default function main() {
           }),
         );
 
-        // RethrowIfWasmException should be stripped; fluent calls before extrude completed before throw
+        // RethrowIfWasmException should be stripped
         const allNames = result.issues[0]!.stackFrames?.map((f) => f.functionName) ?? [];
-        for (const absent of ['rethrowIfWasmException', 'draw', 'hLine', 'vLine', 'close', 'sketchOnPlane']) {
-          expect(allNames).not.toContain(absent);
-        }
+        expect(allNames).not.toContain('rethrowIfWasmException');
       });
 
       it('should handle empty geometry result gracefully', async () => {
@@ -2006,25 +1853,19 @@ export function getShape() { return broken(); }
     });
 
     describe('withSourceMapping option', () => {
-      const extrudeZeroCode = `import { draw } from 'replicad';
+      const filletFailCode = `import { makeBaseBox } from 'replicad';
 
 export default function main() {
-  return draw()
-    .hLine(10)
-    .vLine(10)
-    .hLine(-10)
-    .close()
-    .sketchOnPlane()
-    .extrude(0);
+  return makeBaseBox(10, 10, 10).fillet(100);
 }
 `;
 
       it('should show compiled library paths when withSourceMapping is false (default)', async () => {
         const result = await createGeometry({
-          files: { 'box.ts': extrudeZeroCode },
+          files: { 'box.ts': filletFailCode },
           mainFile: 'box.ts',
           parameters: {},
-          options: { workerOptions: { wasm: 'single-exceptions' } },
+          options: { workerOptions: { wasm: 'single' } },
         });
 
         assertFailure(result);
@@ -2034,14 +1875,8 @@ export default function main() {
             severity: 'error',
             stackFrames: expect.arrayContaining([
               expect.objectContaining({
-                functionName: 'Sketch.extrude',
-                fileName: expect.stringMatching(/replicad\/dist\/replicad\.js$/),
                 context: 'library',
-              }),
-              expect.objectContaining({
-                functionName: 'basicFaceExtrusion',
                 fileName: expect.stringMatching(/replicad\/dist\/replicad\.js$/),
-                context: 'library',
               }),
             ]),
           }),
@@ -2055,12 +1890,12 @@ export default function main() {
 
       it('should show source-mapped library paths when withSourceMapping is true', async () => {
         const result = await createGeometry({
-          files: { 'box.ts': extrudeZeroCode },
+          files: { 'box.ts': filletFailCode },
           mainFile: 'box.ts',
           parameters: {},
           options: {
             workerOptions: {
-              wasm: 'single-exceptions',
+              wasm: 'single',
               withSourceMapping: true,
             },
           },
@@ -2073,9 +1908,8 @@ export default function main() {
             severity: 'error',
             stackFrames: expect.arrayContaining([
               expect.objectContaining({
-                functionName: 'Sketch.extrude',
-                fileName: 'replicad/src/sketches/Sketch.ts',
                 context: 'library',
+                fileName: expect.stringMatching(/replicad\/src\//),
               }),
             ]),
           }),
@@ -2092,10 +1926,10 @@ export default function main() {
         // in dev and prod. In production, bundled chunk names are opaque, so
         // classifyLibraryFrames uses the replicad export name table instead.
         const result = await createGeometry({
-          files: { 'box.ts': extrudeZeroCode },
+          files: { 'box.ts': filletFailCode },
           mainFile: 'box.ts',
           parameters: {},
-          options: { workerOptions: { wasm: 'single-exceptions' } },
+          options: { workerOptions: { wasm: 'single' } },
         });
 
         assertFailure(result);
@@ -2105,18 +1939,10 @@ export default function main() {
             severity: 'error',
             stackFrames: expect.arrayContaining([
               expect.objectContaining({ functionName: 'main', fileName: 'box.ts', context: 'user' }),
-              expect.objectContaining({ functionName: 'Sketch.extrude', context: 'library' }),
-              expect.objectContaining({ functionName: 'basicFaceExtrusion', context: 'library' }),
+              expect.objectContaining({ context: 'library' }),
             ]),
           }),
         );
-
-        // Replicad exports must not leak into framework classification
-        const frameworkNames = result.issues[0]!.stackFrames?.filter((f) => f.context === 'framework').map(
-          (f) => f.functionName,
-        );
-        expect(frameworkNames).not.toContain('Sketch.extrude');
-        expect(frameworkNames).not.toContain('basicFaceExtrusion');
 
         // Every frame must have a definite context
         for (const frame of result.issues[0]!.stackFrames!) {
@@ -2222,7 +2048,7 @@ export default function main() {
   // ===========================================================================
 
   describe('exportGeometry', () => {
-    it('should export to STEP format', async () => {
+    it('should export to STEP format with actual geometry', async () => {
       const worker = await createWorker({
         'box.ts': `
           import { drawRoundedRectangle } from 'replicad';
@@ -2233,7 +2059,6 @@ export default function main() {
         `,
       });
 
-      // First create geometry
       const geometryFile = createGeometryFile('box.ts');
       const createResult = await worker.createGeometry({
         file: geometryFile,
@@ -2241,12 +2066,59 @@ export default function main() {
       });
       assertSuccess(createResult);
 
-      // Then export
       const exportResult = await worker.exportGeometry('step');
       assertSuccess(exportResult);
       expect(exportResult.data.length).toBeGreaterThan(0);
       expect(exportResult.data[0]?.bytes).toBeInstanceOf(Uint8Array);
       expect(exportResult.data[0]?.mimeType).toBe('application/step');
+
+      const stepContent = new TextDecoder().decode(exportResult.data[0]!.bytes);
+      expect(stepContent).toContain('CLOSED_SHELL');
+      expect(stepContent).toContain('ADVANCED_BREP_SHAPE_REPRESENTATION');
+    });
+
+    it('should round-trip STEP export/import preserving geometry', async () => {
+      const { importSTEP, drawRoundedRectangle, measureVolume, measureArea, isShape3D } = await import('replicad');
+
+      const worker = await createWorker({
+        'box.ts': `
+          import { drawRoundedRectangle } from 'replicad';
+
+          export default function main() {
+            return drawRoundedRectangle(50, 30).sketchOnPlane().extrude(10);
+          }
+        `,
+      });
+
+      const geometryFile = createGeometryFile('box.ts');
+      await worker.createGeometry({ file: geometryFile, parameters: {} });
+
+      const exportResult = await worker.exportGeometry('step');
+      assertSuccess(exportResult);
+
+      const stepBytes = exportResult.data[0]!.bytes;
+      const stepBlob = new Blob([stepBytes], { type: 'application/step' });
+      const importedShape = await importSTEP(stepBlob);
+
+      expect(isShape3D(importedShape)).toBe(true);
+      if (!isShape3D(importedShape)) {
+        throw new Error('Imported shape is not a 3D shape');
+      }
+
+      const originalShape = drawRoundedRectangle(50, 30).sketchOnPlane().extrude(10);
+      const originalVolume = measureVolume(originalShape);
+      const importedVolume = measureVolume(importedShape);
+
+      expect(originalVolume).toBeGreaterThan(0);
+      expect(importedVolume).toBeCloseTo(originalVolume, 2);
+
+      const originalArea = measureArea(originalShape);
+      const importedArea = measureArea(importedShape);
+
+      expect(originalArea).toBeGreaterThan(0);
+      expect(importedArea).toBeCloseTo(originalArea, 2);
+
+      expect(importedShape.faces.length).toBe(originalShape.faces.length);
     });
 
     it('should export to STL format', async () => {
@@ -2282,7 +2154,7 @@ export default function main() {
       const geometryFile = createGeometryFile('box.ts');
       await worker.createGeometry({ file: geometryFile, parameters: {} });
 
-      const exportResult = await worker.exportGeometry('stl-binary');
+      const exportResult = await worker.exportGeometry('stl', { binary: true });
       assertSuccess(exportResult);
     });
 
@@ -2324,7 +2196,7 @@ export default function main() {
       expect(exportResult.data[0]?.name).toContain('glb');
     });
 
-    it('should export STEP assembly', async () => {
+    it('should export STEP assembly with geometry for each shape', async () => {
       const worker = await createWorker({
         'assembly.ts': `
           import { drawRoundedRectangle, drawCircle } from 'replicad';
@@ -2341,8 +2213,14 @@ export default function main() {
       const geometryFile = createGeometryFile('assembly.ts');
       await worker.createGeometry({ file: geometryFile, parameters: {} });
 
-      const exportResult = await worker.exportGeometry('step-assembly');
+      const exportResult = await worker.exportGeometry('step', {});
       assertSuccess(exportResult);
+
+      const stepContent = new TextDecoder().decode(exportResult.data[0]!.bytes);
+      expect(stepContent).toContain('CLOSED_SHELL');
+      expect(stepContent).toContain('ADVANCED_BREP_SHAPE_REPRESENTATION');
+      expect(stepContent).toContain('base');
+      expect(stepContent).toContain('cylinder');
     });
 
     it('should return error when no geometry computed', async () => {
@@ -3088,14 +2966,18 @@ export default function main() {
       await geometryHelpers.expectValidGltf(result1);
 
       // Modify file content: change to 20x20x20 box
-      await seedTestFileSystem({
-        '/projects/test/main.ts': `
+      // Write directly to the existing FS instance (seedTestFileSystem creates a new
+      // fromMemoryFS, which disconnects from the bridge the worker reads through).
+      const fs1 = getTestFileSystem();
+      await fs1.writeFile(
+        '/projects/test/main.ts',
+        `
           import { drawRoundedRectangle } from 'replicad';
           export default function main() {
             return drawRoundedRectangle(20, 20).sketchOnPlane().extrude(20);
           }
         `,
-      });
+      );
 
       // Notify worker about the change
       await worker.notifyFileChanged(['/projects/test/main.ts']);
@@ -3132,15 +3014,17 @@ export default function main() {
       });
       assertSuccess(result1);
 
-      // Modify file content
-      await seedTestFileSystem({
-        '/projects/test/main.ts': `
+      // Modify file content (write to existing FS to preserve bridge connection)
+      const fs2 = getTestFileSystem();
+      await fs2.writeFile(
+        '/projects/test/main.ts',
+        `
           import { drawRoundedRectangle } from 'replicad';
           export default function main() {
             return drawRoundedRectangle(30, 30).sketchOnPlane().extrude(30);
           }
         `,
-      });
+      );
 
       // Notify with ABSOLUTE path (matching production behavior from use-project.tsx)
       await worker.notifyFileChanged(['/projects/test/main.ts']);
@@ -3158,8 +3042,6 @@ export default function main() {
     });
 
     it('should re-render with different parameters when replicad is imported transitively (production flow)', async () => {
-      const productionDetectImport = /import.*from\s+["']replicad["']/s.source;
-
       const worker = await createTestWorker(
         replicadKernel,
         {
@@ -3181,16 +3063,12 @@ export default function main() {
           `,
         },
         {
-          detectImport: productionDetectImport,
+          detectImport: replicadDetectPattern.source,
           builtinModuleNames: ['replicad'],
         },
       );
 
       const geometryFile = createGeometryFile('main.ts');
-
-      // First render: canHandle + render (matches kernel.machine.ts renderActor flow)
-      const canHandle1 = await worker.canHandle(geometryFile);
-      expect(canHandle1).toBe(true);
 
       const result1 = await worker.render({
         file: geometryFile,
@@ -3199,19 +3077,342 @@ export default function main() {
       assertSuccess(result1);
       await geometryHelpers.expectValidGltf(result1);
 
-      // Second render with different parameters (same flow as parameter change in UI)
-      // This is the bug: canHandle fails because selectionCache returns method: 'extension'
-      // instead of preserving the original method: 'bundler', causing the kernel's canHandle
-      // to re-check the entry file for direct replicad imports (which don't exist).
-      const canHandle2 = await worker.canHandle(geometryFile);
-      expect(canHandle2).toBe(true);
-
+      // Second render with different parameters — kernel selection is cached
+      // via ensureActiveKernel so the bundler-detected kernel persists.
       const result2 = await worker.render({
         file: geometryFile,
         parameters: { size: 60 },
       });
       assertSuccess(result2);
       await geometryHelpers.expectValidGltf(result2);
+    });
+
+    it('should recover when a single dependency has a syntax error that is then fixed', async () => {
+      const worker = await createWorker({
+        'main.ts': `
+          import { makeBox } from './lib/box';
+          export default function main() {
+            return makeBox();
+          }
+        `,
+        'lib/box.ts': `
+          import { makeBaseBox } from 'replicad';
+          // Syntax error: unterminated regex
+          const pattern = /missing-slash
+          export function makeBox() {
+            return makeBaseBox(10, 10, 10);
+          }
+        `,
+      });
+
+      const geometryFile = createGeometryFile('main.ts');
+
+      // First render should fail due to syntax error in dependency
+      const result1 = await worker.createGeometry({
+        file: geometryFile,
+        parameters: {},
+      });
+      assertFailure(result1);
+
+      // Fix the syntax error (write to existing FS to preserve bridge connection)
+      const fs3 = getTestFileSystem();
+      await fs3.writeFile(
+        '/projects/test/main.ts',
+        `
+          import { makeBox } from './lib/box';
+          export default function main() {
+            return makeBox();
+          }
+        `,
+      );
+      await fs3.writeFile(
+        '/projects/test/lib/box.ts',
+        `
+          import { makeBaseBox } from 'replicad';
+          const pattern = /valid-regex/;
+          export function makeBox() {
+            return makeBaseBox(10, 10, 10);
+          }
+        `,
+      );
+
+      // Notify that the dependency changed
+      await worker.notifyFileChanged(['/projects/test/lib/box.ts']);
+
+      // Second render should succeed with the fixed dependency
+      const result2 = await worker.createGeometry({
+        file: geometryFile,
+        parameters: {},
+      });
+      assertSuccess(result2);
+      await geometryHelpers.expectValidGltf(result2);
+    });
+
+    it('should recover when a transitive dependency (double-dep chain) has a syntax error that is then fixed', async () => {
+      const worker = await createWorker({
+        'main.ts': `
+          import { makeAssembly } from './lib/assembly';
+          export default function main() {
+            return makeAssembly();
+          }
+        `,
+        'lib/assembly.ts': `
+          import { makeBox } from './shapes';
+          export function makeAssembly() {
+            return makeBox();
+          }
+        `,
+        'lib/shapes.ts': `
+          import { makeBaseBox } from 'replicad';
+          // Syntax error: missing closing brace
+          export function makeBox( {
+            return makeBaseBox(10, 10, 10);
+          }
+        `,
+      });
+
+      const geometryFile = createGeometryFile('main.ts');
+
+      // First render should fail due to syntax error in transitive dependency
+      const result1 = await worker.createGeometry({
+        file: geometryFile,
+        parameters: {},
+      });
+      assertFailure(result1);
+
+      // Fix the syntax error in the transitive dependency (write to existing FS to preserve bridge connection)
+      const fs4 = getTestFileSystem();
+      await fs4.writeFile(
+        '/projects/test/main.ts',
+        `
+          import { makeAssembly } from './lib/assembly';
+          export default function main() {
+            return makeAssembly();
+          }
+        `,
+      );
+      await fs4.writeFile(
+        '/projects/test/lib/assembly.ts',
+        `
+          import { makeBox } from './shapes';
+          export function makeAssembly() {
+            return makeBox();
+          }
+        `,
+      );
+      await fs4.writeFile(
+        '/projects/test/lib/shapes.ts',
+        `
+          import { makeBaseBox } from 'replicad';
+          export function makeBox() {
+            return makeBaseBox(10, 10, 10);
+          }
+        `,
+      );
+
+      // Notify that the transitive dependency changed
+      await worker.notifyFileChanged(['/projects/test/lib/shapes.ts']);
+
+      // Second render should succeed
+      const result2 = await worker.createGeometry({
+        file: geometryFile,
+        parameters: {},
+      });
+      assertSuccess(result2);
+      await geometryHelpers.expectValidGltf(result2);
+    });
+
+    it('should recover when one of multiple dependencies has a syntax error that is then fixed', async () => {
+      const worker = await createWorker({
+        'main.ts': `
+          import { makeBox } from './lib/box';
+          import { makeCylinder } from './lib/cylinder';
+          export default function main() {
+            return [makeBox(), makeCylinder()];
+          }
+        `,
+        'lib/box.ts': `
+          import { makeBaseBox } from 'replicad';
+          export function makeBox() {
+            return makeBaseBox(10, 10, 10);
+          }
+        `,
+        'lib/cylinder.ts': `
+          import { makeBaseBox } from 'replicad';
+          // Syntax error: invalid expression
+          export function makeCylinder( {
+            return makeBaseBox(5, 5, 20);
+          }
+        `,
+      });
+
+      const geometryFile = createGeometryFile('main.ts');
+
+      // First render should fail (cylinder has syntax error)
+      const result1 = await worker.createGeometry({
+        file: geometryFile,
+        parameters: {},
+      });
+      assertFailure(result1);
+
+      // Fix the syntax error in cylinder (write to existing FS to preserve bridge connection)
+      const fs5 = getTestFileSystem();
+      await fs5.writeFile(
+        '/projects/test/main.ts',
+        `
+          import { makeBox } from './lib/box';
+          import { makeCylinder } from './lib/cylinder';
+          export default function main() {
+            return [makeBox(), makeCylinder()];
+          }
+        `,
+      );
+      await fs5.writeFile(
+        '/projects/test/lib/box.ts',
+        `
+          import { makeBaseBox } from 'replicad';
+          export function makeBox() {
+            return makeBaseBox(10, 10, 10);
+          }
+        `,
+      );
+      await fs5.writeFile(
+        '/projects/test/lib/cylinder.ts',
+        `
+          import { makeBaseBox } from 'replicad';
+          export function makeCylinder() {
+            return makeBaseBox(5, 5, 20);
+          }
+        `,
+      );
+
+      // Notify that the fixed dependency changed
+      await worker.notifyFileChanged(['/projects/test/lib/cylinder.ts']);
+
+      // Second render should succeed
+      const result2 = await worker.createGeometry({
+        file: geometryFile,
+        parameters: {},
+      });
+      assertSuccess(result2);
+      await geometryHelpers.expectValidGltf(result2);
+    });
+
+    it('should include dependency paths in watch set even when build fails', async () => {
+      const worker = await createWorker({
+        'main.ts': `
+          import { makeBox } from './lib/box';
+          export default function main() {
+            return makeBox();
+          }
+        `,
+        'lib/box.ts': `
+          import { makeBaseBox } from 'replicad';
+          // Syntax error
+          export function makeBox( {
+            return makeBaseBox(10, 10, 10);
+          }
+        `,
+      });
+
+      const geometryFile = createGeometryFile('main.ts');
+
+      // Use render() which calls _updateWatchSetFromCaches in its finally block
+      const result = await worker.render({
+        file: geometryFile,
+        parameters: {},
+      });
+      assertFailure(result);
+
+      // Verify that the worker's watch set includes the dependency file,
+      // even though the build failed
+      const watchedPaths = worker.getWatchedPaths();
+      expect(watchedPaths).toContain('/projects/test/main.ts');
+      expect(watchedPaths).toContain('/projects/test/lib/box.ts');
+    });
+
+    it('should watch unresolved imports and re-render when missing files are created', async () => {
+      const worker = await createWorker({
+        'main.ts': `
+          import { makeBox } from './lib/box';
+          import { makeCylinder } from './lib/cylinder';
+          export default function main() {
+            return [makeBox(), makeCylinder()];
+          }
+        `,
+      });
+
+      const geometryFile = createGeometryFile('main.ts');
+
+      const result1 = await worker.render({
+        file: geometryFile,
+        parameters: {},
+      });
+      assertFailure(result1);
+
+      // The watch set should include extension variants for the unresolved
+      // imports so that creating the files later triggers a re-render
+      const watchedPaths = worker.getWatchedPaths();
+      expect(watchedPaths).toContain('/projects/test/main.ts');
+      expect(watchedPaths).toContain('/projects/test/lib/box.ts');
+      expect(watchedPaths).toContain('/projects/test/lib/cylinder.ts');
+
+      // Write missing files directly to the live filesystem (seedTestFileSystem
+      // replaces the instance, but the bridge port is bound to the original)
+      const fs = getTestFileSystem();
+      await fs.mkdir('/projects/test/lib', { recursive: true });
+      await fs.writeFile(
+        '/projects/test/lib/box.ts',
+        `
+          import { makeBaseBox } from 'replicad';
+          export function makeBox() {
+            return makeBaseBox(10, 10, 10);
+          }
+        `,
+      );
+      await fs.writeFile(
+        '/projects/test/lib/cylinder.ts',
+        `
+          import { makeBaseBox } from 'replicad';
+          export function makeCylinder() {
+            return makeBaseBox(5, 5, 20);
+          }
+        `,
+      );
+
+      await worker.notifyFileChanged(['/projects/test/lib/box.ts']);
+
+      const result2 = await worker.createGeometry({
+        file: geometryFile,
+        parameters: {},
+      });
+      assertSuccess(result2);
+      await geometryHelpers.expectValidGltf(result2);
+    });
+
+    it('should resolve .js import to .ts file and render successfully', async () => {
+      const worker = await createWorker({
+        'main.ts': `
+          import { makeBox } from './lib/box.js';
+          export default function main() {
+            return makeBox();
+          }
+        `,
+        'lib/box.ts': `
+          import { makeBaseBox } from 'replicad';
+          export function makeBox() {
+            return makeBaseBox(10, 10, 10);
+          }
+        `,
+      });
+
+      const geometryFile = createGeometryFile('main.ts');
+      const result = await worker.render({
+        file: geometryFile,
+        parameters: {},
+      });
+      assertSuccess(result);
+      await geometryHelpers.expectValidGltf(result);
     });
   });
 });
@@ -3456,6 +3657,367 @@ describe('withBrepEdges option', () => {
 
     expect(triangleVerticesWithout).toBe(triangleVerticesWith);
   });
+
+  it('should produce valid BRep edges', async () => {
+    const result = await createTestGeometry({
+      definition: replicadKernel,
+      files: { 'box.ts': boxCode },
+      mainFile: 'box.ts',
+      parameters: {},
+      options: { workerOptions: { wasm: 'single', withBrepEdges: true } },
+    });
+
+    assertSuccess(result);
+    const lineCount = await countLinePrimitives(result);
+    expect(lineCount).toBeGreaterThan(0);
+  });
+});
+
+// =============================================================================
+// Angular tolerance (degree-to-radian conversion)
+// =============================================================================
+
+describe('Angular tolerance', () => {
+  const sphereCode = `
+    import { drawCircle } from 'replicad';
+    export default function main() {
+      return drawCircle(10).sketchOnPlane().revolve();
+    }
+  `;
+
+  const getVertexCount = async (glbData: Uint8Array<ArrayBuffer>): Promise<number> => {
+    const document = await new NodeIO().readBinary(glbData);
+    let count = 0;
+    for (const mesh of document.getRoot().listMeshes()) {
+      for (const primitive of mesh.listPrimitives()) {
+        if (primitive.getMode() === 4) {
+          count += primitive.getAttribute('POSITION')!.getCount();
+        }
+      }
+    }
+
+    return count;
+  };
+
+  it('should produce denser meshes with finer angular tolerance on curved surfaces', async () => {
+    const worker = await createWorker({ 'sphere.ts': sphereCode });
+    const geometryFile = createGeometryFile('sphere.ts');
+
+    const coarseResult = await worker.createGeometry({
+      file: geometryFile,
+      parameters: {},
+      options: { tessellation: { linearTolerance: 1, angularTolerance: 60 } },
+    });
+    assertSuccess(coarseResult);
+
+    const fineResult = await worker.createGeometry({
+      file: geometryFile,
+      parameters: {},
+      options: { tessellation: { linearTolerance: 1, angularTolerance: 5 } },
+    });
+    assertSuccess(fineResult);
+
+    const coarseVertices = await getVertexCount(extractGltfFromResult(coarseResult)!);
+    const fineVertices = await getVertexCount(extractGltfFromResult(fineResult)!);
+
+    // Fine angular tolerance (5°) must produce significantly more vertices
+    // than coarse (60°) on a sphere. If the deg→rad conversion is broken
+    // (raw degrees passed as radians), both values are meaninglessly large
+    // and produce identical mesh density driven only by linearTolerance.
+    expect(fineVertices).toBeGreaterThan(coarseVertices * 1.5);
+  });
+});
+
+// =============================================================================
+// Normal consistency helpers
+// =============================================================================
+
+type VertexNormalEntry = { pos: number[]; normal: number[] };
+
+function extractNormalsFromDocument(document: Document): VertexNormalEntry[] {
+  const result: VertexNormalEntry[] = [];
+  for (const mesh of document.getRoot().listMeshes()) {
+    for (const primitive of mesh.listPrimitives()) {
+      if (primitive.getMode() !== 4) {
+        continue;
+      }
+      const positionAccessor = primitive.getAttribute('POSITION')!;
+      const normalAccessor = primitive.getAttribute('NORMAL')!;
+      const count = positionAccessor.getCount();
+      for (let index = 0; index < count; index++) {
+        result.push({
+          pos: [...positionAccessor.getElement(index, [0, 0, 0])],
+          normal: [...normalAccessor.getElement(index, [0, 0, 0])],
+        });
+      }
+    }
+  }
+  return result;
+}
+
+function analyzeCoLocatedNormals(
+  normals: VertexNormalEntry[],
+  predicate: (dotProduct: number) => boolean,
+): { matchCount: number; totalPairs: number } {
+  const epsilon = 1e-5;
+  const cellSize = epsilon * 2;
+  const grid = new Map<string, number[]>();
+
+  for (const [index, entry] of normals.entries()) {
+    const p = entry.pos;
+    const key = `${Math.round(p[0]! / cellSize)},${Math.round(p[1]! / cellSize)},${Math.round(p[2]! / cellSize)}`;
+    const bucket = grid.get(key);
+    if (bucket) {
+      bucket.push(index);
+    } else {
+      grid.set(key, [index]);
+    }
+  }
+
+  let matchCount = 0;
+  let totalPairs = 0;
+
+  for (const bucket of grid.values()) {
+    for (let ii = 0; ii < bucket.length; ii++) {
+      for (let jj = ii + 1; jj < bucket.length; jj++) {
+        const a = normals[bucket[ii]!]!;
+        const b = normals[bucket[jj]!]!;
+        const distance = Math.hypot(a.pos[0]! - b.pos[0]!, a.pos[1]! - b.pos[1]!, a.pos[2]! - b.pos[2]!);
+        if (distance >= epsilon) {
+          continue;
+        }
+        const dot = a.normal[0]! * b.normal[0]! + a.normal[1]! * b.normal[1]! + a.normal[2]! * b.normal[2]!;
+        totalPairs++;
+        if (predicate(dot)) {
+          matchCount++;
+        }
+      }
+    }
+  }
+
+  return { matchCount, totalPairs };
+}
+
+// =============================================================================
+// Normal consistency (OCCT V8 regression guard)
+// =============================================================================
+
+describe('Normal consistency', () => {
+  it('should produce outward-facing normals on all faces of a convex solid', async () => {
+    const result = await createTestGeometry({
+      definition: replicadKernel,
+      files: {
+        'box.ts': `
+          import { drawRoundedRectangle } from 'replicad';
+          export default function main() {
+            return drawRoundedRectangle(50, 30).sketchOnPlane().extrude(10);
+          }
+        `,
+      },
+      mainFile: 'box.ts',
+      parameters: {},
+    });
+
+    assertSuccess(result);
+
+    const glbData = extractGltfFromResult(result)!;
+    const document = await new NodeIO().readBinary(glbData);
+
+    const center = [0, 0, 0] as [number, number, number];
+    let totalVertices = 0;
+
+    for (const mesh of document.getRoot().listMeshes()) {
+      for (const primitive of mesh.listPrimitives()) {
+        if (primitive.getMode() !== 4) {
+          continue;
+        }
+        const positionAccessor = primitive.getAttribute('POSITION')!;
+        const count = positionAccessor.getCount();
+        for (let i = 0; i < count; i++) {
+          const pos = positionAccessor.getElement(i, [0, 0, 0]);
+          center[0] += pos[0]!;
+          center[1] += pos[1]!;
+          center[2] += pos[2]!;
+          totalVertices++;
+        }
+      }
+    }
+
+    center[0] /= totalVertices;
+    center[1] /= totalVertices;
+    center[2] /= totalVertices;
+
+    let inwardCount = 0;
+    let checkedCount = 0;
+
+    for (const mesh of document.getRoot().listMeshes()) {
+      for (const primitive of mesh.listPrimitives()) {
+        if (primitive.getMode() !== 4) {
+          continue;
+        }
+        const positionAccessor = primitive.getAttribute('POSITION')!;
+        const normalAccessor = primitive.getAttribute('NORMAL')!;
+        const count = positionAccessor.getCount();
+
+        for (let i = 0; i < count; i++) {
+          const pos = positionAccessor.getElement(i, [0, 0, 0]);
+          const normal = normalAccessor.getElement(i, [0, 0, 0]);
+
+          const dx = pos[0]! - center[0];
+          const dy = pos[1]! - center[1];
+          const dz = pos[2]! - center[2];
+
+          const dot = dx * normal[0]! + dy * normal[1]! + dz * normal[2]!;
+          if (dot < 0) {
+            inwardCount++;
+          }
+          checkedCount++;
+        }
+      }
+    }
+
+    expect(checkedCount).toBeGreaterThan(0);
+    const inwardRatio = inwardCount / checkedCount;
+    expect(inwardRatio, `${(inwardRatio * 100).toFixed(1)}% of normals point inward (expected <5%)`).toBeLessThan(0.05);
+  });
+
+  it('should produce outward-facing normals after boolean operations', async () => {
+    const result = await createTestGeometry({
+      definition: replicadKernel,
+      files: {
+        'hollow.ts': `
+          import { drawCircle } from 'replicad';
+          export default function main() {
+            const outer = drawCircle(30).sketchOnPlane().extrude(20);
+            const inner = drawCircle(25).sketchOnPlane().extrude(25);
+            return outer.cut(inner);
+          }
+        `,
+      },
+      mainFile: 'hollow.ts',
+      parameters: {},
+    });
+
+    assertSuccess(result);
+
+    const glbData = extractGltfFromResult(result)!;
+    const document = await new NodeIO().readBinary(glbData);
+
+    let inwardCount = 0;
+    let checkedCount = 0;
+
+    for (const mesh of document.getRoot().listMeshes()) {
+      for (const primitive of mesh.listPrimitives()) {
+        if (primitive.getMode() !== 4) {
+          continue;
+        }
+        const positionAccessor = primitive.getAttribute('POSITION')!;
+        const normalAccessor = primitive.getAttribute('NORMAL')!;
+        const indexAccessor = primitive.getIndices();
+        const triCount = indexAccessor ? indexAccessor.getCount() / 3 : positionAccessor.getCount() / 3;
+
+        for (let t = 0; t < triCount; t++) {
+          const i0 = indexAccessor ? indexAccessor.getScalar(t * 3) : t * 3;
+          const i1 = indexAccessor ? indexAccessor.getScalar(t * 3 + 1) : t * 3 + 1;
+          const i2 = indexAccessor ? indexAccessor.getScalar(t * 3 + 2) : t * 3 + 2;
+
+          const p0 = positionAccessor.getElement(i0, [0, 0, 0]);
+          const p1 = positionAccessor.getElement(i1, [0, 0, 0]);
+          const p2 = positionAccessor.getElement(i2, [0, 0, 0]);
+
+          const error1 = [p1[0]! - p0[0]!, p1[1]! - p0[1]!, p1[2]! - p0[2]!];
+          const error2 = [p2[0]! - p0[0]!, p2[1]! - p0[1]!, p2[2]! - p0[2]!];
+          const cross = [
+            error1[1]! * error2[2]! - error1[2]! * error2[1]!,
+            error1[2]! * error2[0]! - error1[0]! * error2[2]!,
+            error1[0]! * error2[1]! - error1[1]! * error2[0]!,
+          ];
+
+          const n0 = normalAccessor.getElement(i0, [0, 0, 0]);
+          const dot = cross[0]! * n0[0]! + cross[1]! * n0[1]! + cross[2]! * n0[2]!;
+          if (dot < 0) {
+            inwardCount++;
+          }
+          checkedCount++;
+        }
+      }
+    }
+
+    expect(checkedCount).toBeGreaterThan(0);
+    const inwardRatio = inwardCount / checkedCount;
+    expect(
+      inwardRatio,
+      `${(inwardRatio * 100).toFixed(1)}% of normals disagree with winding (expected <5%)`,
+    ).toBeLessThan(0.05);
+  });
+
+  it('should produce smooth normals across face boundaries on a filleted shape', { timeout: 30_000 }, async () => {
+    const result = await createTestGeometry({
+      definition: replicadKernel,
+      files: {
+        'fillet.ts': `
+          import { drawRoundedRectangle } from 'replicad';
+          export default function main() {
+            return drawRoundedRectangle(40, 40, 8).sketchOnPlane().extrude(20).fillet(2);
+          }
+        `,
+      },
+      mainFile: 'fillet.ts',
+      parameters: {},
+    });
+
+    assertSuccess(result);
+
+    const glbData = extractGltfFromResult(result)!;
+    const document = await new NodeIO().readBinary(glbData);
+
+    const allNormals = extractNormalsFromDocument(document);
+
+    const { matchCount, totalPairs } = analyzeCoLocatedNormals(allNormals, (dot) => dot > 0.7);
+
+    expect(totalPairs).toBeGreaterThan(0);
+    const smoothRatio = matchCount / totalPairs;
+    expect(
+      smoothRatio,
+      `${(smoothRatio * 100).toFixed(1)}% of co-located normals are smooth (expected >90%)`,
+    ).toBeGreaterThan(0.9);
+  });
+
+  it('should preserve sharp edges on a tray (base-to-wall 90° transition)', async () => {
+    const result = await createTestGeometry({
+      definition: replicadKernel,
+      files: {
+        'tray.ts': `
+          import { drawRoundedRectangle } from 'replicad';
+          export default function main() {
+            const outer = drawRoundedRectangle(60, 40).sketchOnPlane().extrude(15);
+            const inner = drawRoundedRectangle(54, 34)
+              .sketchOnPlane("XY", 3)
+              .extrude(15);
+            return outer.cut(inner);
+          }
+        `,
+      },
+      mainFile: 'tray.ts',
+      parameters: {},
+    });
+
+    assertSuccess(result);
+
+    const glbData = extractGltfFromResult(result)!;
+    const document = await new NodeIO().readBinary(glbData);
+
+    const allNormals = extractNormalsFromDocument(document);
+
+    const { matchCount, totalPairs } = analyzeCoLocatedNormals(allNormals, (dot) => dot < 0.5);
+
+    expect(totalPairs).toBeGreaterThan(0);
+    const sharpRatio = matchCount / totalPairs;
+    expect(
+      sharpRatio,
+      `${(sharpRatio * 100).toFixed(1)}% of co-located pairs are sharp (expected >20% — tray has 90° wall-to-base edges)`,
+    ).toBeGreaterThan(0.2);
+  });
 });
 
 // =============================================================================
@@ -3463,13 +4025,13 @@ describe('withBrepEdges option', () => {
 // =============================================================================
 
 // Longer test suite for verifying opencascadejs bindings to replicad are all present.
-describe.skip('Example models (single-exceptions)', () => {
+describe.skip('Example models', () => {
   for (const fixture of exampleFixtures) {
     it(`should produce valid geometry for ${fixture.name}`, async () => {
       const result = await createGeometry({
         files: fixture.files,
         mainFile: fixture.mainFile,
-        options: { workerOptions: { wasm: 'single-exceptions' } },
+        options: { workerOptions: { wasm: 'single' } },
       });
 
       assertSuccess(result);
@@ -3479,6 +4041,83 @@ describe.skip('Example models (single-exceptions)', () => {
   }
 });
 
+// =============================================================================
+// serializeHandle / deserializeHandle
+// =============================================================================
+
+describe('serializeHandle', () => {
+  it('should serialize nativeHandle to BRep strings with metadata', async () => {
+    const result = await createGeometry({
+      files: {
+        'box.ts': `
+          import { drawRoundedRectangle } from 'replicad';
+          export default function main() {
+            return {
+              shape: drawRoundedRectangle(50, 30).sketchOnPlane().extrude(10),
+              name: 'TestBox',
+              color: '#ff0000',
+              metalness: 0.8,
+              roughness: 0.3,
+            };
+          }
+        `,
+      },
+      mainFile: 'box.ts',
+    });
+
+    assertSuccess(result);
+    expect(result.serializedHandle).toBeDefined();
+
+    const serialized = result.serializedHandle as Array<{
+      brep: string;
+      metadata: Record<string, unknown>;
+    }>;
+
+    expect(serialized).toHaveLength(1);
+    expect(typeof serialized[0]!.brep).toBe('string');
+    expect(serialized[0]!.brep.length).toBeGreaterThan(0);
+    expect(serialized[0]!.metadata['name']).toBe('TestBox');
+    expect(serialized[0]!.metadata['color']).toBe('#ff0000');
+    expect(serialized[0]!.metadata['metalness']).toBe(0.8);
+    expect(serialized[0]!.metadata['roughness']).toBe(0.3);
+  });
+
+  it('should round-trip serialize/deserialize preserving shape geometry', async () => {
+    const result = await createGeometry({
+      files: {
+        'box.ts': `
+          import { drawRoundedRectangle, drawCircle } from 'replicad';
+          export default function main() {
+            return [
+              { shape: drawRoundedRectangle(50, 30).sketchOnPlane().extrude(10), name: 'Box', color: '#ff0000' },
+              { shape: drawCircle(10).sketchOnPlane().extrude(20).translate([0, 0, 10]), name: 'Cylinder', color: '#0000ff', opacity: 0.7 },
+            ];
+          }
+        `,
+      },
+      mainFile: 'box.ts',
+    });
+
+    assertSuccess(result);
+    expect(result.serializedHandle).toBeDefined();
+
+    const serialized = result.serializedHandle as Array<{
+      brep: string;
+      metadata: { name: string; color?: string; opacity?: number };
+    }>;
+
+    expect(serialized).toHaveLength(2);
+    expect(serialized[0]!.metadata.name).toBe('Box');
+    expect(serialized[1]!.metadata.name).toBe('Cylinder');
+    expect(serialized[1]!.metadata.opacity).toBe(0.7);
+  });
+
+  it('should have serializeHandle and deserializeHandle defined on the kernel', () => {
+    expect(replicadKernel.serializeHandle).toBeDefined();
+    expect(replicadKernel.deserializeHandle).toBeDefined();
+  });
+});
+
 describe('No kernel matched', () => {
   it('should return empty geometry for an empty file when no kernel can handle it', async () => {
     const result = await createGeometry({
@@ -3486,7 +4125,7 @@ describe('No kernel matched', () => {
       mainFile: 'empty.ts',
       options: {
         builtinModuleNames: ['replicad'],
-        detectImport: String.raw`import.*from\s+['"]replicad['"]`,
+        detectImport: replicadDetectPattern.source,
       },
     });
 

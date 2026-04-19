@@ -3,10 +3,12 @@ import { useSelector } from '@xstate/react';
 import type { ActorRefFrom } from 'xstate';
 import type { GraphicsViewSettings, PinnedMeasurement } from '#constants/editor.constants.js';
 import type { graphicsMachine } from '#machines/graphics.machine.js';
+import type { cadMachine } from '#machines/cad.machine.js';
 import type { editorMachine } from '#machines/editor.machine.js';
 /**
  * Synchronises persistable graphics settings from the per-view GraphicsMachine
- * back to the EditorMachine's `viewSettings` store.
+ * (and render timeout from the CadMachine) back to the EditorMachine's
+ * `viewSettings` store.
  * Changes flow through the existing `updateViewSettings` event which debounces
  * writes to IndexedDB.
  *
@@ -21,10 +23,12 @@ import type { editorMachine } from '#machines/editor.machine.js';
 export function useViewSettingsSync({
   viewId,
   graphicsRef,
+  cadRef,
   editorRef,
 }: {
   viewId: string;
   graphicsRef: ActorRefFrom<typeof graphicsMachine>;
+  cadRef: ActorRefFrom<typeof cadMachine> | undefined;
   editorRef: ActorRefFrom<typeof editorMachine>;
 }): void {
   // Track whether we've emitted at least once (skip the first emission)
@@ -48,7 +52,8 @@ export function useViewSettingsSync({
   // Pinned measurements for persistence
   const measurements = useSelector(graphicsRef, (s) => s.context.measurements);
 
-  // Render timeout is now managed internally by the autonomous runtime worker
+  // Render timeout lives on the cad machine (per-file), not the graphics machine (per-view)
+  const renderTimeout = useSelector(cadRef, (s) => s?.context.renderTimeout ?? 30);
 
   useEffect(() => {
     // Extract pinned measurements for persistence
@@ -74,6 +79,7 @@ export function useViewSettingsSync({
       cameraFovAngle,
       environmentPreset,
       pinnedMeasurements,
+      renderTimeout,
     };
 
     // Skip the very first emission to avoid overwriting restored state
@@ -111,6 +117,7 @@ export function useViewSettingsSync({
     cameraFovAngle,
     environmentPreset,
     measurements,
+    renderTimeout,
   ]);
 }
 

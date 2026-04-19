@@ -108,6 +108,35 @@ function AnalyticsIdentifier({ children }: { readonly children: React.ReactNode 
   return children;
 }
 
+/**
+ * Starts PostHog session recording after the browser is idle, avoiding the synchronous
+ * rrweb DOM snapshot during the critical rendering path. Uses `requestIdleCallback` with
+ * a `setTimeout` fallback for Safari.
+ */
+export function DeferredSessionRecording(): React.ReactNode {
+  const posthog = usePostHog();
+
+  useEffect(() => {
+    const start = () => {
+      posthog.startSessionRecording();
+    };
+
+    if ('requestIdleCallback' in globalThis) {
+      const id = requestIdleCallback(start);
+      return () => {
+        cancelIdleCallback(id);
+      };
+    }
+
+    const id = setTimeout(start, 0);
+    return () => {
+      clearTimeout(id);
+    };
+  }, [posthog]);
+
+  return undefined;
+}
+
 export function AnalyticsProvider({ children }: { readonly children: React.ReactNode }): React.ReactNode {
   const { options, apiKey } = posthogConfig;
 
@@ -120,6 +149,7 @@ export function AnalyticsProvider({ children }: { readonly children: React.React
 
   return (
     <PostHogProvider options={options} apiKey={apiKey}>
+      <DeferredSessionRecording />
       <AnalyticsIdentifier>{children}</AnalyticsIdentifier>
     </PostHogProvider>
   );

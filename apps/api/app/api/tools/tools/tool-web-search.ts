@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { TavilySearch } from '@langchain/tavily';
 import type { TavilyBaseSearchResponse } from '@langchain/tavily';
 import { StructuredTool } from '@langchain/core/tools';
@@ -31,6 +32,7 @@ class WebSearchTool extends StructuredTool {
 
   public override schema = webSearchInputSchema;
 
+  private readonly logger = new Logger(WebSearchTool.name);
   private readonly tavilyTool: TavilySearch;
 
   public constructor(tavilyTool: TavilySearch) {
@@ -42,16 +44,23 @@ class WebSearchTool extends StructuredTool {
     input: z.infer<typeof webSearchInputSchema>,
     _runManager?: CallbackManagerForToolRun,
   ): Promise<WebSearchOutput> {
-    // Call Tavily to get raw results
+    this.logger.debug(`Search query: "${input.query}"`);
+
     const rawResult = (await this.tavilyTool.invoke(input)) as TavilyBaseSearchResponse | { error: string };
 
-    // Handle error responses
     if ('error' in rawResult) {
+      this.logger.warn(`Tavily API error for query "${input.query}": ${String(rawResult.error)}`);
       throw new Error(String(rawResult.error));
     }
 
-    // Extract and transform only the results array
-    return rawResult.results.map((result) => ({
+    const { results } = rawResult;
+    for (const r of results) {
+      const preview = r.content.replaceAll(/\s+/g, ' ').trim().slice(0, 150);
+      this.logger.debug(`Search result: "${r.title}" (${r.url}) — ${r.content.length} chars: "${preview}"`);
+    }
+    this.logger.debug(`Search complete for "${input.query}": ${results.length} results`);
+
+    return results.map((result) => ({
       title: result.title,
       url: result.url,
       content: result.content,

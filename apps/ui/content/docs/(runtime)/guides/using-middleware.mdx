@@ -57,11 +57,11 @@ const client = createRuntimeClient({
 
 ### 4. Use a Writable Filesystem for Caching
 
-Geometry and parameter caches require a writable filesystem. Use `fromNodeFS` in Node.js or a writable ZenFS instance in the browser:
+Geometry and parameter caches require a writable filesystem. Use `fromNodeFS` in Node.js or a writable filesystem in the browser:
 
 ```typescript
 import { createRuntimeClient } from '@taucad/runtime';
-import { fromNodeFS } from '@taucad/runtime/filesystem';
+import { fromNodeFS } from '@taucad/runtime/filesystem/node';
 import { replicad } from '@taucad/runtime/kernels';
 import { esbuild } from '@taucad/runtime/bundler';
 import { geometryCache, parameterCache } from '@taucad/runtime/middleware';
@@ -103,7 +103,7 @@ if (result.success) {
 
 ```typescript
 import { createRuntimeClient, presets } from '@taucad/runtime';
-import { fromNodeFS } from '@taucad/runtime/filesystem';
+import { fromNodeFS } from '@taucad/runtime/filesystem/node';
 
 const client = createRuntimeClient({
   ...presets.all(),

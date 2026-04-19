@@ -56,12 +56,16 @@ describe('coalesceEvents (pure)', () => {
   it('should preserve rename event when fileRenamed is followed by fileDeleted on oldPath', () => {
     const events = [renamed('/a', '/b'), deleted('/a')];
     const result = coalesceEvents(events);
-    // newPath '/b' must appear in the coalesced result — either as a rename or
+    // NewPath '/b' must appear in the coalesced result — either as a rename or
     // as a write — so that downstream consumers learn about the new location.
-    const allPaths = result.flatMap((e) => {
+    const allPaths = result.flatMap((event) => {
       const paths: string[] = [];
-      if ('path' in e) paths.push(e.path);
-      if ('newPath' in e) paths.push(e.newPath);
+      if ('path' in event) {
+        paths.push(event.path);
+      }
+      if ('newPath' in event) {
+        paths.push(event.newPath);
+      }
       return paths;
     });
     expect(allPaths).toContain('/b');
@@ -72,10 +76,14 @@ describe('coalesceEvents (pure)', () => {
     const result = coalesceEvents(events);
     // The rename to /b should survive — a consumer watching /a should learn
     // that the content moved to /b, not just that /a was deleted.
-    const allPaths = result.flatMap((e) => {
+    const allPaths = result.flatMap((event) => {
       const paths: string[] = [];
-      if ('path' in e) paths.push(e.path);
-      if ('newPath' in e) paths.push(e.newPath);
+      if ('path' in event) {
+        paths.push(event.path);
+      }
+      if ('newPath' in event) {
+        paths.push(event.newPath);
+      }
       return paths;
     });
     expect(allPaths).toContain('/b');
@@ -183,6 +191,22 @@ describe('EventCoalescer (timed)', () => {
     coalescer.dispose();
   });
 
+  it('should overflow at 10,000 events by default', () => {
+    const deliver = vi.fn();
+    const onOverflow = vi.fn();
+    const coalescer = new EventCoalescer(deliver, { onOverflow });
+
+    for (let i = 0; i < 10_000; i++) {
+      coalescer.push(written(`/${i}.txt`));
+    }
+    expect(onOverflow).not.toHaveBeenCalled();
+
+    coalescer.push(written('/overflow.txt'));
+    expect(onOverflow).toHaveBeenCalledTimes(1);
+
+    coalescer.dispose();
+  });
+
   it('should prevent further delivery after dispose()', () => {
     const deliver = vi.fn();
     const coalescer = new EventCoalescer(deliver, { windowMs: 50 });
@@ -208,5 +232,44 @@ describe('EventCoalescer (timed)', () => {
     expect(deliver).toHaveBeenLastCalledWith([written('/b.txt')]);
 
     coalescer.dispose();
+  });
+
+  it('should reset timer on each push (sliding window)', () => {
+    const deliver = vi.fn();
+    const coalescer = new EventCoalescer(deliver, { windowMs: 75 });
+
+    coalescer.push(written('/a.txt'));
+    vi.advanceTimersByTime(50);
+    expect(deliver).not.toHaveBeenCalled();
+
+    coalescer.push(written('/b.txt'));
+    vi.advanceTimersByTime(50);
+    expect(deliver).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(25);
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(deliver).toHaveBeenCalledWith([written('/a.txt'), written('/b.txt')]);
+
+    coalescer.dispose();
+  });
+
+  it('should respect configurable windowMs for different tiers', () => {
+    const kernelDeliver = vi.fn();
+    const uiDeliver = vi.fn();
+    const kernelCoalescer = new EventCoalescer(kernelDeliver, { windowMs: 75 });
+    const uiCoalescer = new EventCoalescer(uiDeliver, { windowMs: 500 });
+
+    kernelCoalescer.push(written('/a.txt'));
+    uiCoalescer.push(written('/a.txt'));
+
+    vi.advanceTimersByTime(75);
+    expect(kernelDeliver).toHaveBeenCalledTimes(1);
+    expect(uiDeliver).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(425);
+    expect(uiDeliver).toHaveBeenCalledTimes(1);
+
+    kernelCoalescer.dispose();
+    uiCoalescer.dispose();
   });
 });

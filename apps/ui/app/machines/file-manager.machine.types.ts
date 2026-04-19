@@ -12,7 +12,7 @@
 import type { ActorRefFrom } from 'xstate';
 import type { FileStat, FileStatEntry, FileSystemBackend } from '@taucad/types';
 import type { FileManagerMachine } from '#machines/file-manager.machine.js';
-import type { FileTreeNode, WatchRequest, WatchEvent, MkdirOptions } from '@taucad/filesystem';
+import type { FileTreeNode, WatchRequest, WatchEvent, MkdirOptions, MountOptions } from '@taucad/filesystem';
 
 /**
  * The source of the file write operation.
@@ -66,7 +66,8 @@ export type FileManagerProtocol = {
   duplicateFile(sourcePath: string, destinationPath: string): Promise<void>;
   copyDirectory(sourcePath: string, destinationPath: string): Promise<void>;
   getZippedDirectory(path: string): Promise<Blob>;
-  reconfigure(backend: FileSystemBackend): Promise<void>;
+  mount(prefix: string, backend: FileSystemBackend, options?: MountOptions): Promise<void>;
+  unmount(prefix: string): void;
   setDirectoryHandle(handle: FileSystemDirectoryHandle): void;
   readShallowDirectory(
     path: string,
@@ -75,6 +76,12 @@ export type FileManagerProtocol = {
   ): Promise<FileTreeNode[]>;
 
   readDirectory(path: string): Promise<FileTreeNode[]>;
+
+  searchFiles(
+    basePath: string,
+    query: string,
+    options?: { maxResults?: number; includeDirectories?: boolean },
+  ): FileStatEntry[];
 
   watch(request: WatchRequest, handler: (event: WatchEvent) => void): () => void;
 };

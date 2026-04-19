@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { useSelector } from '@xstate/react';
 import type {
   DockviewApi,
@@ -10,13 +10,11 @@ import type {
 } from 'dockview-react';
 import { positionToDirection } from 'dockview-react';
 import { Box, ChevronDown } from 'lucide-react';
-import type { FileEntry } from '@taucad/types';
 import { tauFileDragMime, tauEditorPanelDragMime, tauViewerPanelDragMime } from '@taucad/types/constants';
 import { generatePrefixedId } from '@taucad/utils/id';
 import { FileSelector } from '#components/files/file-selector.js';
 import { Button } from '#components/ui/button.js';
 import { useProject } from '#hooks/use-project.js';
-import { useFileTreeMap } from '#hooks/use-file-tree.js';
 import { defaultGraphicsSettings, parseGraphicsViewSettings } from '#constants/editor.constants.js';
 import type { GraphicsViewSettings } from '#constants/editor.constants.js';
 import { ChatViewer } from '#routes/projects_.$id/chat-viewer.js';
@@ -24,7 +22,6 @@ import { Dockview } from '#components/panes/dockview.js';
 import { DockviewWatermark } from '#components/panes/dockview-watermark.js';
 import { ViewerDockviewTab } from '#components/panes/viewer-tab-context-menu.js';
 import { DockviewOpenFileAction, DockviewFileActionProvider } from '#components/panes/dockview-open-file-action.js';
-import { WebglContextTrackerProvider } from '#hooks/use-webgl-context-tracker.js';
 
 /**
  * Params passed to each viewer panel via Dockview.
@@ -58,15 +55,6 @@ const components = {
  */
 function ViewerWatermark({ containerApi, group }: IWatermarkPanelProps): React.JSX.Element {
   const { projectRef, editorRef } = useProject();
-  const fileTree = useFileTreeMap();
-
-  const files = useMemo(
-    () =>
-      [...fileTree.values()]
-        .filter((entry: FileEntry) => entry.type === 'file')
-        .map((entry: FileEntry) => ({ path: entry.path, size: entry.size })),
-    [fileTree],
-  );
 
   const handleSelect = useCallback(
     (path: string) => {
@@ -108,7 +96,6 @@ function ViewerWatermark({ containerApi, group }: IWatermarkPanelProps): React.J
       onClose={handleClose}
     >
       <FileSelector
-        files={files}
         selectedFile={undefined}
         title='Viewport File'
         description='Choose which file to render in the viewport'
@@ -583,20 +570,18 @@ export const ViewerDockview = memo(function (): React.JSX.Element {
   );
 
   return (
-    <WebglContextTrackerProvider>
-      <DockviewFileActionProvider value={handleOpenFile}>
-        <div className='relative size-full'>
-          <Dockview
-            components={components}
-            noPanelsOverlay='emptyGroup'
-            defaultTabComponent={ViewerDockviewTab}
-            watermarkComponent={ViewerWatermark}
-            leftHeaderActionsComponent={DockviewOpenFileAction}
-            onReady={onReady}
-            onDidDrop={onDidDrop}
-          />
-        </div>
-      </DockviewFileActionProvider>
-    </WebglContextTrackerProvider>
+    <DockviewFileActionProvider value={handleOpenFile}>
+      <div className='relative size-full'>
+        <Dockview
+          components={components}
+          noPanelsOverlay='emptyGroup'
+          defaultTabComponent={ViewerDockviewTab}
+          watermarkComponent={ViewerWatermark}
+          leftHeaderActionsComponent={DockviewOpenFileAction}
+          onReady={onReady}
+          onDidDrop={onDidDrop}
+        />
+      </div>
+    </DockviewFileActionProvider>
   );
 });

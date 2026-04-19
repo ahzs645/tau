@@ -141,3 +141,30 @@ export type ParsedCadModule = {
   /** Raw module exports for debugging */
   rawExports: CadModuleExports;
 };
+
+/**
+ * Parameter configuration for a single source file.
+ * Tracks which parameter group is active and all available groups.
+ * Stored as a per-CU file at `.tau/parameters/<entryFile>.json`.
+ */
+export type FileParameterEntry = {
+  activeGroup: string;
+  order?: string[];
+  groups: Record<string, ParameterGroup>;
+};
+
+/**
+ * A named collection of parameter override values.
+ * Values are overrides of source-code defaults — only non-default values are stored.
+ */
+export type ParameterGroup = {
+  values: Record<string, unknown>;
+};
+
+/**
+ * Export fidelity level: boundary representation (`brep`) preserves exact
+ * topology and surfaces, whereas `mesh` is a tessellated approximation.
+ *
+ * @public
+ */
+export type ExportFidelity = 'brep' | 'mesh';

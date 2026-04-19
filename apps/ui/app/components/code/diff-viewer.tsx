@@ -1,7 +1,8 @@
-import { useMemo } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { diffLines } from 'diff';
+import type { HighlighterCore } from 'shiki/core';
 import type { CodeLanguage } from '@taucad/types';
-import { highlighter, diffTransformer } from '#lib/shiki.lib.js';
+import { getHighlighter, diffTransformer } from '#lib/shiki.lib.js';
 import { cn } from '#utils/ui.utils.js';
 import { useTheme } from '#hooks/use-theme.js';
 
@@ -217,6 +218,14 @@ export function DiffViewer({
   className,
 }: DiffViewerProps): React.JSX.Element {
   const { theme } = useTheme();
+  const [highlighter, setHighlighter] = useState<HighlighterCore | undefined>();
+
+  useEffect(() => {
+    const loadHighlighter = async () => {
+      setHighlighter(await getHighlighter());
+    };
+    void loadHighlighter();
+  }, []);
 
   const segments = useMemo(
     () => processDiffWithContext(originalContent, modifiedContent),
@@ -224,6 +233,10 @@ export function DiffViewer({
   );
 
   const renderedSegments = useMemo(() => {
+    if (!highlighter) {
+      return null;
+    }
+
     return segments.map((segment, segmentIndex) => {
       if (segment.type === 'hidden') {
         // oxlint-disable-next-line react/no-array-index-key -- segments are stable during render
@@ -265,7 +278,7 @@ export function DiffViewer({
         />
       );
     });
-  }, [segments, language, theme]);
+  }, [segments, language, theme, highlighter]);
 
   // Outer container w-max min-w-full ensures all segments extend to longest line across all groups
   return <div className={cn('w-max min-w-full text-xs', className)}>{renderedSegments}</div>;

@@ -295,5 +295,45 @@ describe('chatPersistenceMachine', () => {
         vi.useRealTimers();
       }
     });
+
+    it('should clear persistedError from context immediately when clearPersistedError is sent from idle', async () => {
+      vi.useFakeTimers();
+      try {
+        let clearResolve: (() => void) | undefined;
+        const actor = createTestActor({
+          activeChatId: 'chat_abc',
+          persistErrorResult: async () => {
+            // oxlint-disable-next-line no-empty-function -- mock stub
+          },
+          clearErrorResult: async () =>
+            new Promise<void>((resolve) => {
+              clearResolve = resolve;
+            }),
+        });
+        actor.start();
+
+        // Set an error and wait for persistence to complete → back to idle
+        const error: ChatError = { category: 'generic', title: 'Error', message: 'fail', code: 'ERR' };
+        actor.send({ type: 'setPersistedError', error });
+        await vi.advanceTimersByTimeAsync(0);
+        await waitFor(actor, (s) => s.matches({ errorPersistence: 'idle' }));
+        expect(actor.getSnapshot().context.persistedError).toEqual(error);
+
+        // Send clearPersistedError — context must be cleared IMMEDIATELY,
+        // even though the async IDB write (clearErrorActor) has not completed.
+        actor.send({ type: 'clearPersistedError' });
+        expect(actor.getSnapshot().matches({ errorPersistence: 'clearing' })).toBe(true);
+        expect(actor.getSnapshot().context.persistedError).toBeUndefined();
+
+        // Let the async actor finish
+        clearResolve!();
+        await vi.advanceTimersByTimeAsync(0);
+        await waitFor(actor, (s) => s.matches({ errorPersistence: 'idle' }));
+        expect(actor.getSnapshot().context.persistedError).toBeUndefined();
+        actor.stop();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });

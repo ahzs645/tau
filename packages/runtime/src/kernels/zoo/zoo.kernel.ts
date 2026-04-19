@@ -11,7 +11,6 @@
  */
 
 import type { GeometryGltf } from '@taucad/types';
-import { z } from 'zod';
 import type { CompilationError } from '@taucad/kcl-wasm-lib/bindings/CompilationError';
 import { asBuffer } from '@taucad/utils/file';
 import { joinPath } from '@taucad/utils/path';
@@ -20,6 +19,8 @@ import type { KernelErrorResult, KernelIssue } from '#types/runtime.types.js';
 import type { RuntimeFileSystem, RuntimeLogger } from '#types/runtime-kernel.types.js';
 import { defineKernel } from '#types/runtime-kernel.types.js';
 import type { RuntimeSpanTracer } from '#types/runtime-tracer.types.js';
+import { zooOptionsSchema, zooExportSchemas } from '#kernels/zoo/zoo.schemas.js';
+import { resolveToRelative } from '#kernels/kernel-module-helpers.js';
 import { createKernelError, createKernelSuccess } from '#kernels/kernel-helpers.js';
 import { KclUtilities } from '#kernels/zoo/kcl-utils.js';
 import { isKclError } from '#kernels/zoo/kcl-errors.js';
@@ -41,15 +42,6 @@ type ZooContext = {
 // =============================================================================
 // Path helpers
 // =============================================================================
-
-function resolveToRelative(absolutePath: string, basePath: string): string {
-  const normalizedBase = basePath.endsWith('/') ? basePath.slice(0, -1) : basePath;
-  if (absolutePath.startsWith(`${normalizedBase}/`)) {
-    return absolutePath.slice(normalizedBase.length + 1);
-  }
-
-  return absolutePath;
-}
 
 function resolveFromRoot(relativePath: string, basePath: string): string {
   return joinPath(basePath, relativePath);
@@ -136,10 +128,6 @@ async function getKclUtilitiesWithEngine(context: ZooContext): Promise<KclUtilit
   return utils;
 }
 
-// =============================================================================
-// Options schema
-// =============================================================================
-
 /**
  * Zoo (KCL) kernel options.
  * @public
@@ -149,10 +137,6 @@ export type ZooOptions = {
   baseUrl?: string;
 };
 
-const zooOptionsSchema = z.object({
-  baseUrl: z.string().default('wss://api.zoo.dev'),
-}) satisfies z.ZodType<Required<ZooOptions>>;
-
 // =============================================================================
 // Kernel module definition
 // =============================================================================
@@ -161,6 +145,7 @@ const zooOptionsSchema = z.object({
 export default defineKernel({
   name: 'ZooKernel',
   version: '1.0.0',
+  exportSchemas: zooExportSchemas,
   optionsSchema: zooOptionsSchema,
 
   async initialize(options) {
@@ -171,20 +156,19 @@ export default defineKernel({
     };
   },
 
-  async canHandle({ extension }) {
-    return extension === 'kcl';
-  },
-
   async getDependencies({ filePath, basePath }, { filesystem }, context) {
     ensureFileSystemManager(context, basePath, filesystem);
     const utilities = await getKclUtils(context);
     const relativeFilePath = resolveToRelative(filePath, basePath);
-    const relativePaths = await discoverKclDependencies(
+    const { resolved, unresolved } = await discoverKclDependencies(
       relativeFilePath,
       async (path) => filesystem.readFile(resolveFromRoot(path, basePath), 'utf8'),
       async (code) => utilities.parseKcl(code),
     );
-    return relativePaths.map((relativePath) => resolveFromRoot(relativePath, basePath));
+    return {
+      resolved: resolved.map((relativePath) => resolveFromRoot(relativePath, basePath)),
+      unresolved: unresolved.map((relativePath) => resolveFromRoot(relativePath, basePath)),
+    };
   },
 
   async getParameters({ filePath, basePath }, { filesystem, logger }, context) {
@@ -202,7 +186,7 @@ export default defineKernel({
         return createKernelError(mapCompilationErrorsToKernelIssues(criticalErrors, code, relativeFilePath));
       }
 
-      const executionResult = await utilities.executeMockKcl(parseResult.program, 'main.kcl');
+      const executionResult = await utilities.executeMockKcl(parseResult.program, relativeFilePath);
       const criticalExecutionErrors = filterNonWarningErrors(executionResult.errors);
       if (criticalExecutionErrors.length > 0) {
         logger.warn('KCL execution errors during parameter extraction', {
@@ -240,7 +224,7 @@ export default defineKernel({
       }
 
       const modifiedProgram = KclUtilities.injectParametersIntoProgram(parseResult.program, parameters);
-      const executionResult = await utilities.executeProgram(modifiedProgram, 'main.kcl');
+      const executionResult = await utilities.executeProgram(modifiedProgram, relativeFilePath);
       const criticalExecutionErrors = filterNonWarningErrors(executionResult.errors);
       if (criticalExecutionErrors.length > 0) {
         logger.warn('KCL execution errors', { data: criticalExecutionErrors });
@@ -275,7 +259,9 @@ export default defineKernel({
     }
   },
 
-  async exportGeometry({ fileType, nativeHandle }, { logger }, context) {
+  async exportGeometry(input, { logger }, context) {
+    const { format, nativeHandle, options } = input;
+
     if (nativeHandle.length === 0) {
       return createKernelError([
         {
@@ -288,54 +274,33 @@ export default defineKernel({
     try {
       const utilities = await getKclUtilitiesWithEngine(context);
 
-      switch (fileType) {
-        case 'stl':
-        case 'stl-binary': {
+      switch (format) {
+        case 'stl': {
+          const { binary } = options;
           const stlResult = await utilities.exportFromMemory({
             type: 'stl',
-            storage: fileType === 'stl-binary' ? 'binary' : 'ascii',
+            storage: binary ? 'binary' : 'ascii',
             units: 'mm',
           });
           if (stlResult.length === 0 || !stlResult[0]) {
-            return createKernelError([
-              {
-                message: 'No STL data received from KCL export',
-                severity: 'error',
-              },
-            ]);
+            return createKernelError([{ message: 'No STL data received from KCL export', severity: 'error' }]);
           }
-
-          return createKernelSuccess([createExportFile(fileType, 'model.stl', asBuffer(stlResult[0].contents))]);
+          return createKernelSuccess([createExportFile('stl', 'model.stl', asBuffer(stlResult[0].contents))]);
         }
 
         case 'step': {
           const stepResult = await utilities.exportFromMemory({ type: 'step' });
           if (stepResult.length === 0 || !stepResult[0]) {
-            return createKernelError([
-              {
-                message: 'No STEP data received from KCL export',
-                severity: 'error',
-              },
-            ]);
+            return createKernelError([{ message: 'No STEP data received from KCL export', severity: 'error' }]);
           }
-
           return createKernelSuccess([createExportFile('step', 'model.step', asBuffer(stepResult[0].contents))]);
         }
 
         case 'glb': {
-          const glbResult = await utilities.exportFromMemory({
-            type: 'gltf',
-            storage: 'binary',
-          });
+          const glbResult = await utilities.exportFromMemory({ type: 'gltf', storage: 'binary' });
           if (glbResult.length === 0 || !glbResult[0]) {
-            return createKernelError([
-              {
-                message: 'No GLB data received from KCL export',
-                severity: 'error',
-              },
-            ]);
+            return createKernelError([{ message: 'No GLB data received from KCL export', severity: 'error' }]);
           }
-
           return createKernelSuccess([createExportFile('glb', 'model.glb', asBuffer(glbResult[0].contents))]);
         }
 
@@ -346,23 +311,15 @@ export default defineKernel({
             presentation: 'pretty',
           });
           if (gltfResult.length === 0 || !gltfResult[0]) {
-            return createKernelError([
-              {
-                message: 'No GLTF data received from KCL export',
-                severity: 'error',
-              },
-            ]);
+            return createKernelError([{ message: 'No GLTF data received from KCL export', severity: 'error' }]);
           }
-
           return createKernelSuccess([createExportFile('gltf', 'model.gltf', asBuffer(gltfResult[0].contents))]);
         }
 
         default: {
+          const _exhaustive: never = format;
           return createKernelError([
-            {
-              message: `Unsupported export format: ${fileType}`,
-              severity: 'error',
-            },
+            { message: `Unsupported export format: ${_exhaustive as string}`, severity: 'error' },
           ]);
         }
       }

@@ -2,19 +2,19 @@ import { describe, it, expect } from 'vitest';
 import { isWorkerContext, getWorkerMessagePort } from '#framework/runtime-message-adapter.js';
 
 describe('isWorkerContext', () => {
-  it('should return false when running on the main thread', () => {
-    expect(isWorkerContext()).toBe(false);
+  it('should return false when running on the main thread', async () => {
+    await expect(isWorkerContext()).resolves.toBe(false);
   });
 });
 
 describe('getWorkerMessagePort', () => {
-  it('should throw when called outside a worker context', () => {
-    expect(() => getWorkerMessagePort()).toThrow('getWorkerMessagePort() must be called from a worker context');
+  it('should reject when called outside a worker context', async () => {
+    await expect(getWorkerMessagePort()).rejects.toThrow('getWorkerMessagePort() must be called from a worker context');
   });
 
-  it('should throw an Error instance with the expected message', () => {
+  it('should reject with an Error instance with the expected message', async () => {
     try {
-      getWorkerMessagePort();
+      await getWorkerMessagePort();
       expect.fail('should have thrown');
     } catch (error) {
       expect(error).toBeInstanceOf(Error);

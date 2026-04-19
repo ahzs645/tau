@@ -9,6 +9,8 @@ import {
   applyFatLineSegments,
   updateLineMaterialResolution,
 } from '#components/geometry/graphics/three/materials/gltf-edges.js';
+import { Theme, useTheme } from '#hooks/use-theme.js';
+import { darkModeIntensityScale } from '#components/geometry/graphics/three/utils/lights.utils.js';
 
 // Module-scoped GLTFLoader instance. GLTFLoader is stateless and fully reusable,
 // so creating a fresh instance per parse wastes initialization overhead and GC pressure.
@@ -87,9 +89,19 @@ function restoreOriginalMaterials(scene: Group, saved: Map<number, Material | Ma
         return;
       }
 
+      // Preserve clipping planes so section-view clipping survives material restoration
+      const currentMats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      const restoredMats = Array.isArray(original) ? original : [original];
+      for (let i = 0; i < restoredMats.length && i < currentMats.length; i++) {
+        const currentMat = currentMats[i];
+        const restoredMat = restoredMats[i];
+        if (currentMat && restoredMat && currentMat.clippingPlanes?.length) {
+          restoredMat.clippingPlanes = currentMat.clippingPlanes;
+        }
+      }
+
       // Dispose current material if it was replaced (e.g. matcap)
       if (mesh.material !== original) {
-        const currentMats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
         for (const mat of currentMats) {
           disposeMaterialWithTextures(mat);
         }
@@ -204,6 +216,8 @@ export function GltfMesh({
   // The rendered scene has material mode applied and is what <primitive> displays.
   const [scene, setScene] = useState<Group | undefined>(undefined);
   const { size, invalidate } = useThree();
+  const { theme } = useTheme();
+  const matcapTint = theme === Theme.DARK ? darkModeIntensityScale : 1;
 
   // Memoize resolution vector to avoid creating new objects on each render
   const resolutionRef = useRef(new Vector2(size.width, size.height));
@@ -239,14 +253,7 @@ export function GltfMesh({
 
     const loadGltf = async (): Promise<void> => {
       try {
-        if (typeof SharedArrayBuffer === 'function' && gltfFile.buffer instanceof SharedArrayBuffer) {
-          throw new TypeError('SharedArrayBuffer is not supported in <GltfMesh />');
-        }
-
-        const gltf = await gltfLoader.parseAsync(
-          gltfFile.buffer,
-          '', // Path (not needed for ArrayBuffer)
-        );
+        const gltf = await gltfLoader.parseAsync(gltfFile.buffer, '');
 
         if (cancelled) {
           disposeSceneResources(gltf.scene);
@@ -302,12 +309,12 @@ export function GltfMesh({
   const applyMaterials = useCallback(
     (targetScene: Group): void => {
       if (enableMatcap) {
-        void applyMatcap({ scene: targetScene } as GLTF);
+        void applyMatcap({ scene: targetScene } as GLTF, matcapTint);
       } else {
         restoreOriginalMaterials(targetScene, originalMaterialsRef.current);
       }
     },
-    [enableMatcap],
+    [enableMatcap, matcapTint],
   );
 
   useEffect(() => {

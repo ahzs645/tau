@@ -7,13 +7,18 @@
 
 import deepmerge from 'deepmerge';
 import type { PartialDeep } from 'type-fest';
-import type { ExportFormat, GeometryResponse, GeometryFile, OnWorkerLog, FileStat, FileStatEntry } from '@taucad/types';
+import type {
+  FileExtension,
+  GeometryResponse,
+  GeometryFile,
+  OnWorkerLog,
+  FileStat,
+  FileStatEntry,
+} from '@taucad/types';
 import { parentDirectory, joinPath } from '@taucad/utils/path';
 import type { Mock } from 'vitest';
 import { expect, vi } from 'vitest';
 import { mock } from 'vitest-mock-extended';
-import { configure, fs } from '@zenfs/core';
-import { InMemory } from '@zenfs/core/backends/memory.js';
 import type {
   CreateGeometryResult,
   HashedGeometryResult,
@@ -30,10 +35,10 @@ import type { PerformanceEntryData } from '#types/runtime-protocol.types.js';
 import type {
   RuntimeLogger,
   KernelRuntime,
-  KernelDefinition,
+  AnyKernelDefinition,
   RuntimeFileSystem,
-  CanHandleInput,
   GetDependenciesInput,
+  GetDependenciesResult,
   GetParametersInput,
   CreateGeometryInput,
   ExportGeometryInput,
@@ -48,20 +53,28 @@ import type {
 } from '#types/runtime-middleware.types.js';
 import type { Dependency } from '#types/runtime-dependency.types.js';
 import type { KernelMiddleware } from '#middleware/runtime-middleware.js';
+import { z } from 'zod';
 import { KernelRuntimeWorker } from '#framework/kernel-runtime-worker.js';
 import type { ResolvedMiddleware } from '#framework/kernel-worker.js';
 import { KernelWorker } from '#framework/kernel-worker.js';
 import { createBridgePort } from '#framework/runtime-filesystem-bridge.js';
-import { fromFsLike } from '#filesystem/from-fs-like.js';
+import { fromMemoryFS } from '#filesystem/from-memory-fs.js';
 
-async function resetFileSystem(): Promise<void> {
-  // eslint-disable-next-line @typescript-eslint/naming-convention -- filesystem mount point requires '/' as key
-  await configure({ mounts: { '/': InMemory } });
-}
+let _testFileSystem: ReturnType<typeof fromMemoryFS> | undefined;
 
 // =============================================================================
 // Test Filesystem Utilities
 // =============================================================================
+
+/**
+ * Get the shared test filesystem instance. Creates a new one if none exists.
+ * @returns The shared in-memory test filesystem
+ * @public
+ */
+export function getTestFileSystem(): ReturnType<typeof fromMemoryFS> {
+  _testFileSystem ??= fromMemoryFS();
+  return _testFileSystem;
+}
 
 /**
  * Seed the test filesystem with files.
@@ -72,21 +85,17 @@ async function resetFileSystem(): Promise<void> {
  * @public
  */
 export async function seedTestFileSystem(files: Record<string, string | Uint8Array<ArrayBuffer>>): Promise<void> {
-  // Reset to a clean in-memory filesystem to prevent stale files from prior tests
-  // (e.g., a leftover shapes.ts blocking resolution of shapes/index.ts barrel imports)
-  await resetFileSystem();
+  _testFileSystem = fromMemoryFS();
 
-  // Write files to the filesystem
   for (const [path, content] of Object.entries(files)) {
     const normalizedPath = path.startsWith('/') ? path : `/${path}`;
     const parentDirectoryPath = parentDirectory(normalizedPath);
 
     if (parentDirectoryPath && parentDirectoryPath !== '/') {
-      await fs.promises.mkdir(parentDirectoryPath, { recursive: true });
+      await _testFileSystem.mkdir(parentDirectoryPath, { recursive: true });
     }
 
-    // Write file content
-    await fs.promises.writeFile(normalizedPath, content);
+    await _testFileSystem.writeFile(normalizedPath, content);
   }
 }
 
@@ -95,7 +104,7 @@ export async function seedTestFileSystem(files: Record<string, string | Uint8Arr
  * @public
  */
 export async function clearTestFileSystem(): Promise<void> {
-  await resetFileSystem();
+  _testFileSystem = fromMemoryFS();
 }
 
 // =============================================================================
@@ -139,7 +148,7 @@ export async function initializeWorkerForTesting<T extends KernelWorker>(
     worker.setTelemetrySend(options.onTelemetry);
   }
 
-  const { port } = createBridgePort(fromFsLike(fs));
+  const { port } = createBridgePort(getTestFileSystem());
 
   await worker.initialize({
     callbacks: {
@@ -396,6 +405,7 @@ export function createMockRuntime<
     options: (mockOptions?.options ?? {}) as Options,
     dependencies: mockOptions?.dependencies ?? [],
     dependencyHash: mockOptions?.dependencyHash ?? defaultMockDependencyHash,
+    registerWatchPath: vi.fn(),
   };
 }
 
@@ -489,7 +499,7 @@ export function assertSuccess<T>(result: KernelResult<T>, context?: string): ass
   if (!result.success) {
     const prefix = context ? `[${context}] ` : '';
     const issuesSummary = result.issues.map((issue) => `  [${issue.severity}] ${issue.message}`).join('\n');
-    console.error(`${prefix}Expected success but got failure:\n${issuesSummary}`);
+    throw new Error(`${prefix}Expected success but got failure:\n${issuesSummary}`);
   }
 
   expect(result.success).toBe(true);
@@ -523,12 +533,13 @@ export function createMockInput(overrides?: Partial<CreateGeometryInput>): Creat
     filePath: '/projects/test-build/test.kcl',
     basePath: '/projects/test-build',
     parameters: {},
+    options: {},
     ...overrides,
   };
 }
 
 /**
- * Creates a GeometryFile for use with worker methods (canHandle, getParameters, createGeometry).
+ * Creates a GeometryFile for use with worker methods (getParameters, createGeometry).
  *
  * @param filename - The file name (e.g. `'test.ts'`)
  * @param basePath - The project base path (defaults to `/projects/test`)
@@ -576,7 +587,7 @@ export type CreateTestWorkerOptions = {
  * @param definition - the kernel definition to infer extensions from
  * @returns array of file extensions the kernel handles
  */
-function inferExtensions(definition: KernelDefinition): string[] {
+function inferExtensions(definition: AnyKernelDefinition): string[] {
   const name = definition.name.toLowerCase();
 
   if (
@@ -601,16 +612,11 @@ function inferExtensions(definition: KernelDefinition): string[] {
 
 /**
  * Infer an import-detection regex from the kernel name.
- * Returns undefined when the kernel has its own canHandle() that performs detection.
  *
- * @param definition - the kernel definition to infer import detection from
- * @returns a regex string for import detection, or undefined if the kernel handles it
+ * @param _definition - the kernel definition (unused — detection is handled at the plugin layer)
+ * @returns undefined — detection is always handled at the plugin layer
  */
-function inferDetectImport(definition: KernelDefinition): string | undefined {
-  if (definition.canHandle) {
-    return undefined;
-  }
-
+function inferDetectImport(_definition: AnyKernelDefinition): string | undefined {
   return undefined;
 }
 
@@ -626,7 +632,7 @@ function inferDetectImport(definition: KernelDefinition): string | undefined {
  * @public
  */
 export async function createTestWorker(
-  definition: KernelDefinition,
+  definition: AnyKernelDefinition,
   files: Record<string, string>,
   options?: CreateTestWorkerOptions,
 ): Promise<KernelRuntimeWorker> {
@@ -699,7 +705,7 @@ export async function createTestWorker(
  * @public
  */
 export async function getTestParameters(
-  definition: KernelDefinition,
+  definition: AnyKernelDefinition,
   files: Record<string, string>,
   mainFile: string,
 ): Promise<{
@@ -733,7 +739,7 @@ export async function getTestParameters(
  * @public
  */
 export async function createTestGeometry(input: {
-  definition: KernelDefinition;
+  definition: AnyKernelDefinition;
   files: Record<string, string>;
   mainFile: string;
   parameters?: Record<string, unknown>;
@@ -776,11 +782,12 @@ export function createMockKernelRuntime(options?: { filesystemOverrides?: MockFi
       issues: never[];
       success: false;
       dependencies: never[];
+      unresolvedPaths: never[];
     }> {
-      return { code: '', issues: [], success: false, dependencies: [] };
+      return { code: '', issues: [], success: false, dependencies: [], unresolvedPaths: [] };
     },
-    async resolveDependencies(): Promise<string[]> {
-      return [];
+    async resolveDependencies(): Promise<GetDependenciesResult> {
+      return { resolved: [], unresolved: [] };
     },
     registerModule(): void {
       // No-op for tests
@@ -875,6 +882,12 @@ export type MockKernelWorkerOptions = {
   onLog?: OnWorkerLog;
   /** Mock filesystem for middleware operations */
   filesystem?: RuntimeFileSystem;
+  /** Per-format Zod schemas for export validation. Keys define supported formats (defaults to glb+gltf with empty schemas). */
+  exportZodSchemas?: Partial<Record<FileExtension, z.ZodType>>;
+  /** Zod schema for render option validation. When set, the mock kernel's render options are validated against it. */
+  renderZodSchema?: z.ZodType;
+  /** Pre-set the nativeHandle on construction (simulates prior createGeometry) */
+  nativeHandle?: unknown;
 };
 
 /**
@@ -883,6 +896,11 @@ export type MockKernelWorkerOptions = {
  * @public
  */
 export class MockKernelWorker extends KernelWorker {
+  /** Expose onCreateGeometry call count for test assertions */
+  public createGeometryCalls = 0;
+
+  public readonly exportGeometrySpy = vi.fn<(input: ExportGeometryInput, runtime: KernelRuntime) => void>();
+
   protected override readonly name = 'MockKernelWorker';
 
   private readonly testResolvedMiddleware: ResolvedMiddleware[];
@@ -923,6 +941,17 @@ export class MockKernelWorker extends KernelWorker {
     // Set up the internal _logger property directly (uses createLogger which depends on onLog)
     // @ts-expect-error - Test utility accessing internals
     this._logger = this.createLogger();
+
+    const zodSchemas = options.exportZodSchemas ?? { glb: z.object({}), gltf: z.object({}) };
+    this.kernelExportZodSchemasMap.set('mock-kernel', zodSchemas);
+
+    if (options.renderZodSchema) {
+      this.kernelRenderZodSchemaMap.set('mock-kernel', options.renderZodSchema);
+    }
+
+    if (options.nativeHandle !== undefined) {
+      this.nativeHandle = options.nativeHandle;
+    }
   }
 
   /**
@@ -943,11 +972,15 @@ export class MockKernelWorker extends KernelWorker {
   /**
    * Helper to run exportGeometry with a mock export format.
    *
-   * @param fileType - the export format to use
+   * @param format - the export format to use
+   * @param options - export options to forward to the kernel
    * @returns the export geometry result
    */
-  public async runExportGeometry(fileType = 'gltf'): Promise<ExportGeometryResult> {
-    return this.exportGeometry(fileType as ExportFormat);
+  public async runExportGeometry(
+    format: FileExtension = 'gltf',
+    options?: Record<string, unknown>,
+  ): Promise<ExportGeometryResult> {
+    return this.exportGeometry(format, options);
   }
 
   /**
@@ -960,10 +993,6 @@ export class MockKernelWorker extends KernelWorker {
   }
 
   // Stub implementations of abstract methods
-  protected override async onCanHandle(_input: CanHandleInput, _runtime: KernelRuntime): Promise<boolean> {
-    return true;
-  }
-
   protected override async onGetParameters(
     _input: GetParametersInput,
     _runtime: KernelRuntime,
@@ -982,21 +1011,27 @@ export class MockKernelWorker extends KernelWorker {
     _input: CreateGeometryInput,
     _runtime: KernelRuntime,
   ): Promise<CreateGeometryResult> {
+    this.createGeometryCalls++;
     return this.mockComputeResult;
   }
 
   protected override async onExportGeometry(
-    _input: ExportGeometryInput,
+    input: ExportGeometryInput,
     _runtime: KernelRuntime,
   ): Promise<ExportGeometryResult> {
+    this.exportGeometrySpy(input, _runtime);
     return this.mockExportResult;
   }
 
   protected override async onGetDependencies(
     { filePath }: GetDependenciesInput,
     _runtime: KernelRuntime,
-  ): Promise<string[]> {
-    return [filePath];
+  ): Promise<GetDependenciesResult> {
+    return { resolved: [filePath], unresolved: [] };
+  }
+
+  protected override getActiveKernelId(): string | undefined {
+    return 'mock-kernel';
   }
 }
 

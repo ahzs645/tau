@@ -16,7 +16,7 @@ type EnhancedMethods = Pick<RuntimeFileSystem, 'readFiles' | 'readdirContents' |
  *
  * The four helper methods (`readFiles`, `readdirContents`, `readdirStat`, `ensureDir`)
  * have default implementations built from the 11 primitives. Backends can supply
- * optimized overrides (e.g. the FileManager can batch-read at the ZenFS layer).
+ * optimized overrides (e.g. the FileManager can batch-read at the provider layer).
  *
  * @param base - Base filesystem (11 primitives) with optional enhanced method overrides
  * @returns Full RuntimeFileSystem with all enhanced methods guaranteed

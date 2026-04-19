@@ -1,6 +1,5 @@
-import type { ExportFile } from '#types/file.types.js';
 import type { FileExtension } from '#types/mime-types.types.js';
-import { mimeTypes } from '#constants/mime-types.constants.js';
+import type { ExportFidelity } from '#types/cad.types.js';
 
 /**
  * MIME type for file drags originating from the headless-tree file explorer.
@@ -21,42 +20,42 @@ export const tauEditorPanelDragMime = 'application/x-tau-editor-panel';
 export const tauViewerPanelDragMime = 'application/x-tau-viewer-panel';
 
 /**
- * The export formats.
+ * Map of file extensions to their canonical {@link ExportFidelity}.
+ *
+ * Boundary representation (`brep`) is used for CAD interchange formats that
+ * preserve exact topology (STEP, IGES, BREP). All other formats are treated
+ * as tessellated `mesh` exports by default — see {@link lookupExportFidelity}.
+ *
+ * @public
  */
-export const exportFormats = [
-  //
-  'stl',
-  'stl-binary',
-  'step',
-  'step-assembly',
-  'glb',
-  'gltf',
-  '3mf',
-] as const satisfies string[];
-
-type ExportFormat = (typeof exportFormats)[number];
+export const exportFidelities = {
+  step: 'brep',
+  stp: 'brep',
+  iges: 'brep',
+  igs: 'brep',
+  brep: 'brep',
+} as const satisfies Partial<Record<FileExtension, ExportFidelity>>;
 
 /**
- * Map of export formats to file extensions
+ * Resolve the canonical {@link ExportFidelity} for a given file extension.
+ *
+ * Returns `'brep'` for CAD interchange formats listed in {@link exportFidelities},
+ * and `'mesh'` for everything else (mesh formats, animation formats, unknown
+ * extensions). The default-to-`mesh` policy mirrors how downstream viewers
+ * and toolchains treat unrecognised payloads.
+ *
+ * @param extension - File extension to classify (case-sensitive, no leading dot).
+ * @returns The export fidelity, defaulting to `'mesh'` if not registered as `brep`.
+ *
+ * @example <caption>Classify a CAD interchange format</caption>
+ * ```typescript
+ * import { lookupExportFidelity } from '@taucad/types/constants';
+ *
+ * lookupExportFidelity('step'); // -> 'brep'
+ * lookupExportFidelity('glb');  // -> 'mesh'
+ * ```
+ *
+ * @public
  */
-export const fileExtensionFromExportFormat = {
-  stl: 'stl',
-  'stl-binary': 'stl',
-  step: 'step',
-  'step-assembly': 'step',
-  glb: 'glb',
-  gltf: 'gltf',
-  // eslint-disable-next-line @typescript-eslint/naming-convention -- File format names don't follow camelCase
-  '3mf': '3mf',
-} as const satisfies Record<ExportFormat, FileExtension>;
-
-type ExportFileExtension = (typeof fileExtensionFromExportFormat)[ExportFormat];
-
-/**
- * Create an {@link ExportFile} with the MIME type auto-resolved from the export format.
- * Chains through {@link fileExtensionFromExportFormat} into {@link mimeTypes}.
- */
-export function createExportFile(format: ExportFormat, name: string, bytes: Uint8Array<ArrayBuffer>): ExportFile {
-  const extension: ExportFileExtension = fileExtensionFromExportFormat[format];
-  return { name, bytes, mimeType: mimeTypes[extension] };
-}
+export const lookupExportFidelity = (extension: string): ExportFidelity =>
+  (exportFidelities as Record<string, ExportFidelity | undefined>)[extension] ?? 'mesh';

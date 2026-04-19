@@ -108,4 +108,8 @@ export const idPrefix = {
    * A view ID
    */
   view: 'view',
+  /**
+   * A browser tab ID.
+   */
+  tab: 'tab',
 } as const satisfies Record<string, string>;

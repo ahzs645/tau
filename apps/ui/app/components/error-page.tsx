@@ -1,10 +1,14 @@
 import { AlertCircle, ArrowLeft, RefreshCcw } from 'lucide-react';
-import { useEffect } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { isRouteErrorResponse, useNavigate, useRouteError } from 'react-router';
 import { Button } from '#components/ui/button.js';
 import { useAnalytics } from '#hooks/use-analytics.js';
-import { CollapsibleCodeBlock } from '#components/ui/collapsible-code-block.js';
 import { PageNotFound } from '#components/page-not-found.js';
+
+const CollapsibleCodeBlock = lazy(async () => {
+  const m = await import('#components/ui/collapsible-code-block.js');
+  return { default: m.CollapsibleCodeBlock };
+});
 
 export function ErrorPage(): React.JSX.Element {
   const error = useRouteError();
@@ -85,16 +89,23 @@ export function ErrorPage(): React.JSX.Element {
             Our team has been notified of the error and will investigate it shortly.
           </p>
 
-          {/* Error Details with Collapsible Stack Trace */}
           {error.stack ? (
-            <CollapsibleCodeBlock
-              language='bash'
-              title={error.message}
-              text={error.stack}
-              collapsedLineCount={3}
-              className='text-left text-muted-foreground'
-              containerClassName='w-full'
-            />
+            <Suspense
+              fallback={
+                <div className='w-full rounded-md border border-border bg-muted/30 p-3 text-left'>
+                  <p className='text-xs font-medium text-muted-foreground'>{error.message}</p>
+                </div>
+              }
+            >
+              <CollapsibleCodeBlock
+                language='bash'
+                title={error.message}
+                text={error.stack}
+                collapsedLineCount={3}
+                className='text-left text-muted-foreground'
+                containerClassName='w-full'
+              />
+            </Suspense>
           ) : (
             <div className='w-full rounded-md border border-border bg-muted/30 p-3 text-left'>
               <p className='text-xs font-medium text-muted-foreground'>{error.message}</p>

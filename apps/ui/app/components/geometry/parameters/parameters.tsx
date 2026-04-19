@@ -4,6 +4,7 @@ import { Info } from 'lucide-react';
 import React, { useCallback, useMemo, useState } from 'react';
 import Form from '@rjsf/core';
 import type { RJSFSchema } from '@rjsf/utils';
+import deepmerge from 'deepmerge';
 import { SearchInput } from '#components/search-input.js';
 import { cn } from '#utils/ui.utils.js';
 import { templates, uiSchema, widgets } from '#components/geometry/parameters/rjsf-theme.js';
@@ -131,7 +132,13 @@ export function Parameters({
     [allExpanded, searchTerm, resetSingleParameter, defaultParameters, units],
   );
 
-  const mergedData = useMemo(() => ({ ...defaultParameters, ...parameters }), [defaultParameters, parameters]);
+  const mergedData = useMemo(
+    () =>
+      deepmerge(defaultParameters, parameters, {
+        arrayMerge: (_target: unknown[], source: unknown[]) => source,
+      }),
+    [defaultParameters, parameters],
+  );
   const hasParameters = jsonSchema && Object.keys(jsonSchema.properties ?? {}).length > 0;
 
   // Initialize the ref with the current edited parameters when component mounts or data changes
@@ -145,17 +152,28 @@ export function Parameters({
   };
 
   return (
-    <div data-slot='parameters' className={cn('group flex h-full w-full flex-col', className)}>
+    <div
+      data-slot='parameters'
+      className={cn('group flex h-full w-full flex-col', className)}
+      style={
+        {
+          '--param-field-h': '1.5rem',
+          '--param-field-radius': 'var(--radius-md)',
+          '--param-field-color': 'var(--color-muted-foreground)',
+          '--param-field-color-focus': 'var(--color-foreground)',
+        } as React.CSSProperties
+      }
+    >
       {hasParameters ? (
         <>
           {/* Search Bar */}
           {enableSearch ? (
-            <div className='flex w-full flex-row gap-2 border-b bg-sidebar p-2'>
+            <div className='flex w-full flex-row gap-1.5 border-b bg-sidebar px-2 py-1.5'>
               <SearchInput
                 ref={searchInputReference}
                 placeholder={searchPlaceholder}
                 value={searchTerm}
-                className='h-7 w-full bg-background'
+                className='h-6 w-full bg-background text-sm'
                 onChange={handleSearchChange}
                 onClear={clearSearch}
               />
@@ -174,12 +192,12 @@ export function Parameters({
             widgets={widgets}
             formData={mergedData}
             formContext={formContext}
-            className='flex flex-1 flex-col overflow-y-auto px-0 py-0'
+            className='flex flex-1 scroll-shadows-y flex-col overflow-x-hidden px-0 py-0'
             onChange={handleChange}
           />
         </>
       ) : (
-        <EmptyItems>
+        <EmptyItems className='mt-0'>
           <div className='mb-3 rounded-full bg-muted/50 p-2'>
             <Info className='size-6 text-muted-foreground' strokeWidth={1.5} />
           </div>

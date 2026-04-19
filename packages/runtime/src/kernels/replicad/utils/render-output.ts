@@ -1,21 +1,55 @@
 import type { AnyShape, Drawing } from 'replicad';
 import type { SetRequired } from 'type-fest';
 import type { GeometrySvg } from '@taucad/types';
-import type { Tessellation } from '#types/runtime-kernel.types.js';
 import { normalizeColor } from '#kernels/replicad/utils/normalize-color.js';
 import type { GeometryReplicad } from '#kernels/replicad/replicad.types.js';
+
+type Tessellation = {
+  linearTolerance: number;
+  angularTolerance: number;
+};
 
 type Meshable = SetRequired<AnyShape, 'mesh' | 'meshEdges'>;
 
 type Svgable = SetRequired<Drawing, 'toSVGPaths' | 'toSVGViewBox'>;
 
-/** A shape with optional display metadata for rendering. */
+/**
+ * A shape with optional display and material metadata for rendering.
+ *
+ * Returned from a Replicad model's `main()` function to control per-shape
+ * appearance in both GLTF preview rendering and STEP export.
+ *
+ * @public
+ *
+ * @example <caption>Shape with PBR material properties</caption>
+ * ```typescript
+ * import { makeCylinder } from 'replicad';
+ *
+ * export default function main() {
+ *   return {
+ *     shape: makeCylinder(10, 30),
+ *     color: '#C0C0C0',
+ *     metalness: 0.9,
+ *     roughness: 0.2,
+ *     density: 7.85,
+ *   };
+ * }
+ * ```
+ */
 export type InputShape = {
   shape: AnyShape;
   name?: string;
+  /** CSS hex color string (e.g. `'#ff0000'`). Applied to GLTF baseColor and STEP surface color. */
   color?: string;
+  /** Opacity from 0 (transparent) to 1 (opaque). Maps to GLTF alpha and STEP transparency. */
   opacity?: number;
   strokeType?: string;
+  /** PBR metalness factor (0 = dielectric, 1 = metal). Threaded to GLTF metallicFactor and STEP visual material. */
+  metalness?: number;
+  /** PBR roughness factor (0 = mirror, 1 = diffuse). Threaded to GLTF roughnessFactor and STEP visual material. */
+  roughness?: number;
+  /** Physical density in g/cm³. Written to STEP as XCAFDoc_Material for mass computation. */
+  density?: number;
 };
 
 type SvgShapeConfiguration = InputShape & { shape: Svgable };
@@ -119,12 +153,14 @@ const defaultPreviewTessellation: Tessellation = {
 };
 
 function renderMesh(shapeConfig: MeshableConfiguration, tessellation: Tessellation, withBrepEdges: boolean) {
-  const { name = 'Shape', shape, color, opacity } = shapeConfig;
+  const { name = 'Shape', shape, color, opacity, metalness, roughness } = shapeConfig;
   const geometry: GeometryReplicad = {
     format: 'replicad',
     name,
     color,
     opacity,
+    metalness,
+    roughness,
     faces: {
       triangles: [],
       vertices: [],
@@ -137,15 +173,17 @@ function renderMesh(shapeConfig: MeshableConfiguration, tessellation: Tessellati
     },
   };
 
+  const angularToleranceRad = tessellation.angularTolerance * (Math.PI / 180);
+
   geometry.faces = shape.mesh({
     tolerance: tessellation.linearTolerance,
-    angularTolerance: tessellation.angularTolerance,
+    angularTolerance: angularToleranceRad,
   });
 
   if (withBrepEdges) {
     geometry.edges = shape.meshEdges({
       tolerance: tessellation.linearTolerance,
-      angularTolerance: tessellation.angularTolerance,
+      angularTolerance: angularToleranceRad,
     });
   }
 

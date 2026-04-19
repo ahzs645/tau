@@ -86,6 +86,10 @@ function addCacheControlToAiMessage(message: AIMessage): AIMessage {
       tool_calls: message.tool_calls,
       // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
       additional_kwargs: additionalKwargs,
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
+      response_metadata: message.response_metadata,
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
+      usage_metadata: message.usage_metadata,
     });
   }
 
@@ -111,6 +115,10 @@ function addCacheControlToAiMessage(message: AIMessage): AIMessage {
       tool_calls: message.tool_calls,
       // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
       additional_kwargs: additionalKwargs,
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
+      response_metadata: message.response_metadata,
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
+      usage_metadata: message.usage_metadata,
     });
   }
 
@@ -131,6 +139,10 @@ function addCacheControlToAiMessage(message: AIMessage): AIMessage {
       tool_calls: message.tool_calls,
       // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
       additional_kwargs: additionalKwargs,
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
+      response_metadata: message.response_metadata,
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
+      usage_metadata: message.usage_metadata,
     });
   }
 

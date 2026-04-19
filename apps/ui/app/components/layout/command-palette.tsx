@@ -154,7 +154,8 @@ function CommandPaletteTrigger({ items }: CommandPaletteTriggerProperties): Reac
     <>
       <Button
         variant='outline'
-        className='relative h-8 w-full max-w-sm justify-start rounded-md bg-sidebar pl-3 text-sm font-normal text-muted-foreground shadow-none max-md:hidden sm:pr-12 md:w-32 dark:bg-sidebar'
+        size='sm'
+        className='relative w-full max-w-sm justify-start pl-3 text-muted-foreground max-md:hidden sm:pr-12 md:w-32'
         onClick={() => {
           setOpen(true);
         }}

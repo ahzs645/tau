@@ -8,13 +8,11 @@ import type { ChatRpcConfigurable } from '#api/tools/tool.types.js';
 
 export const screenshotToolDefinition = {
   name: toolName.screenshot,
-  description: `Capture a screenshot of the current 3D model for visual verification.
+  description: `Capture a screenshot of the current 3D model for visual inspection.
 
 Modes:
 - single: Captures the current camera perspective (1 image)
-- multi_angle: Captures a labeled composite of all 6 orthographic views (front, back, right, left, top, bottom) as a single image
-
-Use after tests pass to verify the model looks correct visually.`,
+- multi_angle: Captures a labeled composite of all 6 orthographic views (front, back, right, left, top, bottom) as a single image`,
   schema: screenshotInputSchema,
 } as const;
 

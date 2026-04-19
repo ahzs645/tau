@@ -9,7 +9,6 @@
  */
 
 import type { OpenCascadeInstance } from 'replicad-opencascadejs/src/replicad_single.js';
-import type { OpenCascadeInstance as OpenCascadeWithExceptions } from 'replicad-opencascadejs/src/replicad_with_exceptions.js';
 import type { KernelIssue, KernelStackFrame, ErrorLocation } from '#types/runtime.types.js';
 import { OcKernelError, formatOcExceptionMessage } from '#kernels/replicad/oc-kernel-error.js';
 
@@ -155,7 +154,7 @@ function decodeWebAssemblyException(
  * @returns the exception type name, or empty string on failure
  */
 function extractExceptionTypeName(
-  errorData: ReturnType<OpenCascadeWithExceptions['OCJS']['getStandard_FailureData']>,
+  errorData: ReturnType<OpenCascadeInstance['OCJS']['getStandard_FailureData']>,
 ): string {
   try {
     // oxlint-disable-next-line new-cap, @typescript-eslint/consistent-type-assertions -- OpenCASCADE C++ bindings use PascalCase methods; WASM binding type mismatch
@@ -184,10 +183,9 @@ function extractStandardFailureData(
   ocInstance: OpenCascadeInstance,
   errorPointer: number,
 ): { message: string; typeName: string; cppStack: string } {
-  const oc = ocInstance as OpenCascadeWithExceptions;
+  const oc = ocInstance;
   return withWasmObject(oc.OCJS.getStandard_FailureData(errorPointer), (errorData) => {
-    // oxlint-disable-next-line new-cap -- OpenCASCADE C++ bindings use PascalCase methods
-    const errorMessage = errorData.GetMessageString();
+    const errorMessage = errorData.what();
     // oxlint-disable-next-line new-cap -- OpenCASCADE C++ bindings use PascalCase methods
     const cppStack = errorData.GetStackString();
     const typeName = extractExceptionTypeName(errorData);
@@ -264,17 +262,22 @@ export function formatRuntimeErrorWithOc({
 
   if (isWebAssemblyException(error)) {
     const decoded = decodeWebAssemblyException(error, ocInstance as Partial<EmscriptenExceptionHelpers>);
-    if (decoded) {
-      const stackFrames = applySourceMaps(parseStackTrace(new Error(decoded.message)));
-      const location = deriveLocation(stackFrames, sourceMap);
-      return {
-        message: decoded.message,
-        location,
-        type: 'kernel',
-        severity: 'error',
-        stackFrames,
-      };
-    }
+    const message = decoded?.message ?? 'KernelError: The geometry kernel threw an undecodable C++ exception';
+
+    // WebAssembly.Exception is not an Error and has no .stack — parseStackTrace
+    // returns []. This is intentional: the OC proxy should have already
+    // converted it to an OcKernelError with Error.captureStackTrace. If we
+    // reach here, the exception bypassed the proxy; returning empty frames is
+    // more honest than manufacturing misleading framework frames.
+    const stackFrames = applySourceMaps(parseStackTrace(error));
+    const location = deriveLocation(stackFrames, sourceMap);
+    return {
+      message,
+      location,
+      type: 'kernel',
+      severity: 'error',
+      stackFrames,
+    };
   }
 
   const wasmException = extractWasmException(error);

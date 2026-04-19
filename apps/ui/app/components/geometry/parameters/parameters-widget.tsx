@@ -36,7 +36,6 @@ export function ParametersWidget(
 
       return (
         <ParametersNumber
-          className='w-26'
           value={numericValue}
           defaultValue={defaultNumericValue}
           descriptor={descriptor}

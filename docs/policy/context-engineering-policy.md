@@ -3,13 +3,17 @@ title: 'Context Engineering Policy'
 description: 'Comprehensive guide to optimizing system prompts and tool descriptions for LLM agents. Covers foundational principles, design techniques, tool guidelines, and anti-patterns.'
 status: active
 created: '2026-03-09'
-updated: '2026-03-09'
-related: []
+updated: '2026-03-24'
+related:
+  - docs/policy/filesystem-context-policy.md
+  - docs/research/transcript-search-architecture.md
 ---
 
 # Context Engineering Policy
 
 Internal reference for optimizing system prompts and tool descriptions for LLM agents, synthesized from 30+ sources published since July 2025.
+
+> **Implementation**: For rules on the filesystem-backed transcript, offloading, skills, memory, and compaction pipeline, see `docs/policy/filesystem-context-policy.md`.
 
 ## Rationale
 

@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { signalSlot, workerStateEnum } from '#types/runtime-protocol.types.js';
-import { RenderAbortedError, isRenderAbortedError } from '#framework/runtime-worker-client.js';
+import {
+  RenderAbortedError,
+  isRenderAbortedError,
+  RenderTimeoutError,
+  isRenderTimeoutError,
+} from '#framework/runtime-worker-client.js';
 
 /**
  * Tests for the autonomous kernel render loop patterns.
@@ -105,7 +110,7 @@ describe('Autonomous render loop patterns', () => {
   });
 
   describe('debounce scheduling', () => {
-    it('should debounce parameter changes at 50ms', () => {
+    it('should debounce parameter changes at 200ms', () => {
       const renderFunction = vi.fn();
       let timer: number | undefined;
 
@@ -115,15 +120,15 @@ describe('Autonomous render loop patterns', () => {
       };
 
       // Rapid parameter changes
-      scheduleRender(50);
-      scheduleRender(50);
-      scheduleRender(50);
+      scheduleRender(200);
+      scheduleRender(200);
+      scheduleRender(200);
 
       // Should not have rendered yet
       expect(renderFunction).not.toHaveBeenCalled();
 
-      // Advance 49ms - still not rendered
-      vi.advanceTimersByTime(49);
+      // Advance 199ms - still not rendered
+      vi.advanceTimersByTime(199);
       expect(renderFunction).not.toHaveBeenCalled();
 
       // Advance 1ms more - should render
@@ -131,7 +136,7 @@ describe('Autonomous render loop patterns', () => {
       expect(renderFunction).toHaveBeenCalledTimes(1);
     });
 
-    it('should debounce file changes at 500ms', () => {
+    it('should debounce file changes at 200ms', () => {
       const renderFunction = vi.fn();
       let timer: number | undefined;
 
@@ -140,9 +145,9 @@ describe('Autonomous render loop patterns', () => {
         timer = Number(setTimeout(renderFunction, delayMs));
       };
 
-      scheduleRender(500);
+      scheduleRender(200);
 
-      vi.advanceTimersByTime(499);
+      vi.advanceTimersByTime(199);
       expect(renderFunction).not.toHaveBeenCalled();
 
       vi.advanceTimersByTime(1);
@@ -158,13 +163,13 @@ describe('Autonomous render loop patterns', () => {
         timer = Number(setTimeout(renderFunction, delayMs));
       };
 
-      scheduleRender(500);
-      vi.advanceTimersByTime(400);
+      scheduleRender(200);
+      vi.advanceTimersByTime(100);
       expect(renderFunction).not.toHaveBeenCalled();
 
       // New change resets the timer
-      scheduleRender(500);
-      vi.advanceTimersByTime(400);
+      scheduleRender(200);
+      vi.advanceTimersByTime(100);
       expect(renderFunction).not.toHaveBeenCalled();
 
       vi.advanceTimersByTime(100);
@@ -248,6 +253,78 @@ describe('Autonomous render loop patterns', () => {
       expect(results).toHaveLength(1);
       expect(results[0]!.data).toBe('second');
       expect(results[0]!.generation).toBe(gen2);
+    });
+  });
+
+  describe('render timeout pattern', () => {
+    it('should reject with RenderTimeoutError when timeout elapses', async () => {
+      const timeoutMs = 500;
+
+      const renderWork = async (): Promise<string> =>
+        new Promise((resolve) => {
+          setTimeout(() => {
+            resolve('done');
+          }, 5000);
+        });
+
+      let timeoutId: ReturnType<typeof setTimeout>;
+      const raceWithTimeout = async (): Promise<string> => {
+        try {
+          return await Promise.race([
+            renderWork(),
+            new Promise<never>((_resolve, reject) => {
+              timeoutId = setTimeout(() => {
+                reject(new RenderTimeoutError(timeoutMs));
+              }, timeoutMs);
+            }),
+          ]);
+        } finally {
+          clearTimeout(timeoutId!);
+        }
+      };
+      const result = raceWithTimeout();
+
+      vi.advanceTimersByTime(timeoutMs);
+
+      await expect(result).rejects.toThrow(RenderTimeoutError);
+      try {
+        await result;
+      } catch (error) {
+        expect(isRenderTimeoutError(error)).toBe(true);
+        expect((error as Error).message).toContain('0.5 seconds');
+      }
+    });
+
+    it('should resolve normally when work completes before timeout', async () => {
+      const timeoutMs = 5000;
+
+      const renderWork = async (): Promise<string> =>
+        new Promise((resolve) => {
+          setTimeout(() => {
+            resolve('geometry');
+          }, 100);
+        });
+
+      let timeoutId: ReturnType<typeof setTimeout>;
+      const raceWithTimeout = async (): Promise<string> => {
+        try {
+          return await Promise.race([
+            renderWork(),
+            new Promise<never>((_resolve, reject) => {
+              timeoutId = setTimeout(() => {
+                reject(new RenderTimeoutError(timeoutMs));
+              }, timeoutMs);
+            }),
+          ]);
+        } finally {
+          clearTimeout(timeoutId!);
+        }
+      };
+      const result = raceWithTimeout();
+
+      vi.advanceTimersByTime(100);
+
+      await expect(result).resolves.toBe('geometry');
     });
   });
 });

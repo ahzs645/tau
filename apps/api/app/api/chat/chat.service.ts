@@ -5,10 +5,14 @@ import type { ReactAgent } from 'langchain';
 import { streamText } from 'ai';
 import type { ModelMessage } from 'ai';
 import type { KernelProvider } from '@taucad/runtime';
-import type { ToolSelection } from '@taucad/chat';
+import type { ToolSelection, ContextPayload } from '@taucad/chat';
 import type { ChatMode } from '@taucad/chat/constants';
 import { ModelService } from '#api/models/model.service.js';
-import { usageTrackingMiddleware } from '#api/chat/middleware/usage-tracking.middleware.js';
+import { createUsageTrackingMiddleware } from '#api/chat/middleware/usage-tracking.middleware.js';
+import { createToolMetricsMiddleware } from '#api/chat/middleware/tool-metrics.middleware.js';
+import { createLlmTimingMiddleware } from '#api/chat/middleware/llm-timing.middleware.js';
+import { createAgentIterationsMiddleware } from '#api/chat/middleware/agent-iterations.middleware.js';
+import { MetricsService } from '#telemetry/metrics.js';
 import { messageLoggingMiddleware } from '#api/chat/middleware/message-logging.middleware.js';
 import { toolErrorHandlerMiddleware } from '#api/chat/middleware/tool-error-handler.middleware.js';
 import { createCachedSystemMessage } from '#api/chat/utils/create-cached-system-message.js';
@@ -19,7 +23,18 @@ import { getCadSystemPrompt } from '#api/chat/prompts/cad-agent.prompt.js';
 import { toolResultTrimmerMiddleware } from '#api/chat/middleware/tool-result-trimmer.middleware.js';
 import { promptCachingMiddleware } from '#api/chat/middleware/prompt-caching.middleware.js';
 import { messageContentSanitizerMiddleware } from '#api/chat/middleware/message-content-sanitizer.middleware.js';
+import { latexDelimiterMiddleware } from '#api/chat/middleware/latex-delimiter.middleware.js';
+import { newlineTrimmerMiddleware } from '#api/chat/middleware/newline-trimmer.middleware.js';
+import { createCompactionMiddleware } from '#api/chat/middleware/compaction.middleware.js';
+import { createToolOffloadingMiddleware } from '#api/chat/middleware/tool-offloading.middleware.js';
+import { createTranscriptMiddleware } from '#api/chat/middleware/transcript.middleware.js';
+import { createContextUsageMiddleware } from '#api/chat/middleware/context-usage.middleware.js';
 import { CheckpointerService } from '#api/chat/checkpointer.service.js';
+import { CompactionService } from '#api/chat/compaction.service.js';
+import { TauRpcBackendFactory } from '#api/chat/tau-rpc-backend.js';
+import { ChatRpcService } from '#api/chat/chat-rpc.service.js';
+import { createClientContextMiddleware } from '#api/chat/middleware/client-context.middleware.js';
+import { Span } from '#telemetry/tracer.service.js';
 
 @Injectable()
 export class ChatService {
@@ -27,25 +42,15 @@ export class ChatService {
     private readonly modelService: ModelService,
     private readonly toolService: ToolService,
     private readonly checkpointerService: CheckpointerService,
+    private readonly metricsService: MetricsService,
+    private readonly compactionService: CompactionService,
+    private readonly rpcBackendFactory: TauRpcBackendFactory,
+    private readonly chatRpcService: ChatRpcService,
   ) {}
 
-  public getBuildNameGenerator(coreMessages: ModelMessage[]): ReturnType<typeof streamText> {
-    return streamText({
-      model: openai('gpt-4o-mini'),
-      messages: coreMessages,
-      system: projectNameGenerationSystemPrompt,
-    });
-  }
-
-  public getCommitMessageGenerator(coreMessages: ModelMessage[]): ReturnType<typeof streamText> {
-    return streamText({
-      model: openai('gpt-4o-mini'),
-      messages: coreMessages,
-      system: commitMessageGenerationSystemPrompt,
-    });
-  }
-
+  @Span()
   public async createAgent(options: {
+    chatId: string;
     modelId: string;
     kernel: KernelProvider;
     mode?: ChatMode;
@@ -53,8 +58,9 @@ export class ChatService {
       choice: ToolSelection;
       testingEnabled?: boolean;
     };
+    contextPayload?: ContextPayload;
   }): Promise<ReactAgent> {
-    const { modelId, kernel, mode = 'agent' } = options;
+    const { chatId, modelId, kernel, mode = 'agent', contextPayload } = options;
     const { choice, testingEnabled = true } = options.tools;
     const { tools } = this.toolService.getTools(choice);
 
@@ -82,27 +88,34 @@ export class ChatService {
     ].filter((tool) => tool !== undefined);
 
     // ==========================================================================
-    // Prompt Caching Strategy (2 breakpoints)
+    // Prompt Caching Strategy (3 breakpoints)
     // ==========================================================================
-    // We use TWO cache breakpoints for optimal caching:
+    // Block 1 (static): Globally-cached system prompt (role, workflow, kernel config)
+    //   → cache_control: { type: 'ephemeral', scope: 'global' } (Anthropic only)
+    // Block 2 (workspace): Skills + memory, injected by clientContextMiddleware
+    //   → cache_control: { type: 'ephemeral' }
+    // Block 3 (dynamic): Per-request content (model info, git status, transcript path)
+    //   → No cache_control
+    // Last message: Incremental conversation caching via promptCachingMiddleware
+    //   → cache_control: { type: 'ephemeral' }
     //
-    // 1. SYSTEM MESSAGE (here): Large (~15K+ tokens), stable content.
-    //    - Cached via createCachedSystemMessage
-    //    - Written once, read on every subsequent model call
-    //    - Cannot be moved to middleware because systemPrompt is passed
-    //      separately to createAgent, not in the messages array
-    //
-    // 2. LAST MESSAGE (middleware): Dynamic, growing conversation.
-    //    - Cached via promptCachingMiddleware on every model call
-    //    - Incrementally caches as conversation grows
-    //    - Handles HumanMessage, AIMessage, and ToolMessage
-    //
-    // Anthropic allows up to 4 breakpoints per request. This 2-breakpoint
-    // strategy ensures the stable system prompt is cached separately from
-    // the dynamic conversation, maximizing cache hits.
+    // 3 of 4 Anthropic breakpoint slots used, 1 reserved.
     // ==========================================================================
-    const systemPromptText = await getCadSystemPrompt(kernel, mode, testingEnabled);
-    const systemPrompt = createCachedSystemMessage(systemPromptText);
+    const contextWindow = this.modelService.getContextWindow(modelId);
+    const knowledgeCutoff = this.modelService.getKnowledgeCutoff(modelId);
+    const gitStatus = contextPayload?.gitStatus;
+    const { static: staticPrompt, dynamic: dynamicPrompt } = await getCadSystemPrompt(kernel, mode, testingEnabled, {
+      chatId,
+      modelId,
+      contextWindow,
+      knowledgeCutoff,
+      gitStatus,
+    });
+    // Global cache scope is currently disabled: enabling it requires the
+    // `prompt-caching-scope-2026-01-05` Anthropic beta on the configured API key.
+    // When the beta is available switch this to `getProviderId(modelId) === 'anthropic'`.
+    const useGlobalScope = false;
+    const systemPrompt = createCachedSystemMessage({ staticPrompt, dynamicPrompt, useGlobalScope });
 
     const agent = createAgent({
       model,
@@ -110,21 +123,56 @@ export class ChatService {
       systemPrompt,
       checkpointer,
       middleware: [
-        // Handle tool errors and convert to structured JSON (must wrap tool calls)
+        // --- Metrics and error handling ---
+        createToolMetricsMiddleware(this.metricsService),
         toolErrorHandlerMiddleware,
-        // Trim tool results (e.g., remove base64 images) before sending to the LLM
+
+        // --- Context prevention (offload large tool results before trimming) ---
+        createToolOffloadingMiddleware(this.rpcBackendFactory),
         toolResultTrimmerMiddleware,
-        // Ensure all AIMessages have text content (fixes interrupted thinking blocks)
+
+        // --- Context compaction ---
+        createCompactionMiddleware(this.compactionService, this.rpcBackendFactory, this.chatRpcService),
+
+        // --- Message processing ---
         messageContentSanitizerMiddleware,
-        // Add cache_control to last message for incremental caching (breakpoint 2)
+        newlineTrimmerMiddleware,
+        latexDelimiterMiddleware,
+
+        // --- Prompt caching (must follow compaction) ---
         promptCachingMiddleware,
-        // Log messages before each model call (for debugging)
+
+        // --- Logging and observability ---
         messageLoggingMiddleware,
-        // Track token usage and costs after each model call
-        usageTrackingMiddleware,
+        createLlmTimingMiddleware(this.metricsService),
+        createAgentIterationsMiddleware(this.metricsService),
+        createUsageTrackingMiddleware(this.metricsService),
+        createContextUsageMiddleware(),
+
+        // --- Transcript (captures final state) ---
+        createTranscriptMiddleware(this.chatRpcService),
+
+        // --- Client-side context injection (skills catalog + AGENTS.md memory) ---
+        createClientContextMiddleware(contextPayload),
       ],
     });
 
     return agent;
+  }
+
+  public getBuildNameGenerator(coreMessages: ModelMessage[]): ReturnType<typeof streamText> {
+    return streamText({
+      model: openai('gpt-4o-mini'),
+      messages: coreMessages,
+      system: projectNameGenerationSystemPrompt,
+    });
+  }
+
+  public getCommitMessageGenerator(coreMessages: ModelMessage[]): ReturnType<typeof streamText> {
+    return streamText({
+      model: openai('gpt-4o-mini'),
+      messages: coreMessages,
+      system: commitMessageGenerationSystemPrompt,
+    });
   }
 }

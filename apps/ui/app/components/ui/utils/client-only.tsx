@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 
+type ClientOnlyProps = {
+  readonly children: ReactNode;
+  /** Rendered during SSR and before the first client-side effect. Defaults to `null`. */
+  readonly fallback?: ReactNode;
+};
+
 /**
  * Client-only component.
  *
@@ -9,10 +15,11 @@ import type { ReactNode } from 'react';
  * This is achieved by only mounting children after a `useEffect` hook has run.
  *
  * @param props - The component props.
- * @param props.children - The children to render.
- * @returns The children if the component has mounted, otherwise null.
+ * @param props.children - The children to render on the client.
+ * @param props.fallback - Optional placeholder rendered during SSR and before hydration.
+ * @returns The children if the component has mounted, otherwise the fallback (or null).
  */
-export function ClientOnly({ children }: { readonly children: ReactNode }): ReactNode {
+export function ClientOnly({ children, fallback }: ClientOnlyProps): ReactNode {
   const [hasMounted, setHasMounted] = useState(false);
 
   useEffect(() => {
@@ -20,7 +27,7 @@ export function ClientOnly({ children }: { readonly children: ReactNode }): Reac
   }, []);
 
   if (!hasMounted) {
-    return null;
+    return fallback ?? null;
   }
 
   return children;

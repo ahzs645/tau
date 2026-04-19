@@ -6,10 +6,10 @@
  */
 
 /** Debounce delay (ms) for parameter-change re-renders. */
-export const parameterDebounceMs = 50;
+export const parameterDebounceMs = 200;
 
 /** Debounce delay (ms) for file-change re-renders. */
-export const fileChangeDebounceMs = 500;
+export const fileChangeDebounceMs = 200;
 
 /** Debounce delay (ms) for flushing batched worker logs to the main thread. */
 export const logFlushDebounceMs = 250;
@@ -20,8 +20,11 @@ export const messagePortCallTimeoutMs = 30_000;
 /** Polling interval (ms) used when `Atomics.waitAsync` is unavailable. Matches one frame at 60 fps. */
 export const waitAsyncPollIntervalMs = 16;
 
-/** Byte length of the SharedArrayBuffer signal channel (4 Int32 slots x 4 bytes). */
-export const signalBufferByteLength = 16;
+/** Byte length of the SharedArrayBuffer signal channel (5 Int32 slots x 4 bytes). */
+export const signalBufferByteLength = 20;
 
 /** Maximum byte length the growable SharedArrayBuffer can expand to. */
 export const signalBufferMaxByteLength = 64;
+
+/** Message type posted by workers to signal that initialization is complete and they are ready to receive bridge connections. */
+export const workerReadyMessageType = '__worker_ready__';

@@ -1,8 +1,8 @@
 import { geometries, maths } from '@jscad/modeling';
-import type { Primitive } from '@gltf-transform/core';
-import { Document, NodeIO } from '@gltf-transform/core';
 import { cadMaterialDefaults } from '@taucad/types/constants';
 import { transformNormalArray, transformVertexArray } from '#framework/common.js';
+import { writeGlb } from '#utils/glb-writer.js';
+import type { GlbInput, GlbNode, GlbPrimitive } from '#utils/glb-writer.js';
 
 /**
  * Type guard to check if a shape has a color property
@@ -34,7 +34,6 @@ function extractColorFromShape(shape: unknown): [number, number, number, number]
     return undefined;
   }
 
-  // JSCAD colors are already in 0-1 range
   const r = color[0] ?? 0.8;
   const g = color[1] ?? 0.8;
   const b = color[2] ?? 0.8;
@@ -83,21 +82,18 @@ function extractMeshDataFromJscadShapes(shapes: unknown[]): {
   normals: number[];
   indices: number[];
 } {
-  // Collect all polygons from all shapes
   const allPolygons: Array<{ vertices: maths.vec3.Vec3[] }> = [];
   for (const [index, singleShape] of shapes.entries()) {
     try {
       const polygons = geometries.geom3.toPolygons(singleShape as geometries.geom3.Geom3);
       allPolygons.push(...polygons);
     } catch (error) {
-      // Determine shape type for error message
       let shapeType: string;
       if (singleShape === null) {
         shapeType = 'null';
       } else if (singleShape === undefined) {
         shapeType = 'undefined';
       } else if (typeof singleShape === 'object') {
-        // Handle objects (including arrays, typed arrays, etc.)
         const ctorName = (singleShape as Record<string, unknown>).constructor.name;
         shapeType = ctorName ? String(ctorName) : 'Object';
       } else {
@@ -112,7 +108,6 @@ function extractMeshDataFromJscadShapes(shapes: unknown[]): {
     }
   }
 
-  // Build a mesh from the polygons with proper normals
   const vertices: number[] = [];
   const normals: number[] = [];
   const indices: number[] = [];
@@ -124,7 +119,6 @@ function extractMeshDataFromJscadShapes(shapes: unknown[]): {
       continue;
     }
 
-    // Calculate polygon normal using cross product
     const v1 = polyVertices[0];
     const v2 = polyVertices[1];
     const v3 = polyVertices[2];
@@ -133,15 +127,12 @@ function extractMeshDataFromJscadShapes(shapes: unknown[]): {
       continue;
     }
 
-    // Compute edges
     const edge1 = maths.vec3.subtract(maths.vec3.create(), v2, v1);
     const edge2 = maths.vec3.subtract(maths.vec3.create(), v3, v1);
 
-    // Compute normal via cross product
     const normal = maths.vec3.cross(maths.vec3.create(), edge1, edge2);
     maths.vec3.normalize(normal, normal);
 
-    // Triangulate the polygon (simple fan triangulation)
     const firstVertex = polyVertices[0];
     if (!firstVertex) {
       continue;
@@ -156,13 +147,8 @@ function extractMeshDataFromJscadShapes(shapes: unknown[]): {
         continue;
       }
 
-      // Add vertices
       vertices.push(vert1[0], vert1[1], vert1[2], vert2[0], vert2[1], vert2[2], vert3[0], vert3[1], vert3[2]);
-
-      // Add the same normal for all three vertices of this triangle
       normals.push(normal[0], normal[1], normal[2], normal[0], normal[1], normal[2], normal[0], normal[1], normal[2]);
-
-      // Add indices
       indices.push(vertexIndex, vertexIndex + 1, vertexIndex + 2);
       vertexIndex += 3;
     }
@@ -172,150 +158,50 @@ function extractMeshDataFromJscadShapes(shapes: unknown[]): {
 }
 
 /**
- * Create a glTF primitive from JSCAD mesh data.
+ * Build a GlbNode from a single JSCAD shape.
  *
- * Constructs a complete glTF primitive (mesh component) from pre-processed vertex data.
- * This includes geometry attributes (positions, normals), indices, and material properties.
- *
- * Always produces spec-compliant GLTF with Y-up coordinates and meter units.
- *
- * Material setup:
- * - Double-sided rendering enabled for robustness (handles reversed normals)
- * - Metallic: 0.1 (slightly reflective, mostly matte)
- * - Roughness: 0.7 (matte surface)
- * - Base color: Provided color or light gray [0.8, 0.8, 0.8, 1.0] for neutral appearance
- * - Alpha mode: BLEND if color has transparency, otherwise OPAQUE
- *
- * Primitive mode 4 specifies TRIANGLES (each 3 indices = 1 triangle).
- *
- * @internal
- *
- * @param document - glTF Document to create mesh components within
- * @param meshData - Object containing mesh data and optional color
- * @param meshData.vertices - Vertex position data
- * @param meshData.normals - Vertex normal data
- * @param meshData.indices - Triangle index data
- * @param meshData.color - Optional RGBA color tuple
- * @returns Configured glTF Primitive ready to be added to a Mesh
- *
- * @see {@link jscadToGltf} — the public API that orchestrates these helpers
+ * @param shape - the JSCAD geometry object
+ * @param shapeIndex - index for naming
+ * @returns the GlbNode, or undefined if no renderable geometry
  */
-function createPrimitiveFromJscadMesh(
-  document: Document,
-  meshData: {
-    vertices: number[];
-    normals: number[];
-    indices: number[];
-    color?: [number, number, number, number];
-  },
-): Primitive {
-  const { vertices, normals, indices, color } = meshData;
+function buildNodeFromJscadShape(shape: unknown, shapeIndex: number): GlbNode | undefined {
+  const color = extractColorFromShape(shape);
+  const { vertices, normals, indices } = extractMeshDataFromJscadShapes([shape]);
 
-  // Convert to typed arrays and transform coordinates from Z-up/mm to Y-up/meters
+  if (vertices.length === 0 || indices.length === 0) {
+    return undefined;
+  }
+
   const positions = transformVertexArray(vertices);
   const normalsArray = transformNormalArray(normals);
   const indicesArray = new Uint32Array(indices);
 
-  // Use provided color or default to light gray
   const baseColor: [number, number, number, number] = color ?? [0.8, 0.8, 0.8, 1];
 
-  // Create material with color styling
-  const material = document
-    .createMaterial()
-    .setDoubleSided(true)
-    .setMetallicFactor(cadMaterialDefaults.metallicFactor)
-    .setRoughnessFactor(cadMaterialDefaults.roughnessFactor)
-    .setBaseColorFactor(baseColor);
-
-  // Set alpha mode based on opacity
-  if (baseColor[3] < 1) {
-    material.setAlphaMode('BLEND');
-  } else {
-    material.setAlphaMode('OPAQUE');
-  }
-
-  // Set material name based on color for debugging
+  let materialName = 'default';
   if (color) {
-    const colorString = `rgba(${Math.round(color[0] * 255)},${Math.round(color[1] * 255)},${Math.round(color[2] * 255)},${color[3].toFixed(2)})`;
-    material.setName(colorString);
-  } else {
-    material.setName('default');
+    materialName = `rgba(${Math.round(color[0] * 255)},${Math.round(color[1] * 255)},${Math.round(color[2] * 255)},${color[3].toFixed(2)})`;
   }
 
-  // Create primitive with triangulated data
-  const primitive = document
-    .createPrimitive()
-    .setMode(4) // TRIANGLES mode
-    .setMaterial(material)
-    .setAttribute('POSITION', document.createAccessor().setType('VEC3').setArray(positions))
-    .setAttribute('NORMAL', document.createAccessor().setType('VEC3').setArray(normalsArray))
-    .setIndices(document.createAccessor().setType('SCALAR').setArray(indicesArray));
+  const primitive: GlbPrimitive = {
+    mode: 4,
+    positions,
+    normals: normalsArray,
+    indices: indicesArray,
+    material: {
+      baseColorFactor: baseColor,
+      metallicFactor: cadMaterialDefaults.metalnessFactor,
+      roughnessFactor: cadMaterialDefaults.roughnessFactor,
+      doubleSided: true,
+      alphaMode: baseColor[3] < 1 ? 'BLEND' : 'OPAQUE',
+      name: materialName,
+    },
+  };
 
-  return primitive;
-}
-
-/**
- * Create a GLTF document from JSCAD shapes with color support.
- *
- * Always produces spec-compliant GLTF with Y-up coordinates and meter units.
- *
- * Orchestrates the complete conversion pipeline from JSCAD geometries to a glTF document.
- * This function:
- * 1. Creates a new glTF Document with a buffer
- * 2. Creates a separate mesh/node for each shape to preserve individual geometry
- * 3. Applies coordinate transformation (Z-up/mm to Y-up/meters)
- * 4. Applies color from each shape to its material
- * 5. Adds all meshes to the scene
- *
- * Color handling:
- * - Each shape gets its own mesh with its own material
- * - Colors are preserved from colorize() applied to individual shapes
- * - Transparent colors (alpha < 1) are handled with BLEND alpha mode
- *
- * If no valid geometry is extracted (empty vertices or indices), the scene contains no mesh
- * but the document is still valid (which jscadToGltf handles by checking for empty geometry).
- *
- * @internal
- *
- * @param shapes - Array of JSCAD geometry objects to convert
- * @returns Complete glTF Document ready for serialization to GLB format
- *
- * @see {@link jscadToGltf} — the public API that orchestrates these helpers
- */
-function createGltfDocumentFromJscadShapes(shapes: unknown[]): Document {
-  const document = new Document();
-  document.createBuffer();
-
-  const scene = document.createScene();
-
-  // Process each shape separately to preserve individual geometry
-  for (const [shapeIndex, shape] of shapes.entries()) {
-    // Extract color from this shape
-    const color = extractColorFromShape(shape);
-
-    // Extract mesh data from this single shape
-    const { vertices, normals, indices } = extractMeshDataFromJscadShapes([shape]);
-
-    // Only create mesh if we have geometry
-    if (vertices.length > 0 && indices.length > 0) {
-      const mesh = document.createMesh();
-      const primitive = createPrimitiveFromJscadMesh(document, {
-        vertices,
-        normals,
-        indices,
-        color,
-      });
-      mesh.addPrimitive(primitive);
-
-      // Create a descriptive node name
-      const nodeName = `JSCAD_Shape_${shapeIndex}`;
-
-      const node = document.createNode().setMesh(mesh).setName(nodeName);
-      scene.addChild(node);
-    }
-  }
-
-  return document;
+  return {
+    name: `JSCAD_Shape_${shapeIndex}`,
+    primitives: [primitive],
+  };
 }
 
 /**
@@ -347,7 +233,7 @@ function createGltfDocumentFromJscadShapes(shapes: unknown[]): Document {
  * - Empty geometry (returns valid GLB with empty scene)
  * - Throws error for invalid or unconvertible shapes
  *
- * Material properties are set to sensible defaults (matte, double-sided, low metallic)
+ * Material properties are set to sensible defaults (matte, double-sided, low metalness)
  * suitable for preview visualization. For production export, use specialized exporters.
  *
  * @internal
@@ -357,30 +243,31 @@ function createGltfDocumentFromJscadShapes(shapes: unknown[]): Document {
  *               - Array of geometry objects
  *               - Any shape produced by @jscad/modeling functions
  *               - Shapes created with colorize() will preserve their colors
- * @returns Promise resolving to GLB Blob (binary glTF format)
- *          Type: 'model/gltf-binary'
+ * @returns GLB binary (binary glTF format)
  *
  * @throws {Error} If any shape cannot be converted to GLTF polygon
- * @throws May reject if glTF serialization fails (rare, typically only for memory issues)
  *
  * @example <caption>Converting JSCAD shapes to glTF</caption>
  * ```typescript
  * const shape = primitives.cube({ size: 10 });
- * const glb = await jscadToGltf(shape);
+ * const glb = jscadToGltf(shape);
  *
  * const redSphere = colors.colorize([1, 0, 0], primitives.sphere({ radius: 5 }));
  * const blueCube = colors.colorize([0, 0, 1, 0.5], primitives.cube({ size: 10 }));
- * const coloredGlb = await jscadToGltf([redSphere, blueCube]);
+ * const coloredGlb = jscadToGltf([redSphere, blueCube]);
  * ```
  */
-export async function jscadToGltf(shape: unknown): Promise<Uint8Array<ArrayBuffer>> {
-  // Handle array of geometries
+export function jscadToGltf(shape: unknown): Uint8Array<ArrayBuffer> {
   const shapes = Array.isArray(shape) ? shape : [shape];
 
-  // Create GLTF document using gltf-transform
-  const document = createGltfDocumentFromJscadShapes(shapes);
+  const nodes: GlbNode[] = [];
+  for (const [index, singleShape] of shapes.entries()) {
+    const node = buildNodeFromJscadShape(singleShape, index);
+    if (node) {
+      nodes.push(node);
+    }
+  }
 
-  // Write as GLB binary format
-  const glbBuffer = await new NodeIO().writeBinary(document);
-  return glbBuffer;
+  const input: GlbInput = { nodes };
+  return writeGlb(input);
 }

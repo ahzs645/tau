@@ -84,6 +84,19 @@
         "command": "vitest run --config vitest.integration.config.ts",
         "cwd": "{projectRoot}"
       }
+    },
+    "benchmark:models": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "node --import @oxc-node/core/register --import ./scripts/raw-loader.mts scripts/benchmark-models.mts",
+        "cwd": "{projectRoot}"
+      }
+    },
+    "grafana:sync": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bash apps/api/scripts/sync-grafana-dashboards.sh"
+      }
     }
   }
 }

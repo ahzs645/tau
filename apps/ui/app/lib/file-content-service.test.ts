@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { FileContentService } from '#lib/file-content-service.js';
+import { SharedPool } from '@taucad/memory';
 import type { FileManagerProxy } from '#machines/file-manager.machine.types.js';
 import type { ContentChangeEvent } from '#lib/file-content-service.js';
 
@@ -183,5 +184,164 @@ describe('FileContentService', () => {
 
     expect(proxy.getZippedDirectory).toHaveBeenCalledWith('/project');
     expect(result).toBe(blob);
+  });
+
+  // ── Orphan Tracking (VS Code inOrphanMode pattern) ──
+
+  describe('orphan tracking', () => {
+    function createEnoentError(path: string): Error {
+      const error = new Error(`ENOENT: no such file or directory '${path}'`);
+      (error as NodeJS.ErrnoException).code = 'ENOENT';
+      return error;
+    }
+
+    it('should mark path as orphaned when resolve rejects with file-not-found', async () => {
+      vi.mocked(proxy.readFile).mockRejectedValue(createEnoentError('/project/missing.ts'));
+
+      expect(service.isOrphaned('missing.ts')).toBe(false);
+
+      await expect(service.resolve('missing.ts')).rejects.toThrow('ENOENT');
+
+      expect(service.isOrphaned('missing.ts')).toBe(true);
+    });
+
+    it('should clear orphan when resolve succeeds', async () => {
+      vi.mocked(proxy.readFile).mockRejectedValueOnce(createEnoentError('/project/main.ts'));
+      await expect(service.resolve('main.ts')).rejects.toThrow('ENOENT');
+      expect(service.isOrphaned('main.ts')).toBe(true);
+
+      vi.mocked(proxy.readFile).mockResolvedValueOnce(new Uint8Array([1, 2, 3]));
+      service.reset('/project');
+      await service.resolve('main.ts');
+
+      expect(service.isOrphaned('main.ts')).toBe(false);
+    });
+
+    it('should clear orphan when write succeeds', async () => {
+      vi.mocked(proxy.readFile).mockRejectedValueOnce(createEnoentError('/project/main.ts'));
+      await expect(service.resolve('main.ts')).rejects.toThrow('ENOENT');
+      expect(service.isOrphaned('main.ts')).toBe(true);
+
+      await service.write('main.ts', new Uint8Array([1]), 'user');
+
+      expect(service.isOrphaned('main.ts')).toBe(false);
+    });
+
+    it('should set orphan when delete is called', async () => {
+      vi.mocked(proxy.readFile).mockResolvedValue(new Uint8Array([1]));
+      await service.resolve('main.ts');
+      expect(service.isOrphaned('main.ts')).toBe(false);
+
+      await service.delete('main.ts', 'user');
+
+      expect(service.isOrphaned('main.ts')).toBe(true);
+    });
+
+    it('should fire onDidChangeOrphaned event on orphan state transition', async () => {
+      const handler = vi.fn<(event: { path: string; orphaned: boolean }) => void>();
+      service.onDidChangeOrphaned(handler);
+
+      vi.mocked(proxy.readFile).mockRejectedValue(createEnoentError('/project/main.ts'));
+      await expect(service.resolve('main.ts')).rejects.toThrow('ENOENT');
+
+      expect(handler).toHaveBeenCalledOnce();
+      expect(handler).toHaveBeenCalledWith({ path: 'main.ts', orphaned: true });
+    });
+
+    it('should not fire onDidChangeOrphaned when state is unchanged', async () => {
+      const handler = vi.fn<(event: { path: string; orphaned: boolean }) => void>();
+      service.onDidChangeOrphaned(handler);
+
+      vi.mocked(proxy.readFile).mockRejectedValue(createEnoentError('/project/main.ts'));
+      await expect(service.resolve('main.ts')).rejects.toThrow('ENOENT');
+      handler.mockClear();
+
+      service.reset('/project');
+      vi.mocked(proxy.readFile).mockRejectedValue(createEnoentError('/project/main.ts'));
+      await expect(service.resolve('main.ts')).rejects.toThrow('ENOENT');
+
+      expect(handler).toHaveBeenCalledOnce();
+    });
+
+    it('should clear all orphans on reset', async () => {
+      vi.mocked(proxy.readFile).mockRejectedValue(createEnoentError('/project/a.ts'));
+      await expect(service.resolve('a.ts')).rejects.toThrow('ENOENT');
+      expect(service.isOrphaned('a.ts')).toBe(true);
+
+      service.reset('/project');
+
+      expect(service.isOrphaned('a.ts')).toBe(false);
+    });
+  });
+
+  describe('cache capacity', () => {
+    it('should accept 500 entries before eviction with default cache options', async () => {
+      const svc = new FileContentService({
+        proxy: createMockProxy({
+          readFile: vi.fn().mockImplementation(async () => new Uint8Array([1])),
+        }),
+        rootDirectory: '/project',
+      });
+
+      for (let i = 0; i < 500; i++) {
+        // oxlint-disable-next-line no-await-in-loop -- Sequential cache population required
+        await svc.resolve(`file-${i}.ts`);
+      }
+
+      for (let i = 0; i < 500; i++) {
+        expect(svc.peek(`file-${i}.ts`)).toBeDefined();
+      }
+    });
+  });
+
+  describe('SharedPool integration', () => {
+    const encoder = new TextEncoder();
+
+    function createPoolService() {
+      const buffer = new SharedArrayBuffer(128 * 1024);
+      const pool = new SharedPool(buffer, { maxEntries: 128 });
+      const mockProxy = createMockProxy();
+      const svc = new FileContentService({
+        proxy: mockProxy,
+        rootDirectory: '/project',
+        filePool: pool,
+      });
+      return { service: svc, pool, proxy: mockProxy };
+    }
+
+    it('should resolve from shared pool on BoundedFileCache miss', async () => {
+      const { service: svc, pool, proxy: mockProxy } = createPoolService();
+
+      pool.store('/project/pooled.ts', encoder.encode('pool content'));
+
+      const result = await svc.resolve('pooled.ts');
+      expect(new TextDecoder().decode(result)).toBe('pool content');
+      expect(mockProxy.readFile).not.toHaveBeenCalled();
+    });
+
+    it('should fall through to worker RPC on double miss', async () => {
+      const { service: svc, proxy: mockProxy } = createPoolService();
+
+      const workerData = new Uint8Array([7, 8, 9]);
+      vi.mocked(mockProxy.readFile).mockResolvedValue(workerData);
+
+      const result = await svc.resolve('worker-only.ts');
+      expect(mockProxy.readFile).toHaveBeenCalledWith('/project/worker-only.ts');
+      expect(result).toEqual(workerData);
+    });
+
+    it('should preserve existing BoundedFileCache behavior', async () => {
+      const { service: svc, proxy: mockProxy } = createPoolService();
+
+      const workerData = new Uint8Array([1, 2, 3]);
+      vi.mocked(mockProxy.readFile).mockResolvedValue(workerData);
+
+      await svc.resolve('cached.ts');
+      vi.mocked(mockProxy.readFile).mockClear();
+
+      const result = await svc.resolve('cached.ts');
+      expect(mockProxy.readFile).not.toHaveBeenCalled();
+      expect(result).toEqual(workerData);
+    });
   });
 });

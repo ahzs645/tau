@@ -7,12 +7,15 @@
  * This is the reference implementation of the defineKernel pattern.
  */
 
-import { importToGlb, exportFromGlb, supportedImportFormats } from '@taucad/converter';
-import type { SupportedImportFormat, SupportedExportFormat, FileResolver } from '@taucad/converter';
+import { importToGlb } from '@taucad/converter';
+import type { SupportedImportFormat, FileResolver } from '@taucad/converter';
 import { defineKernel } from '#types/runtime-kernel.types.js';
+import { tauExportSchemas } from '#kernels/tau/tau.schemas.js';
 import type { RuntimeFileSystem } from '#types/runtime-kernel.types.js';
+import { resolveToRelative } from '#kernels/kernel-module-helpers.js';
 import type { KernelIssue } from '#types/runtime.types.js';
 import { createKernelError, createKernelSuccess } from '#kernels/kernel-helpers.js';
+import { createExportFile } from '@taucad/types/constants';
 
 function getFileExtension(filename: string): string {
   const lastDotIndex = filename.lastIndexOf('.');
@@ -31,15 +34,6 @@ function getBasename(filename: string): string {
 function getDirname(filepath: string): string {
   const lastSlashIndex = filepath.lastIndexOf('/');
   return lastSlashIndex === -1 ? '' : filepath.slice(0, lastSlashIndex);
-}
-
-function resolveToRelative(absolutePath: string, basePath: string): string {
-  const normalizedBase = basePath.endsWith('/') ? basePath.slice(0, -1) : basePath;
-  if (absolutePath.startsWith(`${normalizedBase}/`)) {
-    return absolutePath.slice(normalizedBase.length + 1);
-  }
-
-  return absolutePath;
 }
 
 /**
@@ -91,17 +85,14 @@ async function createDirectoryResolver(filesystem: RuntimeFileSystem, directory:
 export default defineKernel({
   name: 'TauKernel',
   version: '1.0.0',
+  exportSchemas: tauExportSchemas,
 
   async initialize() {
     return {};
   },
 
-  async canHandle({ extension }) {
-    return supportedImportFormats.includes(extension as SupportedImportFormat);
-  },
-
   async getDependencies({ filePath }) {
-    return [filePath];
+    return { resolved: [filePath], unresolved: [] };
   },
 
   async getParameters() {
@@ -156,35 +147,38 @@ export default defineKernel({
     }
   },
 
-  async exportGeometry({ fileType, nativeHandle }, { logger }, _context) {
-    try {
-      if (nativeHandle.length === 0) {
+  async exportGeometry(input, { logger }, _context) {
+    const { format, nativeHandle } = input;
+
+    if (nativeHandle.length === 0) {
+      return createKernelError([
+        {
+          message: 'No geometry available for export. Please build geometries before exporting.',
+          type: 'runtime',
+          severity: 'error',
+        },
+      ]);
+    }
+
+    switch (format) {
+      case 'glb':
+      case 'gltf': {
+        logger.log('Exporting geometry', { data: { format } });
+        const file = createExportFile(format, `model.${format}`, nativeHandle);
+        logger.log('Successfully exported geometry');
+        return createKernelSuccess([file]);
+      }
+
+      default: {
+        const _exhaustive: never = format;
         return createKernelError([
           {
-            message: 'No geometry available for export. Please build geometries before exporting.',
+            message: `Tau kernel only supports glb and gltf export. Use a transcoder for '${_exhaustive as string}'.`,
             type: 'runtime',
             severity: 'error',
           },
         ]);
       }
-
-      logger.log('Exporting geometry', { data: { format: fileType } });
-
-      const files = await exportFromGlb(nativeHandle, fileType as SupportedExportFormat);
-
-      logger.log('Successfully exported geometry');
-
-      return createKernelSuccess(files);
-    } catch (error) {
-      logger.error('Error exporting geometry', { data: error });
-      const errorMessage = error instanceof Error ? error.message : 'Failed to export geometry';
-      return createKernelError([
-        {
-          message: errorMessage,
-          type: 'runtime',
-          severity: 'error',
-        },
-      ]);
     }
   },
 });

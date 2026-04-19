@@ -11,6 +11,8 @@ import {
   environmentBaseIntensity,
   lightingUserDataKeys,
   poleFadeAngleDeg,
+  darkModeIntensityScale,
+  darkModeAmbientBoost,
 } from '#components/geometry/graphics/three/utils/lights.utils.js';
 import type { HeadlampConfig, LightingConfig } from '#components/geometry/graphics/three/utils/lights.utils.js';
 
@@ -765,6 +767,82 @@ describe('applyLightingForCamera', () => {
       const isIdentical =
         Math.abs(rot1.x - rot2.x) < 1e-6 && Math.abs(rot1.y - rot2.y) < 1e-6 && Math.abs(rot1.z - rot2.z) < 1e-6;
       expect(isIdentical).toBe(false);
+    });
+  });
+
+  describe('theme intensity scaling', () => {
+    it('should scale environment intensity by themeIntensityScale at reference FOV', () => {
+      const scene = createTestScene();
+      const camera = createTestCamera(54);
+      const config = createDefaultLightingConfig({
+        themeIntensityScale: darkModeIntensityScale,
+      });
+
+      applyLightingForCamera({ scene, camera, headlamp: undefined, ambient: undefined, config });
+
+      expect(scene.environmentIntensity).toBeCloseTo(environmentBaseIntensity * darkModeIntensityScale, 2);
+    });
+
+    it('should scale headlamp intensity by themeIntensityScale at reference FOV', () => {
+      const scene = createTestScene();
+      const camera = createTestCamera(54);
+      const headlamp = new THREE.DirectionalLight('white', 1);
+      scene.add(headlamp);
+      scene.add(headlamp.target);
+      const config = createDefaultLightingConfig({
+        themeIntensityScale: darkModeIntensityScale,
+      });
+
+      applyLightingForCamera({ scene, camera, headlamp, ambient: undefined, config });
+
+      expect(headlamp.intensity).toBeCloseTo(headlampBaseIntensity * darkModeIntensityScale, 2);
+    });
+
+    it('should scale ambient intensity by themeIntensityScale × themeAmbientBoost at reference FOV', () => {
+      const scene = createTestScene();
+      const camera = createTestCamera(54);
+      const ambient = new THREE.AmbientLight('white', 1);
+      scene.add(ambient);
+      const config = createDefaultLightingConfig({
+        themeIntensityScale: darkModeIntensityScale,
+        themeAmbientBoost: darkModeAmbientBoost,
+      });
+
+      applyLightingForCamera({ scene, camera, headlamp: undefined, ambient, config });
+
+      const expected = ambientBaseIntensity * darkModeIntensityScale * darkModeAmbientBoost;
+      expect(ambient.intensity).toBeCloseTo(expected, 4);
+    });
+
+    it('should default to 1.0 when theme fields are undefined (backward compatible)', () => {
+      const scene = createTestScene();
+      const camera = createTestCamera(54);
+      const headlamp = new THREE.DirectionalLight('white', 1);
+      scene.add(headlamp);
+      scene.add(headlamp.target);
+      const ambient = new THREE.AmbientLight('white', 1);
+      scene.add(ambient);
+      const config = createDefaultLightingConfig();
+
+      applyLightingForCamera({ scene, camera, headlamp, ambient, config });
+
+      expect(scene.environmentIntensity).toBeCloseTo(environmentBaseIntensity, 2);
+      expect(headlamp.intensity).toBeCloseTo(headlampBaseIntensity, 2);
+      expect(ambient.intensity).toBeCloseTo(ambientBaseIntensity, 2);
+    });
+
+    it('should compose theme scaling with FOV compensation at low FOV', () => {
+      const scene = createTestScene();
+      const camera = createTestCamera(10);
+      const config = createDefaultLightingConfig({
+        themeIntensityScale: darkModeIntensityScale,
+      });
+
+      applyLightingForCamera({ scene, camera, headlamp: undefined, ambient: undefined, config });
+
+      // At low FOV with dark mode: environment should be less than both the
+      // base value AND the dark-mode-only value (both FOV and theme dim it)
+      expect(scene.environmentIntensity).toBeLessThan(environmentBaseIntensity * darkModeIntensityScale);
     });
   });
 });

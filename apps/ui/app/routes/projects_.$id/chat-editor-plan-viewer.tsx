@@ -1,21 +1,18 @@
 import { MarkdownViewer } from '#components/markdown/markdown-viewer.js';
+import { ChatEditorBreadcrumbs } from '#routes/projects_.$id/chat-editor-breadcrumbs.js';
+import type { ChatEditorViewerProps } from '#routes/projects_.$id/chat-editor-viewer.types.js';
 
-type ChatEditorPlanViewerProperties = {
-  readonly content: string;
-  readonly filePath: string;
-};
-
-export function ChatEditorPlanViewer({
-  content,
-  filePath: _filePath,
-}: ChatEditorPlanViewerProperties): React.JSX.Element {
+export function ChatEditorPlanViewer({ filePath, content }: ChatEditorViewerProps): React.JSX.Element {
   return (
-    <div className='flex h-full flex-col overflow-auto bg-background'>
-      <div className='mx-auto w-full max-w-3xl px-6 py-8'>
-        <MarkdownViewer className='prose-sm dark:prose-invert prose prose-headings:font-semibold prose-p:text-muted-foreground prose-li:text-muted-foreground'>
-          {content}
-        </MarkdownViewer>
+    <>
+      <ChatEditorBreadcrumbs filePath={filePath} />
+      <div className='flex h-full flex-col overflow-auto bg-background'>
+        <div className='mx-auto w-full max-w-3xl px-6 pt-3 pb-8'>
+          <MarkdownViewer className='prose-sm dark:prose-invert prose prose-headings:font-semibold prose-p:text-muted-foreground prose-li:text-muted-foreground'>
+            {content}
+          </MarkdownViewer>
+        </div>
       </div>
-    </div>
+    </>
   );
 }

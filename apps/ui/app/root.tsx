@@ -27,7 +27,6 @@ import { RootCommandPaletteItems } from '#root-command-items.js';
 import { ProjectManagerProvider } from '#hooks/use-project-manager.js';
 import { FileManagerProvider } from '#hooks/use-file-manager.js';
 import { AnalyticsProvider } from '#hooks/use-analytics.js';
-import { ChatRpcSocketProvider } from '#hooks/use-chat-rpc-socket.js';
 import { KeyboardProvider } from '#hooks/use-keyboard.js';
 import { UnloadProvider } from '#hooks/use-flush-on-close.js';
 
@@ -98,21 +97,19 @@ export function Layout({ children }: { readonly children: ReactNode }): React.JS
         <AnalyticsProvider>
           <FileManagerProvider rootDirectory='/'>
             <ProjectManagerProvider>
-              <ChatRpcSocketProvider>
-                <ThemeProvider specifiedTheme={ssrTheme} themeAction='/action/set-theme'>
-                  <ColorProvider>
-                    <TooltipProvider>
-                      <KeyboardProvider>
-                        <UnloadProvider>
-                          <LayoutDocument env={data?.env ?? {}} ssrTheme={ssrTheme}>
-                            {children}
-                          </LayoutDocument>
-                        </UnloadProvider>
-                      </KeyboardProvider>
-                    </TooltipProvider>
-                  </ColorProvider>
-                </ThemeProvider>
-              </ChatRpcSocketProvider>
+              <ThemeProvider specifiedTheme={ssrTheme} themeAction='/action/set-theme'>
+                <ColorProvider>
+                  <TooltipProvider>
+                    <KeyboardProvider>
+                      <UnloadProvider>
+                        <LayoutDocument env={data?.env ?? {}} ssrTheme={ssrTheme}>
+                          {children}
+                        </LayoutDocument>
+                      </UnloadProvider>
+                    </KeyboardProvider>
+                  </TooltipProvider>
+                </ColorProvider>
+              </ThemeProvider>
             </ProjectManagerProvider>
           </FileManagerProvider>
         </AnalyticsProvider>

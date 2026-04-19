@@ -1,7 +1,7 @@
 diff --git a/dist/replicad.d.ts b/dist/replicad.d.ts
 --- a/dist/replicad.d.ts
 +++ b/dist/replicad.d.ts
-@@ -2060,14 +2060,14 @@
+@@ -2144,12 +2144,12 @@
          extrusionProfile?: ExtrusionProfile;
          twistAngle?: number;
          origin?: Point;
@@ -16,5 +16,3 @@ diff --git a/dist/replicad.d.ts b/dist/replicad.d.ts
 -    }): AnyShape;
 +    }): Shape3D;
  }
- 
- /**

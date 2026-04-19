@@ -26,14 +26,14 @@ type PendingEvent = {
 export type CoalescerOptions = {
   /** Window in milliseconds for coalescing events. Default: 50. */
   windowMs?: number;
-  /** Maximum queue depth before emitting overflow. Default: 1000. */
+  /** Maximum queue depth before emitting overflow. Default: 10,000. */
   maxQueueDepth?: number;
   /** Called when queue depth is exceeded. */
   onOverflow?: () => void;
 };
 
 const defaultWindowMs = 50;
-const defaultMaxQueueDepth = 1000;
+const defaultMaxQueueDepth = 10_000;
 
 /**
  * Buffers {@link ChangeEvent}s within a time window and applies coalescing
@@ -79,7 +79,10 @@ export class EventCoalescer {
 
     this._pending.push({ event, timestamp: Date.now() });
 
-    this._timer ??= setTimeout(() => {
+    if (this._timer !== undefined) {
+      clearTimeout(this._timer);
+    }
+    this._timer = setTimeout(() => {
       this._flush();
     }, this._windowMs);
   }

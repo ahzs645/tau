@@ -30,4 +30,42 @@ describe('createMemoryProvider', () => {
     expect(await a.exists('/only-in-a.txt')).toBe(true);
     expect(await b.exists('/only-in-a.txt')).toBe(false);
   });
+
+  it('should throw ENOTEMPTY when rmdir is called on a non-empty directory', async () => {
+    const provider = await createMemoryProvider();
+    await provider.mkdir('/parent');
+    await provider.writeFile('/parent/child.txt', 'data');
+
+    await expect(provider.rmdir('/parent')).rejects.toThrow('ENOTEMPTY');
+  });
+
+  it('should succeed when rmdir is called on an empty directory', async () => {
+    const provider = await createMemoryProvider();
+    await provider.mkdir('/empty-dir');
+
+    await expect(provider.rmdir('/empty-dir')).resolves.toBeUndefined();
+    expect(await provider.exists('/empty-dir')).toBe(false);
+  });
+
+  it('should return entries with stats from readdirWithStats', async () => {
+    const provider = await createMemoryProvider();
+    await provider.mkdir('/src');
+    await provider.writeFile('/src/index.ts', 'export {}');
+    await provider.mkdir('/src/utils');
+
+    const entries = await provider.readdirWithStats('/src');
+    expect(entries).toHaveLength(2);
+
+    const fileEntry = entries.find((entry) => entry.name === 'index.ts');
+    const directoryEntry = entries.find((entry) => entry.name === 'utils');
+
+    expect(fileEntry).toBeDefined();
+    expect(fileEntry!.isFile).toBe(true);
+    expect(fileEntry!.isDirectory).toBe(false);
+    expect(fileEntry!.size).toBeGreaterThan(0);
+
+    expect(directoryEntry).toBeDefined();
+    expect(directoryEntry!.isDirectory).toBe(true);
+    expect(directoryEntry!.isFile).toBe(false);
+  });
 });

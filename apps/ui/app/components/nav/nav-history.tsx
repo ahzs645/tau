@@ -19,6 +19,7 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from '#components/ui/sidebar.js';
+import { Skeleton } from '#components/ui/skeleton.js';
 import { useProjects } from '#hooks/use-projects.js';
 import { toast } from '#components/ui/sonner.js';
 import { groupItemsByTimeHorizon } from '#utils/temporal.utils.js';
@@ -31,7 +32,7 @@ export function NavHistory(): ReactNode {
   const [visibleCount, setVisibleCount] = useState(projectsPerPage);
   const [editingId, setEditingId] = useState<string | undefined>(undefined);
   const [searchQuery, setSearchQuery] = useState('');
-  const { projects, deleteProject, duplicateProject, updateName } = useProjects();
+  const { projects, isLoading, deleteProject, duplicateProject, updateName } = useProjects();
   const navigate = useNavigate();
 
   // Filter projects based on search query
@@ -139,6 +140,24 @@ export function NavHistory(): ReactNode {
     // Prevent the search from triggering sidebar navigation
     event.stopPropagation();
   };
+
+  if (isLoading && projects.length === 0) {
+    return (
+      <SidebarGroup className='group-data-[collapsible=icon]:hidden'>
+        <SidebarGroupLabel>Recent Projects</SidebarGroupLabel>
+        <SidebarMenu data-testid='nav-history-skeleton'>
+          {Array.from({ length: 3 }, (_, i) => (
+            <SidebarMenuItem key={i}>
+              <SidebarMenuButton>
+                <Skeleton className='h-4 w-4 rounded' />
+                <Skeleton className='h-4 flex-1' />
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          ))}
+        </SidebarMenu>
+      </SidebarGroup>
+    );
+  }
 
   if (projects.length === 0) {
     return null;

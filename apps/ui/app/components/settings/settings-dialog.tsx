@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import type { MouseEvent } from 'react';
 import { AccountView } from '@daveyplate/better-auth-ui';
-import { CreditCard, FlaskConical, HardDrive, Key, Lock, Settings2, User } from 'lucide-react';
+import { Bot, BrainCircuit, CreditCard, FlaskConical, HardDrive, Key, Lock, Settings2, User } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '#components/ui/dialog.js';
 import {
@@ -14,6 +14,8 @@ import type { SettingsSection } from '#hooks/use-settings-dialog.js';
 import { FileSystemSettings } from '#components/settings/filesystem-settings.js';
 import { GeneralSettings } from '#components/settings/general-settings.js';
 import { ExperimentalSettings } from '#components/settings/experimental-settings.js';
+import { ModelSettings } from '#components/settings/model-settings.js';
+import { AgentSettings } from '#components/settings/agent-settings.js';
 import { SettingsAuthGate } from '#components/settings/settings-auth-gate.js';
 import { cn } from '#utils/ui.utils.js';
 import { useKeybinding } from '#hooks/use-keyboard.js';
@@ -21,31 +23,26 @@ import { ResponsiveTabs } from '#components/ui/responsive-tabs.js';
 import type { ResponsiveTabItem } from '#components/ui/responsive-tabs.js';
 import { TabsContent } from '#components/ui/tabs.js';
 
+type SettingsGroup = 'platform' | 'ai' | 'advanced';
+
 type SettingsSectionDefinition = {
   readonly id: SettingsSection;
   readonly label: string;
   readonly icon: LucideIcon;
   readonly requiresAuth: boolean;
+  readonly group: SettingsGroup;
 };
 
 const sections: readonly SettingsSectionDefinition[] = [
-  { id: 'general', label: 'General', icon: Settings2, requiresAuth: false },
-  {
-    id: 'filesystem',
-    label: 'Filesystem',
-    icon: HardDrive,
-    requiresAuth: false,
-  },
-  { id: 'account', label: 'Account', icon: User, requiresAuth: true },
-  { id: 'security', label: 'Security', icon: Lock, requiresAuth: true },
-  { id: 'api-keys', label: 'API Keys', icon: Key, requiresAuth: true },
-  { id: 'billing', label: 'Billing', icon: CreditCard, requiresAuth: true },
-  {
-    id: 'experimental',
-    label: 'Experimental',
-    icon: FlaskConical,
-    requiresAuth: false,
-  },
+  { id: 'general', label: 'General', icon: Settings2, requiresAuth: false, group: 'platform' },
+  { id: 'account', label: 'Account', icon: User, requiresAuth: true, group: 'platform' },
+  { id: 'security', label: 'Security', icon: Lock, requiresAuth: true, group: 'platform' },
+  { id: 'api-keys', label: 'API Keys', icon: Key, requiresAuth: true, group: 'platform' },
+  { id: 'billing', label: 'Billing', icon: CreditCard, requiresAuth: true, group: 'platform' },
+  { id: 'models', label: 'Models', icon: Bot, requiresAuth: false, group: 'ai' },
+  { id: 'agents', label: 'Agents', icon: BrainCircuit, requiresAuth: false, group: 'ai' },
+  { id: 'filesystem', label: 'Filesystem', icon: HardDrive, requiresAuth: false, group: 'advanced' },
+  { id: 'experimental', label: 'Experimental', icon: FlaskConical, requiresAuth: false, group: 'advanced' },
 ] as const;
 
 const sectionPathMap: Record<SettingsSection, string> = {
@@ -55,6 +52,8 @@ const sectionPathMap: Record<SettingsSection, string> = {
   security: '/settings/security',
   'api-keys': '/settings/api-keys',
   billing: '/settings/billing',
+  models: '/settings/models',
+  agents: '/settings/agents',
   experimental: '/settings/experimental',
 };
 
@@ -63,10 +62,11 @@ const sectionPathMap: Record<SettingsSection, string> = {
  * settings routes so that ResponsiveTabs renders correctly. Navigation
  * is intercepted via onClickCapture to prevent actual route changes.
  */
-const settingsTabs: readonly ResponsiveTabItem[] = sections.map((s) => ({
-  label: s.label,
-  href: sectionPathMap[s.id],
-  icon: s.icon,
+const settingsTabs: readonly ResponsiveTabItem[] = sections.map((section) => ({
+  label: section.label,
+  href: sectionPathMap[section.id],
+  icon: section.icon,
+  group: section.group,
 }));
 
 /** Reverse lookup: path -> section id */
@@ -125,11 +125,11 @@ export function SettingsDialog(): React.JSX.Element {
 
   return (
     <Dialog open={isOpen} onOpenChange={handleOpenChange}>
-      <DialogContent className={cn('gap-0 overflow-hidden', 'h-[min(90vh,640px)]', 'sm:max-w-4xl')}>
+      <DialogContent className={cn('gap-0 overflow-hidden', 'h-[min(90vh,640px)] grid-rows-[1fr]', 'sm:max-w-4xl')}>
         <DialogTitle className='sr-only'>Settings</DialogTitle>
         <DialogDescription className='sr-only'>Application settings and preferences</DialogDescription>
 
-        <div className='size-full overflow-y-auto' onClickCapture={handleClickCapture}>
+        <div className='size-full min-h-0 overflow-hidden' onClickCapture={handleClickCapture}>
           <ResponsiveTabs tabs={settingsTabs} activeTab={activeTab} enableContentAnimation={false}>
             {authSections.map((sectionId) => (
               <TabsContent
@@ -161,6 +161,12 @@ export function SettingsDialog(): React.JSX.Element {
               <SettingsAuthGate>
                 <div className='py-4 text-sm text-muted-foreground'>Billing - coming soon.</div>
               </SettingsAuthGate>
+            </TabsContent>
+            <TabsContent enableAnimation={false} value='Models'>
+              <ModelSettings />
+            </TabsContent>
+            <TabsContent enableAnimation={false} value='Agents'>
+              <AgentSettings />
             </TabsContent>
             <TabsContent enableAnimation={false} value='Experimental'>
               <ExperimentalSettings />

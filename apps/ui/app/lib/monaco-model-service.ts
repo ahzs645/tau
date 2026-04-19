@@ -158,30 +158,21 @@ export class MonacoModelService {
   }
 
   /**
-   * Register an editor hold for a path. Creates model if needed.
-   * Call when the editor opens a file.
+   * Acquire a ref-counted editor hold on a path and ensure the model exists.
+   * Returns the model, or undefined if the file can't be loaded.
+   * Each call must be balanced by a corresponding `releaseModel` call.
    */
-  public registerEditorModel(path: string): void {
-    const current = this.editorHolds.get(path) ?? 0;
-    this.editorHolds.set(path, current + 1);
-
-    // Remove from background tracking since it's now editor-held
-    this.backgroundAccessTimes.delete(path);
+  public async acquireModel(path: string): Promise<Monaco.editor.ITextModel | undefined> {
+    this.registerEditorModel(path);
+    return this.getOrEnsureModel(path);
   }
 
   /**
-   * Unregister an editor hold for a path.
-   * Call when the editor closes a file (or switches away).
+   * Release a ref-counted editor hold. When the last hold is released,
+   * the model transitions to the background pool (subject to TTL/cap eviction).
    */
-  public unregisterEditorModel(path: string): void {
-    const current = this.editorHolds.get(path) ?? 0;
-    if (current <= 1) {
-      this.editorHolds.delete(path);
-      // Move to background tracking
-      this.backgroundAccessTimes.set(path, Date.now());
-    } else {
-      this.editorHolds.set(path, current - 1);
-    }
+  public releaseModel(path: string): void {
+    this.unregisterEditorModel(path);
   }
 
   /**
@@ -250,6 +241,25 @@ export class MonacoModelService {
       backgroundCount: this.backgroundAccessTimes.size,
       currentModelCount: this.monaco?.editor.getModels().length ?? 0,
     };
+  }
+
+  private registerEditorModel(path: string): void {
+    const current = this.editorHolds.get(path) ?? 0;
+    this.editorHolds.set(path, current + 1);
+
+    // Remove from background tracking since it's now editor-held
+    this.backgroundAccessTimes.delete(path);
+  }
+
+  private unregisterEditorModel(path: string): void {
+    const current = this.editorHolds.get(path) ?? 0;
+    if (current <= 1) {
+      this.editorHolds.delete(path);
+      // Move to background tracking
+      this.backgroundAccessTimes.set(path, Date.now());
+    } else {
+      this.editorHolds.set(path, current - 1);
+    }
   }
 
   // ============ Content Event Handler ============
@@ -478,6 +488,10 @@ export class MonacoModelService {
         }
 
         this.syncedPaths.add(filePath);
+        return;
+      }
+
+      if (this.backgroundAccessTimes.size >= maxBackgroundModels) {
         return;
       }
 

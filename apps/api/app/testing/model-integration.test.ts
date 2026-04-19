@@ -5,6 +5,7 @@ import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { Server as SocketIoServer } from 'socket.io';
 import { io as ioClient } from 'socket.io-client';
 import { ChatRpcService } from '#api/chat/chat-rpc.service.js';
+import { MetricsService } from '#telemetry/metrics.js';
 import { collectStreamChunks, collectFinalMessage } from '#testing/stream-consumer.js';
 import {
   expectHasTextContent,
@@ -793,26 +794,19 @@ describe('Chat RPC WebSocket Transport Resilience', () => {
   it('should complete RPC round-trip with large geometry payload over real Socket.IO', async () => {
     const { serverIo, listen } = createTestServer({ maxHttpBufferSize: 10e6 });
 
-    const chatRpcService = new ChatRpcService();
+    const chatRpcService = new ChatRpcService(new MetricsService());
     const chatId = 'chat_rpc_test_001';
 
     serverIo.on('connection', (socket) => {
       socket.on('join', () => {
-        chatRpcService.registerConnection(chatId, socket);
+        chatRpcService.registerConnection(chatId, socket, 'test_user');
       });
 
       socket.on('disconnect', () => {
         chatRpcService.handleSocketDisconnect(socket);
       });
 
-      socket.on('rpc_response', (message: { requestId: string; result: unknown }) => {
-        chatRpcService.handleRpcResponse({
-          type: 'rpc_response',
-          requestId: message.requestId,
-          toolCallId: 'tool_001',
-          result: message.result,
-        });
-      });
+      // EmitWithAck handles responses via ack callback — no rpc_response handler needed
     });
 
     const port = await listen();
@@ -828,9 +822,11 @@ describe('Chat RPC WebSocket Transport Resilience', () => {
     const twoMegabytes = 2 * 1024 * 1024;
     const largeGlb = new Uint8Array(twoMegabytes);
 
-    client.on('rpc_request' as string, (request: { requestId: string }) => {
-      client.emit('rpc_response', {
+    client.on('rpc_request', (request: { requestId: string }, ack: (response: unknown) => void) => {
+      ack({
+        type: 'rpc_response',
         requestId: request.requestId,
+        toolCallId: 'tool_001',
         result: { success: true, glb: largeGlb },
       });
     });
@@ -859,4 +855,218 @@ describe('Chat RPC WebSocket Transport Resilience', () => {
     expect(rpcResult).toHaveProperty('glb');
     expect((rpcResult as { glb: unknown }).glb).toBeInstanceOf(Uint8Array);
   });
+
+  it('should complete emitWithAck round-trip with geometry payload', async () => {
+    const { serverIo, listen } = createTestServer({ maxHttpBufferSize: 10e6 });
+
+    const chatRpcService = new ChatRpcService(new MetricsService());
+    const chatId = 'chat_ack_roundtrip';
+
+    serverIo.on('connection', (socket) => {
+      socket.on('join', () => {
+        chatRpcService.registerConnection(chatId, socket, 'test_user');
+      });
+      socket.on('disconnect', () => {
+        chatRpcService.handleSocketDisconnect(socket);
+      });
+    });
+
+    const port = await listen();
+    const client = createTestClient(port);
+
+    const connected = new Promise<void>((resolve) => {
+      client.on('connect', () => {
+        client.emit('join', { chatId });
+        resolve();
+      });
+    });
+
+    const glbPayload = new Uint8Array(1024);
+
+    client.on('rpc_request', (request: { requestId: string; toolCallId: string }, ack: (response: unknown) => void) => {
+      ack({
+        type: 'rpc_response',
+        requestId: request.requestId,
+        toolCallId: request.toolCallId,
+        result: { success: true, glb: glbPayload },
+      });
+    });
+
+    client.connect();
+    await connected;
+
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 100);
+    });
+
+    const result = await chatRpcService.sendRpcRequest({
+      chatId,
+      toolCallId: 'tool_001',
+      rpcName: 'fetch_geometry',
+      args: {},
+    });
+
+    expect(result).toMatchObject({ success: true });
+    expect(result).toHaveProperty('glb');
+    chatRpcService.onModuleDestroy();
+  });
+
+  it('should return TIMEOUT when client does not ack emitWithAck within timeout', async () => {
+    const { serverIo, listen } = createTestServer();
+
+    const chatRpcService = new ChatRpcService(new MetricsService());
+    const chatId = 'chat_ack_timeout';
+
+    serverIo.on('connection', (socket) => {
+      socket.on('join', () => {
+        chatRpcService.registerConnection(chatId, socket, 'test_user');
+      });
+    });
+
+    const port = await listen();
+    const client = createTestClient(port);
+
+    const connected = new Promise<void>((resolve) => {
+      client.on('connect', () => {
+        client.emit('join', { chatId });
+        resolve();
+      });
+    });
+
+    client.on('rpc_request', () => {
+      // Intentionally not calling ack — simulates unresponsive client
+    });
+
+    client.connect();
+    await connected;
+
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 100);
+    });
+
+    const result = await chatRpcService.sendRpcRequest({
+      chatId,
+      toolCallId: 'tool_timeout',
+      rpcName: 'fetch_geometry',
+      args: {},
+    });
+
+    expect(result).toMatchObject({ errorCode: 'TIMEOUT' });
+    chatRpcService.onModuleDestroy();
+  }, 120_000);
+
+  it('should return CLIENT_DISCONNECTED when client disconnects during emitWithAck', async () => {
+    const { serverIo, listen } = createTestServer();
+
+    const chatRpcService = new ChatRpcService(new MetricsService());
+    const chatId = 'chat_ack_disconnect';
+
+    serverIo.on('connection', (socket) => {
+      socket.on('join', () => {
+        chatRpcService.registerConnection(chatId, socket, 'test_user');
+      });
+      socket.on('disconnect', () => {
+        chatRpcService.handleSocketDisconnect(socket);
+      });
+    });
+
+    const port = await listen();
+    const client = createTestClient(port);
+
+    const connected = new Promise<void>((resolve) => {
+      client.on('connect', () => {
+        client.emit('join', { chatId });
+        resolve();
+      });
+    });
+
+    client.on('rpc_request', () => {
+      client.disconnect();
+    });
+
+    client.connect();
+    await connected;
+
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 100);
+    });
+
+    const result = await chatRpcService.sendRpcRequest({
+      chatId,
+      toolCallId: 'tool_disconnect',
+      rpcName: 'fetch_geometry',
+      args: {},
+    });
+
+    expect(result).toMatchObject({ errorCode: 'CLIENT_DISCONNECTED' });
+    chatRpcService.onModuleDestroy();
+  }, 120_000);
+
+  it('should reject unauthenticated client when auth middleware is enabled', async () => {
+    const { serverIo, listen } = createTestServer();
+
+    serverIo.use((_socket, next) => {
+      next(new Error('UNAUTHENTICATED'));
+    });
+
+    const port = await listen();
+    const client = createTestClient(port, { reconnection: false });
+
+    const connectError = new Promise<Error>((resolve) => {
+      client.on('connect_error', (error) => {
+        resolve(error);
+      });
+    });
+
+    client.connect();
+    const error = await connectError;
+
+    expect(error.message).toBe('UNAUTHENTICATED');
+    expect(client.connected).toBe(false);
+  });
+
+  it('should reconnect after server-initiated disconnect with manual retry', async () => {
+    const { serverIo, listen } = createTestServer();
+
+    let connectionCount = 0;
+
+    serverIo.on('connection', () => {
+      connectionCount++;
+    });
+
+    const port = await listen();
+    const client = createTestClient(port);
+
+    const connected = new Promise<void>((resolve) => {
+      client.on('connect', () => {
+        resolve();
+      });
+    });
+
+    client.connect();
+    await connected;
+    expect(connectionCount).toBe(1);
+
+    // Socket.IO disables auto-reconnect for 'io server disconnect',
+    // matching the client-side manual reconnect pattern in chat-rpc-socket.service.ts
+    const reconnected = new Promise<void>((resolve) => {
+      client.on('disconnect', () => {
+        setTimeout(() => {
+          client.connect();
+        }, 100);
+      });
+      client.on('connect', () => {
+        if (connectionCount >= 2) {
+          resolve();
+        }
+      });
+    });
+
+    const sockets = await serverIo.fetchSockets();
+    sockets[0]!.disconnect(true);
+    await reconnected;
+
+    expect(client.connected).toBe(true);
+    expect(connectionCount).toBe(2);
+  }, 15_000);
 });

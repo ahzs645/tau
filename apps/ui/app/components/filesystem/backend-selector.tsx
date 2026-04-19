@@ -75,10 +75,8 @@ export function BackendSelector({
     () =>
       backendOptions.filter(
         (option) =>
-          // OPFS is disabled due to file corruption issues -- hide from all selectors
-          option.value !== 'opfs' &&
           // Memory is internal-only
-          (!isInternalHidden || option.value !== 'memory'),
+          !isInternalHidden || option.value !== 'memory',
       ),
     [isInternalHidden],
   );
@@ -112,9 +110,9 @@ export function BackendSelector({
       isSearchEnabled={false}
       onSelect={onSelect}
     >
-      <Button variant='outline' className='w-[160px] justify-between' disabled={isLoading}>
+      <Button variant='outline' size='sm' className='w-[160px] justify-between' disabled={isLoading}>
         <span className='flex items-center gap-2'>
-          {isLoading ? <Loader className='size-4' /> : <currentOption.icon className='size-4' />}
+          {isLoading ? <Loader className='size-3.5' /> : <currentOption.icon className='size-3.5' />}
           <span className='truncate'>{currentOption.label}</span>
         </span>
         <ChevronDown className='size-4 shrink-0 opacity-50' />

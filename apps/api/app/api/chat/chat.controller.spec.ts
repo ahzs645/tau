@@ -16,6 +16,7 @@ import { FileEditService } from '#api/file-edit/file-edit.service.js';
 import { GeometryAnalysisService } from '#api/analysis/geometry-analysis.service.js';
 import { AuthGuard } from '#auth/auth.guard.js';
 import type { CreateChatDto } from '#api/chat/chat.dto.js';
+import { MetricsService } from '#telemetry/metrics.js';
 
 // Mock the @ai-sdk/langchain module
 vi.mock('@ai-sdk/langchain', () => ({
@@ -184,6 +185,10 @@ describe('ChatController', () => {
           provide: GeometryAnalysisService,
           useValue: mockGeometryAnalysisService,
         },
+        {
+          provide: MetricsService,
+          useValue: new MetricsService(),
+        },
         Reflector,
       ],
     })
@@ -215,6 +220,7 @@ describe('ChatController', () => {
 
       // Assert
       expect(chatService.createAgent).toHaveBeenCalledWith({
+        chatId: 'chat_123',
         modelId: 'test-model',
         kernel: 'openscad',
         mode: 'agent',
@@ -255,6 +261,7 @@ describe('ChatController', () => {
 
       // Assert
       expect(chatService.createAgent).toHaveBeenCalledWith({
+        chatId: 'chat_tool_choice',
         modelId: 'test-model',
         kernel: 'openscad',
         mode: 'agent',
@@ -427,12 +434,12 @@ describe('ChatController', () => {
       // First part should be the injected editor context
       const contextPart = messagesArgument[0]?.parts[0] as { type: 'text'; text: string };
       expect(contextPart.type).toBe('text');
-      expect(contextPart.text).toContain('<editor_context>');
+      expect(contextPart.text).toContain('<system-reminder>');
       expect(contextPart.text).toContain('<active_file>');
       expect(contextPart.text).toContain('src/main.scad');
       expect(contextPart.text).toContain('<project_layout>');
       expect(contextPart.text).toContain('main.scad (1KB)');
-      expect(contextPart.text).toContain('</editor_context>');
+      expect(contextPart.text).toContain('</system-reminder>');
 
       // Second part should be the original user message
       const originalPart = messagesArgument[0]?.parts[1] as { type: 'text'; text: string };
@@ -470,8 +477,7 @@ describe('ChatController', () => {
       const originalPart = messagesArgument[0]?.parts[0] as { type: 'text'; text: string };
       expect(originalPart.type).toBe('text');
       expect(originalPart.text).toBe('Create a sphere');
-      // Should NOT contain editor_context
-      expect(originalPart.text).not.toContain('<editor_context>');
+      expect(originalPart.text).not.toContain('<system-reminder>');
     });
 
     it('should inject only activeFile context when only activeFile is provided', async () => {
@@ -504,10 +510,9 @@ describe('ChatController', () => {
       expect(messagesArgument[0]?.parts).toHaveLength(2);
       const contextPart = messagesArgument[0]?.parts[0] as { type: 'text'; text: string };
 
-      expect(contextPart.text).toContain('<editor_context>');
+      expect(contextPart.text).toContain('<system-reminder>');
       expect(contextPart.text).toContain('<active_file>');
       expect(contextPart.text).toContain('main.scad');
-      // Should NOT have project_layout or open_files since they weren't provided
       expect(contextPart.text).not.toContain('<project_layout>');
       expect(contextPart.text).not.toContain('<open_files>');
     });
@@ -544,7 +549,7 @@ describe('ChatController', () => {
       expect(messagesArgument[0]?.parts).toHaveLength(1);
       const originalPart = messagesArgument[0]?.parts[0] as { type: 'text'; text: string };
       expect(originalPart.text).toBe('Test');
-      expect(originalPart.text).not.toContain('<editor_context>');
+      expect(originalPart.text).not.toContain('<system-reminder>');
     });
   });
 

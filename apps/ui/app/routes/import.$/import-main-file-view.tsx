@@ -1,6 +1,7 @@
+import { useMemo } from 'react';
 import { Upload } from 'lucide-react';
 import { Button } from '#components/ui/button.js';
-import { FileSelector } from '#components/files/file-selector.js';
+import { FileSelector, createStaticDataSource } from '#components/files/file-selector.js';
 import { SvgIcon } from '#components/icons/svg-icon.js';
 import { ImportViewer } from '#routes/import.$/import-viewer.js';
 import type { FileMap } from '#utils/file-reader.utils.js';
@@ -36,6 +37,7 @@ export function ImportMainFileView({
   onCancel,
 }: ImportMainFileViewProperties): React.JSX.Element {
   const fileNames = [...files.keys()];
+  const dataSource = useMemo(() => createStaticDataSource(fileNames.map((path) => ({ path }))), [fileNames]);
 
   return (
     <div className='flex min-h-full flex-col items-center justify-start px-4 pt-6 pb-16 md:justify-center md:pt-8'>
@@ -69,7 +71,7 @@ export function ImportMainFileView({
             <div className='space-y-3'>
               <h2 className='text-sm font-medium'>Main File</h2>
               <FileSelector
-                files={fileNames.map((path) => ({ path }))}
+                dataSource={dataSource}
                 selectedFile={selectedMainFile}
                 placeholder='Select main file...'
                 title='Select Main File'

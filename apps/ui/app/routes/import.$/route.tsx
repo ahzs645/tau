@@ -1,6 +1,6 @@
 import { useLoaderData, useLocation, useNavigate } from 'react-router';
 import type { MetaDescriptor } from 'react-router';
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useActorRef, useSelector } from '@xstate/react';
 import { AlertCircle, X, XCircle } from 'lucide-react';
 import { fromSafeAsync } from '#lib/xstate.lib.js';
@@ -17,7 +17,7 @@ import { formatFileSize } from '#components/geometry/converter/converter-utils.j
 import { useProjectManager } from '#hooks/use-project-manager.js';
 import { RepositoryCard } from '#routes/import.$/repository-card.js';
 import { BranchSelector } from '#routes/import.$/branch-selector.js';
-import { FileSelector } from '#components/files/file-selector.js';
+import { FileSelector, createStaticDataSource } from '#components/files/file-selector.js';
 import { SuggestedClones } from '#routes/import.$/suggested-clones.js';
 import { UploadCard } from '#routes/import.$/upload-card.js';
 import { parseGitHubUrl, normalizeGitHubUrl } from '#routes/import.$/import.utils.js';
@@ -198,6 +198,7 @@ export default function ImportRoute(): React.JSX.Element {
   const branches = useSelector(gitHubActorRef, (snapshot) => snapshot.context.branches);
   const selectedBranch = useSelector(gitHubActorRef, (snapshot) => snapshot.context.selectedBranch);
   const repoFiles = useSelector(gitHubActorRef, (snapshot) => snapshot.context.repoFiles);
+  const repoFilesDataSource = useMemo(() => createStaticDataSource(repoFiles), [repoFiles]);
   const isLoadingFiles = useSelector(gitHubActorRef, (snapshot) => snapshot.context.isLoadingFiles);
   const fetchErrors = useSelector(gitHubActorRef, (snapshot) => snapshot.context.fetchErrors);
   const hasMoreBranches = useSelector(gitHubActorRef, (snapshot) => snapshot.context.hasMoreBranches);
@@ -565,7 +566,7 @@ export default function ImportRoute(): React.JSX.Element {
                       <div className='space-y-2 rounded-lg border bg-sidebar p-6'>
                         <label className='text-sm font-medium'>Main File</label>
                         <FileSelector
-                          files={repoFiles}
+                          dataSource={repoFilesDataSource}
                           selectedFile={gitHubSelectedMainFile}
                           isLoading={isLoadingFiles}
                           popoverProperties={{
@@ -806,17 +807,18 @@ export default function ImportRoute(): React.JSX.Element {
               </div>
 
               {/* Extracting */}
-              {(gitHubState.matches('extracting') || gitHubState.matches('creating')) && downloadProgress.loaded > 0 ? (
+              {(gitHubState.matches('downloading') || gitHubState.matches('creating')) &&
+              downloadProgress.loaded > 0 ? (
                 <div className='space-y-2'>
                   <div className='flex items-center justify-between text-sm'>
                     <span className='flex items-center gap-2 font-medium'>
-                      {gitHubState.matches('extracting') ? (
+                      {gitHubState.matches('creating') ? (
+                        '✓ Extracted'
+                      ) : (
                         <>
                           <Loader />
                           <span>Extracting files...</span>
                         </>
-                      ) : (
-                        '✓ Extracted'
                       )}
                     </span>
                     {gitHubExtractProgress.total > 0 ? (
@@ -850,7 +852,7 @@ export default function ImportRoute(): React.JSX.Element {
               ) : undefined}
 
               {/* Cancel Button - show during download/extract only */}
-              {gitHubState.matches('downloading') || gitHubState.matches('extracting') ? (
+              {gitHubState.matches('downloading') ? (
                 <Button
                   variant='outline'
                   className='w-full'

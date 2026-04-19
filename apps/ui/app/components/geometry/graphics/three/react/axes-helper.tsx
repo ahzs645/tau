@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Line } from '@react-three/drei';
 import React, { Fragment } from 'react';
+import { sceneTag, sceneTagData } from '#components/geometry/graphics/three/utils/scene-tags.js';
 
 type CustomAxesHelperProps = {
   /**
@@ -77,7 +78,7 @@ export function AxesHelper({
   );
 
   return (
-    <group userData={{ isPreviewOnly: true }}>
+    <group userData={sceneTagData(sceneTag.previewOnly)}>
       {axes.map((axis) => {
         const isHovered = hoveredAxis === axis.id;
         const points = [isHovered ? axis.negativeEnd : axis.origin, axis.positiveEnd];

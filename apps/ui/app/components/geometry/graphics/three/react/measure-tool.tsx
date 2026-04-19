@@ -13,6 +13,7 @@ import {
 import type { SnapPoint } from '#components/geometry/graphics/three/utils/snap-detection.utils.js';
 import { computeAxisRotationForCamera } from '#components/geometry/graphics/three/utils/rotation.utils.js';
 import { matcapMaterial } from '#components/geometry/graphics/three/materials/matcap-material.js';
+import { sceneTag, sceneTagData, hasSceneTag } from '#components/geometry/graphics/three/utils/scene-tags.js';
 import { useGraphics, useGraphicsSelector } from '#hooks/use-graphics.js';
 
 function calculateScaleFromCamera(position: THREE.Vector3, camera: THREE.Camera): number {
@@ -110,7 +111,7 @@ export function MeasureTool(): React.JSX.Element {
 
     const meshes: THREE.Mesh[] = [];
     sceneRef.current.traverse((object) => {
-      if (object instanceof THREE.Mesh && object.visible && !object.userData['isMeasurementUi']) {
+      if (object instanceof THREE.Mesh && object.visible && !hasSceneTag(object, sceneTag.measurementUi)) {
         meshes.push(object as THREE.Mesh);
       }
     });
@@ -413,7 +414,12 @@ function SnapPointIndicator({ position, isActive, camera }: SnapPointIndicatorPr
   return (
     <group renderOrder={isActive ? 10 : 0}>
       {/* Outer border (black) */}
-      <mesh ref={outerRef} position={position} renderOrder={isActive ? 2 : 1} userData={{ isMeasurementUi: true }}>
+      <mesh
+        ref={outerRef}
+        position={position}
+        renderOrder={isActive ? 2 : 1}
+        userData={sceneTagData(sceneTag.measurementUi)}
+      >
         <cylinderGeometry args={[borderSize, borderSize, height, segments]} />
         <meshMatcapMaterial
           transparent
@@ -431,7 +437,7 @@ function SnapPointIndicator({ position, isActive, camera }: SnapPointIndicatorPr
         position={position}
         // Ensure the hover/selected indicator is rendered on top of other indicators
         renderOrder={isActive ? 2 : 1}
-        userData={{ isMeasurementUi: true }}
+        userData={sceneTagData(sceneTag.measurementUi)}
       >
         <cylinderGeometry args={[innerSize, innerSize, height, segments]} />
         <meshBasicMaterial
@@ -736,7 +742,7 @@ function MeasurementLine({
           ref={cylinderMeshRef}
           position={midpoint}
           quaternion={cylinderQuaternion}
-          userData={{ isMeasurementUi: true }}
+          userData={sceneTagData(sceneTag.measurementUi)}
         >
           {/* Unit geometry – scaled per-frame */}
           <cylinderGeometry args={[1, 1, 1, 16]} />
@@ -749,7 +755,7 @@ function MeasurementLine({
             ref={startConeMeshRef}
             position={start}
             quaternion={startQuaternion}
-            userData={{ isMeasurementUi: true }}
+            userData={sceneTagData(sceneTag.measurementUi)}
           >
             {/* Unit geometry – scaled per-frame */}
             <coneGeometry args={[1, 1, 16]} />
@@ -759,7 +765,12 @@ function MeasurementLine({
 
         {/* Cone at end */}
         {!isPreview && (
-          <mesh ref={endConeMeshRef} position={end} quaternion={endQuaternion} userData={{ isMeasurementUi: true }}>
+          <mesh
+            ref={endConeMeshRef}
+            position={end}
+            quaternion={endQuaternion}
+            userData={sceneTagData(sceneTag.measurementUi)}
+          >
             {/* Unit geometry – scaled per-frame */}
             <coneGeometry args={[1, 1, 16]} />
             <primitive object={derivedMaterials.coneMaterial} attach='material' />
@@ -773,7 +784,7 @@ function MeasurementLine({
           {/* Stable invisible hit area to prevent hover flicker when pin appears */}
           <mesh
             position={[0, 0, 0]}
-            userData={{ isMeasurementUi: true }}
+            userData={sceneTagData(sceneTag.measurementUi)}
             onPointerEnter={(event) => {
               event.stopPropagation();
               setIsLabelHovered(true);
@@ -814,17 +825,17 @@ function MeasurementLine({
             })()}
           </mesh>
           {/* Background */}
-          <mesh position={[0, 0, 0]} userData={{ isMeasurementUi: true }}>
+          <mesh position={[0, 0, 0]} userData={sceneTagData(sceneTag.measurementUi)}>
             <primitive object={backgroundOutlineGeometry} attach='geometry' />
             <primitive object={derivedMaterials.textMaterial} attach='material' />
           </mesh>
-          <mesh position={[0, 0, 0]} userData={{ isMeasurementUi: true }}>
+          <mesh position={[0, 0, 0]} userData={sceneTagData(sceneTag.measurementUi)}>
             <primitive object={backgroundGeometry} attach='geometry' />
             <primitive object={derivedMaterials.backgroundMaterial} attach='material' />
           </mesh>
 
           {/* Text */}
-          <mesh position={[0, 0, 0]} userData={{ isMeasurementUi: true }}>
+          <mesh position={[0, 0, 0]} userData={sceneTagData(sceneTag.measurementUi)}>
             <primitive object={textGeometry} attach='geometry' />
             <primitive object={derivedMaterials.textMaterial} attach='material' />
           </mesh>
@@ -842,11 +853,11 @@ function MeasurementLine({
                 return [offsetX, offsetY, 0];
               })()}
               renderOrder={3}
-              userData={{ isMeasurementUi: true }}
+              userData={sceneTagData(sceneTag.measurementUi)}
             >
               {/* Yellow/gold circular pin button (appears only on label hover) */}
               <mesh
-                userData={{ isMeasurementUi: true }}
+                userData={sceneTagData(sceneTag.measurementUi)}
                 onPointerOver={(event) => {
                   event.stopPropagation();
                   // Keep hover state active when over pin button
@@ -887,7 +898,7 @@ function MeasurementLine({
               {/* Pin glyph using simple geometry */}
               <mesh
                 position={[0, labelCharWidth * 0.15, 0]}
-                userData={{ isMeasurementUi: true }}
+                userData={sceneTagData(sceneTag.measurementUi)}
                 onPointerOver={(event) => {
                   event.stopPropagation();
                 }}
@@ -900,7 +911,7 @@ function MeasurementLine({
               </mesh>
               <mesh
                 position={[0, -labelCharWidth * 0.2, 0]}
-                userData={{ isMeasurementUi: true }}
+                userData={sceneTagData(sceneTag.measurementUi)}
                 onPointerOver={(event) => {
                   event.stopPropagation();
                 }}

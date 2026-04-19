@@ -566,7 +566,7 @@ async function main(): Promise<void> {
 
 try {
   await main();
-} catch (error: unknown) {
+} catch (error) {
   console.error('Fatal error:', error);
   process.exit(1);
 }

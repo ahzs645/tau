@@ -62,7 +62,7 @@ Follow the Manifold extractor pattern:
 - Read `packages/runtime/src/kernels/opencascade/wasm/opencascade_full.d.ts`
 - Strip `export declare` to `export` (inside `declare module`, `declare` is implicit)
 - Strip namespace alias blocks (`export namespace Foo { ... }`) — these are ~268 blocks of shorthand aliases that duplicate full-qualified names
-- Wrap in two `declare module` blocks: `'opencascade.js'` and `'opencascade'` (both are registered as `builtinModuleNames` in [kernel-factories.ts](packages/runtime/src/plugins/kernel-factories.ts#L75))
+- Wrap in two `declare module` blocks: `'opencascade.js'` and `'opencascade.js'` (both are registered as `builtinModuleNames` in [kernel-factories.ts](packages/runtime/src/plugins/kernel-factories.ts#L75))
 - Export a `buildBundledTypes()` function (for testability) and a `main()` CLI entry
 - Output to `libs/api-extractor/src/generated/opencascade/opencascade.bundled.d.ts`
 
@@ -117,7 +117,7 @@ staticTypes: [
 
 The `prewrapped: true` flag tells `TypeAcquisitionService` the content already contains `declare module` blocks, so it won't double-wrap. The `builtinTypePackages` set prevents ATA from trying to fetch `opencascade.js` from esm.sh.
 
-Note: We only need `packageName: 'opencascade.js'` (not a separate entry for `'opencascade'`) because the bundled `.d.ts` itself contains both `declare module 'opencascade.js'` and `declare module 'opencascade'` blocks. The `packageName` is used for ATA dedup tracking, and users primarily `import oc from 'opencascade.js'`. We should also add `'opencascade'` to `builtinTypePackages` — check if `TypeAcquisitionService` needs a second `staticTypes` entry with `packageName: 'opencascade'` pointing to the same content, or if the dual `declare module` blocks handle resolution on their own. If Monaco resolves `import ... from 'opencascade'` just from the `declare module 'opencascade'` block inside the registered file, a single entry suffices. Otherwise, register both package names.
+Note: We only need `packageName: 'opencascade.js'` (not a separate entry for `'opencascade.js'`) because the bundled `.d.ts` itself contains both `declare module 'opencascade.js'` and `declare module 'opencascade.js'` blocks. The `packageName` is used for ATA dedup tracking, and users primarily `import oc from 'opencascade.js'`. We should also add `'opencascade.js'` to `builtinTypePackages` — check if `TypeAcquisitionService` needs a second `staticTypes` entry with `packageName: 'opencascade.js'` pointing to the same content, or if the dual `declare module` blocks handle resolution on their own. If Monaco resolves `import ... from 'opencascade.js'` just from the `declare module 'opencascade.js'` block inside the registered file, a single entry suffices. Otherwise, register both package names.
 
 ### 6. Update new-kernel skill
 

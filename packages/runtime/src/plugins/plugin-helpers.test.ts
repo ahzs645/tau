@@ -1,5 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createKernelPlugin, createMiddlewarePlugin, createBundlerPlugin } from '#plugins/plugin-helpers.js';
+import { z } from 'zod';
+import {
+  createKernelPlugin,
+  createMiddlewarePlugin,
+  createBundlerPlugin,
+  createTranscoderPlugin,
+} from '#plugins/plugin-helpers.js';
 
 // ===================================================================
 // createKernelPlugin
@@ -22,44 +28,17 @@ describe('createKernelPlugin', () => {
     });
   });
 
-  it('should merge options into the plugin object', () => {
-    const factory = createKernelPlugin<{ wasmUrl: string }>({
+  it('should merge options into the plugin object when optionsSchema is provided', () => {
+    const factory = createKernelPlugin({
       id: 'wasm-kernel',
       moduleUrl: 'https://example.com/wasm.js',
       extensions: ['ts'],
+      optionsSchema: z.object({ wasmUrl: z.string() }),
     });
 
     const plugin = factory({ wasmUrl: '/custom.wasm' });
     expect(plugin.id).toBe('wasm-kernel');
     expect(plugin.options).toEqual({ wasmUrl: '/custom.wasm' });
-  });
-
-  it('should call builder function with options when config is a function', () => {
-    const builder = vi.fn().mockReturnValue({
-      id: 'dynamic-kernel',
-      moduleUrl: 'https://example.com/dynamic.js',
-      extensions: ['tsx'],
-    });
-
-    const factory = createKernelPlugin<{ mode: string }>(builder);
-    const plugin = factory({ mode: 'fast' });
-
-    expect(builder).toHaveBeenCalledWith({ mode: 'fast' });
-    expect(plugin.id).toBe('dynamic-kernel');
-    expect(plugin.options).toEqual({ mode: 'fast' });
-  });
-
-  it('should call builder function with undefined when no options passed', () => {
-    const builder = vi.fn().mockReturnValue({
-      id: 'no-opts',
-      moduleUrl: 'https://example.com/no-opts.js',
-      extensions: ['js'],
-    });
-
-    const factory = createKernelPlugin(builder);
-    factory();
-
-    expect(builder).toHaveBeenCalledWith(undefined);
   });
 
   it('should preserve detectImport and builtinModuleNames from config', () => {
@@ -74,6 +53,22 @@ describe('createKernelPlugin', () => {
     const plugin = factory();
     expect(plugin.detectImport).toBeInstanceOf(RegExp);
     expect(plugin.builtinModuleNames).toEqual(['my-lib']);
+  });
+
+  it('should strip optionsSchema, exportSchemas, and renderSchema from returned plugin', () => {
+    const factory = createKernelPlugin({
+      id: 'strip-test',
+      moduleUrl: 'https://example.com/strip.js',
+      extensions: ['ts'],
+      optionsSchema: z.object({ debug: z.boolean().default(false) }),
+      exportSchemas: { stl: z.object({ binary: z.boolean().default(true) }) },
+      renderSchema: z.object({ quality: z.number().default(1) }),
+    });
+
+    const plugin = factory();
+    expect(plugin).not.toHaveProperty('optionsSchema');
+    expect(plugin).not.toHaveProperty('exportSchemas');
+    expect(plugin).not.toHaveProperty('renderSchema');
   });
 });
 
@@ -180,5 +175,60 @@ describe('createBundlerPlugin', () => {
 
     expect(builder).toHaveBeenCalledWith(undefined);
     expect(plugin.extensions).toEqual(['ts', 'js', 'tsx', 'jsx']);
+  });
+});
+
+// ===================================================================
+// createTranscoderPlugin
+// ===================================================================
+
+describe('createTranscoderPlugin', () => {
+  it('should produce a plugin with correct shape from static config', () => {
+    const factory = createTranscoderPlugin({
+      id: 'test-transcoder',
+      moduleUrl: 'https://example.com/transcoder.js',
+    });
+
+    const plugin = factory();
+    expect(plugin).toEqual({
+      id: 'test-transcoder',
+      moduleUrl: 'https://example.com/transcoder.js',
+      options: undefined,
+    });
+  });
+
+  it('should merge options into the plugin object', () => {
+    const factory = createTranscoderPlugin<{ apiKey: string }>({
+      id: 'cloud-transcoder',
+      moduleUrl: 'https://example.com/cloud.js',
+    });
+
+    const plugin = factory({ apiKey: 'abc123' });
+    expect(plugin.id).toBe('cloud-transcoder');
+    expect(plugin.options).toEqual({ apiKey: 'abc123' });
+  });
+
+  it('should call builder function with options when config is a function', () => {
+    const builder = vi.fn().mockReturnValue({
+      id: 'dynamic-transcoder',
+      moduleUrl: 'https://example.com/dynamic-transcoder.js',
+    });
+
+    const factory = createTranscoderPlugin<{ endpoint: string }>(builder);
+    factory({ endpoint: 'https://api.example.com' });
+
+    expect(builder).toHaveBeenCalledWith({ endpoint: 'https://api.example.com' });
+  });
+
+  it('should call builder function with undefined when no options passed', () => {
+    const builder = vi.fn().mockReturnValue({
+      id: 'no-opts-transcoder',
+      moduleUrl: 'https://example.com/no-opts.js',
+    });
+
+    const factory = createTranscoderPlugin(builder);
+    factory();
+
+    expect(builder).toHaveBeenCalledWith(undefined);
   });
 });

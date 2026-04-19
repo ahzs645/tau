@@ -1,0 +1,36 @@
+{
+  "title": "tau-critical",
+  "interval": 60,
+  "rules": [
+    {
+      "uid": "redis-connection-lost",
+      "title": "P0: Redis Connection Lost",
+      "condition": "redis_down",
+      "data": [
+        {
+          "refId": "redis_down",
+          "queryType": "",
+          "relativeTimeRange": { "from": 300, "to": 0 },
+          "datasourceUid": "prometheus",
+          "model": {
+            "expr": "redis_connection_state{service_name=\"tau-api\"} == 0",
+            "intervalMs": 15000,
+            "maxDataPoints": 20,
+            "refId": "redis_down"
+          }
+        }
+      ],
+      "noDataState": "OK",
+      "execErrState": "OK",
+      "for": "1m",
+      "annotations": {
+        "summary": "Redis connection is down. Chat RPC, session management, and adapter services are degraded."
+      },
+      "labels": {
+        "severity": "critical",
+        "service": "tau-api",
+        "component": "redis"
+      }
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-import { assign, setup, enqueueActions } from 'xstate';
+import { assign, setup, enqueueActions, waitFor } from 'xstate';
 import type { ActorRefFrom } from 'xstate';
 import type { GeometryFile } from '@taucad/types';
 import { fromSafeAsync } from '#lib/xstate.lib.js';
@@ -34,12 +34,35 @@ type CadPreviewEvent =
   | { type: 'setParameters'; parameters: Record<string, unknown> }
   | { type: 'retry' };
 
+type EnsureParametersInput = {
+  readonly cadRef: ActorRefFrom<typeof cadMachine>;
+  readonly parameters: Record<string, unknown>;
+};
+
 /**
  * Default prepareFiles actor -- throws to enforce injection via `.provide()`.
  * Follows the same pattern as projectMachine's `loadProjectActor`.
  */
 const prepareFilesActor = fromSafeAsync<void, PrepareFilesInput>(async () => {
   throw new Error('Not implemented. Supply via cadPreviewMachine.provide({ actors: { prepareFiles } }).');
+});
+
+/**
+ * Waits for cadRef's kernel client to become available, then sends parameters
+ * directly to the kernel. Handles the deferred case where prepareFiles
+ * completes before the kernel connects.
+ */
+const ensureParametersActor = fromSafeAsync<void, EnsureParametersInput>(async ({ input, signal }) => {
+  const { cadRef, parameters } = input;
+  if (Object.keys(parameters).length === 0) {
+    return;
+  }
+
+  const snapshot = await waitFor(cadRef, (s) => s.context.kernelClient !== undefined, { signal });
+  const { kernelClient } = snapshot.context;
+  if (kernelClient) {
+    kernelClient.setParameters(parameters);
+  }
 });
 
 /**
@@ -64,6 +87,7 @@ export const cadPreviewMachine = setup({
   },
   actors: {
     prepareFiles: prepareFilesActor,
+    ensureParameters: ensureParametersActor,
   },
   actions: {
     initializeCadModel: enqueueActions(({ enqueue, context }) => {
@@ -88,6 +112,8 @@ export const cadPreviewMachine = setup({
           type: 'setParameters',
           parameters: event.parameters,
         });
+        const { kernelClient } = context.cadRef.getSnapshot().context;
+        kernelClient?.setParameters(event.parameters);
       }
     }),
   },
@@ -128,6 +154,13 @@ export const cadPreviewMachine = setup({
       },
     },
     active: {
+      invoke: {
+        src: 'ensureParameters',
+        input: ({ context }): EnsureParametersInput => ({
+          cadRef: context.cadRef,
+          parameters: context.parameters,
+        }),
+      },
       on: {
         setParameters: {
           actions: 'forwardSetParameters',

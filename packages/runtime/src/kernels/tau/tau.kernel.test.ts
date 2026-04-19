@@ -1,9 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mock } from 'vitest-mock-extended';
-import { importToGlb, exportFromGlb } from '@taucad/converter';
+import { importToGlb } from '@taucad/converter';
 import type {
   KernelRuntime,
-  CanHandleInput,
   GetDependenciesInput,
   GetParametersInput,
   CreateGeometryInput,
@@ -13,8 +12,6 @@ import tauKernel from '#kernels/tau/tau.kernel.js';
 
 vi.mock('@taucad/converter', () => ({
   importToGlb: vi.fn(),
-  exportFromGlb: vi.fn(),
-  supportedImportFormats: ['step', 'stl', 'obj', 'iges', 'brep', 'gltf', 'glb', '3mf', 'fbx', 'dxf'],
 }));
 
 const stepBytes = new Uint8Array([0x53, 0x54, 0x45, 0x50]);
@@ -24,18 +21,6 @@ afterEach(() => {
 });
 
 describe('TauKernel', () => {
-  describe('canHandle', () => {
-    it('should return true for STEP extension', async () => {
-      const result = await tauKernel.canHandle!(mock<CanHandleInput>({ extension: 'step' }), mock<KernelRuntime>(), {});
-      expect(result).toBe(true);
-    });
-
-    it('should return false for unsupported extension', async () => {
-      const result = await tauKernel.canHandle!(mock<CanHandleInput>({ extension: 'xyz' }), mock<KernelRuntime>(), {});
-      expect(result).toBe(false);
-    });
-  });
-
   describe('getDependencies', () => {
     it('should return array containing the input filePath', async () => {
       const result = await tauKernel.getDependencies(
@@ -43,7 +28,7 @@ describe('TauKernel', () => {
         mock<KernelRuntime>(),
         {},
       );
-      expect(result).toEqual(['/models/part.step']);
+      expect(result).toEqual({ resolved: ['/models/part.step'], unresolved: [] });
     });
   });
 
@@ -82,7 +67,7 @@ describe('TauKernel', () => {
       });
 
       const result = await tauKernel.createGeometry(
-        mock<CreateGeometryInput>({ filePath: '/models/part.step', basePath: '/models' }),
+        mock<CreateGeometryInput>({ filePath: '/models/part.step', basePath: '/models', options: {} }),
         runtime,
         {},
       );
@@ -110,7 +95,7 @@ describe('TauKernel', () => {
 
       try {
         await tauKernel.createGeometry(
-          mock<CreateGeometryInput>({ filePath: '/models/part.step', basePath: '/models' }),
+          mock<CreateGeometryInput>({ filePath: '/models/part.step', basePath: '/models', options: {} }),
           runtime,
           {},
         );
@@ -125,45 +110,58 @@ describe('TauKernel', () => {
   });
 
   describe('exportGeometry', () => {
-    it('should call exportFromGlb with native handle and file type', async () => {
-      const exportedFiles = [{ name: 'model.stl', bytes: new Uint8Array([1, 2, 3]), mimeType: 'model/stl' } as const];
-      vi.mocked(exportFromGlb).mockResolvedValue(exportedFiles);
-
+    it('should return GLB file when format is glb', async () => {
       const runtime = createMockKernelRuntime();
       const nativeHandle = new Uint8Array([0x67, 0x6c, 0x54, 0x46]);
 
-      const result = await tauKernel.exportGeometry({ fileType: 'stl', nativeHandle }, runtime, {});
+      const result = await tauKernel.exportGeometry({ format: 'glb', options: {}, nativeHandle }, runtime, {});
 
-      expect(exportFromGlb).toHaveBeenCalledWith(nativeHandle, 'stl');
-      expect(result).toEqual({
-        success: true,
-        data: exportedFiles,
-        issues: [],
-      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data).toHaveLength(1);
+        expect(result.data[0]!.name).toBe('model.glb');
+        expect(result.data[0]!.mimeType).toBe('model/gltf-binary');
+        expect(result.data[0]!.bytes).toBe(nativeHandle);
+      }
+    });
+
+    it('should return glTF file when format is gltf', async () => {
+      const runtime = createMockKernelRuntime();
+      const nativeHandle = new Uint8Array([0x67, 0x6c, 0x54, 0x46]);
+
+      const result = await tauKernel.exportGeometry({ format: 'gltf', options: {}, nativeHandle }, runtime, {});
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data).toHaveLength(1);
+        expect(result.data[0]!.name).toBe('model.gltf');
+      }
+    });
+
+    it('should reject unsupported formats with error result', async () => {
+      const runtime = createMockKernelRuntime();
+      const nativeHandle = new Uint8Array([1, 2, 3]);
+
+      const result = await tauKernel.exportGeometry({ format: 'stl' as 'glb', options: {}, nativeHandle }, runtime, {});
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.issues[0]!.message).toContain('Use a transcoder');
+      }
     });
 
     it('should return error result when nativeHandle is empty', async () => {
       const runtime = createMockKernelRuntime();
 
-      const result = await tauKernel.exportGeometry({ fileType: 'stl', nativeHandle: new Uint8Array(0) }, runtime, {});
+      const result = await tauKernel.exportGeometry(
+        { format: 'glb', options: {}, nativeHandle: new Uint8Array(0) },
+        runtime,
+        {},
+      );
 
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.issues[0]!.message).toContain('No geometry available');
-      }
-    });
-
-    it('should return error result when exportFromGlb throws', async () => {
-      vi.mocked(exportFromGlb).mockRejectedValue(new Error('export failed'));
-
-      const runtime = createMockKernelRuntime();
-      const nativeHandle = new Uint8Array([1, 2, 3]);
-
-      const result = await tauKernel.exportGeometry({ fileType: 'stl', nativeHandle }, runtime, {});
-
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(result.issues[0]!.message).toBe('export failed');
       }
     });
   });

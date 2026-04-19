@@ -2,22 +2,34 @@ import type { GlobSearchRpcInput, GlobSearchRpcResult } from '#schemas/rpc.schem
 import type { RpcFileSystem } from '#rpc/rpc-dependencies.js';
 import { toRpcError } from '#rpc/rpc-error.js';
 
-async function collectFilePaths(fileSystem: RpcFileSystem, basePath: string): Promise<string[]> {
-  const paths: string[] = [];
+type CollectedEntry = {
+  path: string;
+  isDirectory: boolean;
+  size: number;
+  modifiedAt?: string;
+};
+
+async function collectFileEntries(fileSystem: RpcFileSystem, basePath: string): Promise<CollectedEntry[]> {
+  const result: CollectedEntry[] = [];
   const entries = await fileSystem.readdir(basePath);
 
   for (const entry of entries) {
     const fullPath = basePath ? `${basePath}/${entry.name}` : entry.name;
     if (entry.type === 'file') {
-      paths.push(fullPath);
+      result.push({
+        path: fullPath,
+        isDirectory: false,
+        size: entry.size,
+        modifiedAt: entry.modifiedAt,
+      });
     } else {
       // oxlint-disable-next-line no-await-in-loop -- recursive traversal
-      const subPaths = await collectFilePaths(fileSystem, fullPath);
-      paths.push(...subPaths);
+      const subEntries = await collectFileEntries(fileSystem, fullPath);
+      result.push(...subEntries);
     }
   }
 
-  return paths;
+  return result;
 }
 
 /** @public */
@@ -27,12 +39,20 @@ export async function handleGlobSearch(
 ): Promise<GlobSearchRpcResult> {
   try {
     const basePath = input.path ?? '';
-    const allFiles = await collectFilePaths(fileSystem, basePath);
+    const allEntries = await collectFileEntries(fileSystem, basePath);
 
     const { minimatch } = await import('minimatch');
-    const files = allFiles.filter((path) => minimatch(path, input.pattern, { matchBase: true }));
+    const matched = allEntries.filter((entry) => minimatch(entry.path, input.pattern, { matchBase: true }));
 
-    return { success: true, files, totalFiles: files.length };
+    const files = matched.map((entry) => entry.path);
+    const entries = matched.map((entry) => ({
+      path: entry.path,
+      isDirectory: entry.isDirectory,
+      size: entry.size,
+      modifiedAt: entry.modifiedAt,
+    }));
+
+    return { success: true, files, entries, totalFiles: files.length };
   } catch (error) {
     return toRpcError(error);
   }

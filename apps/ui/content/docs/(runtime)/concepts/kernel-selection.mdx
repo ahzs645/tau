@@ -76,8 +76,6 @@ Selection results are cached in `selectionCache` keyed by file path. On a cache 
 
 In **autonomous rendering mode** (using `setFile`/`setParameters`), the worker's filesystem watch subscription handles cache invalidation automatically when files change. In **inline code mode** (using `client.render()` with `code`), call `client.notifyFileChanged(paths)` to invalidate the selection cache.
 
-The selection method (`extension`, `regex`, `bundler`, `catchall`) is also stored. When the method is `bundler`, the framework skips the kernel's own `canHandle` check, because the bundler has already traced transitive imports and the kernel might only inspect the entry file.
-
 ## Key Relationships
 
 - **Selection and Plugins** -- Kernel plugins supply `extensions`, `detectImport`, and `builtinModuleNames`. These drive all three passes.

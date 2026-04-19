@@ -5,6 +5,7 @@ import { waitFor } from 'xstate';
 import type { ActorRefFrom } from 'xstate';
 import type { Remote } from 'comlink';
 import { useQueryClient } from '@tanstack/react-query';
+import type { FileParameterEntry } from '@taucad/types';
 import type { RuntimeClientOptions } from '@taucad/runtime';
 import { fromSafeAsync } from '#lib/xstate.lib.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
@@ -18,6 +19,14 @@ import type { logMachine } from '#machines/logs.machine.js';
 import { inspect } from '#machines/inspector.js';
 import { useProjectManager } from '#hooks/use-project-manager.js';
 import { defaultKernelOptions } from '#constants/kernel-worker.constants.js';
+import { joinPath } from '@taucad/utils/path';
+import {
+  parseParameterEntry,
+  createDefaultEntry,
+  serializeParameterEntry,
+  parameterEntryPath,
+  parametersDirectory,
+} from '#utils/parameter-config.utils.js';
 
 type ProjectContextType = {
   projectId: string;
@@ -36,6 +45,12 @@ type ProjectContextType = {
     parameters: Record<string, unknown>,
   ) => void;
   setParameters: (parameters: Record<string, unknown>) => void;
+  setCompilationUnitParameters: (filePath: string, parameters: Record<string, unknown>) => void;
+  switchParameterGroup: (filePath: string, groupName: string) => void;
+  createParameterGroup: (filePath: string, groupName: string, values?: Record<string, unknown>) => void;
+  deleteParameterGroup: (filePath: string, groupName: string) => void;
+  renameParameterGroup: (filePath: string, oldName: string, newName: string) => void;
+  parameterEntries: Map<string, FileParameterEntry>;
   updateName: (name: string) => void;
   updateDescription: (description: string) => void;
   updateTags: (tags: string[]) => void;
@@ -76,13 +91,63 @@ export function ProjectProvider({
             throw new Error(`Project not found: ${input.projectId}`);
           }
 
-          // Ensure the file manager is ready before loading the project
-          await waitFor(fileManager.fileManagerRef, (state) => state.matches('ready'));
+          const readySnapshot = await waitFor(fileManager.fileManagerRef, (state) => state.matches('ready'));
 
-          return { type: 'projectRetrieved', project };
+          const parameterEntries = new Map<string, FileParameterEntry>();
+          const { contentService, proxy, rootDirectory } = readySnapshot.context;
+          const mainFile = project.assets.mechanical?.main ?? 'main.ts';
+
+          if (contentService && proxy) {
+            const absoluteParamsDirectory = joinPath(rootDirectory, parametersDirectory);
+            try {
+              const allFiles = await proxy.getDirectoryContents(absoluteParamsDirectory);
+              for (const [relativePath, data] of Object.entries(allFiles)) {
+                if (!relativePath.endsWith('.json')) {
+                  continue;
+                }
+                const entryFile = relativePath.slice(0, -'.json'.length);
+                try {
+                  const text = new TextDecoder().decode(data);
+                  parameterEntries.set(entryFile, parseParameterEntry(text));
+                } catch {
+                  // Corrupt parameter file — skip
+                }
+              }
+            } catch {
+              // Parameters directory doesn't exist yet — new project
+            }
+
+            if (!parameterEntries.has(mainFile)) {
+              const defaultEntry = createDefaultEntry();
+              parameterEntries.set(mainFile, defaultEntry);
+              const serialized = serializeParameterEntry(defaultEntry);
+              await contentService.write(parameterEntryPath(mainFile), new TextEncoder().encode(serialized), 'machine');
+            }
+          }
+
+          return {
+            type: 'projectRetrieved',
+            project,
+            parameterEntries,
+          };
         }),
         writeProjectActor: fromSafeAsync(async ({ input }) => {
           await projectManager.updateProject(input.project.id, input.project);
+        }),
+        writeParameterFileActor: fromSafeAsync(async ({ input, signal }) => {
+          if (signal.aborted) {
+            return;
+          }
+          const path = parameterEntryPath(input.filePath);
+          const serialized = serializeParameterEntry(input.entry);
+          const encoded = new TextEncoder().encode(serialized);
+          if (encoded.byteLength === 0) {
+            return;
+          }
+          const { contentService } = fileManager.fileManagerRef.getSnapshot().context;
+          if (contentService) {
+            await contentService.write(path, encoded, 'machine');
+          }
         }),
       },
       ...provide,
@@ -146,6 +211,7 @@ export function ProjectProvider({
     (state) => state.context.mainEntryFile,
   );
   const logRef = useSelector(actorRef, (state) => state.context.logRef);
+  const parameterEntries = useSelector(actorRef, (state) => state.context.parameterEntries);
 
   useEffect(() => {
     // Load the new project when the projectId changes
@@ -169,7 +235,6 @@ export function ProjectProvider({
 
   useEffect(() => {
     const subscription = actorRef.on('projectUpdated', () => {
-      // The project updated, invalidate the projects query
       void queryClient.invalidateQueries({ queryKey: ['projects'] });
     });
 
@@ -177,6 +242,31 @@ export function ProjectProvider({
       subscription.unsubscribe();
     };
   }, [actorRef, queryClient]);
+
+  // Subscribe to external parameter file changes (per-CU files under the parameters directory)
+  useEffect(() => {
+    const { contentService } = fileManager;
+    if (!contentService) {
+      return;
+    }
+
+    const parametersPrefix = `${parametersDirectory}/`;
+    const unsubscribe = contentService.onDidContentChange((event) => {
+      if (event.type !== 'written' || !event.path.startsWith(parametersPrefix) || event.source === 'machine') {
+        return;
+      }
+      try {
+        const text = new TextDecoder().decode(event.data);
+        const entry = parseParameterEntry(text);
+        const filePath = event.path.slice(parametersPrefix.length, -'.json'.length);
+        actorRef.send({ type: 'parameterFileChanged', filePath, entry });
+      } catch {
+        // Invalid JSON — ignore
+      }
+    });
+
+    return unsubscribe;
+  }, [fileManager, projectId, actorRef]);
 
   // Memoize callbacks
   const setCodeParameters = useCallback(
@@ -189,6 +279,41 @@ export function ProjectProvider({
   const setParameters = useCallback(
     (parameters: Record<string, unknown>) => {
       actorRef.send({ type: 'setParameters', parameters });
+    },
+    [actorRef],
+  );
+
+  const setCompilationUnitParameters = useCallback(
+    (filePath: string, parameters: Record<string, unknown>) => {
+      actorRef.send({ type: 'setCompilationUnitParameters', filePath, parameters });
+    },
+    [actorRef],
+  );
+
+  const switchParameterGroup = useCallback(
+    (filePath: string, groupName: string) => {
+      actorRef.send({ type: 'switchParameterGroup', filePath, groupName });
+    },
+    [actorRef],
+  );
+
+  const createParameterGroup = useCallback(
+    (filePath: string, groupName: string, values?: Record<string, unknown>) => {
+      actorRef.send({ type: 'createParameterGroup', filePath, groupName, values });
+    },
+    [actorRef],
+  );
+
+  const deleteParameterGroup = useCallback(
+    (filePath: string, groupName: string) => {
+      actorRef.send({ type: 'deleteParameterGroup', filePath, groupName });
+    },
+    [actorRef],
+  );
+
+  const renameParameterGroup = useCallback(
+    (filePath: string, oldName: string, newName: string) => {
+      actorRef.send({ type: 'renameParameterGroup', filePath, oldName, newName });
     },
     [actorRef],
   );
@@ -248,8 +373,14 @@ export function ProjectProvider({
       compilationUnits,
       mainEntryFile,
       logRef,
+      parameterEntries,
       setCodeParameters,
       setParameters,
+      setCompilationUnitParameters,
+      switchParameterGroup,
+      createParameterGroup,
+      deleteParameterGroup,
+      renameParameterGroup,
       updateName,
       updateDescription,
       updateTags,
@@ -266,8 +397,14 @@ export function ProjectProvider({
     compilationUnits,
     mainEntryFile,
     logRef,
+    parameterEntries,
     setCodeParameters,
     setParameters,
+    setCompilationUnitParameters,
+    switchParameterGroup,
+    createParameterGroup,
+    deleteParameterGroup,
+    renameParameterGroup,
     updateName,
     updateDescription,
     updateTags,

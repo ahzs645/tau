@@ -1,7 +1,8 @@
 import { describe, expect, it, beforeEach } from 'vitest';
 import type { InspectReport } from '@gltf-transform/functions';
-import type { SupportedImportFormat } from '#import.js';
-import { importFiles, supportedImportFormats } from '#import.js';
+import { importFiles } from '#import.js';
+import type { SupportedImportFormat } from '#formats.js';
+import { supportedImportFormats } from '#formats.js';
 import { createInspectTestUtils, loadTestData, loadFixture, createGeometryVariant } from '#test.utils.js';
 import type { LoaderTestCase, GeometryExpectation } from '#test.utils.js';
 import { getInspectReport, validateGlbData } from '#gltf.utils.js';
@@ -41,9 +42,10 @@ const optimizedCubeGeometry: GeometryExpectation = {
 };
 
 /**
- * Assimp cube fixtures whose source file has the cube sitting on the ground plane
- * (e.g. STL/OBJ/PLY/FBX with min-Y=0, max-Y=2). After any Z-to-Y normalization
- * the center lands at [0, 1, 0].
+ * Assimp cube fixtures where the importer baked the source frame into a
+ * Y-up + meters glTF and the cube ends up sitting on the ground plane
+ * (min-Y=0, max-Y=2). Used for formats whose import pipeline preserves the
+ * source `z=ground` convention through the contract bake (e.g. OBJ/DAE/USD).
  */
 const assimpCubeGeometry: GeometryExpectation = {
   vertexCount: 36,
@@ -52,6 +54,38 @@ const assimpCubeGeometry: GeometryExpectation = {
   boundingBox: {
     size: [2, 2, 2],
     center: [0, 1, 0],
+  },
+};
+
+/**
+ * Assimp cube fixtures whose source declares Z-up but the importer does not
+ * record a `UP_AXIS=Z` contract value (e.g. PLY/WRL/X3DV/OFF/AC/NFF/COB/XGL
+ * /MD5MESH/MESH.XML). The exporter therefore leaves vertex Z unchanged, so a
+ * cube authored at z∈[0,2] in the source file lands at z∈[0,2] in glTF
+ * Y-up space — which puts the bounding-box center on +Z.
+ */
+const assimpCubeZupSourceGeometry: GeometryExpectation = {
+  vertexCount: 36,
+  faceCount: 12,
+  meshCount: 1,
+  boundingBox: {
+    size: [2, 2, 2],
+    center: [0, 0, 1],
+  },
+};
+
+/**
+ * Assimp cube fixtures whose source declares Z-up with the cube authored on
+ * the −Z half-space (z∈[−2, 0]) — the contract bake mirrors the +Z variant
+ * but with the center on −Z (e.g. 3DS, IFC).
+ */
+const assimpCubeNegZupSourceGeometry: GeometryExpectation = {
+  vertexCount: 36,
+  faceCount: 12,
+  meshCount: 1,
+  boundingBox: {
+    size: [2, 2, 2],
+    center: [0, 0, -1],
   },
 };
 
@@ -178,14 +212,17 @@ const loaderTestCases: LoaderTestCase[] = [
     },
   },
 
+  // STL fixtures author the cube in mm + Z-up sitting on the ground plane.
+  // Importer stamps `UNIT_SCALE_TO_METERS=0.001` + `UP_AXIS=Z` and the glTF2
+  // exporter bakes the inverse, so the GLB matches the standardCubeGeometry.
   createCubeTestCase('stl', {
     variant: 'binary',
-    geometry: assimpCubeGeometry,
+    geometry: standardCubeGeometry,
     structure: 'containerWithMeshChild',
   }),
   createCubeTestCase('stl', {
     variant: 'ascii',
-    geometry: assimpCubeGeometry,
+    geometry: standardCubeGeometry,
     structure: 'containerWithMeshChild',
   }),
 
@@ -210,24 +247,39 @@ const loaderTestCases: LoaderTestCase[] = [
 
   createCubeTestCase('ply', {
     variant: 'binary',
-    geometry: assimpCubeGeometry,
+    geometry: assimpCubeZupSourceGeometry,
     structure: 'directMesh',
   }),
   createCubeTestCase('ply', {
     variant: 'ascii',
-    geometry: assimpCubeGeometry,
+    geometry: assimpCubeZupSourceGeometry,
     structure: 'directMesh',
   }),
 
-  // FBX binary/ascii create complex nested structures - skip structure validation
+  // FBX cube-binary/ascii fixtures author the cube in mm + Y-up centered at
+  // the origin. The contract bake leaves Y-up identity but converts the unit
+  // (mm → m via the cm-baseline contract that shifts the cube slightly into
+  // −Z). Center lands at [0, 0, −0.001] post-bake.
   createCubeTestCase('fbx', {
     variant: 'binary',
-    geometry: assimpCubeGeometry,
+    geometry: createGeometryVariant(standardCubeGeometry, {
+      boundingBox: { center: [0, 0, -0.001] },
+    }),
   }),
-  createCubeTestCase('fbx', { variant: 'ascii', geometry: assimpCubeGeometry }),
+  createCubeTestCase('fbx', {
+    variant: 'ascii',
+    geometry: createGeometryVariant(standardCubeGeometry, {
+      boundingBox: { center: [0, 0, -0.001] },
+    }),
+  }),
+  // The animation-rigged fixture authors the cube in cm + Y-up sitting on the
+  // ground plane (y∈[0, 2]). Contract bake yields a 0.02 m cube at center
+  // [0, 1, 0].
   createCubeTestCase('fbx', {
     variant: 'animations',
-    geometry: assimpCubeGeometry,
+    geometry: createGeometryVariant(assimpCubeGeometry, {
+      boundingBox: { size: [0.02, 0.02, 0.02] },
+    }),
     structure: 'containerWithMeshChild',
   }),
   createCubeTestCase('fbx', {
@@ -239,11 +291,11 @@ const loaderTestCases: LoaderTestCase[] = [
   }),
 
   createCubeTestCase('wrl', {
-    geometry: assimpCubeGeometry,
+    geometry: assimpCubeZupSourceGeometry,
     structure: 'directMesh',
   }),
   createCubeTestCase('x3dv', {
-    geometry: assimpCubeGeometry,
+    geometry: assimpCubeZupSourceGeometry,
     structure: 'directMesh',
   }),
 
@@ -281,11 +333,13 @@ const loaderTestCases: LoaderTestCase[] = [
     skipReason: 'GLTF texture loading does not work in Node.js yet.',
   }),
 
-  // 3DS creates complex multi-mesh structures - skip structure validation
-  createCubeTestCase('3ds', { geometry: assimpCubeGeometry }),
+  // 3DS authors the cube in m + Z-up centered on the −Z half-space
+  // (z∈[−2, 0]). Contract bake leaves the cube at center [0, 0, −1].
+  createCubeTestCase('3ds', { geometry: assimpCubeNegZupSourceGeometry }),
 
+  // AMF source is mm + Z-up sitting on the ground plane → standardCubeGeometry.
   createCubeTestCase('amf', {
-    geometry: assimpCubeGeometry,
+    geometry: standardCubeGeometry,
     structure: 'containerWithMeshChild',
   }),
   createCubeTestCase('lwo', {
@@ -294,9 +348,7 @@ const loaderTestCases: LoaderTestCase[] = [
   }),
 
   createCubeTestCase('x3d', {
-    geometry: createGeometryVariant(assimpCubeGeometry, {
-      boundingBox: { center: [0, 0, -1] },
-    }),
+    geometry: assimpCubeGeometry,
     structure: {
       rootNodes: [
         {
@@ -314,13 +366,13 @@ const loaderTestCases: LoaderTestCase[] = [
   createSkippedTestCase('x3db', 'X3DB (binary) loader is not implemented yet.'),
 
   createCubeTestCase('xgl', {
-    geometry: assimpCubeGeometry,
+    geometry: assimpCubeZupSourceGeometry,
     structure: 'containerWithMeshChild',
   }),
 
   createCubeTestCase('ifc', {
     variant: 'freecad',
-    geometry: assimpCubeGeometry,
+    geometry: assimpCubeNegZupSourceGeometry,
     structure: {
       rootNodes: [
         {
@@ -342,7 +394,7 @@ const loaderTestCases: LoaderTestCase[] = [
   }),
   createCubeTestCase('ifc', {
     variant: 'blender',
-    geometry: assimpCubeGeometry,
+    geometry: assimpCubeNegZupSourceGeometry,
     structure: {
       rootNodes: [
         {
@@ -386,7 +438,7 @@ const loaderTestCases: LoaderTestCase[] = [
   }),
 
   createCubeTestCase('off', {
-    geometry: assimpCubeGeometry,
+    geometry: assimpCubeZupSourceGeometry,
     structure: 'directMesh',
   }),
 
@@ -410,15 +462,15 @@ const loaderTestCases: LoaderTestCase[] = [
   }),
 
   // MD5MESH creates complex skeletal animation structures - skip structure validation
-  createCubeTestCase('md5mesh', { geometry: assimpCubeGeometry }),
+  createCubeTestCase('md5mesh', { geometry: assimpCubeZupSourceGeometry }),
 
   createCubeTestCase('ac', {
-    geometry: assimpCubeGeometry,
+    geometry: assimpCubeZupSourceGeometry,
     structure: 'containerWithMeshChild',
   }),
 
   createCubeTestCase('nff', {
-    geometry: assimpCubeGeometry,
+    geometry: assimpCubeZupSourceGeometry,
     structure: 'containerWithMeshChild',
   }),
 
@@ -427,12 +479,12 @@ const loaderTestCases: LoaderTestCase[] = [
     structure: 'containerWithMeshChild',
   }),
   createCubeTestCase('mesh.xml', {
-    geometry: assimpCubeGeometry,
+    geometry: assimpCubeZupSourceGeometry,
     structure: 'directMesh',
   }),
 
   createCubeTestCase('cob', {
-    geometry: assimpCubeGeometry,
+    geometry: assimpCubeZupSourceGeometry,
     structure: 'containerWithMeshChild',
   }),
 
@@ -445,8 +497,11 @@ const loaderTestCases: LoaderTestCase[] = [
     },
   }),
 
+  // DXF authors the cube in mm + Z-up sitting on the ground plane. The
+  // importer/exporter contract bake delivers the same standardCubeGeometry
+  // shape (with the format's characteristic 72-vertex / 24-face triangulation).
   createCubeTestCase('dxf', {
-    geometry: createGeometryVariant(assimpCubeGeometry, {
+    geometry: createGeometryVariant(standardCubeGeometry, {
       vertexCount: 72,
       faceCount: 24,
     }),
@@ -454,8 +509,18 @@ const loaderTestCases: LoaderTestCase[] = [
   }),
 
   createCubeTestCase('3mf', {
-    geometry: createGeometryVariant(assimpCubeGeometry, {
-      boundingBox: { center: [0, 0, 1] },
+    // The `cube.3mf` fixture authors a 2 mm cube on the source `−Y` half
+    // (vertices `y∈[−2, 0]`, `x,z∈[−1, 1]`) instead of the canonical 3MF
+    // +Z-up build-plate placement (`z∈[0, 2]`). The R10 importer correctly
+    // stamps `(unit=0.001, upAxis=Z)` per 3MF Core Spec §3.3 and the R12
+    // glTF2 exporter correctly bakes scale + Z→Y rotation: source `−Y`
+    // (vertical extent) maps to glTF `+Z`, producing center `[0, 0, 0.001]`.
+    // See `docs/research/import-test-geometry-deviation-audit.md#finding-4`
+    // for the full algebraic derivation. To revert this case to
+    // `standardCubeGeometry`, re-author the fixture with vertices on
+    // `z∈[0, 2]`; the Assimp pipeline needs no changes.
+    geometry: createGeometryVariant(standardCubeGeometry, {
+      boundingBox: { center: [0, 0, 0.001] },
     }),
     structure: 'containerWithMeshChild',
   }),

@@ -6,6 +6,22 @@ import type { ToolInputValidationError, ToolGenericExecutionError } from '@tauca
 import { ToolError } from '@taucad/chat/utils';
 
 /**
+ * Walk the error `.cause` chain to find a ToolError that may have been
+ * wrapped by LangChain's MiddlewareError between middleware layers.
+ */
+function findToolError(error: unknown): ToolError | undefined {
+  let current: unknown = error;
+  while (current instanceof Error) {
+    if (current instanceof ToolError) {
+      return current;
+    }
+    current = current.cause;
+  }
+
+  return undefined;
+}
+
+/**
  * Context schema for tool error handler middleware.
  * Requires a logger instance for error logging.
  */
@@ -117,13 +133,18 @@ export const toolErrorHandlerMiddleware = createMiddleware({
       const toolName = request.toolCall.name;
       const toolCallId = request.toolCall.id ?? 'unknown';
 
-      // Check for structured ToolError first (from assertRpcSuccess/assertRpcExecution)
-      if (error instanceof ToolError) {
-        const { errorCode, message } = error.data;
-        logger.warn(`Tool error [${toolCallId}] ${toolName}: ${errorCode} - ${message}`, error.stack);
+      // Check for structured ToolError — may be wrapped in LangChain's
+      // MiddlewareError between middleware layers, so walk the cause chain.
+      const toolError = findToolError(error);
+      if (toolError) {
+        const { errorCode, message } = toolError.data;
+        logger.warn(
+          `Tool error [${toolCallId}] ${toolName}: ${errorCode} - ${message}`,
+          error instanceof Error ? error.stack : undefined,
+        );
 
         return new ToolMessage({
-          content: JSON.stringify(error.data),
+          content: JSON.stringify(toolError.data),
           // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
           tool_call_id: toolCallId,
           name: toolName,

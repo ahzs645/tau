@@ -1,14 +1,18 @@
 ---
-description: Context engineering guidelines for system prompts and tool descriptions (see docs/policy/context-engineering-policy.md)
+description: Context engineering guidelines for system prompts, tool descriptions, and filesystem-based context middleware
 globs:
   - "**/tools/**/*.ts"
   - "**/prompts/**/*.ts"
   - "**/chat-prompt*.ts"
+  - "**/middleware/transcript*.ts"
+  - "**/middleware/compaction*.ts"
+  - "**/middleware/tool-offloading*.ts"
+  - "**/tau-rpc-backend.ts"
 alwaysApply: false
 ---
 # Context Engineering
 
-Follow `docs/policy/context-engineering-policy.md` for the full guide. Key principles summarized here.
+Follow `docs/policy/context-engineering-policy.md` for prompts/tools. Follow `docs/policy/filesystem-context-policy.md` for the transcript, offloading, and compaction pipeline.
 
 ## Core Principles
 
@@ -18,38 +22,24 @@ Follow `docs/policy/context-engineering-policy.md` for the full guide. Key princ
 - **Examples over rules**: One comprehensive example > three paragraphs of explanation.
 - **Trust model capability**: If a competent developer wouldn't need the instruction, the model doesn't either.
 
-## System Prompts
+## Filesystem Context Rules
 
-- Structure with XML tags or Markdown headers for distinct sections.
-- Reference tools by name, don't re-explain their parameters.
-- Compress prescriptive lists into terse sentences.
-- Use professional, terse language -- cut filler and defensive repetition.
+- Transcripts: single append-only JSONL at `.tau/transcripts/{chatId}.jsonl`
+- Every JSONL line has `role` + `timestamp`; content blocks split into separate lines
+- Drop opaque data (signatures, indexes); skip tool_use blocks (captured by wrapToolCall)
+- Tool offloading: large results to `.tau/tool-outputs/`, replaced with file path reference
+- Skills/memory: loaded from `.tau/skills/` and `.tau/AGENTS.md` by middleware, never hardcoded in prompt
+- All writes fire-and-forget (`void promise`) — never block the agent loop
+- Compaction uses `append`, never `write` (overwrite)
 
-## Tool Descriptions
-
-```typescript
-description: `[One-line purpose]
-[When to use - 2-3 bullets max]
-[Key behavior - only if non-obvious]`
-```
-
-Target under 150 words. Let Zod schemas self-document parameters.
-
-## Anti-Patterns
+## Prompt Anti-Patterns
 
 | Anti-Pattern | Fix |
 |---|---|
 | Tool explained in prompt AND description | Keep in description only |
-| Multiple similar code examples | One canonical example |
 | "1. Analyze 2. Understand 3. Fix" | "Fix incrementally, verify after" |
 | "CRITICAL: You MUST always..." | State once |
-| All 50 tool definitions in every request | Dynamic discovery |
+| All tool definitions in every request | Dynamic discovery |
 | Full conversation history forever | Sliding windows + summarization |
-
-## Audit Checklist
-
-- [ ] Is this explained elsewhere? Consolidate.
-- [ ] Would a senior dev need this? Remove if obvious.
-- [ ] Can this be an example instead?
-- [ ] Are there prescriptive lists? Compress.
-- [ ] Does this duplicate tool docs? Remove from prompt.
+| Signature/binary data in transcript | Drop — zero search value |
+| `await` on transcript writes | `void` — fire-and-forget |

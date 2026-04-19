@@ -208,11 +208,11 @@ Each commit should represent a single, coherent change. Do not combine unrelated
 ### Automated
 
 - **`commit-msg` hook** (`.husky/commit-msg`): Validates scope against known project names at commit time. Rejects invalid scopes with the full list of valid options.
-- **`scripts/validate-project-names.ts`**: CI check ensuring `project.json` names match directory and `package.json` names — keeps the scope source of truth consistent.
+- **`scripts/src/validate-project-names.ts`**: CI check ensuring `project.json` names match directory and `package.json` names — keeps the scope source of truth consistent.
 
 ### AI-Assisted
 
-- **`scripts/aic.sh`**: Dynamically discovers valid scopes from the repo, detects which scopes are touched by staged files, and generates a prompt that constrains the AI to valid scopes only. Invalid scopes are excluded from the AI's options.
+- **`scripts/src/aic.sh`**: Dynamically discovers valid scopes from the repo, detects which scopes are touched by staged files, and generates a prompt that constrains the AI to valid scopes only. Invalid scopes are excluded from the AI's options.
 
 ## Summary Checklist
 

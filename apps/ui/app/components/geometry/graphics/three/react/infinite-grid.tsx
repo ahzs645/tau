@@ -2,6 +2,7 @@ import { Plane } from '@react-three/drei';
 import React from 'react';
 import { infiniteGridMaterial } from '#components/geometry/graphics/three/materials/infinite-grid-material.js';
 import type { InfiniteGridMaterialProperties } from '#components/geometry/graphics/three/materials/infinite-grid-material.js';
+import { sceneTag, sceneTagData } from '#components/geometry/graphics/three/utils/scene-tags.js';
 
 type InfiniteGridProperties = {
   /**
@@ -68,7 +69,7 @@ export function InfiniteGrid(properties: InfiniteGridProperties): React.JSX.Elem
   return (
     <Plane
       frustumCulled={false} // Ensure the grid is always rendered
-      userData={{ isPreviewOnly: true }}
+      userData={sceneTagData(sceneTag.previewOnly)}
       material={material}
       {...planeProperties}
     />

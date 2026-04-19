@@ -16,8 +16,8 @@ Every policy follows this skeleton. Include sections in order; omit optional sec
 title: '{Title} Policy'
 description: '{One-line description for agent discoverability}'
 status: active
-created: YYYY-MM-DD
-updated: YYYY-MM-DD
+created: 'YYYY-MM-DD'
+updated: 'YYYY-MM-DD'
 related: # optional
   - docs/research/related-research.md
 ---
@@ -64,6 +64,54 @@ Explicit "do not" rules when the wrong approach is common or tempting.
 
 - [External spec](url)
 - Related: `docs/policy/other-policy.md`
+```
+
+## Frontmatter Pitfalls
+
+Two errors that repeatedly break `pnpm docs:validate`:
+
+1. **Unquoted dates** — YAML auto-parses bare `YYYY-MM-DD` as `Date` objects. The validator expects strings. Always single-quote dates.
+
+CORRECT:
+
+```yaml
+created: '2026-03-24'
+updated: '2026-03-24'
+```
+
+INCORRECT:
+
+```yaml
+created: 2026-03-24
+updated: 2026-03-24
+```
+
+2. **Markdown syntax in YAML** — The frontmatter block between `---` delimiters is pure YAML. Markdown headings (`##`), blank lines between fields, or markdown list syntax (`- ` without indentation for `related`) will corrupt the parse.
+
+CORRECT:
+
+```yaml
+---
+title: 'My Policy'
+description: 'One-line description'
+status: active
+created: '2026-03-24'
+updated: '2026-03-24'
+related:
+  - docs/research/some-research.md
+---
+```
+
+INCORRECT:
+
+```yaml
+---
+## title: 'My Policy'
+
+description: 'One-line description'
+status: active
+related:
+  - docs/research/some-research.md
 ```
 
 ## Section Guide
@@ -216,7 +264,7 @@ This creates a bidirectional link: the policy explains _why_, the lint rule enfo
 Before finalizing a policy:
 
 - [ ] Filename matches `docs/policy/{name}-policy.md`
-- [ ] YAML frontmatter with title, description, status, created, updated
+- [ ] YAML frontmatter with title, description, status, created, updated — dates single-quoted
 - [ ] Frontmatter `title` matches H1 heading
 - [ ] Frontmatter `related` lists cross-referenced docs
 - [ ] Opens with one-line scope statement

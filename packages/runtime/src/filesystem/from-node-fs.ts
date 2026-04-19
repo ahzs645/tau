@@ -1,5 +1,7 @@
 import { toFileStat } from '@taucad/types/constants';
 import type { RuntimeFileSystemBase } from '#types/runtime-kernel.types.js';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 
 /**
  * Create a RuntimeFileSystem from Node.js `fs.promises`.
@@ -13,7 +15,7 @@ import type { RuntimeFileSystemBase } from '#types/runtime-kernel.types.js';
  * @example <caption>Server-side Node.js filesystem</caption>
  * ```typescript
  * import { createRuntimeClient } from '@taucad/runtime';
- * import { fromNodeFS } from '@taucad/runtime/filesystem';
+ * import { fromNodeFS } from '@taucad/runtime/filesystem/node';
  * import { replicad } from '@taucad/runtime/kernels';
  * import { esbuild } from '@taucad/runtime/bundler';
  * import { createInProcessTransport } from '@taucad/runtime/transport';
@@ -27,12 +29,7 @@ import type { RuntimeFileSystemBase } from '#types/runtime-kernel.types.js';
  * ```
  */
 export function fromNodeFS(basePath: string): RuntimeFileSystemBase {
-  // oxlint-disable-next-line @typescript-eslint/no-require-imports, unicorn/prefer-module, @typescript-eslint/consistent-type-imports -- dynamic require avoids bundling Node.js builtins in browser builds
-  const fs = require('node:fs/promises') as typeof import('node:fs/promises');
-  // oxlint-disable-next-line @typescript-eslint/no-require-imports, unicorn/prefer-module, @typescript-eslint/consistent-type-imports -- dynamic require avoids bundling Node.js builtins in browser builds
-  const path = require('node:path') as typeof import('node:path');
-
-  const resolve = (p: string): string => path.resolve(basePath, p);
+  const resolve = (p: string): string => path.join(basePath, p);
 
   function readFile(filePath: string, encoding: 'utf8'): Promise<string>;
   function readFile(filePath: string): Promise<Uint8Array<ArrayBuffer>>;

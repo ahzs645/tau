@@ -1,7 +1,7 @@
-import { useCallback, useMemo, useState } from 'react';
-import { exportFromGlb } from '@taucad/converter';
+import { useCallback, useState } from 'react';
 import type { Geometry } from '@taucad/types';
 import { toast } from '#components/ui/sonner.js';
+import type { AppRuntimeClient } from '#types/runtime-client.alias.js';
 
 type ArCapability = {
   readonly isQuickLookSupported: boolean;
@@ -62,22 +62,16 @@ function launchQuickLook(usdzBlobUrl: string): void {
  *
  * Returns `canActivateAr: true` only when the device supports Quick Look
  * and geometry is available. Call `activateAr()` from a user click handler
- * to convert the model to USDZ and open AR Quick Look.
+ * to export the model to USDZ via the runtime client and open AR Quick Look.
  */
-export function useAr(geometries: readonly Geometry[]): ArCapability {
+export function useAr(geometries: readonly Geometry[], kernelClient?: AppRuntimeClient): ArCapability {
   const [isConverting, setIsConverting] = useState(false);
 
-  const hasGltfGeometry = useMemo(() => geometries.some((g) => g.format === 'gltf'), [geometries]);
-
-  const canActivateAr = isQuickLookSupported && hasGltfGeometry;
+  const hasGltfGeometry = geometries.some((g) => g.format === 'gltf');
+  const canActivateAr = isQuickLookSupported && hasGltfGeometry && Boolean(kernelClient);
 
   const activateAr = useCallback(async () => {
-    if (!canActivateAr) {
-      return;
-    }
-
-    const glbGeometry = geometries.find((g) => g.format === 'gltf');
-    if (!glbGeometry) {
+    if (!canActivateAr || !kernelClient) {
       return;
     }
 
@@ -85,13 +79,13 @@ export function useAr(geometries: readonly Geometry[]): ArCapability {
     let blobUrl: string | undefined;
 
     try {
-      const exportedFiles = await exportFromGlb(glbGeometry.content, 'usdz');
-      const usdzFile = exportedFiles[0];
-      if (!usdzFile) {
-        throw new Error('USDZ conversion produced no output');
+      const result = await kernelClient.export('usdz');
+      if (!result.success) {
+        throw new Error(result.issues[0]?.message ?? 'USDZ export failed');
       }
 
-      blobUrl = URL.createObjectURL(new Blob([usdzFile.bytes], { type: 'model/vnd.usdz+zip' }));
+      const { data } = result;
+      blobUrl = URL.createObjectURL(new Blob([data.bytes], { type: data.mimeType }));
 
       launchQuickLook(blobUrl);
     } catch (error) {
@@ -104,7 +98,7 @@ export function useAr(geometries: readonly Geometry[]): ArCapability {
 
       setIsConverting(false);
     }
-  }, [canActivateAr, geometries]);
+  }, [canActivateAr, kernelClient]);
 
   return {
     isQuickLookSupported,

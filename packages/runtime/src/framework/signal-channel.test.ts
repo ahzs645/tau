@@ -28,6 +28,7 @@ describe('SharedArrayBuffer signal channel', () => {
       expect(workerStateEnum.idle).toBe(0);
       expect(workerStateEnum.rendering).toBe(1);
       expect(workerStateEnum.error).toBe(2);
+      expect(workerStateEnum.buffering).toBe(3);
     });
   });
 
@@ -36,6 +37,7 @@ describe('SharedArrayBuffer signal channel', () => {
       expect(workerStateNames[workerStateEnum.idle]).toBe('idle');
       expect(workerStateNames[workerStateEnum.rendering]).toBe('rendering');
       expect(workerStateNames[workerStateEnum.error]).toBe('error');
+      expect(workerStateNames[workerStateEnum.buffering]).toBe('buffering');
     });
   });
 
@@ -74,6 +76,20 @@ describe('SharedArrayBuffer signal channel', () => {
     it('should support error state', () => {
       Atomics.store(signalView, signalSlot.workerState, workerStateEnum.error);
       expect(Atomics.load(signalView, signalSlot.workerState)).toBe(workerStateEnum.error);
+    });
+
+    it('should support idle -> buffering -> rendering -> idle transitions', () => {
+      Atomics.store(signalView, signalSlot.workerState, workerStateEnum.idle);
+      expect(Atomics.load(signalView, signalSlot.workerState)).toBe(workerStateEnum.idle);
+
+      Atomics.store(signalView, signalSlot.workerState, workerStateEnum.buffering);
+      expect(Atomics.load(signalView, signalSlot.workerState)).toBe(workerStateEnum.buffering);
+
+      Atomics.store(signalView, signalSlot.workerState, workerStateEnum.rendering);
+      expect(Atomics.load(signalView, signalSlot.workerState)).toBe(workerStateEnum.rendering);
+
+      Atomics.store(signalView, signalSlot.workerState, workerStateEnum.idle);
+      expect(Atomics.load(signalView, signalSlot.workerState)).toBe(workerStateEnum.idle);
     });
 
     it('should resolve state name from integer value', () => {

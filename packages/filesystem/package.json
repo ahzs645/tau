@@ -57,10 +57,9 @@
     "#*": "./src/*"
   },
   "dependencies": {
+    "@taucad/memory": "workspace:*",
     "@taucad/types": "workspace:*",
     "@taucad/utils": "workspace:*",
-    "@zenfs/core": "catalog:",
-    "@zenfs/dom": "catalog:",
     "jszip": "^3.10.1"
   }
 }

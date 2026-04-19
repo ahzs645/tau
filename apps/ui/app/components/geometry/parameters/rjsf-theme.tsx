@@ -11,7 +11,7 @@ import type {
   ErrorListProps,
   RJSFSchema,
 } from '@rjsf/utils';
-import { ChevronRight, RefreshCcwDot } from 'lucide-react';
+import { ChevronRight } from 'lucide-react';
 import { Fragment, useEffect, useState } from 'react';
 import { Button } from '#components/ui/button.js';
 import { Input } from '#components/ui/input.js';
@@ -20,7 +20,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '#
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '#components/ui/collapsible.js';
 import { cn } from '#utils/ui.utils.js';
 import { toTitleCase } from '#utils/string.utils.js';
-import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
+import { ModifiedIndicator } from '#components/ui/modified-indicator.js';
 import { HighlightText } from '#components/highlight-text.js';
 import { ParametersWidget } from '#components/geometry/parameters/parameters-widget.js';
 import {
@@ -65,21 +65,10 @@ function FieldTemplate(props: FieldTemplateProps<Record<string, unknown>, RJSFSc
           'field-group group/field-group',
 
           // We can save some space by hiding the left border if the root is an object with only nested (object or array) children
-          'data-[is-root-nested-only=true]:-ml-3.5',
+          'data-[is-root-nested-only=true]:-ml-0.5',
 
-          // Non root object fields.
-          // These have a left border and a top/bottom border.
-          !isRoot &&
-            cn(
-              'border-t border-b',
-              'ml-2 border-l-6',
-              // The first field group in the object should not have a top border
-              '[.field-group:first-of-type]:border-t-0',
-              // The last field group in the object should not have a bottom border
-              '[.field-group:last-of-type]:border-b-0',
-              // The first field group in the object should not have a top border
-              '[.field-group+&]:border-t-0',
-            ),
+          // Non root object fields: subtle left accent for nesting
+          !isRoot && 'ml-0 border-l-2 border-primary/20 hover:border-primary/40 transition-colors',
         )}
         data-is-root-nested-only={isRootNestedOnlyChildren}
       >
@@ -146,40 +135,37 @@ function FieldTemplate(props: FieldTemplateProps<Record<string, unknown>, RJSFSc
   };
 
   return (
-    <div className='@container/parameter my-3 flex flex-col gap-0.5 px-3 transition-colors'>
-      <div className='flex h-auto min-h-5 flex-row justify-between gap-2'>
-        <span
-          className={cn('pb-0.25 text-sm', fieldHasValue ? 'font-medium' : 'font-normal')}
-          aria-label={`Parameter: ${prettyLabel}`}
-        >
-          <HighlightText text={prettyLabel} searchTerm={formContext.searchTerm} />
-          {required ? <span className='text-destructive'>*</span> : null}
-        </span>
-        {fieldHasValue ? (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant='ghost'
-                size='xs'
-                className='h-5 text-muted-foreground'
-                aria-label={`Reset ${prettyLabel}`}
-                onClick={handleReset}
-              >
-                <RefreshCcwDot className='size-3.5' />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side='left'>Reset &quot;{prettyLabel}&quot;</TooltipContent>
-          </Tooltip>
-        ) : null}
+    <div className='group/field @container/parameter my-1.5 flex flex-col gap-0.5 px-2.5 transition-colors'>
+      <div className='flex items-center gap-2 @[240px]/parameter:flex-row'>
+        <div className='flex min-w-0 shrink-0 items-center gap-1.5 @[240px]/parameter:w-[40%]'>
+          <span
+            className={cn(
+              'truncate text-sm',
+              fieldHasValue ? 'font-medium text-foreground' : 'font-normal text-muted-foreground',
+            )}
+            aria-label={`Parameter: ${prettyLabel}`}
+          >
+            <HighlightText text={prettyLabel} searchTerm={formContext.searchTerm} />
+            {required ? <span className='text-destructive/50'>*</span> : null}
+          </span>
+          {fieldHasValue ? (
+            <ModifiedIndicator
+              onReset={handleReset}
+              tooltip={`Reset ${prettyLabel}`}
+              tooltipSide='left'
+              className='group-hover/field:**:data-[slot=dot]:opacity-0 group-hover/field:**:data-[slot=icon]:opacity-100'
+            />
+          ) : null}
+        </div>
+        <div className='flex min-w-0 flex-1 items-center justify-end gap-2'>{children}</div>
       </div>
       {descriptionText ? (
-        <div className='text-sm text-muted-foreground'>
+        <div className='text-xs text-muted-foreground/70'>
           <HighlightText text={descriptionText} searchTerm={formContext.searchTerm} />
         </div>
       ) : (
         description
       )}
-      <div className='mt-auto flex w-full flex-row items-center gap-2'>{children}</div>
       {help}
       {errors}
     </div>
@@ -262,24 +248,24 @@ function ObjectFieldTemplate(
     : `(${totalPropertiesCount})`;
 
   return (
-    <Collapsible open={isOpen} className='w-full' onOpenChange={setIsOpen}>
+    <Collapsible open={isOpen} className='w-full border-t border-border/40 first:border-t-0' onOpenChange={setIsOpen}>
       <CollapsibleTrigger
-        className='group/collapsible flex h-8 w-full items-center justify-between px-3 py-1.5 transition-colors hover:bg-muted/70'
+        className='group/collapsible flex h-7 w-full items-center justify-between px-2.5 py-1 transition-colors hover:bg-muted/50'
         aria-label={`Group: ${prettyTitle}`}
       >
         <h3 className='flex min-w-0 flex-1 items-center text-xs font-semibold tracking-wide text-muted-foreground uppercase'>
           <span className='truncate'>
             <HighlightText text={prettyTitle} searchTerm={formContext.searchTerm} />
           </span>
-          <span className={cn('ml-1.5 shrink-0 text-muted-foreground/50', isCountFiltered && 'italic')}>
+          <span className={cn('ml-1.5 shrink-0 text-muted-foreground/70', isCountFiltered && 'italic')}>
             {countDisplay}
           </span>
         </h3>
-        <ChevronRight className='size-3.5 text-muted-foreground transition-transform duration-200 ease-in-out group-data-[state=open]/collapsible:rotate-90' />
+        <ChevronRight className='size-3 text-muted-foreground transition-transform duration-200 ease-in-out group-data-[state=open]/collapsible:rotate-90' />
       </CollapsibleTrigger>
 
       <CollapsibleContent className='px-0 py-0'>
-        {description ? <div className='px-3 py-2 text-sm text-muted-foreground'>{description}</div> : null}
+        {description ? <div className='px-2.5 py-1.5 text-xs text-muted-foreground'>{description}</div> : null}
         {properties.map((element) => element.content)}
       </CollapsibleContent>
     </Collapsible>
@@ -323,18 +309,18 @@ function ArrayFieldTemplate(
   const countDisplay = `(${itemCount})`;
 
   return (
-    <Collapsible open={isOpen} className='w-full' onOpenChange={setIsOpen}>
+    <Collapsible open={isOpen} className='w-full border-t border-border/40 first:border-t-0' onOpenChange={setIsOpen}>
       <CollapsibleTrigger
-        className='group/collapsible flex h-8 w-full items-center justify-between px-3 py-1.5 transition-colors hover:bg-muted/70'
+        className='group/collapsible flex h-7 w-full items-center justify-between px-2.5 py-1 transition-colors hover:bg-muted/50'
         aria-label={`Group: ${prettyTitle}`}
       >
         <h3 className='flex min-w-0 flex-1 items-center text-xs font-semibold tracking-wide text-muted-foreground uppercase'>
           <span className='truncate'>
             <HighlightText text={prettyTitle} searchTerm={formContext.searchTerm} />
           </span>
-          <span className='ml-1.5 shrink-0 text-muted-foreground/50'>{countDisplay}</span>
+          <span className='ml-1.5 shrink-0 text-muted-foreground/70'>{countDisplay}</span>
         </h3>
-        <ChevronRight className='size-3.5 text-muted-foreground transition-transform duration-200 ease-in-out group-data-[state=open]/collapsible:rotate-90' />
+        <ChevronRight className='size-3 text-muted-foreground transition-transform duration-200 ease-in-out group-data-[state=open]/collapsible:rotate-90' />
       </CollapsibleTrigger>
 
       <CollapsibleContent className='px-0 py-0'>
@@ -342,7 +328,7 @@ function ArrayFieldTemplate(
           <Fragment key={item.key}>{item.children}</Fragment>
         ))}
         {canAdd ? (
-          <Button type='button' variant='outline' size='sm' className='mx-2 my-2' onClick={onAddClick}>
+          <Button type='button' variant='outline' size='sm' className='mx-2.5 my-1.5' onClick={onAddClick}>
             Add item ({prettyTitle})
           </Button>
         ) : null}
@@ -358,22 +344,26 @@ function SelectWidget(props: WidgetProps): React.ReactNode {
 
   const { enumOptions, enumDisabled } = options;
 
-  const handleChange = (newValue: string) => {
-    onChange(newValue === '' ? undefined : newValue);
-  };
-
   if (!enumOptions) {
     throw new Error('No enum options provided');
   }
 
+  const handleChange = (newValue: string) => {
+    if (newValue === '') {
+      onChange(undefined);
+      return;
+    }
+    const matched = enumOptions.find((opt) => String(opt.value) === newValue);
+    onChange(matched ? matched.value : newValue);
+  };
+
   const prettyLabel = name ? toTitleCase(name) : '';
 
   return (
-    // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- value is untyped in RJSF
-    <Select value={value} onValueChange={handleChange}>
+    <Select value={String(value ?? '')} onValueChange={handleChange}>
       <SelectTrigger
         size='sm'
-        className='min-w-0 flex-1 bg-background'
+        className='h-(--param-field-h) min-w-0 flex-1 rounded-(--param-field-radius) border-border/50 bg-muted text-(--param-field-color) shadow-none transition-colors hover:border-border hover:text-(--param-field-color-focus) focus-visible:border-border focus-visible:text-(--param-field-color-focus) focus-visible:ring-0'
         aria-label={prettyLabel ? `Select for ${prettyLabel}` : undefined}
       >
         <SelectValue placeholder={placeholder ?? 'Choose an option'} />
@@ -387,8 +377,7 @@ function SelectWidget(props: WidgetProps): React.ReactNode {
         {enumOptions.map((option) => (
           <SelectItem
             key={String(option.value)}
-            // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- value is untyped in RJSF
-            value={option.value}
+            value={String(option.value)}
             // oxlint-disable-next-line @typescript-eslint/no-unsafe-argument -- value is untyped in RJSF
             disabled={enumDisabled?.includes(option.value)}
             className='h-7'
@@ -417,7 +406,7 @@ function SimpleInputWidget(props: WidgetProps & { readonly inputType: string }):
       // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- value is untyped in RJSF
       value={value}
       defaultValue={schema.default as string}
-      className='h-6 flex-1 bg-background p-1'
+      className='h-(--param-field-h) w-full rounded-(--param-field-radius) border-border/50 bg-muted pr-6 pl-2 text-right text-sm text-(--param-field-color) shadow-none transition-colors hover:border-border hover:text-(--param-field-color-focus) focus-visible:border-border focus-visible:text-(--param-field-color-focus) focus-visible:ring-0'
       aria-label={prettyLabel ? `Input for ${prettyLabel}` : undefined}
       onChange={(event) => {
         onChange(event.target.value);
@@ -487,7 +476,7 @@ export const templates: TemplatesType = {
       // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- value is untyped in RJSF
       value={value}
       defaultValue={schema.default as string}
-      className='h-6 flex-1 bg-background p-1'
+      className='h-(--param-field-h) w-full rounded-(--param-field-radius) border-border/50 bg-muted pr-6 pl-2 text-right text-sm text-(--param-field-color) shadow-none transition-colors hover:border-border hover:text-(--param-field-color-focus) focus-visible:border-border focus-visible:text-(--param-field-color-focus) focus-visible:ring-0'
       onChange={(event) => {
         onChange(event.target.value);
       }}
@@ -517,11 +506,8 @@ export const templates: TemplatesType = {
       <div
         aria-label={`Invalid Field: ${fieldName}`}
         className={cn(
-          'flex flex-col gap-2.5 bg-warning/10 p-3',
-          // Since we don't have access to the parent field group,
-          // we inset the border by the same amount as the border of the field group,
-          // thus removing duplicate borders of different colors.
-          '-my-px -ml-1.5 border-y border-l-6 border-warning',
+          'flex flex-col gap-2.5 bg-warning/10 p-2.5',
+          '-my-px border-l-2 border-warning',
           // Apply full border with rounded corners if the field is not an array or object,
           // as we already have a border for those.
           !isArrayType && !isObjectType && 'rounded-md border',

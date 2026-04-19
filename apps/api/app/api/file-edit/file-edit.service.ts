@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { MorphClient } from '@morphllm/morphsdk';
 import type { Environment } from '#config/environment.config.js';
 import { parseDiffStats } from '#utils/diff.utils.js';
+import { Span } from '#telemetry/tracer.service.js';
 
 export type FileEditRequest = {
   targetFile: string;
@@ -41,6 +42,7 @@ export class FileEditService {
     this.morph = new MorphClient({ apiKey: morphApiKey });
   }
 
+  @Span()
   public async applyFileEdit(request: FileEditRequest): Promise<FileEditResult> {
     try {
       const { originalContent, codeEdit, targetFile, instructions } = request;

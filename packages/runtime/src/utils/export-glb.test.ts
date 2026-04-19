@@ -98,7 +98,7 @@ const meshWithInvalidFace: IndexedPolyhedron = {
 
 describe('createGlb', () => {
   it('should produce valid GLB with correct triangle count for a single-triangle mesh', async () => {
-    const glb = await createGlb(triangle);
+    const glb = createGlb(triangle);
     const document = await new NodeIO().readBinary(glb);
     const meshes = document.getRoot().listMeshes();
 
@@ -111,7 +111,7 @@ describe('createGlb', () => {
   });
 
   it('should group faces by color into separate primitives', async () => {
-    const glb = await createGlb(twoColorMesh);
+    const glb = createGlb(twoColorMesh);
     const document = await new NodeIO().readBinary(glb);
     const meshes = document.getRoot().listMeshes();
     const primitives = meshes[0]!.listPrimitives();
@@ -120,7 +120,7 @@ describe('createGlb', () => {
   });
 
   it('should set BLEND alphaMode for transparent colors and OPAQUE for opaque', async () => {
-    const glb = await createGlb(twoColorMesh);
+    const glb = createGlb(twoColorMesh);
     const document = await new NodeIO().readBinary(glb);
     const materials = document.getRoot().listMaterials();
 
@@ -130,7 +130,7 @@ describe('createGlb', () => {
   });
 
   it('should fan-triangulate quad faces into two triangles', async () => {
-    const glb = await createGlb(quad);
+    const glb = createGlb(quad);
     const document = await new NodeIO().readBinary(glb);
     const primitives = document.getRoot().listMeshes()[0]!.listPrimitives();
     const indices = primitives[0]!.getIndices()!;
@@ -139,7 +139,7 @@ describe('createGlb', () => {
   });
 
   it('should produce an empty-geometry fallback primitive when mesh has no faces', async () => {
-    const glb = await createGlb(emptyMesh);
+    const glb = createGlb(emptyMesh);
     const document = await new NodeIO().readBinary(glb);
     const primitives = document.getRoot().listMeshes()[0]!.listPrimitives();
 
@@ -149,7 +149,7 @@ describe('createGlb', () => {
   });
 
   it('should skip faces with fewer than 3 vertices', async () => {
-    const glb = await createGlb(meshWithInvalidFace);
+    const glb = createGlb(meshWithInvalidFace);
     const document = await new NodeIO().readBinary(glb);
     const primitives = document.getRoot().listMeshes()[0]!.listPrimitives();
 
@@ -170,7 +170,7 @@ describe('createGlb', () => {
       faces: [[0, 1, 2]],
       colors: [[1, 1, 1, 1]],
     };
-    const glb = await createGlb(unitMesh);
+    const glb = createGlb(unitMesh);
     const document = await new NodeIO().readBinary(glb);
     const positions = document.getRoot().listMeshes()[0]!.listPrimitives()[0]!.getAttribute('POSITION')!;
 
@@ -185,7 +185,7 @@ describe('createGlb', () => {
   });
 
   it('should handle degenerate triangles with zero-area normal', async () => {
-    const glb = await createGlb(degenerateTriangle);
+    const glb = createGlb(degenerateTriangle);
     const document = await new NodeIO().readBinary(glb);
     const primitives = document.getRoot().listMeshes()[0]!.listPrimitives();
     const normals = primitives[0]!.getAttribute('NORMAL')!;
@@ -197,7 +197,7 @@ describe('createGlb', () => {
   });
 
   it('should include line primitives when meshData.lines is provided', async () => {
-    const glb = await createGlb(meshWithLines);
+    const glb = createGlb(meshWithLines);
     const document = await new NodeIO().readBinary(glb);
     const meshes = document.getRoot().listMeshes();
 
@@ -209,14 +209,14 @@ describe('createGlb', () => {
   });
 
   it('should return a Uint8Array', async () => {
-    const result = await createGlb(triangle);
+    const result = createGlb(triangle);
     expect(result).toBeInstanceOf(Uint8Array);
   });
 });
 
 describe('createGltf', () => {
   it('should produce valid JSON glTF with embedded base64 buffer URIs', async () => {
-    const gltfBytes = await createGltf(triangle);
+    const gltfBytes = createGltf(triangle);
     const json = JSON.parse(new TextDecoder().decode(gltfBytes)) as {
       asset: unknown;
       meshes: unknown[];
@@ -231,8 +231,8 @@ describe('createGltf', () => {
   });
 
   it('should produce geometry matching createGlb output for the same input', async () => {
-    const glb = await createGlb(triangle);
-    const gltfBytes = await createGltf(triangle);
+    const glb = createGlb(triangle);
+    const gltfBytes = createGltf(triangle);
 
     const glbDocument = await new NodeIO().readBinary(glb);
     const gltfJson = JSON.parse(new TextDecoder().decode(gltfBytes)) as { meshes: unknown[] };

@@ -5,7 +5,7 @@ import type { PartialDeep } from 'type-fest';
 import { expect } from 'vitest';
 import type { InspectReport } from '@gltf-transform/functions';
 import type { FileInput } from '@taucad/types';
-import type { SupportedImportFormat } from '#import.js';
+import type { SupportedImportFormat } from '#formats.js';
 import {
   getInspectReport,
   getGeometryStatsFromInspect,

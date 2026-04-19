@@ -28,10 +28,17 @@ describe('presets.all', () => {
     expect(bundlers[0]!.extensions).toEqual(['ts', 'js', 'tsx', 'jsx']);
   });
 
-  it('should include a non-empty moduleUrl on every plugin', () => {
-    const { kernels, middleware, bundlers } = presets.all();
+  it('should return 1 transcoder plugin with converter ID', () => {
+    const { transcoders } = presets.all();
 
-    for (const plugin of [...kernels, ...middleware, ...bundlers]) {
+    expect(transcoders).toHaveLength(1);
+    expect(transcoders[0]!.id).toBe('converter');
+  });
+
+  it('should include a non-empty moduleUrl on every plugin', () => {
+    const { kernels, middleware, bundlers, transcoders } = presets.all();
+
+    for (const plugin of [...kernels, ...middleware, ...bundlers, ...transcoders]) {
       expect(plugin.moduleUrl).toEqual(expect.any(String));
       expect(plugin.moduleUrl.length).toBeGreaterThan(0);
     }
@@ -44,5 +51,6 @@ describe('presets.all', () => {
     expect(first.kernels).not.toBe(second.kernels);
     expect(first.middleware).not.toBe(second.middleware);
     expect(first.bundlers).not.toBe(second.bundlers);
+    expect(first.transcoders).not.toBe(second.transcoders);
   });
 });

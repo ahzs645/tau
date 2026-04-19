@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { createActor, waitFor } from 'xstate';
+import { createActor, waitFor, fromCallback } from 'xstate';
 import { importGitHubMachine } from '#machines/import-github.machine.js';
 import { fromSafeAsync } from '#lib/xstate.lib.js';
 
@@ -23,6 +23,11 @@ vi.mock('#lib/github-api.js', () => ({
     })),
     listFiles: vi.fn(async () => [{ path: 'main.ts', size: 100 }]),
     downloadArchiveWithSize: vi.fn(),
+    getArchiveUrl: vi.fn(
+      ({ owner, repo }: { owner: string; repo: string }) =>
+        `/api/import?url=${encodeURIComponent(`https://api.github.com/repos/${owner}/${repo}/zipball/refs/heads/main`)}`,
+    ),
+    getAuthHeaders: vi.fn(() => ({ 'User-Agent': 'test' })),
   })),
 }));
 
@@ -70,11 +75,22 @@ function createTestActor(options?: {
       getFilesActor: fromSafeAsync(async () => {
         return { type: 'filesRetrieved', files: stubFiles };
       }),
-      downloadZipActor: fromSafeAsync(async () => {
+      importWorkerActor: fromCallback(({ sendBack }) => {
         if (options?.downloadThrows) {
-          throw new Error('download failed');
+          queueMicrotask(() => {
+            sendBack({ type: 'workerError', message: 'download failed', phase: 'download' });
+          });
+        } else {
+          queueMicrotask(() => {
+            sendBack({
+              type: 'workerExtractComplete',
+              filePaths: ['main.ts'],
+              files: [{ path: 'main.ts', content: new Uint8Array([1, 2, 3]) }],
+            });
+          });
         }
-        return { type: 'downloaded', blob: new Blob(['test']) };
+        // Noop cleanup
+        return () => undefined;
       }),
       createProjectActor: fromSafeAsync(async () => {
         return { type: 'projectCreated', projectId: 'proj_123' };
@@ -196,9 +212,37 @@ describe('importGitHubMachine', () => {
         timeout: 5000,
       });
       actor.send({ type: 'startImport' });
-      // Should be downloading or already past it
       const { value } = actor.getSnapshot();
-      expect(['downloading', 'extracting', 'selectingMainFile'].includes(value as string)).toBe(true);
+      expect(['downloading', 'selectingMainFile'].includes(value as string)).toBe(true);
+      actor.stop();
+    });
+
+    it('should reach selectingMainFile after successful worker extraction', async () => {
+      const actor = createTestActor({ owner: 'test', repo: 'repo' });
+      actor.start();
+      await waitFor(actor, (s) => s.value === 'enteringDetails' && s.context.repoMetadata !== undefined, {
+        timeout: 5000,
+      });
+      actor.send({ type: 'startImport' });
+      await waitFor(actor, (s) => s.value === 'selectingMainFile', { timeout: 5000 });
+
+      const { context } = actor.getSnapshot();
+      expect(context.importedFilePaths).toEqual(['main.ts']);
+      expect(context.files.size).toBe(1);
+      expect(context.files.has('main.ts')).toBe(true);
+      actor.stop();
+    });
+
+    it('should auto-select main file matching CAD extensions from importedFilePaths', async () => {
+      const actor = createTestActor({ owner: 'test', repo: 'repo' });
+      actor.start();
+      await waitFor(actor, (s) => s.value === 'enteringDetails' && s.context.repoMetadata !== undefined, {
+        timeout: 5000,
+      });
+      actor.send({ type: 'startImport' });
+      await waitFor(actor, (s) => s.value === 'selectingMainFile', { timeout: 5000 });
+
+      expect(actor.getSnapshot().context.selectedMainFile).toBe('main.ts');
       actor.stop();
     });
 
@@ -210,7 +254,19 @@ describe('importGitHubMachine', () => {
       });
       actor.send({ type: 'startImport' });
       await waitFor(actor, (s) => s.value === 'error', { timeout: 5000 });
-      expect(actor.getSnapshot().context.error?.message).toBe('download failed');
+      expect(actor.getSnapshot().context.error?.message).toContain('download failed');
+      actor.stop();
+    });
+
+    it('should include phase in error message from worker', async () => {
+      const actor = createTestActor({ owner: 'test', repo: 'repo', downloadThrows: true });
+      actor.start();
+      await waitFor(actor, (s) => s.value === 'enteringDetails' && s.context.repoMetadata !== undefined, {
+        timeout: 5000,
+      });
+      actor.send({ type: 'startImport' });
+      await waitFor(actor, (s) => s.value === 'error', { timeout: 5000 });
+      expect(actor.getSnapshot().context.error?.message).toContain('download');
       actor.stop();
     });
 
@@ -224,6 +280,22 @@ describe('importGitHubMachine', () => {
       await waitFor(actor, (s) => s.value === 'error', { timeout: 5000 });
       actor.send({ type: 'retry' });
       expect(actor.getSnapshot().value).toBe('enteringDetails');
+      actor.stop();
+    });
+
+    it('should return to enteringDetails on cancelDownload during downloading', async () => {
+      const actor = createTestActor({ owner: 'test', repo: 'repo' });
+      actor.start();
+      await waitFor(actor, (s) => s.value === 'enteringDetails' && s.context.repoMetadata !== undefined, {
+        timeout: 5000,
+      });
+      actor.send({ type: 'startImport' });
+
+      const snap = actor.getSnapshot();
+      if (snap.value === 'downloading') {
+        actor.send({ type: 'cancelDownload' });
+        expect(actor.getSnapshot().value).toBe('enteringDetails');
+      }
       actor.stop();
     });
   });

@@ -1,9 +1,12 @@
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { config } from 'dotenv';
 import { defineConfig } from 'vitest/config';
 import { nxViteTsPaths } from '@nx/vite/plugins/nx-tsconfig-paths.plugin';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+config({ path: path.resolve(__dirname, '.env') });
 
 export default defineConfig({
   root: __dirname,

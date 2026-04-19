@@ -1,195 +1,190 @@
 import { describe, it, expect } from 'vitest';
+import { NodeIO } from '@gltf-transform/core';
 import { convertReplicadGeometriesToGltf } from '#kernels/replicad/utils/replicad-to-gltf.js';
 import type { GeometryReplicad } from '#kernels/replicad/replicad.types.js';
 
-describe('convertReplicadShapesToGltf', () => {
-  it('should convert empty geometries array to valid GLTF data', async () => {
-    const result = await convertReplicadGeometriesToGltf([], 'glb');
+// =============================================================================
+// Fixtures
+// =============================================================================
 
-    expect(result).toBeDefined();
-    expect(result.constructor.name).toBe('Uint8Array');
-    expect(result.length).toBeGreaterThan(0);
+function createSimpleGeometry(overrides: Partial<GeometryReplicad> = {}): GeometryReplicad {
+  return {
+    format: 'replicad',
+    name: 'TestShape',
+    faces: {
+      vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
+      triangles: [0, 1, 2],
+      normals: [0, 0, 1, 0, 0, 1, 0, 0, 1],
+      faceGroups: [],
+    },
+    edges: { lines: [], edgeGroups: [] },
+    ...overrides,
+  };
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+describe('convertReplicadGeometriesToGltf', () => {
+  it('should convert empty geometries array to valid GLB', async () => {
+    const result = convertReplicadGeometriesToGltf([], 'glb');
+
+    expect(result).toBeInstanceOf(Uint8Array);
+    const document = await new NodeIO().readBinary(result);
+    expect(document.getRoot().listMeshes()).toHaveLength(0);
   });
 
-  it('should convert a simple cube geometry to GLTF', async () => {
-    // Mock a simple cube geometry data
-    const cubeShape: GeometryReplicad = {
-      format: 'replicad',
-      name: 'Test Cube',
-      color: '#ff0000',
-      opacity: 1,
+  it('should produce a mesh with correct triangle count', async () => {
+    const geometry = createSimpleGeometry({
       faces: {
-        // Simple triangle vertices (3 vertices per triangle, 3 components per vertex)
-        vertices: [
-          0,
-          0,
-          0, // Vertex 0
-          1,
-          0,
-          0, // Vertex 1
-          1,
-          1,
-          0, // Vertex 2
-          0,
-          1,
-          0, // Vertex 3
-        ],
-        // Two triangles forming a square (indices into vertices array)
-        triangles: [
-          0,
-          1,
-          2, // First triangle
-          0,
-          2,
-          3, // Second triangle
-        ],
-        normals: [
-          0,
-          0,
-          1, // Normal for vertex 0
-          0,
-          0,
-          1, // Normal for vertex 1
-          0,
-          0,
-          1, // Normal for vertex 2
-          0,
-          0,
-          1, // Normal for vertex 3
-        ],
+        vertices: [0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0],
+        triangles: [0, 1, 2, 0, 2, 3],
+        normals: [0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1],
         faceGroups: [],
       },
-      edges: {
-        lines: [],
-        edgeGroups: [],
-      },
-    };
+    });
 
-    const result = await convertReplicadGeometriesToGltf([cubeShape], 'glb');
+    const glb = convertReplicadGeometriesToGltf([geometry], 'glb');
+    const document = await new NodeIO().readBinary(glb);
+    const primitive = document.getRoot().listMeshes()[0]!.listPrimitives()[0]!;
 
-    expect(result).toBeDefined();
-    expect(result.constructor.name).toBe('Uint8Array');
-    expect(result.length).toBeGreaterThan(0);
+    expect(primitive.getIndices()!.getCount()).toBe(6);
+    expect(primitive.getAttribute('POSITION')!.getCount()).toBe(4);
+    expect(primitive.getAttribute('NORMAL')!.getCount()).toBe(4);
   });
 
-  it('should handle GLTF JSON format output', async () => {
-    const simpleShape: GeometryReplicad = {
-      format: 'replicad',
-      name: 'Test Geometry',
-      faces: {
-        vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
-        triangles: [0, 1, 2],
-        normals: [0, 0, 1, 0, 0, 1, 0, 0, 1],
-        faceGroups: [],
-      },
-      edges: {
-        lines: [],
-        edgeGroups: [],
-      },
-    };
+  it('should set node name from geometry name', async () => {
+    const geometry = createSimpleGeometry({ name: 'MyCube' });
+    const glb = convertReplicadGeometriesToGltf([geometry], 'glb');
+    const document = await new NodeIO().readBinary(glb);
 
-    const result = await convertReplicadGeometriesToGltf([simpleShape], 'gltf');
-
-    expect(result).toBeDefined();
-    expect(result.constructor.name).toBe('Uint8Array');
-    expect(result.length).toBeGreaterThan(0);
+    expect(document.getRoot().listNodes()[0]!.getName()).toBe('MyCube');
   });
 
-  it('should preserve colors from multiple geometries', async () => {
-    const redShape: GeometryReplicad = {
-      format: 'replicad',
-      name: 'Red Geometry',
-      color: '#ff0000',
-      faces: {
-        vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
-        triangles: [0, 1, 2],
-        normals: [0, 0, 1, 0, 0, 1, 0, 0, 1],
-        faceGroups: [],
-      },
-      edges: { lines: [], edgeGroups: [] },
-    };
+  it('should apply red color to material baseColorFactor', async () => {
+    const geometry = createSimpleGeometry({ color: '#ff0000', opacity: 1 });
+    const glb = convertReplicadGeometriesToGltf([geometry], 'glb');
+    const document = await new NodeIO().readBinary(glb);
+    const material = document.getRoot().listMaterials()[0]!;
 
-    const blueShape: GeometryReplicad = {
-      format: 'replicad',
-      name: 'Blue Geometry',
-      color: '#0000ff',
-      faces: {
-        vertices: [2, 0, 0, 3, 0, 0, 2, 1, 0],
-        triangles: [0, 1, 2],
-        normals: [0, 0, 1, 0, 0, 1, 0, 0, 1],
-        faceGroups: [],
-      },
-      edges: { lines: [], edgeGroups: [] },
-    };
-
-    const result = await convertReplicadGeometriesToGltf([redShape, blueShape], 'glb');
-
-    expect(result).toBeDefined();
-    expect(result.constructor.name).toBe('Uint8Array');
-    expect(result.length).toBeGreaterThan(0);
-
-    // The GLTF should contain both geometries combined
-    // We can't easily test the internal structure without parsing the GLTF,
-    // but we can verify it's larger than a single geometry would be
-    const singleShapeResult = await convertReplicadGeometriesToGltf([redShape], 'glb');
-    expect(result.length).toBeGreaterThan(singleShapeResult.length);
+    const color = material.getBaseColorFactor();
+    expect(color[0]).toBeCloseTo(1, 2);
+    expect(color[1]).toBeCloseTo(0, 2);
+    expect(color[2]).toBeCloseTo(0, 2);
+    expect(color[3]).toBeCloseTo(1, 2);
+    expect(material.getAlphaMode()).toBe('OPAQUE');
   });
 
-  it('should preserve edge lines from Shape3D in GLTF conversion', async () => {
-    const shapeWithoutLines: GeometryReplicad = {
-      format: 'replicad',
-      name: 'Geometry without Lines',
-      faces: {
-        vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
-        triangles: [0, 1, 2],
-        normals: [0, 0, 1, 0, 0, 1, 0, 0, 1],
-        faceGroups: [],
-      },
-      edges: {
-        lines: [], // No lines
-        edgeGroups: [],
-      },
-    };
+  it('should set BLEND alphaMode for semi-transparent geometry', async () => {
+    const geometry = createSimpleGeometry({ color: '#ff0000', opacity: 0.5 });
+    const glb = convertReplicadGeometriesToGltf([geometry], 'glb');
+    const document = await new NodeIO().readBinary(glb);
+    const material = document.getRoot().listMaterials()[0]!;
 
-    const shapeWithLines: GeometryReplicad = {
-      format: 'replicad',
-      name: 'Geometry with Lines',
-      faces: {
-        vertices: [0, 0, 0, 1, 0, 0, 0, 1, 0],
-        triangles: [0, 1, 2],
-        normals: [0, 0, 1, 0, 0, 1, 0, 0, 1],
-        faceGroups: [],
-      },
+    expect(material.getAlphaMode()).toBe('BLEND');
+    expect(material.getBaseColorFactor()[3]).toBeCloseTo(0.5);
+  });
+
+  it('should produce separate nodes for multiple geometries', async () => {
+    const red = createSimpleGeometry({ name: 'Red', color: '#ff0000' });
+    const blue = createSimpleGeometry({ name: 'Blue', color: '#0000ff' });
+
+    const glb = convertReplicadGeometriesToGltf([red, blue], 'glb');
+    const document = await new NodeIO().readBinary(glb);
+
+    expect(document.getRoot().listNodes()).toHaveLength(2);
+    expect(document.getRoot().listMaterials()).toHaveLength(2);
+    expect(document.getRoot().listNodes()[0]!.getName()).toBe('Red');
+    expect(document.getRoot().listNodes()[1]!.getName()).toBe('Blue');
+  });
+
+  it('should include edge line primitives when edges are provided', async () => {
+    const geometry = createSimpleGeometry({
       edges: {
-        lines: [0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0], // Two line segments
+        lines: [0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0],
         edgeGroups: [
-          { start: 0, count: 6, edgeId: 1 }, // First line segment
-          { start: 6, count: 6, edgeId: 2 }, // Second line segment
+          { start: 0, count: 6, edgeId: 1 },
+          { start: 6, count: 6, edgeId: 2 },
         ],
       },
+    });
+
+    const glb = convertReplicadGeometriesToGltf([geometry], 'glb');
+    const document = await new NodeIO().readBinary(glb);
+    const primitives = document.getRoot().listMeshes()[0]!.listPrimitives();
+
+    expect(primitives).toHaveLength(2);
+    expect(primitives[0]!.getMode()).toBe(4);
+    expect(primitives[1]!.getMode()).toBe(1);
+  });
+
+  it('should produce valid glTF JSON output with base64 buffer', () => {
+    const geometry = createSimpleGeometry();
+    const gltfBytes = convertReplicadGeometriesToGltf([geometry], 'gltf');
+
+    const json = JSON.parse(new TextDecoder().decode(gltfBytes)) as {
+      asset: { version: string; generator: string };
+      meshes: unknown[];
+      buffers: Array<{ uri: string }>;
     };
 
-    // Convert both geometries
-    const resultWithoutLines = await convertReplicadGeometriesToGltf([shapeWithoutLines], 'glb');
-    const resultWithLines = await convertReplicadGeometriesToGltf([shapeWithLines], 'glb');
+    expect(json.asset.version).toBe('2.0');
+    expect(json.asset.generator).toMatch(/^@taucad\/runtime@\d+\.\d+\.\d+/);
+    expect(json.meshes).toHaveLength(1);
+    expect(json.buffers[0]!.uri).toMatch(/^data:application\/octet-stream;base64,/);
+  });
 
-    // Verify both conversions succeed
-    expect(resultWithoutLines).toBeDefined();
-    expect(resultWithoutLines.constructor.name).toBe('Uint8Array');
-    expect(resultWithoutLines.length).toBeGreaterThan(0);
+  it('should transform coordinates from z-up to y-up and mm to meters', async () => {
+    const geometry = createSimpleGeometry({
+      faces: {
+        vertices: [1000, 2000, 3000, 0, 0, 0, 1000, 0, 0],
+        triangles: [0, 1, 2],
+        normals: [0, 0, 1, 0, 0, 1, 0, 0, 1],
+        faceGroups: [],
+      },
+    });
 
-    expect(resultWithLines).toBeDefined();
-    expect(resultWithLines.constructor.name).toBe('Uint8Array');
-    expect(resultWithLines.length).toBeGreaterThan(0);
+    const glb = convertReplicadGeometriesToGltf([geometry], 'glb');
+    const document = await new NodeIO().readBinary(glb);
+    const positions = document.getRoot().listMeshes()[0]!.listPrimitives()[0]!.getAttribute('POSITION')!;
 
-    // The geometry with lines should produce a larger GLTF file
-    // because it includes additional line data
-    expect(resultWithLines.length).toBeGreaterThan(resultWithoutLines.length);
+    const vertex0 = positions.getElement(0, [0, 0, 0]);
+    expect(vertex0[0]).toBeCloseTo(1, 4);
+    expect(vertex0[1]).toBeCloseTo(3, 4);
+    expect(vertex0[2]).toBeCloseTo(-2, 4);
+  });
 
-    // Also test GLTF format to ensure both formats work
-    const gltfResult = await convertReplicadGeometriesToGltf([shapeWithLines], 'gltf');
-    expect(gltfResult).toBeDefined();
-    expect(gltfResult.constructor.name).toBe('Uint8Array');
-    expect(gltfResult.length).toBeGreaterThan(0);
+  it('should apply default gray color when no color is specified', async () => {
+    const geometry = createSimpleGeometry();
+    const glb = convertReplicadGeometriesToGltf([geometry], 'glb');
+    const document = await new NodeIO().readBinary(glb);
+    const material = document.getRoot().listMaterials()[0]!;
+
+    const color = material.getBaseColorFactor();
+    expect(color[0]).toBeCloseTo(0.7);
+    expect(color[1]).toBeCloseTo(0.7);
+    expect(color[2]).toBeCloseTo(0.7);
+    expect(color[3]).toBeCloseTo(1);
+  });
+
+  it('should use provided metalness/roughness values when set', async () => {
+    const geometry = createSimpleGeometry({ metalness: 0.9, roughness: 0.2 });
+    const glb = convertReplicadGeometriesToGltf([geometry], 'glb');
+    const document = await new NodeIO().readBinary(glb);
+    const material = document.getRoot().listMaterials()[0]!;
+
+    expect(material.getMetallicFactor()).toBeCloseTo(0.9, 2);
+    expect(material.getRoughnessFactor()).toBeCloseTo(0.2, 2);
+  });
+
+  it('should fall back to cadMaterialDefaults when metalness/roughness are not set', async () => {
+    const geometry = createSimpleGeometry();
+    const glb = convertReplicadGeometriesToGltf([geometry], 'glb');
+    const document = await new NodeIO().readBinary(glb);
+    const material = document.getRoot().listMaterials()[0]!;
+
+    expect(material.getMetallicFactor()).toBeCloseTo(0, 2);
+    expect(material.getRoughnessFactor()).toBeCloseTo(0.35, 2);
   });
 });

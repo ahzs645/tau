@@ -1,3 +1,4 @@
+// @vitest-environment node
 /* eslint-disable @typescript-eslint/naming-convention -- test data uses filenames as object keys */
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createActor, waitFor } from 'xstate';
@@ -65,11 +66,12 @@ describe('cadPreviewMachine + cadMachine integration', () => {
 
     await waitFor(previewRef, (s) => s.value === 'active');
     await waitFor(cadRef, (s) => s.value === 'idle');
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
 
-    expect(mockClient.setFile).toHaveBeenCalledWith(
-      { path: '/projects/proj_test', filename: 'main.ts' },
-      { width: 42 },
-    );
+    expect(mockClient.setFile).toHaveBeenCalledWith({ path: '/projects/proj_test', filename: 'main.ts' });
+    expect(mockClient.setParameters).toHaveBeenCalledWith({ width: 42 });
 
     cadRef.stop();
     previewRef.stop();
@@ -141,14 +143,16 @@ describe('cadPreviewMachine + cadMachine integration', () => {
 
     // --- Verify the system recovers ---
     await waitFor(cadRef, (s) => s.value === 'idle', { timeout: 5000 });
+    await waitFor(previewRef, (s) => s.value === 'active', { timeout: 5000 });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
 
     const cadSnapshot = cadRef.getSnapshot();
     expect(cadSnapshot.value).toBe('idle');
     expect(cadSnapshot.context.file).toEqual({ path: '/projects/proj_test', filename: 'main.ts' });
-    expect(mockClient.setFile).toHaveBeenCalledWith(
-      { path: '/projects/proj_test', filename: 'main.ts' },
-      { width: 42 },
-    );
+    expect(mockClient.setFile).toHaveBeenCalledWith({ path: '/projects/proj_test', filename: 'main.ts' });
+    expect(mockClient.setParameters).toHaveBeenCalledWith({ width: 42 });
 
     cadRef.stop();
     previewRef.stop();
@@ -224,7 +228,7 @@ describe('cadPreviewMachine + cadMachine integration', () => {
     await waitFor(previewRef, (s) => s.value === 'active', { timeout: 5000 });
 
     // InitializeModel should have been sent to cadRef (now in idle)
-    expect(mockClient.setFile).toHaveBeenCalledWith({ path: '/projects/proj_test', filename: 'main.ts' }, {});
+    expect(mockClient.setFile).toHaveBeenCalledWith({ path: '/projects/proj_test', filename: 'main.ts' });
 
     cadRef.stop();
     previewRef.stop();
@@ -308,14 +312,15 @@ describe('cadPreviewMachine + cadMachine integration', () => {
     // Wait for both to complete
     await waitFor(cadRef, (s) => s.value === 'idle', { timeout: 5000 });
     await waitFor(previewRef, (s) => s.value === 'active', { timeout: 5000 });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
 
     const cadSnapshot = cadRef.getSnapshot();
     expect(cadSnapshot.value).toBe('idle');
     expect(cadSnapshot.context.file).toEqual({ path: '/projects/proj_test', filename: 'main.ts' });
-    expect(mockClient.setFile).toHaveBeenCalledWith(
-      { path: '/projects/proj_test', filename: 'main.ts' },
-      { width: 42 },
-    );
+    expect(mockClient.setFile).toHaveBeenCalledWith({ path: '/projects/proj_test', filename: 'main.ts' });
+    expect(mockClient.setParameters).toHaveBeenCalledWith({ width: 42 });
 
     cadRef.stop();
     previewRef.stop();
@@ -431,17 +436,18 @@ describe('cadPreviewMachine + cadMachine integration', () => {
     // P2 clones content before transfer, both work correctly.
     await waitFor(cadRef, (s) => s.value === 'idle', { timeout: 5000 });
     await waitFor(previewRef, (s) => s.value === 'active', { timeout: 5000 });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
 
     // Preview machine should be active, NOT in error state
     expect(previewRef.getSnapshot().value).toBe('active');
     expect(previewRef.getSnapshot().context.initError).toBeUndefined();
 
-    // CadRef should have the file
+    // CadRef should have the file and parameters sent directly to kernel
     expect(cadRef.getSnapshot().context.file).toEqual({ path: '/projects/proj_test', filename: 'main.ts' });
-    expect(mockClient.setFile).toHaveBeenCalledWith(
-      { path: '/projects/proj_test', filename: 'main.ts' },
-      { width: 42 },
-    );
+    expect(mockClient.setFile).toHaveBeenCalledWith({ path: '/projects/proj_test', filename: 'main.ts' });
+    expect(mockClient.setParameters).toHaveBeenCalledWith({ width: 42 });
 
     cadRef.stop();
     previewRef.stop();

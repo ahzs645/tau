@@ -17,7 +17,17 @@ export async function handleReadFile(input: ReadFileRpcInput, fileSystem: RpcFil
 
     const content = selectedLines.join('\n');
 
-    return { success: true, content, totalLines, startLine: startIndex + 1 };
+    let createdAt: string | undefined;
+    let modifiedAt: string | undefined;
+    try {
+      const fileStat = await fileSystem.stat(input.targetFile);
+      createdAt = fileStat.createdAt;
+      modifiedAt = fileStat.modifiedAt;
+    } catch {
+      // `stat` may not be available in all environments
+    }
+
+    return { success: true, content, totalLines, startLine: startIndex + 1, createdAt, modifiedAt };
   } catch (error) {
     return toRpcError(error);
   }

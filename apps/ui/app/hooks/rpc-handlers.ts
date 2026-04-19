@@ -17,11 +17,17 @@ import type {
   FetchGeometryRpcResult,
 } from '@taucad/chat';
 import { createRpcDispatcher } from '@taucad/chat/rpc';
-import type { RpcDependencies, RpcFileSystem, RpcRuntimeClient, RpcGraphicsClient } from '@taucad/chat/rpc';
+import type {
+  RpcDependencies,
+  RpcFileSystem,
+  RpcFileStat,
+  RpcRuntimeClient,
+  RpcGraphicsClient,
+} from '@taucad/chat/rpc';
 import type { FileEntry } from '@taucad/types';
 import { idPrefix } from '@taucad/types/constants';
 import { generatePrefixedId } from '@taucad/utils/id';
-import { parentDirectory } from '@taucad/utils/path';
+
 import { screenshotRequestMachine, orthographicViews } from '#machines/screenshot-request.machine.js';
 import type { graphicsMachine } from '#machines/graphics.machine.js';
 import type { projectMachine } from '#machines/project.machine.js';
@@ -38,10 +44,17 @@ export type RpcHandlerDependencies = {
     readFile: (path: string) => Promise<Uint8Array<ArrayBuffer>>;
     writeFile: (path: string, data: Uint8Array<ArrayBuffer>, options: { source: FileWriteSource }) => Promise<void>;
     deleteFile: (path: string, options: { source: FileWriteSource }) => Promise<void>;
+    stat: (path: string) => Promise<{ type: 'file' | 'dir'; size: number; mtimeMs: number }>;
   };
   graphicsRef: ActorRefFrom<typeof graphicsMachine> | undefined;
   projectRef: ActorRefFrom<typeof projectMachine>;
-  treeService: { getTreeSnapshot(): Map<string, FileEntry> } | undefined;
+  treeService:
+    | {
+        getTreeSnapshot(): Map<string, FileEntry>;
+        exists(path: string): Promise<boolean>;
+        readDirectoryEntries(path: string): Promise<Array<{ id?: string; name: string; children?: unknown[] }>>;
+      }
+    | undefined;
   screenshotQuality: number;
 };
 
@@ -72,30 +85,75 @@ function createBrowserRpcFileSystem(
     async deleteFile(path: string): Promise<void> {
       await fileManager.deleteFile(path, { source: 'machine' });
     },
-    async readdir(path: string): Promise<Array<{ name: string; type: 'file' | 'directory'; size: number }>> {
-      const entries: Array<{
-        name: string;
-        type: 'file' | 'directory';
-        size: number;
-      }> = [];
-
-      const fileTree = treeService?.getTreeSnapshot() ?? new Map<string, FileEntry>();
-      for (const [entryPath, entry] of fileTree.entries()) {
-        const parentPath = entryPath.includes('/') ? parentDirectory(entryPath) : '';
-        if (parentPath === path) {
-          entries.push({
-            name: entry.name,
-            type: entry.type === 'dir' ? 'directory' : 'file',
-            size: entry.size,
-          });
-        }
+    async readdir(
+      path: string,
+    ): Promise<Array<{ name: string; type: 'file' | 'directory'; size: number; modifiedAt?: string }>> {
+      if (!treeService) {
+        return [];
       }
-
-      return entries;
+      const nodes = await treeService.readDirectoryEntries(path);
+      return nodes.map((node) => ({
+        name: node.name,
+        type: node.children === undefined ? 'file' : 'directory',
+        size: 0,
+      }));
     },
     async exists(path: string): Promise<boolean> {
-      const fileTree = treeService?.getTreeSnapshot() ?? new Map<string, FileEntry>();
-      return fileTree.has(path);
+      if (!treeService) {
+        return false;
+      }
+      return treeService.exists(path);
+    },
+    async appendFile(path: string, content: string): Promise<void> {
+      let existing = '';
+      try {
+        const data = await fileManager.readFile(path);
+        existing = decodeTextFile(data);
+      } catch {
+        // File doesn't exist yet — will be created
+      }
+
+      await fileManager.writeFile(path, encodeTextFile(existing + content), {
+        source: 'machine',
+      });
+    },
+    // oxlint-disable-next-line max-params -- list of args is consistent with other file operations
+    async editFile(
+      path: string,
+      oldString: string,
+      newString: string,
+      replaceAll?: boolean,
+    ): Promise<{ occurrences: number }> {
+      const data = await fileManager.readFile(path);
+      const content = decodeTextFile(data);
+
+      let updated: string;
+      let occurrences: number;
+
+      if (replaceAll) {
+        occurrences = content.split(oldString).length - 1;
+        updated = occurrences > 0 ? content.replaceAll(oldString, newString) : content;
+      } else {
+        occurrences = content.includes(oldString) ? 1 : 0;
+        updated = occurrences > 0 ? content.replace(oldString, newString) : content;
+      }
+
+      if (occurrences === 0) {
+        throw new Error(`String not found in ${path}`);
+      }
+
+      await fileManager.writeFile(path, encodeTextFile(updated), { source: 'machine' });
+      return { occurrences };
+    },
+    async stat(path: string): Promise<RpcFileStat> {
+      const s = await fileManager.stat(path);
+      const isoDate = new Date(s.mtimeMs).toISOString();
+      return {
+        size: s.size,
+        isDirectory: s.type === 'dir',
+        createdAt: isoDate,
+        modifiedAt: isoDate,
+      };
     },
   };
 }

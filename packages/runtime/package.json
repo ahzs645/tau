@@ -34,8 +34,11 @@
     "./kernels": "./src/plugins/kernels-entry.ts",
     "./middleware": "./src/plugins/middleware-entry.ts",
     "./bundler": "./src/plugins/bundler-entry.ts",
+    "./transcoder": "./src/plugins/transcoder-factories.ts",
     "./transport": "./src/transport/index.ts",
+    "./node": "./src/node.ts",
     "./filesystem": "./src/filesystem/index.ts",
+    "./filesystem/node": "./src/filesystem/from-node-fs.ts",
     "./testing": "./src/testing/index.ts",
     "./worker": "./src/framework/kernel-runtime-worker.ts",
     "./kernels/replicad": "./src/kernels/replicad/replicad.kernel.ts",
@@ -114,6 +117,16 @@
         "import": {
           "types": "./dist/esm/plugins/bundler-entry.d.ts",
           "default": "./dist/esm/plugins/bundler-entry.js"
+        }
+      },
+      "./transcoder": {
+        "require": {
+          "types": "./dist/cjs/plugins/transcoder-factories.d.cts",
+          "default": "./dist/cjs/plugins/transcoder-factories.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/plugins/transcoder-factories.d.ts",
+          "default": "./dist/esm/plugins/transcoder-factories.js"
         }
       },
       "./transport": {
@@ -266,6 +279,16 @@
           "default": "./dist/esm/middleware/gltf-edge-detection.middleware.js"
         }
       },
+      "./node": {
+        "require": {
+          "types": "./dist/cjs/node.d.cts",
+          "default": "./dist/cjs/node.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/node.d.ts",
+          "default": "./dist/esm/node.js"
+        }
+      },
       "./filesystem": {
         "require": {
           "types": "./dist/cjs/filesystem/index.d.cts",
@@ -274,6 +297,16 @@
         "import": {
           "types": "./dist/esm/filesystem/index.d.ts",
           "default": "./dist/esm/filesystem/index.js"
+        }
+      },
+      "./filesystem/node": {
+        "require": {
+          "types": "./dist/cjs/filesystem/from-node-fs.d.cts",
+          "default": "./dist/cjs/filesystem/from-node-fs.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/filesystem/from-node-fs.d.ts",
+          "default": "./dist/esm/filesystem/from-node-fs.js"
         }
       },
       "./testing": {
@@ -301,6 +334,7 @@
     "@taucad/converter": "workspace:*",
     "@taucad/json-schema": "workspace:*",
     "@taucad/kcl-wasm-lib": "catalog:",
+    "@taucad/memory": "workspace:*",
     "@taucad/types": "workspace:*",
     "@taucad/utils": "workspace:*",
     "cdn-resolve": "catalog:",
@@ -310,10 +344,10 @@
     "esbuild-wasm": "catalog:",
     "json-schema-default": "catalog:",
     "manifold-3d": "catalog:",
-    "opencascade.js": "file:../../tarballs/opencascade.js-2.0.0-beta.b5ff984.tgz",
+    "opencascade.js": "file:../../tarballs/opencascade.js-3.0.0-beta.b3b3330.tgz",
     "openscad-wasm-prebuilt": "catalog:",
-    "replicad": "file:../../tarballs/replicad-0.21.0-v8.7.tgz",
-    "replicad-opencascadejs": "file:../../tarballs/replicad-opencascadejs-0.21.0-v8.26.tgz",
+    "replicad": "file:../../tarballs/replicad-0.21.0-v8.55.tgz",
+    "replicad-opencascadejs": "file:../../tarballs/replicad-opencascadejs-0.21.0-v8.55.tgz",
     "source-map-js": "catalog:",
     "type-fest": "catalog:",
     "uint8array-extras": "catalog:",
@@ -332,9 +366,6 @@
   },
   "devDependencies": {
     "@taucad/tau-examples": "workspace:*",
-    "@types/json-schema": "catalog:",
-    "@zenfs/core": "catalog:",
-    "@zenfs/dom": "catalog:",
     "geist": "catalog:"
   }
 }

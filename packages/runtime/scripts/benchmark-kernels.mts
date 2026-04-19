@@ -1,5 +1,3 @@
-/* oxlint-disable n/prefer-global/process -- CLI script requires direct process access */
-
 /**
  * Kernel Benchmarking CLI
  *
@@ -20,6 +18,8 @@ import { filterBenchmarks, benchmarkCategories } from '#benchmarks/benchmark-sui
 import { runBenchmarks } from '#benchmarks/benchmark-runner.js';
 import type { BenchmarkRunResult, BuildProvenance } from '#benchmarks/benchmark-runner.js';
 import { generateHtmlReport, serializeRunResult } from '#benchmarks/benchmark-report.js';
+import type { ProfiledCaseData } from '#benchmarks/profile-report.js';
+import process from 'node:process';
 
 // ── ANSI color helpers ──────────────────────────────────────────────
 
@@ -69,6 +69,8 @@ const { values } = parseArgs({
     'wasm-variant': { type: 'string', default: 'single' },
     ocProfile: { type: 'boolean', default: false },
     noTracing: { type: 'boolean', default: false },
+    cpuProfile: { type: 'boolean', default: false },
+    profileInterval: { type: 'string', default: '100' },
     help: { type: 'boolean', short: 'h', default: false },
   },
   strict: true,
@@ -89,9 +91,11 @@ ${c.dim}Options:${c.reset}
   ${c.cyan}-o${c.reset}, ${c.cyan}--output${c.reset} <dir>      Output directory (default: reports)
   ${c.cyan}-p${c.reset}, ${c.cyan}--provenance${c.reset} <file> Attach build provenance JSON to results
       ${c.cyan}--wasm-dir${c.reset} <path>   Inject custom WASM from directory (contains .wasm + .js files)
-      ${c.cyan}--wasm-variant${c.reset} <v>  WASM variant name: single (default) or single-exceptions
+      ${c.cyan}--wasm-variant${c.reset} <v>  WASM variant name: single (default)
       ${c.cyan}--ocProfile${c.reset}         Use per-call OC tracing for deep profiling
       ${c.cyan}--noTracing${c.reset}         Disable OC tracing entirely for pure timing
+      ${c.cyan}--cpuProfile${c.reset}        Enable V8 CPU profiling for per-function timing breakdown
+      ${c.cyan}--profileInterval${c.reset} <us>  CPU profiler sampling interval in microseconds (default: 100)
   ${c.cyan}-h${c.reset}, ${c.cyan}--help${c.reset}              Show this help message
 `);
   process.exit(0);
@@ -138,10 +142,10 @@ function formatFileSize(bytes: number): string {
 
 // ── WASM resolution ─────────────────────────────────────────────────
 
-type WasmOptionResult = 'single' | 'single-exceptions' | { wasmUrl: string; wasmBindingsUrl: string };
+type WasmOptionResult = 'single' | { wasmUrl: string; wasmBindingsUrl: string };
 
 function resolveWasmOption(): WasmOptionResult {
-  const wasmVariant = values['wasm-variant'] as 'single' | 'single-exceptions' | undefined;
+  const wasmVariant = values['wasm-variant'] as 'single' | undefined;
   const wasmDirectory = values['wasm-dir'];
 
   if (!wasmDirectory) {
@@ -154,7 +158,7 @@ function resolveWasmOption(): WasmOptionResult {
     process.exit(1);
   }
 
-  const variant = wasmVariant === 'single-exceptions' ? 'replicad_with_exceptions' : 'replicad_single';
+  const variant = 'replicad_single';
   const wasmPath = join(absDirectory, `${variant}.wasm`);
   const jsPath = join(absDirectory, `${variant}.js`);
 
@@ -230,10 +234,53 @@ function writeResults(result: BenchmarkRunResult): void {
     const singleSize = formatFileSize(result.wasmSizes.singleWasmBytes);
     const singleJs = formatFileSize(result.wasmSizes.singleJsBytes);
     label('single.wasm', `${singleSize} ${c.dim}(JS: ${singleJs})${c.reset}`);
-    if (result.wasmSizes.exceptionsWasmBytes) {
-      const excSize = formatFileSize(result.wasmSizes.exceptionsWasmBytes);
-      const excJs = formatFileSize(result.wasmSizes.exceptionsJsBytes ?? 0);
-      label('exceptions.wasm', `${excSize} ${c.dim}(JS: ${excJs})${c.reset}`);
+  }
+}
+
+// ── CPU profile output ──────────────────────────────────────────────
+
+async function writeProfileResults(result: BenchmarkRunResult): Promise<void> {
+  const outputDirectory = resolve(values.output);
+  if (!existsSync(outputDirectory)) {
+    mkdirSync(outputDirectory, { recursive: true });
+  }
+
+  const timestamp = result.timestamp.replaceAll(/[.:]/g, '-');
+  const profileDirectory = join(outputDirectory, `profiles-${timestamp}`);
+  mkdirSync(profileDirectory, { recursive: true });
+
+  const profiledCases: ProfiledCaseData[] = [];
+
+  for (const r of result.results) {
+    if (r.cpuProfile) {
+      const profilePath = join(profileDirectory, `${r.name}.cpuprofile`);
+      writeFileSync(profilePath, JSON.stringify(r.cpuProfile));
+      success(`Profile written: ${profilePath}`);
+    }
+
+    if (r.profileAnalysis) {
+      profiledCases.push({
+        name: r.name,
+        analysis: r.profileAnalysis,
+        profile: r.cpuProfile,
+      });
+    }
+  }
+
+  if (profiledCases.length > 0) {
+    const { generateProfileHtmlReport } = await import('#benchmarks/profile-report.js');
+    const profileHtmlPath = join(outputDirectory, `cpu-profile-${timestamp}.html`);
+    writeFileSync(profileHtmlPath, generateProfileHtmlReport(profiledCases, result.timestamp));
+
+    heading('CPU Profile Report');
+    label('HTML', profileHtmlPath);
+    label('Profiles', profileDirectory);
+    label('Cases', `${profiledCases.length}`);
+
+    for (const pc of profiledCases) {
+      const overhead = pc.analysis.frameworkOverheadPct;
+      const overheadColor = overhead > 20 ? c.red : overhead > 10 ? c.yellow : c.green;
+      label(pc.name, `${overheadColor}${overhead.toFixed(1)}% framework overhead${c.reset}`);
     }
   }
 }
@@ -273,11 +320,18 @@ async function runSuite(): Promise<void> {
     printProvenanceBanner(provenance);
   }
 
+  const enableCpuProfile = values.cpuProfile;
+  const cpuProfileInterval = Number.parseInt(values.profileInterval, 10);
+
   heading('Benchmark Run');
   label('Benchmarks', `${cases.length}`);
   label('Iterations', `${iterations}`);
   label('Tracing', ocTracing);
   label('WASM', typeof wasmOption === 'string' ? wasmOption : 'custom');
+  if (enableCpuProfile) {
+    label('CPU Profile', `enabled (${cpuProfileInterval}us interval)`);
+  }
+
   console.log('');
 
   const result = await runBenchmarks(cases, {
@@ -285,6 +339,8 @@ async function runSuite(): Promise<void> {
     ocTracing,
     wasm: wasmOption,
     onProgress: onBenchmarkProgress,
+    cpuProfile: enableCpuProfile,
+    cpuProfileInterval,
   });
 
   if (provenance) {
@@ -293,6 +349,11 @@ async function runSuite(): Promise<void> {
   }
 
   writeResults(result);
+
+  if (enableCpuProfile) {
+    await writeProfileResults(result);
+  }
+
   printSummaryTable(result);
 }
 

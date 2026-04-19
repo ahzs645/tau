@@ -183,10 +183,9 @@ ${filesystemSnapshot}
     return messages;
   }
 
-  // Wrap all context in editor_context tags
-  const editorContext = `<editor_context>
+  const editorContext = `<system-reminder>
 ${contextParts.join('\n\n')}
-</editor_context>
+</system-reminder>
 
 `;
 

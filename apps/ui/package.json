@@ -14,8 +14,11 @@
     "@taucad/chat": "workspace:*",
     "@taucad/utils": "workspace:*",
     "@taucad/filesystem": "workspace:*",
+    "@taucad/memory": "workspace:*",
     "@taucad/react": "workspace:*",
     "@taucad/runtime": "workspace:*",
+    "@taucad/telemetry": "workspace:*",
+    "@taucad/testing": "workspace:*",
     "isbot": "catalog:"
   },
   "devDependencies": {

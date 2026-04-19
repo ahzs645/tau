@@ -12,8 +12,8 @@ import { fromSafeAsync } from '#lib/xstate.lib.js';
 const stubEditorState: EditorState = {
   projectId: 'test-build',
   openFiles: [
-    { path: 'src/main.ts', name: 'main.ts' },
-    { path: 'src/utils.ts', name: 'utils.ts' },
+    { path: 'src/main.ts', name: 'main.ts', lastAccessedAt: 1000 },
+    { path: 'src/utils.ts', name: 'utils.ts', lastAccessedAt: 2000 },
   ],
   activeFilePath: 'src/main.ts',
   lastChatId: 'chat-1',
@@ -162,7 +162,8 @@ describe('editorMachine', () => {
       actor.send({ type: 'openFile', path: 'src/new.ts', source: 'user' });
       const { context } = actor.getSnapshot();
       expect(context.openFiles).toHaveLength(1);
-      expect(context.openFiles[0]).toEqual({ path: 'src/new.ts', name: 'new.ts' });
+      expect(context.openFiles[0]).toMatchObject({ path: 'src/new.ts', name: 'new.ts' });
+      expect(context.openFiles[0]!.lastAccessedAt).toBeGreaterThan(0);
       actor.stop();
     });
 
@@ -220,6 +221,7 @@ describe('editorMachine', () => {
   // State: ready – panel state
   // =========================================================================
   describe('ready – panel state', () => {
+    /* eslint-disable @typescript-eslint/naming-convention -- file path keys in paneview test fixtures */
     it('should update panel state with deep merge', async () => {
       const actor = await startAndLoad({ loadResult: undefined });
       actor.send({
@@ -231,6 +233,69 @@ describe('editorMachine', () => {
       expect(context.panelState.openPanels.chat).toBe(true);
       actor.stop();
     });
+
+    it('should shallow-merge kernelPaneview into panel state', async () => {
+      const actor = await startAndLoad({ loadResult: undefined });
+      actor.send({
+        type: 'setPanelState',
+        panelState: {
+          kernelPaneview: { 'main.ts': { isExpanded: true, size: 200 } },
+        },
+      });
+      expect(actor.getSnapshot().context.panelState.kernelPaneview).toEqual({
+        'main.ts': { isExpanded: true, size: 200 },
+      });
+
+      actor.send({
+        type: 'setPanelState',
+        panelState: {
+          kernelPaneview: { 'other.ts': { isExpanded: false, size: 80 } },
+        },
+      });
+      expect(actor.getSnapshot().context.panelState.kernelPaneview).toEqual({
+        'main.ts': { isExpanded: true, size: 200 },
+        'other.ts': { isExpanded: false, size: 80 },
+      });
+      actor.stop();
+    });
+
+    it('should shallow-merge parametersPaneview into panel state', async () => {
+      const actor = await startAndLoad({ loadResult: undefined });
+      actor.send({
+        type: 'setPanelState',
+        panelState: {
+          parametersPaneview: { 'index.ts': { isExpanded: true, size: 150 } },
+        },
+      });
+      expect(actor.getSnapshot().context.panelState.parametersPaneview).toEqual({
+        'index.ts': { isExpanded: true, size: 150 },
+      });
+      actor.stop();
+    });
+
+    it('should preserve other panel state fields when merging paneview state', async () => {
+      const actor = await startAndLoad({ loadResult: undefined });
+      actor.send({
+        type: 'setPanelState',
+        panelState: { openPanels: { files: true } },
+      });
+      actor.send({
+        type: 'setPanelState',
+        panelState: {
+          kernelPaneview: { 'main.ts': { isExpanded: true, size: 200 } },
+        },
+      });
+
+      const { panelState } = actor.getSnapshot().context;
+      expect(panelState.openPanels.files).toBe(true);
+      expect(panelState.openPanels.chat).toBe(true);
+      expect(panelState.kernelPaneview).toEqual({
+        'main.ts': { isExpanded: true, size: 200 },
+      });
+      expect(panelState.parametersPaneview).toEqual({});
+      actor.stop();
+    });
+    /* eslint-enable @typescript-eslint/naming-convention -- file path keys in paneview test fixtures */
   });
 
   // =========================================================================
@@ -322,6 +387,56 @@ describe('editorMachine', () => {
       await waitFor(actor, (s) => s.matches({ ready: {} }));
       expect(actor.getSnapshot().context.projectId).toBe('new-build');
       expect(actor.getSnapshot().context.openFiles).toEqual([]);
+      actor.stop();
+    });
+  });
+
+  // =========================================================================
+  describe('ready – LRU eviction', () => {
+    it('should evict least-recently-accessed tab when opening 201st file', async () => {
+      const files = Array.from({ length: 200 }, (_, i) => ({
+        path: `src/file-${i}.ts`,
+        name: `file-${i}.ts`,
+        lastAccessedAt: i,
+      }));
+      const fullState: EditorState = {
+        ...stubEditorState,
+        openFiles: files,
+        activeFilePath: files.at(-1)!.path,
+      };
+      const actor = await startAndLoad({ loadResult: fullState });
+
+      expect(actor.getSnapshot().context.openFiles).toHaveLength(200);
+
+      actor.send({ type: 'openFile', path: 'src/new-file.ts', source: 'user' });
+      const { context } = actor.getSnapshot();
+
+      expect(context.openFiles).toHaveLength(200);
+      expect(context.openFiles.find((f) => f.path === 'src/new-file.ts')).toBeDefined();
+      // File-0 had lastAccessedAt=0, so it should be evicted
+      expect(context.openFiles.find((f) => f.path === 'src/file-0.ts')).toBeUndefined();
+      actor.stop();
+    });
+
+    it('should update lastAccessedAt when focusing an existing tab', async () => {
+      const actor = await startAndLoad({ loadResult: stubEditorState });
+
+      const beforeAccess = actor.getSnapshot().context.openFiles.find((f) => f.path === 'src/utils.ts')!.lastAccessedAt;
+      actor.send({ type: 'setActiveFile', path: 'src/utils.ts' });
+      const afterAccess = actor.getSnapshot().context.openFiles.find((f) => f.path === 'src/utils.ts')!.lastAccessedAt;
+
+      expect(afterAccess).toBeGreaterThanOrEqual(beforeAccess);
+      actor.stop();
+    });
+
+    it('should update lastAccessedAt when re-opening an already-open file', async () => {
+      const actor = await startAndLoad({ loadResult: stubEditorState });
+
+      const before = actor.getSnapshot().context.openFiles.find((f) => f.path === 'src/main.ts')!.lastAccessedAt;
+      actor.send({ type: 'openFile', path: 'src/main.ts', source: 'user' });
+      const after = actor.getSnapshot().context.openFiles.find((f) => f.path === 'src/main.ts')!.lastAccessedAt;
+
+      expect(after).toBeGreaterThanOrEqual(before);
       actor.stop();
     });
   });

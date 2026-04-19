@@ -9,28 +9,61 @@
  * init) surface as structured error responses instead of silent hangs.
  */
 
-import type { OnWorkerLog, LogLevel, LogOrigin } from '@taucad/types';
+import type { Geometry, OnWorkerLog, LogEntry } from '@taucad/types';
+import { idPrefix } from '@taucad/types/constants';
+import type { SharedPool } from '@taucad/memory';
+import { generatePrefixedId } from '@taucad/utils/id';
 import type { HashedGeometryResult, ExportGeometryResult } from '#types/runtime.types.js';
-import type { RuntimeCommand, RuntimeResponse, PerformanceEntryData } from '#types/runtime-protocol.types.js';
+import type {
+  RuntimeCommand,
+  RuntimeResponse,
+  PerformanceEntryData,
+  GeometryTransport,
+  HashedGeometryResultTransport,
+} from '#types/runtime-protocol.types.js';
 import type { KernelWorker } from '#framework/kernel-worker.js';
 import { logFlushDebounceMs } from '#framework/runtime-framework.constants.js';
 import type { RuntimeMessagePort } from '#framework/runtime-message-adapter.js';
 import { createErrorTrap } from '#framework/worker-error-trap.js';
 import { named } from '#framework/named.js';
 
-function extractGltfTransferables(result: HashedGeometryResult): Transferable[] {
-  if (!result.success) {
-    return [];
+function toTransportGeometry(geometry: Geometry, geometryPool: SharedPool | undefined): GeometryTransport {
+  if (geometry.format !== 'gltf') {
+    return geometry;
   }
 
-  const seen = new Set<ArrayBuffer>();
-  for (const geometry of result.data) {
-    if (geometry.format === 'gltf') {
-      seen.add(geometry.content.buffer);
+  if (geometryPool) {
+    if (!geometryPool.has(geometry.hash)) {
+      geometryPool.store(geometry.hash, geometry.content);
+    }
+    if (geometryPool.has(geometry.hash)) {
+      return {
+        format: 'gltf',
+        content: { delivery: 'pooled', key: geometry.hash },
+        hash: geometry.hash,
+      };
     }
   }
 
-  return [...seen];
+  return {
+    format: 'gltf',
+    content: { delivery: 'inline', bytes: geometry.content },
+    hash: geometry.hash,
+  };
+}
+
+function toTransportResult(
+  result: HashedGeometryResult,
+  geometryPool: SharedPool | undefined,
+): HashedGeometryResultTransport {
+  if (!result.success) {
+    return result;
+  }
+
+  return {
+    ...result,
+    data: result.data.map((geo) => toTransportGeometry(geo, geometryPool)),
+  };
 }
 
 function extractExportTransferables(result: ExportGeometryResult): Transferable[] {
@@ -58,12 +91,7 @@ export function createWorkerDispatcher(worker: KernelWorker, port: RuntimeMessag
     port.postMessage(response, transferables);
   };
 
-  const pendingLogs: Array<{
-    level: LogLevel;
-    message: string;
-    origin?: LogOrigin;
-    data?: unknown;
-  }> = [];
+  const pendingLogs: LogEntry[] = [];
   let logFlushTimer: ReturnType<typeof setTimeout> | undefined;
 
   const flushLogs = (): void => {
@@ -77,6 +105,8 @@ export function createWorkerDispatcher(worker: KernelWorker, port: RuntimeMessag
 
   const onLog: OnWorkerLog = (log) => {
     pendingLogs.push({
+      id: generatePrefixedId(idPrefix.log),
+      timestamp: Date.now(),
       level: log.level,
       message: log.message,
       origin: log.origin,
@@ -108,13 +138,20 @@ export function createWorkerDispatcher(worker: KernelWorker, port: RuntimeMessag
             worker.setSignalBuffer(signalBuffer);
           }
 
+          if (message.geometryPoolBuffer) {
+            worker.setGeometryPoolBuffer(message.geometryPoolBuffer);
+          }
+          if (message.filePoolBuffer) {
+            worker.setFilePoolBuffer(message.filePoolBuffer);
+          }
+
           worker.onStateChanged = (state, detail) => {
             respond({ type: 'stateChanged', state, detail });
           };
 
           worker.onGeometryComputed = (result) => {
-            const transferables = extractGltfTransferables(result);
-            respond({ type: 'geometryComputed', requestId: '', result }, transferables);
+            const transport = toTransportResult(result, worker.geometryPool);
+            respond({ type: 'geometryComputed', requestId: '', result: transport });
           };
 
           worker.onParametersResolved = (result) => {
@@ -129,12 +166,21 @@ export function createWorkerDispatcher(worker: KernelWorker, port: RuntimeMessag
             respond({ type: 'error', requestId: '', issues });
           };
 
+          worker.onActiveKernelChanged = (kernelId) => {
+            respond({ type: 'activeKernelChanged', kernelId });
+          };
+
+          worker.onCapabilitiesUpdated = (capabilities) => {
+            respond({ type: 'capabilitiesUpdated', capabilities });
+          };
+
           await Promise.race([
             worker.initialize({
               callbacks: { onLog },
               transferables: { fileSystemPort },
               options: message.options,
               middlewareEntries: message.middlewareEntries,
+              transcoderModules: message.transcoderModules,
             }),
             trapPromise,
           ]);
@@ -146,7 +192,11 @@ export function createWorkerDispatcher(worker: KernelWorker, port: RuntimeMessag
             }
           }
 
-          respond({ type: 'initialized', requestId });
+          respond({
+            type: 'initialized',
+            requestId,
+            capabilities: worker.capabilitiesManifest,
+          });
           break;
         }
 
@@ -165,21 +215,20 @@ export function createWorkerDispatcher(worker: KernelWorker, port: RuntimeMessag
               onProgress(phase) {
                 respond({ type: 'progress', requestId, phase });
               },
-              tessellation: message.tessellation,
+              options: message.options,
             }),
             trapPromise,
           ]);
-          const transferables = extractGltfTransferables(result);
+          const transport = toTransportResult(result, worker.geometryPool);
 
           flushLogs();
           worker.flushTelemetry();
-          respond({ type: 'geometryComputed', requestId, result }, transferables);
+          respond({ type: 'geometryComputed', requestId, result: transport });
           break;
         }
 
         case 'setFile': {
-          console.log('[KernelDispatcher] setFile received', { file: message.file, params: message.parameters });
-          worker.handleSetFile(message.file, message.parameters, message.tessellation);
+          worker.handleSetFile(message.file, message.parameters, message.options);
           break;
         }
 
@@ -200,7 +249,7 @@ export function createWorkerDispatcher(worker: KernelWorker, port: RuntimeMessag
 
         case 'export': {
           const exportResult = await Promise.race([
-            worker.exportGeometry(message.format, message.tessellation),
+            worker.exportGeometry(message.format, message.options),
             trapPromise,
           ]);
           const exportTransferables = extractExportTransferables(exportResult);

@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import { DatabaseService } from '#database/database.service.js';
 import { user } from '#database/schema.js';
 import type { PrivacyPreferences, UpdatePrivacyPreferencesInput } from '#api/privacy/privacy.schema.js';
+import { Span } from '#telemetry/tracer.service.js';
 
 @Injectable()
 export class PrivacyService {
@@ -11,6 +12,7 @@ export class PrivacyService {
   /**
    * Get privacy preferences for a user
    */
+  @Span()
   public async getPrivacyPreferences(userId: string): Promise<PrivacyPreferences> {
     const result = await this.databaseService.database.query.user.findFirst({
       where: eq(user.id, userId),
@@ -27,6 +29,7 @@ export class PrivacyService {
   /**
    * Update privacy preferences for a user
    */
+  @Span()
   public async updatePrivacyPreferences(
     userId: string,
     preferences: UpdatePrivacyPreferencesInput,

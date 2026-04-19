@@ -4,7 +4,6 @@ export type {
   KernelIssue,
   KernelStackFrame,
   ErrorLocation,
-  Tessellation,
   WorkerState,
   RenderPhase,
   SpanHandle,

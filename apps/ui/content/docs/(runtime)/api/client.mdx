@@ -39,11 +39,10 @@ const options = createRuntimeClientOptions({
 
 Smart-merges a base with overrides using three strategies based on field type:
 
-| Field type     | Examples                            | Strategy                                                                                                                   |
-| -------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| Plugin arrays  | `kernels`, `middleware`, `bundlers` | **ID-based merge** -- plugins with a matching `id` are replaced in-place (preserving priority order); new IDs are appended |
-| Config objects | `tessellation`                      | **Deep merge** -- override keys replace base keys; absent keys preserve the base value                                     |
-| Opaque fields  | `transport`, `fileSystem`           | **Full replacement** -- the override replaces the base value entirely                                                      |
+| Field type    | Examples                            | Strategy                                                                                                                   |
+| ------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Plugin arrays | `kernels`, `middleware`, `bundlers` | **ID-based merge** -- plugins with a matching `id` are replaced in-place (preserving priority order); new IDs are appended |
+| Opaque fields | `transport`, `fileSystem`           | **Full replacement** -- the override replaces the base value entirely                                                      |
 
 ```typescript
 import { createRuntimeClientOptions } from '@taucad/runtime';
@@ -55,21 +54,11 @@ const defaults = createRuntimeClientOptions({
   kernels: [openscad(), replicad(), jscad()],
   middleware: [parameterCache(), geometryCache()],
   bundlers: [esbuild()],
-  tessellation: {
-    preview: { linearTolerance: 0.1, angularTolerance: 0.1 },
-  },
 });
 
 // Replace replicad with a debug-enabled version (matched by id)
 const debug = createRuntimeClientOptions(defaults, {
   kernels: [replicad({ withSourceMapping: true })],
-});
-
-// Add export tessellation without losing preview settings
-const highQuality = createRuntimeClientOptions(defaults, {
-  tessellation: {
-    export: { linearTolerance: 0.01, angularTolerance: 0.01 },
-  },
 });
 ```
 
@@ -80,7 +69,7 @@ const highQuality = createRuntimeClientOptions(defaults, {
 | `connect`           | `(options: ConnectOptions) => Promise<void>`                       | Initialize the worker and establish the transport connection. |
 | `render`            | `(input: CodeInput \| FileInput) => Promise<HashedGeometryResult>` | Render geometry from code or a file (request/response).       |
 | `export`            | `(format, input?) => Promise<ExportResult>`                        | Export geometry to STEP, STL, GLB, etc.                       |
-| `setFile`           | `(file, parameters?, tessellation?) => void`                       | Set the active file for autonomous rendering.                 |
+| `setFile`           | `(file, parameters?, options?) => void`                            | Set the active file for autonomous rendering.                 |
 | `setParameters`     | `(parameters) => void`                                             | Update parameters for autonomous re-render (50ms debounce).   |
 | `notifyFileChanged` | `(paths: string[]) => void`                                        | Notify the worker that files changed (for inline code mode).  |
 | `on`                | `(event, handler) => () => void`                                   | Subscribe to worker events. Returns an unsubscribe function.  |
@@ -108,7 +97,7 @@ Merge with additional options:
 
 ```typescript
 import { createRuntimeClient, presets } from '@taucad/runtime';
-import { fromNodeFS } from '@taucad/runtime/filesystem';
+import { fromNodeFS } from '@taucad/runtime/filesystem/node';
 
 const client = createRuntimeClient({
   ...presets.all(),

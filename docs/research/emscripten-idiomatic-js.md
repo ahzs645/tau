@@ -465,12 +465,12 @@ This is a high-reward, high-risk change. Consider introducing it as a parallel A
 
 ### Named exports (R13)
 
-`MODULARIZE=instance` is still marked experimental in Emscripten. It requires `EMBIND_AOT` and changes the module initialization pattern. The current `init()` → `OpenCascadeInstance` pattern would be replaced by `import { init, gp_Pnt } from 'opencascade'`. This is the most architecturally significant change and should be validated in a spike before committing.
+`MODULARIZE=instance` is still marked experimental in Emscripten. It requires `EMBIND_AOT` and changes the module initialization pattern. The current `init()` → `OpenCascadeInstance` pattern would be replaced by `import { init, gp_Pnt } from 'opencascade.js'`. This is the most architecturally significant change and should be validated in a spike before committing.
 
 ## References
 
 - Related: `docs/research/build-flag-audit.md`
-- Related: `docs/research/occt-wasm-optimization.md`
+- Related: `docs/research/ocjs-wasm-optimization.md`
 - Related: `docs/research/v76-vs-v8-binding-diff.md`
 - Related: `docs/research/occt-v8-migration.md`
 - Policy: `docs/policy/library-api-policy.md`

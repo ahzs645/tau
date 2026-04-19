@@ -101,9 +101,10 @@ export async function discoverKclDependencies(
   entryFile: string,
   readFile: ReadFileFunction,
   parseKcl: ParseKclFunction,
-): Promise<string[]> {
+): Promise<{ resolved: string[]; unresolved: string[] }> {
   const visited = new Set<string>();
-  const result: string[] = [];
+  const resolved: string[] = [];
+  const unresolved: string[] = [];
 
   /**
    * Normalize and canonicalize a file path.
@@ -158,12 +159,11 @@ export async function discoverKclDependencies(
     try {
       code = await readFile(normalizedPath);
     } catch {
-      // File doesn't exist or can't be read - skip it
+      unresolved.push(normalizedPath);
       return;
     }
 
-    // Add this file to results
-    result.push(normalizedPath);
+    resolved.push(normalizedPath);
 
     // Parse the file to extract imports
     let program: Node<Program>;
@@ -187,5 +187,5 @@ export async function discoverKclDependencies(
 
   await resolveFile(entryFile, 0);
 
-  return result;
+  return { resolved, unresolved };
 }

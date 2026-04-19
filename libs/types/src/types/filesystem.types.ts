@@ -24,6 +24,17 @@ export type FileSystemBackendConfig = {
 };
 
 /**
+ * Discriminated union of filesystem change events emitted by the event bus.
+ * @public
+ */
+export type ChangeEvent =
+  | { type: 'fileWritten'; path: string; backend: FileSystemBackend }
+  | { type: 'fileDeleted'; path: string; backend: FileSystemBackend }
+  | { type: 'fileRenamed'; oldPath: string; newPath: string; backend: FileSystemBackend }
+  | { type: 'directoryChanged'; path: string; backend: FileSystemBackend }
+  | { type: 'backendChanged'; backend: FileSystemBackend };
+
+/**
  * File Status in the filesystem
  */
 export type FileStatus = 'clean' | 'modified' | 'added' | 'deleted' | 'untracked';

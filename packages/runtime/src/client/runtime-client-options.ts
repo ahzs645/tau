@@ -1,11 +1,18 @@
 import deepmerge from 'deepmerge';
 import type { RuntimeClientOptions } from '#client/runtime-client.js';
-import type { KernelPlugin, MiddlewarePlugin, BundlerPlugin } from '#plugins/plugin-types.js';
+// oxlint-disable-next-line @typescript-eslint/no-explicit-any -- variance: accepts any plugin generic
+import type { KernelPlugin, MiddlewarePlugin, BundlerPlugin, TranscoderPlugin } from '#plugins/plugin-types.js';
 
-type PluginWithId = KernelPlugin | MiddlewarePlugin | BundlerPlugin;
+// oxlint-disable @typescript-eslint/no-explicit-any, typescript/no-unnecessary-type-arguments -- variance: union of all plugin types; constrain Id to string so plugin.id is typed as string (not any)
+type PluginWithId =
+  | KernelPlugin<any, any, string>
+  | MiddlewarePlugin
+  | BundlerPlugin
+  | TranscoderPlugin<any, any, string>;
+// oxlint-enable @typescript-eslint/no-explicit-any, typescript/no-unnecessary-type-arguments -- variance: union of all plugin types; constrain Id to string so plugin.id is typed as string (not any)
 
-const pluginArrayKeys = new Set(['kernels', 'middleware', 'bundlers']);
-const opaqueKeys = new Set(['transport', 'fileSystem']);
+const pluginArrayKeys = new Set(['kernels', 'middleware', 'bundlers', 'transcoders']);
+const opaqueKeys = new Set(['transport', 'fileSystem', 'sharedMemory']);
 
 /**
  * Merge two plugin arrays by ID: replace existing plugins in-place (preserving
@@ -16,7 +23,7 @@ const opaqueKeys = new Set(['transport', 'fileSystem']);
  * @returns Merged plugin array with replacements in-place and new plugins appended
  */
 function mergePluginArrays<T extends PluginWithId>(base: T[], overrides: T[]): T[] {
-  const overrideMap = new Map(overrides.map((plugin) => [plugin.id, plugin]));
+  const overrideMap = new Map<string, T>(overrides.map((plugin) => [plugin.id, plugin]));
   const seen = new Set<string>();
 
   const merged = base.map((plugin) => {
@@ -61,9 +68,9 @@ function mergePluginArrays<T extends PluginWithId>(base: T[], overrides: T[]): T
  * - **Plugin arrays** (`kernels`, `middleware`, `bundlers`): ID-based merge.
  *   Plugins with a matching `id` in the base are replaced in-place (preserving
  *   priority order); plugins with new IDs are appended.
- * - **Config objects** (`tessellation`): Deep merge. Override keys replace base
- *   keys; absent keys preserve the base value.
  * - **Opaque fields** (`transport`, `fileSystem`): Full replacement.
+ * - **All other fields**: Deep merge. Override keys replace base keys; absent
+ *   keys preserve the base value.
  *
  * ```typescript
  * import { createRuntimeClientOptions } from '@taucad/runtime';
@@ -72,7 +79,6 @@ function mergePluginArrays<T extends PluginWithId>(base: T[], overrides: T[]): T
  * const defaults = createRuntimeClientOptions({ kernels: [replicad()] });
  * const debug = createRuntimeClientOptions(defaults, {
  *   kernels: [replicad({ withSourceMapping: true })],
- *   tessellation: { export: { linearTolerance: 0.01, angularTolerance: 0.01 } },
  * });
  * ```
  *
@@ -81,7 +87,11 @@ function mergePluginArrays<T extends PluginWithId>(base: T[], overrides: T[]): T
  *
  * @public
  */
-export function createRuntimeClientOptions(options: RuntimeClientOptions): RuntimeClientOptions;
+// oxlint-disable @typescript-eslint/no-explicit-any, @typescript-eslint/no-restricted-types -- variance + empty-tuple default
+export function createRuntimeClientOptions<
+  const K extends KernelPlugin<any, any, any>[],
+  const T extends TranscoderPlugin<any, any, any>[] = [],
+>(options: RuntimeClientOptions<K, T>): RuntimeClientOptions<K, T>;
 /**
  * Smart-merge a base configuration with partial overrides.
  *
@@ -91,10 +101,13 @@ export function createRuntimeClientOptions(options: RuntimeClientOptions): Runti
  *
  * @public
  */
-export function createRuntimeClientOptions(
-  base: RuntimeClientOptions,
-  overrides: Partial<RuntimeClientOptions>,
-): RuntimeClientOptions;
+export function createRuntimeClientOptions<
+  const K extends KernelPlugin<any, any, any>[],
+  const T extends TranscoderPlugin<any, any, any>[] = [],
+  const K2 extends KernelPlugin<any, any, any>[] = K,
+  const T2 extends TranscoderPlugin<any, any, any>[] = T,
+>(base: RuntimeClientOptions<K, T>, overrides: Partial<RuntimeClientOptions<K2, T2>>): RuntimeClientOptions<K, T>;
+// oxlint-enable @typescript-eslint/no-explicit-any
 /**
  * Implementation: routes to identity or smart-merge based on arity.
  *

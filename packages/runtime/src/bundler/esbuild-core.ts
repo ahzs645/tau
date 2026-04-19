@@ -46,6 +46,8 @@ export type BundleResult = {
   success: boolean;
   /** Absolute paths of all project files that were resolved during bundling (transitive dependencies). */
   dependencies: string[];
+  /** Absolute paths of imports that could not be resolved during bundling — used for watch-set expansion. */
+  unresolvedPaths: string[];
 };
 
 /**
@@ -131,6 +133,12 @@ export async function initializeEsbuild(): Promise<void> {
 /** Default names to auto-export from CommonJS-style entry files */
 const defaultAutoExportNames = ['main', 'defaultParams'];
 
+/** TypeScript ESM convention: `.js`/`.jsx` specifiers resolve to `.ts`/`.tsx` source files */
+const tsExtensionSwap = new Map<string, readonly string[]>([
+  ['.js', ['.ts', '.tsx']],
+  ['.jsx', ['.tsx']],
+]);
+
 /**
  * Resolve file extension for imports without extension.
  * Needs filesystem access, so it lives inside the plugin scope.
@@ -140,8 +148,27 @@ const defaultAutoExportNames = ['main', 'defaultParams'];
  * @returns resolved path with file extension appended
  */
 async function resolveFileExtension(filesystem: RuntimeFileSystem, path: string): Promise<string> {
-  // If already has extension, return as-is
-  if (/\.[jt]sx?$/.test(path)) {
+  const extensionMatch = /\.[jt]sx?$/.exec(path);
+
+  if (extensionMatch) {
+    const fileExists = await filesystem.exists(path);
+    if (fileExists) {
+      return path;
+    }
+
+    const extension = extensionMatch[0];
+    const swaps = tsExtensionSwap.get(extension);
+    if (swaps) {
+      const stem = path.slice(0, -extension.length);
+      for (const swap of swaps) {
+        const candidate = stem + swap;
+        // oxlint-disable-next-line no-await-in-loop -- Intentional: short-circuits on first match
+        if (await filesystem.exists(candidate)) {
+          return candidate;
+        }
+      }
+    }
+
     return path;
   }
 
@@ -302,6 +329,8 @@ export type VfsPluginOptions = {
   autoExportNames: string[];
   /** Collects absolute paths of project files accessed during the build, even on failure. */
   accessedProjectFiles?: Set<string>;
+  /** Collects absolute paths of imports that could not be resolved during the build. */
+  unresolvedPaths?: Set<string>;
 };
 
 /**
@@ -325,8 +354,16 @@ export type VfsPluginOptions = {
  * @returns esbuild plugin for vfs-namespace module resolution
  */
 export function createVfsPlugin(options: VfsPluginOptions): Plugin {
-  const { filesystem, moduleManager, builtinModules, projectPath, entryPath, autoExportNames, accessedProjectFiles } =
-    options;
+  const {
+    filesystem,
+    moduleManager,
+    builtinModules,
+    projectPath,
+    entryPath,
+    autoExportNames,
+    accessedProjectFiles,
+    unresolvedPaths,
+  } = options;
 
   // Path conversion helpers: esbuild sees project-relative paths in the vfs namespace,
   // but all filesystem I/O uses absolute paths.
@@ -442,7 +479,14 @@ export function createVfsPlugin(options: VfsPluginOptions): Plugin {
         try {
           const resolvedPath = resolveRelativePath(args.path, importerAbsolute);
           const withExtension = await resolveFileExtension(filesystem, resolvedPath);
-          // Return project-relative path for project files
+
+          if (unresolvedPaths && withExtension === resolvedPath && !/\.[jt]sx?$/.test(resolvedPath)) {
+            const extensionVariants = ['.ts', '.tsx', '.js', '.jsx'];
+            for (const extension of extensionVariants) {
+              unresolvedPaths.add(resolvedPath + extension);
+            }
+          }
+
           return { path: toRelative(withExtension), namespace: esbuildNamespace.vfs };
         } catch (error) {
           return {
@@ -588,6 +632,11 @@ export function createVfsPlugin(options: VfsPluginOptions): Plugin {
             resolveDir: absolutePath.slice(0, absolutePath.lastIndexOf('/')),
           };
         } catch (error) {
+          const failedAbsolutePath = toAbsolute(args.path);
+          if (unresolvedPaths && !failedAbsolutePath.includes('/node_modules/')) {
+            unresolvedPaths.add(failedAbsolutePath);
+          }
+
           return {
             errors: [
               {
@@ -669,6 +718,7 @@ export class EsbuildBundler {
   public async bundle(entryPath: string): Promise<BundleResult> {
     const issues: KernelIssue[] = [];
     const accessedProjectFiles = new Set<string>();
+    const unresolvedPaths = new Set<string>();
 
     try {
       // Create banner to inject CommonJS-style globals for built-in modules
@@ -705,6 +755,7 @@ const module = { exports };
             entryPath,
             autoExportNames: this.autoExportNames,
             accessedProjectFiles,
+            unresolvedPaths,
           }),
         ],
         // Ensure we don't try to resolve node built-ins
@@ -740,6 +791,7 @@ const module = { exports };
           sourceMap,
           issues,
           dependencies,
+          unresolvedPaths: [...unresolvedPaths],
           success: result.errors.length === 0,
         };
       }
@@ -747,6 +799,7 @@ const module = { exports };
       return {
         code: '',
         dependencies,
+        unresolvedPaths: [...unresolvedPaths],
         issues: [
           ...issues,
           {
@@ -780,6 +833,7 @@ const module = { exports };
       return {
         code: '',
         dependencies: [...accessedProjectFiles],
+        unresolvedPaths: [...unresolvedPaths],
         issues,
         success: false,
       };
@@ -1007,39 +1061,64 @@ export function extractExternalImports(metafile: Metafile | undefined): string[]
 // Execution
 // =============================================================================
 
+const executeCacheMap = new Map<string, unknown>();
+
+/**
+ * Clear the module execute cache.
+ *
+ * When called with a specific code string, only that entry is removed.
+ * When called with no arguments, all entries are cleared.
+ *
+ * @param code - optional code string to clear a specific cache entry
+ *
+ * @public
+ */
+export function clearExecuteCache(code?: string): void {
+  if (code === undefined) {
+    executeCacheMap.clear();
+  } else {
+    executeCacheMap.delete(code);
+  }
+}
+
 /**
  * Execute bundled JS/TS code via dynamic import.
- * Browser uses Blob URL, Node.js uses data URL.
+ * Browser uses Blob URL, Node.js writes a temp file (data: URL imports
+ * break under ESM loader hooks like `@oxc-node/core/register` or `tsx`).
+ *
+ * Results are cached by code string — identical code returns the same
+ * module object without re-evaluating. Use `clearExecuteCache` to invalidate.
  *
  * @param code - bundled JavaScript code to execute
  * @returns execution result with exported module and cleanup function
  */
 export async function executeCode(code: string): Promise<ExecuteResult> {
-  const isNodejsRuntime = isNode();
+  const cached = executeCacheMap.get(code);
+  if (cached !== undefined) {
+    return { success: true, value: cached };
+  }
 
   try {
-    let url: string;
-    let shouldRevoke = false;
+    let moduleExports: unknown;
+    let entryUrl: string | undefined;
 
-    if (isNodejsRuntime) {
-      // eslint-disable-next-line @typescript-eslint/naming-convention -- class
-      const { Buffer: NodeBuffer } = await import('node:buffer');
-      const base64Code = NodeBuffer.from(code).toString('base64');
-      url = `data:application/javascript;base64,${base64Code}`;
+    if (isNode()) {
+      const { executeCodeNode } = await import('#bundler/execute-code-node.js');
+      const result = await executeCodeNode(code);
+      moduleExports = result.value;
+      entryUrl = result.entryUrl;
     } else {
       const blob = new Blob([code], { type: 'application/javascript' });
-      url = URL.createObjectURL(blob);
-      shouldRevoke = true;
-    }
-
-    try {
-      const moduleExports: unknown = await import(/* @vite-ignore */ url);
-      return { success: true, value: moduleExports };
-    } finally {
-      if (shouldRevoke) {
-        URL.revokeObjectURL(url);
+      entryUrl = URL.createObjectURL(blob);
+      try {
+        moduleExports = await import(/* @vite-ignore */ entryUrl);
+      } finally {
+        URL.revokeObjectURL(entryUrl);
       }
     }
+
+    executeCacheMap.set(code, moduleExports);
+    return { success: true, value: moduleExports, entryUrl };
   } catch (error) {
     return {
       success: false,

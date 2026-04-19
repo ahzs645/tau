@@ -12,9 +12,12 @@
  */
 
 import { describe, expectTypeOf, it } from 'vitest';
+import { z } from 'zod';
 import type { GeometryFile } from '@taucad/types';
 import type { CodeInput, ExportResult, FileInput, RuntimeClient } from '#client/runtime-client.js';
-import type { Tessellation } from '#types/runtime-kernel.types.js';
+import { createRuntimeClient } from '#client/runtime-client.js';
+import { createKernelPlugin } from '#plugins/plugin-helpers.js';
+import type { KernelPlugin } from '#plugins/plugin-types.js';
 
 // =============================================================================
 // CodeInput<T> -- single-key inline mode
@@ -31,8 +34,26 @@ describe('CodeInput single-key (file optional)', () => {
   it('should compile with single-key code and explicit file', () => {
     expectTypeOf<CodeInput<{ 'box.ts': string }>>().toMatchObjectType<{
       code: { 'box.ts': string };
-      file?: string;
+      file?: 'box.ts';
     }>();
+  });
+
+  it('should NOT compile with single-key code and invalid file', () => {
+    const input: CodeInput<{ 'box.ts': string }> = {
+      code: { 'box.ts': 'const x = 1;' },
+      // @ts-expect-error -- 'invalid.ts' is not a valid key of the code object
+      file: 'invalid.ts',
+    };
+    void input;
+  });
+
+  it('should NOT compile with multi-key code and invalid file', () => {
+    const input: CodeInput<{ 'box.ts': string; 'main.ts': string }> = {
+      code: { 'box.ts': 'const x = 1;', 'main.ts': 'const y = 2;' },
+      // @ts-expect-error -- 'invalid.ts' is not a valid key of the code object
+      file: 'invalid.ts',
+    };
+    void input;
   });
 
   it('should compile with single-key code and parameters', () => {
@@ -156,10 +177,11 @@ describe('FileInput (filesystem mode)', () => {
     expectTypeOf(input.file).toEqualTypeOf<string | GeometryFile>();
   });
 
-  it('should compile with parameters and tessellation', () => {
+  it('should compile with parameters and options', () => {
     expectTypeOf<FileInput>().toExtend<{
       file: string | GeometryFile;
       parameters?: Record<string, unknown>;
+      options?: Record<string, unknown>;
     }>();
   });
 
@@ -172,9 +194,13 @@ describe('FileInput (filesystem mode)', () => {
 // RuntimeClient.render() overload resolution
 // =============================================================================
 
+// oxlint-disable-next-line @typescript-eslint/no-empty-object-type -- matches plugin defaults
+type TestKernel = KernelPlugin<{ step: { linearTolerance: number } }>;
+type TestRuntimeClient = RuntimeClient<readonly [TestKernel]>;
+
 describe('RuntimeClient.render() overload resolution', () => {
   // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- pure type testing
-  const client = {} as RuntimeClient;
+  const client = {} as TestRuntimeClient;
 
   it('should accept single-key code (file inferred)', () => {
     expectTypeOf(client.render({ code: { 'box.ts': 'const x = 1;' } })).toBeObject();
@@ -190,6 +216,18 @@ describe('RuntimeClient.render() overload resolution', () => {
         file: 'main.ts',
       }),
     ).toBeObject();
+  });
+
+  it('should NOT accept single-key code with invalid file', () => {
+    const input = { code: { 'box.ts': 'const x = 1;' }, file: 'invalid.ts' };
+    // @ts-expect-error -- 'invalid.ts' is not a key of the code object
+    void client.render(input);
+  });
+
+  it('should NOT accept multi-key code with invalid file', () => {
+    const input = { code: { 'box.ts': 'const x = 1;', 'main.ts': 'const y = 2;' }, file: 'invalid.ts' };
+    // @ts-expect-error -- 'invalid.ts' is not a key of the code object
+    void client.render(input);
   });
 
   it('should accept filesystem string shorthand', () => {
@@ -222,18 +260,27 @@ describe('RuntimeClient.render() overload resolution', () => {
 
 describe('RuntimeClient.export() overload resolution', () => {
   // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- pure type testing
-  const client: RuntimeClient = {} as RuntimeClient;
+  const client: TestRuntimeClient = {} as TestRuntimeClient;
 
   it('should accept format-only (export from last render)', () => {
     expectTypeOf(client.export('step')).toEqualTypeOf<Promise<ExportResult>>();
   });
 
-  it('should accept format with tessellation options', () => {
-    const tessellation: Tessellation = {
-      linearTolerance: 0.1,
-      angularTolerance: 30,
-    };
-    expectTypeOf(client.export('step', { tessellation })).toEqualTypeOf<Promise<ExportResult>>();
+  it('should accept format with export options', () => {
+    expectTypeOf(client.export('step', { linearTolerance: 0.01 })).toEqualTypeOf<Promise<ExportResult>>();
+  });
+  it('should accept format with export options', () => {
+    expectTypeOf(client.export('step', { linearTolerance: 0.01 })).toEqualTypeOf<Promise<ExportResult>>();
+  });
+
+  it('should NOT accept format with invalid export options', () => {
+    // @ts-expect-error -- invalid export options - `linearTolerances` is not a valid option for `step`
+    expectTypeOf(client.export('step', { linearTolerances: 0.01 })).toEqualTypeOf<Promise<ExportResult>>();
+  });
+
+  it('should NOT accept invalid format', () => {
+    // @ts-expect-error -- invalid format
+    expectTypeOf(client.export('invalid', { linearTolerance: 0.01 })).toEqualTypeOf<Promise<ExportResult>>();
   });
 
   it('should accept self-rendering with single-file inline code', () => {
@@ -249,6 +296,18 @@ describe('RuntimeClient.export() overload resolution', () => {
     ).toEqualTypeOf<Promise<ExportResult>>();
   });
 
+  it('should NOT accept single-key code export with invalid file', () => {
+    const input = { code: { 'box.ts': 'const x = 1;' }, file: 'invalid.ts' };
+    // @ts-expect-error -- 'invalid.ts' is not a key of the code object
+    void client.export('step', input);
+  });
+
+  it('should NOT accept multi-key code export with invalid file', () => {
+    const input = { code: { 'box.ts': 'const x = 1;', 'main.ts': 'const y = 2;' }, file: 'invalid.ts' };
+    // @ts-expect-error -- 'invalid.ts' is not a key of the code object
+    void client.export('step', input);
+  });
+
   it('should accept self-rendering with filesystem file', () => {
     expectTypeOf(client.export('step', { file: '/src/main.ts' })).toEqualTypeOf<Promise<ExportResult>>();
   });
@@ -259,5 +318,43 @@ describe('RuntimeClient.export() overload resolution', () => {
         file: { path: '/', filename: 'main.ts' },
       }),
     ).toEqualTypeOf<Promise<ExportResult>>();
+  });
+});
+
+// =============================================================================
+// RuntimeClient.render() typed options (Task 5b, Section 4)
+// =============================================================================
+
+describe('RuntimeClient.render() typed options', () => {
+  const tessSchema = z.object({
+    tessellation: z.object({ linearTolerance: z.number(), angularTolerance: z.number() }),
+  });
+
+  const kernel = createKernelPlugin({
+    id: 'k1',
+    moduleUrl: 'k1.js',
+    extensions: ['ts'],
+    renderSchema: tessSchema,
+  });
+
+  it('should accept valid render options on CodeInput', () => {
+    const client = createRuntimeClient({ kernels: [kernel()] });
+    void client.render({
+      code: { 'main.ts': 'const x = 1;' },
+      options: { tessellation: { linearTolerance: 0.1, angularTolerance: 10 } },
+    });
+  });
+
+  it('should accept valid render options on FileInput', () => {
+    const client = createRuntimeClient({ kernels: [kernel()] });
+    void client.render({
+      file: 'main.ts',
+      options: { tessellation: { linearTolerance: 0.1, angularTolerance: 10 } },
+    });
+  });
+
+  it('should accept render options on setFile', () => {
+    const client = createRuntimeClient({ kernels: [kernel()] });
+    client.setFile('main.ts', {}, { tessellation: { linearTolerance: 0.1, angularTolerance: 10 } });
   });
 });

@@ -8,6 +8,8 @@ export type SettingsSection =
   | 'security'
   | 'api-keys'
   | 'billing'
+  | 'models'
+  | 'agents'
   | 'experimental';
 
 const validSections = new Set<string>([
@@ -17,6 +19,8 @@ const validSections = new Set<string>([
   'security',
   'api-keys',
   'billing',
+  'models',
+  'agents',
   'experimental',
 ]);
 

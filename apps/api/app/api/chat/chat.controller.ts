@@ -1,9 +1,10 @@
 import { Body, Controller, Logger, Post, Res, UseFilters, UseGuards } from '@nestjs/common';
 import { toBaseMessages, toUIMessageStream } from '@ai-sdk/langchain';
 import { convertToModelMessages, createUIMessageStreamResponse } from 'ai';
+import type { UIMessageChunk } from 'ai';
 import type { FastifyReply } from 'fastify';
 import type { ReactAgent } from 'langchain';
-import type { ToolSelection, ChatSnapshot } from '@taucad/chat';
+import type { ToolSelection, ChatSnapshot, ContextPayload } from '@taucad/chat';
 import type { KernelProvider } from '@taucad/runtime';
 import { ChatService } from '#api/chat/chat.service.js';
 import { ChatRpcService } from '#api/chat/chat-rpc.service.js';
@@ -17,8 +18,15 @@ import { injectSnapshotContext } from '#api/chat/utils/inject-snapshot-context.j
 import { createStaticToolTransform } from '#api/chat/utils/static-tool-transform.js';
 import { createErrorTransform } from '#api/chat/utils/error-transform.js';
 import { createToolOutputTransform } from '#api/chat/utils/tool-output-transform.js';
+import { createNewlineTrimTransform } from '#api/chat/utils/newline-trim-transform.js';
+import { createLatexDelimiterTransform } from '#api/chat/utils/latex-delimiter-transform.js';
 import { ChatExceptionFilter } from '#api/chat/chat-exception.filter.js';
 import { ChatAbortError, isChatAbortError, registerChatAbort } from '#api/chat/utils/chat-abort.js';
+import { MetricsService } from '#telemetry/metrics.js';
+import { Span } from '#telemetry/tracer.service.js';
+import { AttributeKey } from '@taucad/telemetry';
+import { TtftCallbackHandler } from '#api/chat/middleware/ttft-callback.handler.js';
+import { validateImageParts } from '#api/chat/utils/validate-image-parts.js';
 
 type LangChainMessages = Awaited<ReturnType<typeof toBaseMessages>>;
 
@@ -26,6 +34,7 @@ type ChatRequestConfig = {
   modelId: string;
   kernel: KernelProvider;
   snapshot: ChatSnapshot | undefined;
+  contextPayload: ContextPayload | undefined;
   mode: 'agent' | 'plan';
   tools: {
     choice: ToolSelection;
@@ -45,13 +54,15 @@ export class ChatController {
     private readonly modelService: ModelService,
     private readonly fileEditService: FileEditService,
     private readonly geometryAnalysisService: GeometryAnalysisService,
+    private readonly metricsService: MetricsService,
   ) {}
 
   @Post()
+  @Span()
   public async createChat(@Body() body: CreateChatDto, @Res() response: FastifyReply): Promise<void> {
     this.logger.debug(`Creating chat: ${body.id}`);
 
-    const { modelId, kernel, snapshot, mode, tools } = this.extractRequestConfig(body);
+    const { modelId, kernel, snapshot, contextPayload, mode, tools } = this.extractRequestConfig(body);
 
     // Handle simple model streams (name generator, commit generator).
     // These use AI SDK's streamText, so they need ModelMessage[] from convertToModelMessages.
@@ -68,7 +79,7 @@ export class ChatController {
     }
 
     const langchainMessages = await this.prepareMessages(body.messages, snapshot);
-    const agent = await this.chatService.createAgent({ modelId, kernel, mode, tools });
+    const agent = await this.chatService.createAgent({ chatId: body.id, modelId, kernel, mode, tools, contextPayload });
 
     return this.streamAgentResponse({
       chatId: body.id,
@@ -80,60 +91,10 @@ export class ChatController {
   }
 
   /**
-   * Parses and validates the last user message to extract model configuration.
-   */
-  private extractRequestConfig(body: CreateChatDto): ChatRequestConfig {
-    const lastHumanMessage = body.messages.findLast((message) => message.role === 'user');
-
-    if (lastHumanMessage?.role !== 'user') {
-      throw new Error('Last message is not a user message');
-    }
-
-    const messageModel = lastHumanMessage.metadata?.model;
-
-    if (!messageModel) {
-      throw new Error('Message model is required');
-    }
-
-    return {
-      modelId: messageModel,
-      kernel: lastHumanMessage.metadata?.kernel ?? 'openscad',
-      snapshot: lastHumanMessage.metadata?.snapshot,
-      mode: lastHumanMessage.metadata?.mode ?? 'agent',
-      tools: {
-        choice: lastHumanMessage.metadata?.toolChoice ?? 'auto',
-        testingEnabled: lastHumanMessage.metadata?.testingEnabled ?? true,
-      },
-    };
-  }
-
-  /**
-   * Injects snapshot context into messages and converts to LangChain format.
-   */
-  private async prepareMessages(
-    messages: CreateChatDto['messages'],
-    snapshot: ChatSnapshot | undefined,
-  ): Promise<LangChainMessages> {
-    const messagesWithContext = snapshot ? injectSnapshotContext(messages, snapshot) : messages;
-
-    if (snapshot) {
-      const contextTypes = [
-        snapshot.fileTree ? 'fileTree' : undefined,
-        snapshot.activeFile ? 'activeFile' : undefined,
-        snapshot.openFiles ? 'openFiles' : undefined,
-      ]
-        .filter(Boolean)
-        .join(', ');
-      this.logger.debug(`Injecting snapshot context into last message: ${contextTypes}`);
-    }
-
-    return toBaseMessages(messagesWithContext);
-  }
-
-  /**
    * Sets up client-disconnect abort handling, runs the LangGraph agent stream,
    * and pipes the result as an SSE response.
    */
+  @Span()
   private async streamAgentResponse(options: {
     chatId: string;
     agent: ReactAgent;
@@ -164,7 +125,11 @@ export class ChatController {
 
     this.logger.debug(`Starting execution for thread: ${chatId}`);
 
+    this.metricsService.sseActiveConnections.add(1);
+
     try {
+      const ttftHandler = new TtftCallbackHandler(this.metricsService, this.modelService, modelId);
+
       const stream = await agent.graph.stream(
         { messages },
         {
@@ -177,23 +142,30 @@ export class ChatController {
           },
           signal: abortController.signal,
           streamMode: ['values', 'messages', 'custom'],
+          callbacks: [ttftHandler],
           context: {
+            chatId,
             modelId,
             modelService: this.modelService,
             logger: this.logger,
           },
-          recursionLimit: 200,
+          recursionLimit: 2000,
         },
       );
 
       void response.header('content-type', 'text/event-stream');
+      void response.header('cache-control', 'no-cache, no-store');
+      void response.header('connection', 'keep-alive');
       void response.header('x-vercel-ai-ui-message-stream', 'v1');
       void response.header('x-accel-buffering', 'no');
 
       const uiMessageStream = toUIMessageStream(stream)
         .pipeThrough(createStaticToolTransform())
         .pipeThrough(createToolOutputTransform())
-        .pipeThrough(createErrorTransform());
+        .pipeThrough(createNewlineTrimTransform())
+        .pipeThrough(createLatexDelimiterTransform())
+        .pipeThrough(createErrorTransform())
+        .pipeThrough(this.createSseEventCountTransform());
 
       const uiMessageStreamResponse = createUIMessageStreamResponse({
         stream: uiMessageStream,
@@ -215,6 +187,71 @@ export class ChatController {
       }
 
       throw error;
+    } finally {
+      this.metricsService.sseActiveConnections.add(-1);
     }
+  }
+
+  /**
+   * Parses and validates the last user message to extract model configuration.
+   */
+  private extractRequestConfig(body: CreateChatDto): ChatRequestConfig {
+    const lastHumanMessage = body.messages.findLast((message) => message.role === 'user');
+
+    if (lastHumanMessage?.role !== 'user') {
+      throw new Error('Last message is not a user message');
+    }
+
+    const messageModel = lastHumanMessage.metadata?.model;
+
+    if (!messageModel) {
+      throw new Error('Message model is required');
+    }
+
+    return {
+      modelId: messageModel,
+      kernel: lastHumanMessage.metadata?.kernel ?? 'openscad',
+      snapshot: lastHumanMessage.metadata?.snapshot,
+      contextPayload: lastHumanMessage.metadata?.contextPayload,
+      mode: lastHumanMessage.metadata?.mode ?? 'agent',
+      tools: {
+        choice: lastHumanMessage.metadata?.toolChoice ?? 'auto',
+        testingEnabled: lastHumanMessage.metadata?.testingEnabled ?? true,
+      },
+    };
+  }
+
+  /**
+   * Injects snapshot context into messages and converts to LangChain format.
+   */
+  private async prepareMessages(
+    messages: CreateChatDto['messages'],
+    snapshot: ChatSnapshot | undefined,
+  ): Promise<LangChainMessages> {
+    validateImageParts(messages);
+
+    const messagesWithContext = snapshot ? injectSnapshotContext(messages, snapshot) : messages;
+
+    if (snapshot) {
+      const contextTypes = [
+        snapshot.fileTree ? 'fileTree' : undefined,
+        snapshot.activeFile ? 'activeFile' : undefined,
+        snapshot.openFiles ? 'openFiles' : undefined,
+      ]
+        .filter(Boolean)
+        .join(', ');
+      this.logger.debug(`Injecting snapshot context into last message: ${contextTypes}`);
+    }
+
+    return toBaseMessages(messagesWithContext);
+  }
+
+  private createSseEventCountTransform(): TransformStream<UIMessageChunk, UIMessageChunk> {
+    return new TransformStream({
+      transform: (chunk, controller) => {
+        this.metricsService.sseEvents.add(1, { [AttributeKey.SSE_EVENT_TYPE]: 'message' });
+        controller.enqueue(chunk);
+      },
+    });
   }
 }

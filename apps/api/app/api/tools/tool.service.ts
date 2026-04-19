@@ -105,7 +105,7 @@ export class ToolService {
   }
 
   private getWebBrowserTool(): StructuredTool {
-    this.webBrowserTool ??= createWebBrowserTool({ tavilyApiKey: this.getTavilyApiKey() });
+    this.webBrowserTool ??= createWebBrowserTool();
 
     return this.webBrowserTool;
   }

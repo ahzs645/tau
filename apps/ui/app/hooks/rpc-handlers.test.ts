@@ -40,7 +40,14 @@ type FileEntryOptions = {
 };
 
 function createFileEntry(options: FileEntryOptions): FileEntry {
-  return { path: options.path, name: options.name, type: options.type, size: options.size ?? 100, isLoaded: false };
+  return {
+    path: options.path,
+    name: options.name,
+    type: options.type,
+    size: options.size ?? 100,
+    mtimeMs: 0,
+    isLoaded: false,
+  };
 }
 
 type FileManagerWriteCall = [string, Uint8Array<ArrayBuffer>, { source: string }];
@@ -52,6 +59,9 @@ function createMockFileManager() {
       .fn<(path: string, data: Uint8Array<ArrayBuffer>, options: { source: string }) => Promise<void>>()
       .mockResolvedValue(undefined),
     deleteFile: vi.fn<(path: string, options: { source: string }) => Promise<void>>().mockResolvedValue(undefined),
+    stat: vi
+      .fn<(path: string) => Promise<{ type: 'file' | 'dir'; size: number; mtimeMs: number }>>()
+      .mockResolvedValue({ type: 'file', size: 0, mtimeMs: Date.now() }),
   };
 }
 
@@ -104,8 +114,14 @@ function createMockCadUnit(options?: {
 
 function createMockTreeService(tree?: Map<string, FileEntry>): RpcHandlerDependencies['treeService'] {
   const _tree = tree ?? new Map<string, FileEntry>();
-  return { getTreeSnapshot: () => _tree };
+  return {
+    getTreeSnapshot: () => _tree,
+    exists: vi.fn(async (path: string) => _tree.has(path)),
+    readDirectoryEntries: vi.fn(async () => []),
+  };
 }
+
+let lastTreeService: ReturnType<typeof createMockTreeService> | undefined;
 
 function buildDeps(overrides?: {
   fileManager?: ReturnType<typeof createMockFileManager>;
@@ -113,14 +129,18 @@ function buildDeps(overrides?: {
   projectRef?: ReturnType<typeof createMockBuildRef>;
   graphicsRef?: unknown;
   screenshotQuality?: number;
+  treeService?: ReturnType<typeof createMockTreeService>;
 }): RpcDependencies {
   capturedDeps = undefined;
+
+  const ts = overrides?.treeService ?? createMockTreeService(overrides?.fileTree);
+  lastTreeService = ts;
 
   createRpcHandlers({
     fileManager: (overrides?.fileManager ?? createMockFileManager()) as RpcHandlerDependencies['fileManager'],
     projectRef: (overrides?.projectRef ?? createMockBuildRef()) as unknown as RpcHandlerDependencies['projectRef'],
     graphicsRef: (overrides?.graphicsRef ?? undefined) as RpcHandlerDependencies['graphicsRef'],
-    treeService: createMockTreeService(overrides?.fileTree),
+    treeService: ts,
     screenshotQuality: overrides?.screenshotQuality ?? 0.8,
   });
 
@@ -272,59 +292,44 @@ describe('rpc-handlers', () => {
     // ----- readdir -----
 
     describe('readdir', () => {
-      it('should return entries whose parent matches the requested path', async () => {
-        fileTree.set('src/main.ts', createFileEntry({ path: 'src/main.ts', name: 'main.ts', type: 'file', size: 200 }));
-        fileTree.set(
-          'src/utils.ts',
-          createFileEntry({ path: 'src/utils.ts', name: 'utils.ts', type: 'file', size: 150 }),
-        );
-        fileTree.set('src/lib', createFileEntry({ path: 'src/lib', name: 'lib', type: 'dir', size: 0 }));
-        fileTree.set('README.md', createFileEntry({ path: 'README.md', name: 'README.md', type: 'file', size: 50 }));
+      it('should delegate to treeService.readDirectoryEntries without stat calls', async () => {
+        vi.mocked(lastTreeService!.readDirectoryEntries).mockResolvedValueOnce([
+          { id: 'main.ts', name: 'main.ts' },
+          { id: 'utils.ts', name: 'utils.ts' },
+          { id: 'lib', name: 'lib', children: [] },
+        ]);
 
         const entries = await fileSystem.readdir('src');
 
         expect(entries).toHaveLength(3);
-        expect(entries).toEqual(
-          expect.arrayContaining([
-            { name: 'main.ts', type: 'file', size: 200 },
-            { name: 'utils.ts', type: 'file', size: 150 },
-            { name: 'lib', type: 'directory', size: 0 },
-          ]),
-        );
+        expect(lastTreeService!.readDirectoryEntries).toHaveBeenCalledWith('src');
+        expect(mockFm.stat).not.toHaveBeenCalled();
       });
 
-      it('should return empty array when no entries match', async () => {
-        fileTree.set('src/main.ts', createFileEntry({ path: 'src/main.ts', name: 'main.ts', type: 'file' }));
+      it('should return empty array when no entries exist', async () => {
+        vi.mocked(lastTreeService!.readDirectoryEntries).mockResolvedValueOnce([]);
 
         const entries = await fileSystem.readdir('lib');
 
         expect(entries).toEqual([]);
       });
 
-      it('should map dir type to directory', async () => {
-        fileTree.set('src/components', createFileEntry({ path: 'src/components', name: 'components', type: 'dir' }));
+      it('should map entries with children to directory type', async () => {
+        vi.mocked(lastTreeService!.readDirectoryEntries).mockResolvedValueOnce([
+          { id: 'components', name: 'components', children: [] },
+        ]);
 
         const entries = await fileSystem.readdir('src');
 
-        expect(entries).toEqual([{ name: 'components', type: 'directory', size: 100 }]);
+        expect(entries).toEqual([expect.objectContaining({ name: 'components', type: 'directory' })]);
       });
 
-      it('should return root-level entries for empty string path', async () => {
-        fileTree.set('main.scad', createFileEntry({ path: 'main.scad', name: 'main.scad', type: 'file', size: 300 }));
-
-        const entries = await fileSystem.readdir('');
-
-        expect(entries).toEqual([{ name: 'main.scad', type: 'file', size: 300 }]);
-      });
-
-      it('should not return entries from nested subdirectories', async () => {
-        fileTree.set('src/main.ts', createFileEntry({ path: 'src/main.ts', name: 'main.ts', type: 'file' }));
-        fileTree.set('src/lib/utils.ts', createFileEntry({ path: 'src/lib/utils.ts', name: 'utils.ts', type: 'file' }));
+      it('should map entries without children to file type', async () => {
+        vi.mocked(lastTreeService!.readDirectoryEntries).mockResolvedValueOnce([{ id: 'main.ts', name: 'main.ts' }]);
 
         const entries = await fileSystem.readdir('src');
 
-        expect(entries).toHaveLength(1);
-        expect(entries[0]!.name).toBe('main.ts');
+        expect(entries).toEqual([expect.objectContaining({ name: 'main.ts', type: 'file' })]);
       });
     });
 

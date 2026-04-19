@@ -1,5 +1,5 @@
-import { supportedExportFormats } from '@taucad/converter';
-import type { SupportedExportFormat } from '@taucad/converter';
+import { supportedExportFormats } from '@taucad/converter/formats';
+import type { SupportedExportFormat } from '@taucad/converter/formats';
 import { Checkbox } from '#components/ui/checkbox.js';
 import { Label } from '#components/ui/label.js';
 import { Button } from '#components/ui/button.js';

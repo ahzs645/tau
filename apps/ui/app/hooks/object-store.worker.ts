@@ -68,7 +68,7 @@ const objectStoreWorker = {
         options.editorState?.openFiles && options.editorState.openFiles.length > 0
           ? options.editorState.openFiles
           : mainFile
-            ? [{ path: mainFile, name: mainFile.split('/').pop() ?? mainFile }]
+            ? [{ path: mainFile, name: mainFile.split('/').pop() ?? mainFile, lastAccessedAt: Date.now() }]
             : [];
 
       // Merge provided panelState with defaults
@@ -82,6 +82,14 @@ const objectStoreWorker = {
           ...options.editorState?.panelState?.panelSizes,
         },
         mobileActiveTab: options.editorState?.panelState?.mobileActiveTab ?? defaultPanelState.mobileActiveTab,
+        kernelPaneview: {
+          ...defaultPanelState.kernelPaneview,
+          ...options.editorState?.panelState?.kernelPaneview,
+        },
+        parametersPaneview: {
+          ...defaultPanelState.parametersPaneview,
+          ...options.editorState?.panelState?.parametersPaneview,
+        },
       };
 
       await storage.updateEditorState({

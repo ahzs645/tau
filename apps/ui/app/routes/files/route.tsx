@@ -1,6 +1,16 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { Link } from 'react-router';
-import { Database, Download, FolderArchive, FolderOpen, MoreHorizontal, RefreshCw, Star, Trash2 } from 'lucide-react';
+import {
+  Database,
+  Download,
+  FolderArchive,
+  FolderOpen,
+  HardDrive,
+  MoreHorizontal,
+  RefreshCw,
+  Star,
+  Trash2,
+} from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { FileSystemBackend, Project } from '@taucad/types';
 import { ExternalLink } from '#components/external-link.js';
@@ -24,7 +34,7 @@ import {
   requestHandlePermission,
 } from '#filesystem/handle-store.js';
 import type { FileTreeNode } from '@taucad/filesystem';
-import { parentDirectory } from '@taucad/utils/path';
+import { joinPath, parentDirectory } from '@taucad/utils/path';
 
 export const handle: Handle = {
   breadcrumb() {
@@ -55,7 +65,13 @@ const backendColumns: BackendColumnMeta[] = [
     description: 'Browser database storage',
     isSupported: true,
   },
-  // OPFS column removed -- disabled due to file corruption issues
+  {
+    key: 'opfs',
+    label: 'OPFS',
+    icon: HardDrive,
+    description: 'Origin Private File System',
+    isSupported: typeof navigator !== 'undefined' && 'storage' in navigator,
+  },
   {
     key: 'webaccess',
     label: 'File System',
@@ -347,24 +363,6 @@ function countProjects(elements: TreeViewElement[]): number {
   return count;
 }
 
-/**
- * Collect IDs of all folders named "projects" so they can be expanded by default.
- */
-function findProjectsFolderIds(elements: TreeViewElement[]): string[] {
-  const ids: string[] = [];
-  for (const element of elements) {
-    if (element.name === 'projects' && element.children) {
-      ids.push(element.id);
-    }
-
-    if (element.children) {
-      ids.push(...findProjectsFolderIds(element.children));
-    }
-  }
-
-  return ids;
-}
-
 // ============ WebAccess Directory State ============
 
 type WebAccessDirectoryState = {
@@ -491,7 +489,7 @@ function BackendColumn({
           ) : fileTree.length === 0 ? (
             <div className='flex h-32 items-center justify-center text-sm text-muted-foreground'>No files found</div>
           ) : (
-            <Tree elements={fileTree} initialExpandedItems={findProjectsFolderIds(fileTree)} onExpand={onExpand}>
+            <Tree elements={fileTree} onExpand={onExpand}>
               {renderTree(fileTree, treeActionHandlers)}
             </Tree>
           )}
@@ -766,7 +764,7 @@ export default function FilesRoute(): React.JSX.Element {
       const deleteRecursive = async (directoryPath: string): Promise<void> => {
         const entries = await proxy.readdir(directoryPath);
         for (const entry of entries) {
-          const fullPath = `${directoryPath}/${entry}`.replace('//', '/');
+          const fullPath = joinPath(directoryPath, entry);
           // oxlint-disable-next-line no-await-in-loop -- need sequential processing for correct deletion order
           const stats = await proxy.stat(fullPath);
           // oxlint-disable-next-line no-await-in-loop -- need sequential processing for correct deletion order
@@ -847,7 +845,7 @@ export default function FilesRoute(): React.JSX.Element {
       </div>
 
       {/* 3-column grid */}
-      <div className='grid min-h-0 flex-1 grid-cols-1 grid-rows-[1fr] gap-4 overflow-hidden md:grid-cols-2'>
+      <div className='grid min-h-0 flex-1 grid-cols-1 grid-rows-[1fr] gap-4 overflow-hidden md:grid-cols-3'>
         {backendColumns.map((column) => (
           <BackendColumn
             key={column.key}

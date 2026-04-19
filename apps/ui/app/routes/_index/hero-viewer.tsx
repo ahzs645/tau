@@ -1,15 +1,18 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { Download, Check, ChevronDown, ArrowUpRight } from 'lucide-react';
-import type { SupportedExportFormat } from '@taucad/converter';
 import { createRuntimeClientOptions } from '@taucad/runtime';
 import { openscad } from '@taucad/runtime/kernels';
 import { parameterCache, geometryCache, gltfCoordinateTransform, gltfEdgeDetection } from '@taucad/runtime/middleware';
 import { esbuild } from '@taucad/runtime/bundler';
+import { converterTranscoder } from '@taucad/runtime/transcoder';
+import { downloadBlob } from '@taucad/utils/file';
+import { deriveExportFormatOptions } from '#routes/_index/hero-viewer.utils.js';
+import type { ExportFormatOption } from '#routes/_index/hero-viewer.utils.js';
 import { Parameters } from '#components/geometry/parameters/parameters.js';
 import { ModelViewer, RenderStatusOverlay } from '#components/model-viewer.js';
 import { useProjectManager } from '#hooks/use-project-manager.js';
-import { useRender, useGeometryExport } from '@taucad/react';
+import { useRender } from '@taucad/react';
 import { Button } from '#components/ui/button.js';
 import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
 import { FileExtensionIcon } from '#components/icons/file-extension-icon.js';
@@ -26,42 +29,27 @@ const heroOptions = createRuntimeClientOptions({
   kernels: [openscad()],
   middleware: [parameterCache(), geometryCache(), gltfCoordinateTransform(), gltfEdgeDetection()],
   bundlers: [esbuild()],
+  transcoders: [converterTranscoder()],
 });
 
 const heroCode = { [heroMainFile]: qrcodeScad };
 
 const heroUnits: Units = { length: { symbol: 'mm', factor: 1 } };
 
-type ExportFormatOption = {
-  format: SupportedExportFormat;
-  label: string;
-};
-
-const exportFormatOptions: ExportFormatOption[] = [
-  { format: 'stl', label: 'STL' },
-  { format: 'step', label: 'STEP' },
-  { format: 'obj', label: 'OBJ' },
-  { format: 'gltf', label: 'GLTF' },
-  { format: 'glb', label: 'GLB' },
-  { format: 'dae', label: 'DAE' },
-  { format: 'fbx', label: 'FBX' },
-  { format: 'ply', label: 'PLY' },
-];
-
 export function HeroViewer(): React.JSX.Element {
   const navigate = useNavigate();
   const projectManager = useProjectManager();
 
   const [currentParams, setCurrentParams] = useState<Record<string, unknown>>({});
-  const [selectedFormat, setSelectedFormat] = useState<ExportFormatOption>(exportFormatOptions[0]!);
   const [isCreatingBuild, setIsCreatingBuild] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
 
   const renderParams = useMemo(
     () => (Object.keys(currentParams).length > 0 ? currentParams : undefined),
     [currentParams],
   );
 
-  const { geometries, status, defaultParameters, jsonSchema } = useRender({
+  const { geometries, status, defaultParameters, jsonSchema, exportGeometry, capabilities } = useRender({
     clientOptions: heroOptions,
     code: heroCode,
     parameters: renderParams,
@@ -69,30 +57,55 @@ export function HeroViewer(): React.JSX.Element {
 
   const hasParameters = Boolean(jsonSchema);
 
-  const { exportGeometry, canExport } = useGeometryExport({
-    geometries,
-    defaultFilename: 'qrcode',
-    onSuccess: (filename) => toast.success(`Downloaded ${filename}`),
-    onError: (error) => {
-      const message = error instanceof Error ? error.message : 'Export failed';
-      toast.error(`Failed to export: ${message}`);
-    },
-  });
+  const exportFormatOptions = useMemo<ExportFormatOption[]>(
+    () => deriveExportFormatOptions(capabilities),
+    [capabilities],
+  );
+
+  const [selectedFormat, setSelectedFormat] = useState<ExportFormatOption | undefined>();
+  const activeFormat = selectedFormat ?? exportFormatOptions[0];
+  const canExport = status === 'success' && Boolean(activeFormat);
 
   const handleParametersChange = useCallback((newParameters: Record<string, unknown>) => {
     setCurrentParams(newParameters);
   }, []);
 
   const handleExport = useCallback(() => {
-    exportGeometry(selectedFormat.format);
-  }, [selectedFormat, exportGeometry]);
-
-  const handleFormatSelect = useCallback((value: string) => {
-    const option = exportFormatOptions.find((o) => o.format === value);
-    if (option) {
-      setSelectedFormat(option);
+    if (!activeFormat || isExporting) {
+      return;
     }
-  }, []);
+    setIsExporting(true);
+
+    void (async () => {
+      try {
+        const result = await exportGeometry(activeFormat.format);
+        if (result.success) {
+          const blob = new Blob([result.data.bytes]);
+          const filename = `qrcode.${activeFormat.format}`;
+          downloadBlob(blob, filename);
+          toast.success(`Downloaded ${filename}`);
+        } else {
+          const message = result.issues[0]?.message ?? 'Export failed';
+          toast.error(`Failed to export: ${message}`);
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Export failed';
+        toast.error(`Failed to export: ${message}`);
+      } finally {
+        setIsExporting(false);
+      }
+    })();
+  }, [activeFormat, isExporting, exportGeometry]);
+
+  const handleFormatSelect = useCallback(
+    (value: string) => {
+      const option = exportFormatOptions.find((o) => o.format === value);
+      if (option) {
+        setSelectedFormat(option);
+      }
+    },
+    [exportFormatOptions],
+  );
 
   const handleContinueInEditor = useCallback(async () => {
     if (isCreatingBuild) {
@@ -184,46 +197,50 @@ export function HeroViewer(): React.JSX.Element {
               </div>
               <div className='border-t p-3'>
                 <div className='flex items-center gap-2'>
-                  <ComboBoxResponsive
-                    searchPlaceHolder='Search formats...'
-                    title='Export Format'
-                    description='Select a format to export the model'
-                    groupedItems={[
-                      {
-                        name: 'Formats',
-                        items: exportFormatOptions,
-                      },
-                    ]}
-                    defaultValue={selectedFormat}
-                    getValue={(item) => item.format}
-                    renderLabel={(item, selected) => (
-                      <span className='flex w-full items-center justify-between'>
-                        <span className='flex items-center gap-2'>
-                          <FileExtensionIcon filename={`file.${item.format}`} className='size-4' />
-                          <span>{item.label}</span>
-                        </span>
-                        {selected?.format === item.format ? <Check className='size-4' /> : null}
-                      </span>
-                    )}
-                    className='min-w-0 flex-1'
-                    isSearchEnabled={false}
-                    onSelect={handleFormatSelect}
-                  >
-                    <Button variant='outline' size='sm' className='min-w-0 grow justify-start gap-2'>
-                      <FileExtensionIcon filename={`file.${selectedFormat.format}`} className='size-4 shrink-0' />
-                      <span className='truncate'>{selectedFormat.label}</span>
-                      <ChevronDown className='ml-auto size-3 shrink-0 opacity-50' />
-                    </Button>
-                  </ComboBoxResponsive>
-                  <Button
-                    size='sm'
-                    className='shrink-0'
-                    disabled={!canExport}
-                    title={canExport ? `Download as ${selectedFormat.label}` : 'Model not ready'}
-                    onClick={handleExport}
-                  >
-                    <Download className='size-4' />
-                  </Button>
+                  {exportFormatOptions.length > 0 && activeFormat ? (
+                    <>
+                      <ComboBoxResponsive
+                        searchPlaceHolder='Search formats...'
+                        title='Export Format'
+                        description='Select a format to export the model'
+                        groupedItems={[
+                          {
+                            name: 'Formats',
+                            items: exportFormatOptions,
+                          },
+                        ]}
+                        defaultValue={activeFormat}
+                        getValue={(item) => item.format}
+                        renderLabel={(item, selected) => (
+                          <span className='flex w-full items-center justify-between'>
+                            <span className='flex items-center gap-2'>
+                              <FileExtensionIcon filename={`file.${item.format}`} className='size-4' />
+                              <span>{item.label}</span>
+                            </span>
+                            {selected?.format === item.format ? <Check className='size-4' /> : null}
+                          </span>
+                        )}
+                        className='min-w-0 flex-1'
+                        isSearchEnabled={false}
+                        onSelect={handleFormatSelect}
+                      >
+                        <Button variant='outline' size='sm' className='min-w-0 grow justify-start gap-2'>
+                          <FileExtensionIcon filename={`file.${activeFormat.format}`} className='size-4 shrink-0' />
+                          <span className='truncate'>{activeFormat.label}</span>
+                          <ChevronDown className='ml-auto size-3 shrink-0 opacity-50' />
+                        </Button>
+                      </ComboBoxResponsive>
+                      <Button
+                        size='sm'
+                        className='shrink-0'
+                        disabled={!canExport || isExporting}
+                        title={canExport ? `Download as ${activeFormat.label}` : 'Model not ready'}
+                        onClick={handleExport}
+                      >
+                        {isExporting ? <Loader className='size-4' /> : <Download className='size-4' />}
+                      </Button>
+                    </>
+                  ) : null}
                 </div>
               </div>
             </div>

@@ -76,7 +76,7 @@ function ImagePreview({ src, alt, label, onError, children, dialogProps }: Image
             )}
             <DialogContent
               {...dialogProps}
-              className='shadow-lg z-101! flex h-[80vh]! max-h-none! w-auto! max-w-none! items-center justify-center overflow-visible rounded-lg border bg-background p-4'
+              className='shadow-lg z-101! flex h-[80vh]! max-h-none! w-auto! max-w-none! items-center justify-center overflow-visible rounded-lg border bg-background p-2 *:data-[slot=dialog-close]:bg-background'
             >
               <div className='relative h-full'>
                 <img

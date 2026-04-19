@@ -15,8 +15,11 @@ export {
 } from '#conversion.js';
 
 // Direct access to import and export pipelines
-export { importFiles, supportedImportFormats } from '#import.js';
-export { exportFiles, supportedExportFormats } from '#export.js';
+export { importFiles } from '#import.js';
+export { exportFiles } from '#export.js';
+
+// Format metadata (lightweight, no loader dependencies)
+export { supportedImportFormats, supportedExportFormats } from '#formats.js';
 
 // Format metadata (re-exported from @taucad/types)
 export { formatConfigurations } from '@taucad/types/constants';
@@ -37,5 +40,4 @@ export { allExtensions } from '#gltf.extensions.js';
 export type { FileResolver } from '#file-resolver.js';
 
 // Types
-export type { SupportedImportFormat } from '#import.js';
-export type { SupportedExportFormat } from '#export.js';
+export type { SupportedImportFormat, SupportedExportFormat } from '#formats.js';

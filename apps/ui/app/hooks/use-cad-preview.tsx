@@ -1,10 +1,11 @@
 import type { ReactNode } from 'react';
 import { createContext, useContext, useEffect, useMemo, useCallback } from 'react';
 import { useActorRef, useSelector } from '@xstate/react';
+import { waitFor } from 'xstate';
 import type { ActorRefFrom } from 'xstate';
 import type { Geometry } from '@taucad/types';
 import type { RuntimeClientOptions } from '@taucad/runtime';
-import type { JSONSchema7 } from 'json-schema';
+import type { JSONSchema7 } from '@taucad/json-schema';
 import { fromSafeAsync } from '#lib/xstate.lib.js';
 import { cadMachine } from '#machines/cad.machine.js';
 import { cadPreviewMachine } from '#machines/cad-preview.machine.js';
@@ -41,7 +42,7 @@ const CadPreviewContext = createContext<CadPreviewContextValue | undefined>(unde
 export type CadPreviewProviderProps = {
   readonly projectId: string;
   readonly mainFile: string;
-  /** When provided, files are written to ZenFS before kernel init. Omit for dynamic projects where files already exist. */
+  /** When provided, files are written to the filesystem before kernel init. Omit for dynamic projects where files already exist. */
   readonly files?: Record<string, { content: Uint8Array<ArrayBuffer> }>;
   readonly parameters?: Record<string, unknown>;
   /** Whether the rendering should be triggered (default: true) */
@@ -56,6 +57,7 @@ function deriveStatus(cadState: string): CadPreviewStatus {
       return 'ready';
     }
 
+    case 'buffering':
     case 'rendering':
     case 'connecting': {
       return 'loading';
@@ -73,7 +75,7 @@ function deriveStatus(cadState: string): CadPreviewStatus {
 
 /**
  * Provider that creates a lightweight CAD rendering pipeline (cadMachine + graphicsMachine),
- * optionally writes files to ZenFS, and exposes all rendering state via the useCadPreview() hook.
+ * optionally writes files to the filesystem, and exposes all rendering state via the useCadPreview() hook.
  *
  * Replaces the heavyweight ProjectProvider for preview-only contexts.
  * Uses cadPreviewMachine to orchestrate file preparation and kernel initialization,
@@ -86,7 +88,7 @@ function deriveStatus(cadState: string): CadPreviewStatus {
  * </CadPreviewProvider>
  * ```
  *
- * @example Dynamic project (files already in ZenFS)
+ * @example Dynamic project (files already in the filesystem)
  * ```tsx
  * <CadPreviewProvider projectId={existingBuildId} mainFile="main.ts">
  *   <CadPreviewViewer enablePan enableZoom />
@@ -102,7 +104,7 @@ export function CadPreviewProvider({
   kernelOptions,
   children,
 }: CadPreviewProviderProps): React.JSX.Element {
-  const { writeFiles, exists, fileManagerRef } = useFileManager();
+  const { fileManagerRef } = useFileManager();
 
   const cadRef = useActorRef(cadMachine, {
     input: {
@@ -129,30 +131,42 @@ export function CadPreviewProvider({
   });
 
   // Orchestration machine -- file preparation + cadRef initialization.
-  // prepareFiles actor is injected via .provide(), capturing writeFiles/exists
-  // from useFileManager() in the closure (same pattern as projectMachine's loadProjectActor).
+  // prepareFiles actor is injected via .provide(), using fileManagerRef (stable actor ref)
+  // to wait for the file manager to be ready and access services directly from the snapshot.
+  // This avoids stale closures: useActorRef creates the actor once, so closured callbacks
+  // from useFileManager() would permanently capture the initial undefined services.
   const previewRef = useActorRef(
     cadPreviewMachine.provide({
       actors: {
         prepareFiles: fromSafeAsync(async ({ input, signal }) => {
           if (input.files) {
-            const firstFilePath = Object.keys(input.files)[0];
+            const snapshot = await waitFor(fileManagerRef, (state) => state.matches('ready') || state.matches('error'));
 
-            signal.throwIfAborted();
-            const alreadyExists =
-              firstFilePath && (await exists(joinPath('/projects', input.projectId, firstFilePath)));
-
-            signal.throwIfAborted();
-            if (!alreadyExists) {
-              const projectFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};
-              for (const [path, file] of Object.entries(input.files)) {
-                projectFiles[joinPath('/projects', input.projectId, path)] = {
-                  content: new Uint8Array(file.content),
-                };
-              }
-
-              await writeFiles(projectFiles);
+            if (snapshot.matches('error')) {
+              throw new Error(snapshot.context.error?.message ?? 'File manager initialization failed');
             }
+
+            signal.throwIfAborted();
+
+            const { contentService } = snapshot.context;
+            if (!contentService) {
+              throw new Error('File manager services not available after initialization');
+            }
+
+            signal.throwIfAborted();
+
+            // Always write the full snapshot to the filesystem. A previous optimization skipped writes when
+            // `exists(firstKey)` was true; first key order follows Map insertion (arbitrary), so a
+            // stale match could skip the entire write while the kernel still read from disk — ENOENT,
+            // empty geometry, and broken tree refresh. Preview imports are not hot enough to require skipping.
+            const projectFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};
+            for (const [path, file] of Object.entries(input.files)) {
+              projectFiles[joinPath('/projects', input.projectId, path)] = {
+                content: new Uint8Array(file.content),
+              };
+            }
+
+            await contentService.writeFiles(projectFiles, 'machine');
           }
         }),
       },

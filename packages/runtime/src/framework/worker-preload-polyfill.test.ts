@@ -14,16 +14,29 @@ type DocumentStub = {
   head: { appendChild: () => void };
 };
 
+type WindowStub = {
+  dispatchEvent: () => void;
+  addEventListener: () => void;
+  removeEventListener: () => void;
+};
+
 function getDocumentStub(): DocumentStub {
   return (globalThis as Record<string, unknown>)['document'] as DocumentStub;
 }
 
+function getWindowStub(): WindowStub {
+  return (globalThis as Record<string, unknown>)['window'] as WindowStub;
+}
+
 describe('worker-preload-polyfill', () => {
   let originalDocument: unknown;
+  let originalWindow: unknown;
 
   beforeEach(() => {
     originalDocument = (globalThis as Record<string, unknown>)['document'];
+    originalWindow = (globalThis as Record<string, unknown>)['window'];
     delete (globalThis as Record<string, unknown>)['document'];
+    delete (globalThis as Record<string, unknown>)['window'];
     vi.resetModules();
   });
 
@@ -33,7 +46,16 @@ describe('worker-preload-polyfill', () => {
     } else {
       (globalThis as Record<string, unknown>)['document'] = originalDocument;
     }
+    if (originalWindow === undefined) {
+      delete (globalThis as Record<string, unknown>)['window'];
+    } else {
+      (globalThis as Record<string, unknown>)['window'] = originalWindow;
+    }
   });
+
+  // ---------------------------------------------------------------------------
+  // document stub
+  // ---------------------------------------------------------------------------
 
   it('should define globalThis.document when document is undefined', async () => {
     expect(typeof document).toBe('undefined');
@@ -91,5 +113,54 @@ describe('worker-preload-polyfill', () => {
     await import('#framework/worker-preload-polyfill.js');
 
     expect((globalThis as Record<string, unknown>)['document']).toBe(existingDocument);
+  });
+
+  // ---------------------------------------------------------------------------
+  // window stub
+  // ---------------------------------------------------------------------------
+
+  it('should define globalThis.window when window is undefined', async () => {
+    await import('#framework/worker-preload-polyfill.js');
+
+    expect((globalThis as Record<string, unknown>)['window']).toBeDefined();
+  });
+
+  it('should provide dispatchEvent as a no-op function', async () => {
+    await import('#framework/worker-preload-polyfill.js');
+
+    const stubWindow = getWindowStub();
+    expect(typeof stubWindow.dispatchEvent).toBe('function');
+    expect(() => {
+      stubWindow.dispatchEvent();
+    }).not.toThrow();
+  });
+
+  it('should provide addEventListener as a no-op function', async () => {
+    await import('#framework/worker-preload-polyfill.js');
+
+    const stubWindow = getWindowStub();
+    expect(typeof stubWindow.addEventListener).toBe('function');
+    expect(() => {
+      stubWindow.addEventListener();
+    }).not.toThrow();
+  });
+
+  it('should provide removeEventListener as a no-op function', async () => {
+    await import('#framework/worker-preload-polyfill.js');
+
+    const stubWindow = getWindowStub();
+    expect(typeof stubWindow.removeEventListener).toBe('function');
+    expect(() => {
+      stubWindow.removeEventListener();
+    }).not.toThrow();
+  });
+
+  it('should not overwrite window when it already exists', async () => {
+    const existingWindow = { existing: true };
+    (globalThis as Record<string, unknown>)['window'] = existingWindow;
+
+    await import('#framework/worker-preload-polyfill.js');
+
+    expect((globalThis as Record<string, unknown>)['window']).toBe(existingWindow);
   });
 });

@@ -1,14 +1,14 @@
-import { memo, useEffect, useCallback, useMemo } from 'react';
+import { memo, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useSelector } from '@xstate/react';
 import type { DockviewApi, DockviewPanelApi, IDockviewPanelHeaderProps } from 'dockview-react';
 import { FileX, FolderOpen } from 'lucide-react';
-import type { FileEntry } from '@taucad/types';
 import { CadViewer } from '#components/geometry/cad/cad-viewer.js';
 import { FileSelector } from '#components/files/file-selector.js';
 import { useProject } from '#hooks/use-project.js';
 import { useFileTreeMap } from '#hooks/use-file-tree.js';
+import { useFileContent } from '#hooks/use-file-content.js';
 import { defaultGraphicsSettings } from '#constants/editor.constants.js';
-import { CadProvider, useCadSelector } from '#hooks/use-cad.js';
+import { CadProvider, useCad, useCadSelector } from '#hooks/use-cad.js';
 import { GraphicsProvider, useGraphics, useGraphicsSelector } from '#hooks/use-graphics.js';
 import { useViewSettingsSync } from '#hooks/use-view-settings-sync.js';
 import { ChatStackTrace } from '#routes/projects_.$id/chat-stack-trace.js';
@@ -45,15 +45,8 @@ export const ChatViewer = memo(function ({
   // Get the compilation unit for this view's entry file
   const cadActor = entryFile ? compilationUnits.get(entryFile) : undefined;
 
-  // Get file list for the FileSelector
+  // Lazy tree snapshot for isDirectory checks (prefix / loaded dir entry)
   const fileTree = useFileTreeMap();
-  const files = useMemo(
-    () =>
-      [...fileTree.values()]
-        .filter((entry: FileEntry) => entry.type === 'file')
-        .map((entry: FileEntry) => ({ path: entry.path, size: entry.size })),
-    [fileTree],
-  );
 
   // Detect if the entry file is a directory.
   // The fileTree only stores file entries (not directories), so we check
@@ -78,29 +71,10 @@ export const ChatViewer = memo(function ({
     return false;
   }, [entryFile, fileTree]);
 
-  // Detect if the entry file is missing from the file tree.
-  // Only report missing once the tree is populated (size > 0) to avoid
-  // false positives during initial file system loading.
-  const isMissing = useMemo(() => {
-    if (!entryFile || fileTree.size === 0) {
-      return false;
-    }
-
-    // Present in the tree -- not missing
-    if (fileTree.has(entryFile)) {
-      return false;
-    }
-
-    // If it's a directory prefix, it's not missing (handled by isDirectory)
-    const directoryPrefix = `${entryFile}/`;
-    for (const key of fileTree.keys()) {
-      if (key.startsWith(directoryPrefix)) {
-        return false;
-      }
-    }
-
-    return true;
-  }, [entryFile, fileTree]);
+  // Derive isMissing from content service orphan state (VS Code pattern).
+  // useFileContent auto-loads on cache miss; resolve failure sets orphan.
+  const { isOrphaned } = useFileContent(entryFile);
+  const isMissing = isOrphaned && !isDirectory;
 
   // Get the current view settings from editor state for this panel
   const viewSettings = useSelector(editorRef, (state) => state.context.viewSettings);
@@ -156,7 +130,6 @@ export const ChatViewer = memo(function ({
         <div className='flex h-full flex-col items-center justify-center gap-4 text-muted-foreground'>
           <span className='text-sm'>No file selected</span>
           <FileSelector
-            files={files}
             selectedFile={undefined}
             placeholder='Select file to render...'
             className='h-8 w-[200px]'
@@ -179,7 +152,6 @@ export const ChatViewer = memo(function ({
           <FolderOpen className='size-12 stroke-1' />
           <p className='text-sm'>The viewer cannot display a directory.</p>
           <FileSelector
-            files={files}
             selectedFile={undefined}
             initialPath={entryFile}
             placeholder='Select a file to render...'
@@ -206,7 +178,6 @@ export const ChatViewer = memo(function ({
             <p className='max-w-60 truncate text-xs'>{entryFile}</p>
           </div>
           <FileSelector
-            files={files}
             selectedFile={undefined}
             placeholder='Select a file to render...'
             className='h-8 w-[200px]'
@@ -248,8 +219,10 @@ const ViewerContent = memo(function ({
   readonly containerApi: DockviewApi;
 }): React.JSX.Element {
   const { editorRef } = useProject();
+  const cadRef = useCad();
   const geometries = useCadSelector((state) => state.context.geometries, []);
   const units = useCadSelector((state) => state.context.units, undefined);
+  const kernelClient = useCadSelector((state) => state.context.kernelClient, undefined);
 
   // Bridge geometry data from the headless CadMachine to the per-view GraphicsMachine
   const graphicsActor = useGraphics();
@@ -263,14 +236,27 @@ const ViewerContent = memo(function ({
     }
   }, [graphicsActor, geometries, units]);
 
-  // Sync graphics settings back to editor state for persistence
+  // Sync graphics + render timeout settings back to editor state for persistence
   useViewSettingsSync({
     viewId,
     graphicsRef: graphicsActor,
+    cadRef,
     editorRef,
   });
 
-  // Render timeout is now managed internally by the autonomous runtime worker
+  // Restore persisted render timeout on mount
+  const viewSettings = useSelector(editorRef, (state) => state.context.viewSettings);
+  const restoredTimeoutRef = useRef(false);
+  useEffect(() => {
+    if (restoredTimeoutRef.current || !cadRef) {
+      return;
+    }
+    const persisted = viewSettings[viewId]?.graphicsSettings.renderTimeout;
+    if (persisted !== undefined) {
+      restoredTimeoutRef.current = true;
+      cadRef.send({ type: 'setRenderTimeout', seconds: persisted });
+    }
+  }, [cadRef, viewId, viewSettings]);
 
   // Select individual primitive values so that useSelector's reference equality
   // check works correctly. An object-returning selector creates a new reference
@@ -326,7 +312,7 @@ const ViewerContent = memo(function ({
       </div>
 
       {/* AR button — mobile iOS only, positioned bottom-right above controls */}
-      <ChatArButton geometries={geometries} className='absolute right-3 bottom-14 z-10' />
+      <ChatArButton geometries={geometries} kernelClient={kernelClient} className='absolute right-3 bottom-14 z-10' />
 
       {/* Bottom controls */}
       <div className='absolute right-2 bottom-2 left-2 z-10 flex shrink-0 flex-col gap-2'>

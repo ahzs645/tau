@@ -1,3 +1,6 @@
+/**
+ * @public
+ */
 export const codeLanguages = {
   typescript: 'typescript',
   kcl: 'kcl',
@@ -10,8 +13,13 @@ export const codeLanguages = {
   tsx: 'tsx',
   bash: 'bash',
   json: 'json',
+  jsonl: 'jsonl',
+  jsonc: 'jsonc',
 } as const;
 
+/**
+ * @public
+ */
 export const languageFromExtension = {
   kcl: 'kcl',
   scad: 'openscad',
@@ -29,4 +37,6 @@ export const languageFromExtension = {
   tsx: 'tsx',
   sh: 'bash',
   json: 'json',
+  jsonl: 'jsonl',
+  jsonc: 'jsonc',
 } as const;

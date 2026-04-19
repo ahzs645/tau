@@ -22,7 +22,7 @@ The harness consists of four interconnected systems:
 
 1. **Build Cache** (`repos/opencascade.js/src/build-cache.py`) — Config-keyed compilation cache
 2. **Provenance Tracking** (`repos/opencascade.js/src/provenance.py`) — Build metadata sidecar
-3. **Experiment Orchestrator** (`scripts/wasm-experiment.sh`) — Full lifecycle runner
+3. **Experiment Orchestrator** (`scripts/src/wasm-experiment.sh`) — Full lifecycle runner
 4. **Comparison Reporting** (`packages/runtime/scripts/build-matrix-report.mts`) — Visual dashboard
 
 All build operations go through `repos/opencascade.js/build-wasm.sh` as the single entry point.
@@ -33,13 +33,13 @@ All build operations go through `repos/opencascade.js/build-wasm.sh` as the sing
 
 ```bash
 # Run a preset experiment (build + pack + install + benchmark)
-./scripts/wasm-experiment.sh scripts/experiments/O2-noLTO-single.yml
+./scripts/src/wasm-experiment.sh scripts/experiments/O2-noLTO-single.yml
 
 # Build only (skip benchmarks)
-./scripts/wasm-experiment.sh scripts/experiments/O3-noLTO-single.yml --skip-benchmark
+./scripts/src/wasm-experiment.sh scripts/experiments/O3-noLTO-single.yml --skip-benchmark
 
 # Compare against a baseline
-./scripts/wasm-experiment.sh scripts/experiments/Os-noLTO-single.yml --baseline tarballs/baselines/v8-rc4-O2-single
+./scripts/src/wasm-experiment.sh scripts/experiments/Os-noLTO-single.yml --baseline tarballs/baselines/v8-rc4-O2-single
 ```
 
 ### Just Build WASM

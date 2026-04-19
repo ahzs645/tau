@@ -135,12 +135,12 @@ export default function main(p = defaultParams) {
     backendProvider: 'opencascade',
     longDescription:
       'Direct access to the OpenCASCADE Technology (OCCT) kernel via opencascade.js. Full control over BRep operations, precise geometry, and advanced CAD algorithms without abstraction layers.',
-    emptyCode: `import { BRepPrimAPI_MakeBox_2 } from 'opencascade.js';
+    emptyCode: `import { BRepPrimAPI_MakeBox } from 'opencascade.js';
 
 export const defaultParams = { width: 20, height: 20, depth: 20 };
 
 export default function main(p = defaultParams) {
-  const box = new BRepPrimAPI_MakeBox_2(p.width, p.height, p.depth);
+  const box = new BRepPrimAPI_MakeBox(p.width, p.height, p.depth);
   try {
     return box.Shape();
   } finally {
@@ -148,7 +148,7 @@ export default function main(p = defaultParams) {
   }
 }
 `,
-    recommended: 'Advanced CAD & Full OpenCascade Control',
+    recommended: 'Advanced CAD & Full Kernel Access',
     tags: ['OpenCASCADE', 'BRep', 'TypeScript', 'WASM', 'Precision'],
     features: [
       'Full OpenCascade API access',
