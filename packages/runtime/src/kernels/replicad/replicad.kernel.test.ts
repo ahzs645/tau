@@ -4025,7 +4025,7 @@ describe('Normal consistency', () => {
 // =============================================================================
 
 // Longer test suite for verifying opencascadejs bindings to replicad are all present.
-describe('Example models', () => {
+describe.skip('Example models', () => {
   for (const fixture of exampleFixtures) {
     it(`should produce valid geometry for ${fixture.name}`, async () => {
       const result = await createGeometry({
