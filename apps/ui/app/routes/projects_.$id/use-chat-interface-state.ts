@@ -31,8 +31,6 @@ export type ChatInterfaceState = {
   setIsKernelOpen: (value: boolean | ((previous: boolean) => boolean)) => void;
   isConverterOpen: boolean;
   setIsConverterOpen: (value: boolean | ((previous: boolean) => boolean)) => void;
-  isGitOpen: boolean;
-  setIsGitOpen: (value: boolean | ((previous: boolean) => boolean)) => void;
   isDetailsOpen: boolean;
   setIsDetailsOpen: (value: boolean | ((previous: boolean) => boolean)) => void;
 
@@ -253,7 +251,6 @@ type UsePanePositionObserverOptions = {
   isExplorerOpen: boolean;
   isKernelOpen: boolean;
   isConverterOpen: boolean;
-  isGitOpen: boolean;
   isDetailsOpen: boolean;
 };
 
@@ -274,7 +271,6 @@ export function usePanePositionObserver(
     isExplorerOpen,
     isKernelOpen,
     isConverterOpen,
-    isGitOpen,
     isDetailsOpen,
   } = options;
 
@@ -352,7 +348,6 @@ export function usePanePositionObserver(
     isExplorerOpen,
     isKernelOpen,
     isConverterOpen,
-    isGitOpen,
     isDetailsOpen,
   ]);
 }

@@ -42,7 +42,6 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
     setIsKernelOpen,
     isConverterOpen,
     setIsConverterOpen,
-    isGitOpen,
     isDetailsOpen,
     setIsDetailsOpen,
     panelSizes,
@@ -77,7 +76,6 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
     parameters: isParametersOpen,
     editor: isEditorOpen,
     converter: isConverterOpen,
-    git: isGitOpen,
     details: isDetailsOpen,
   };
 
@@ -153,7 +151,6 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
     isParametersOpen,
     isEditorOpen,
     isConverterOpen,
-    isGitOpen,
     isDetailsOpen,
   ]);
 
@@ -167,7 +164,6 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
     isExplorerOpen,
     isKernelOpen,
     isConverterOpen,
-    isGitOpen,
     isDetailsOpen,
   });
 

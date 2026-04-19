@@ -9,10 +9,10 @@ import { z } from 'zod';
  * Used for both default sizes and minimum constraints on panes
  */
 
-/** Minimum width for standard side panels (Explorer, Parameters, Converter, Git, Details) */
+/** Minimum width for standard side panels (Explorer, Parameters, Converter, Details) */
 export const panelMinSizeStandard = 200;
 
-/** Minimum width for standard side panels (Explorer, Parameters, Converter, Git, Details) */
+/** Minimum width for the Chat History panel */
 export const panelMinSizeChat = 240;
 
 /** Minimum width for the Editor panel (code editing area) */
@@ -37,7 +37,6 @@ export const panelIds = [
   'parameters',
   'editor',
   'converter',
-  'git',
   'details',
 ] as const;
 
@@ -53,13 +52,16 @@ export const desktopPanelIds = [
   'parameters',
   'editor',
   'converter',
-  'git',
   'details',
 ] as const;
 
 /**
  * Panel order for Allotment layout - single source of truth for visual ordering.
  * This determines the left-to-right order of panels in the desktop interface.
+ *
+ * INVARIANT: Every entry here MUST correspond to exactly one `<Allotment.Pane>`
+ * rendered in `chat-interface-desktop.tsx` (in the same order). A mismatch
+ * causes `allotment.resize(sizes)` to assign sizes to the wrong panes.
  */
 export const allotmentPanelOrder = [
   'chat',
@@ -70,7 +72,6 @@ export const allotmentPanelOrder = [
   'parameters',
   'editor',
   'converter',
-  'git',
   'details',
 ] as const;
 
@@ -195,7 +196,6 @@ export const defaultPanelState = {
     parameters: true,
     editor: false,
     converter: false,
-    git: false,
     details: false,
   },
   panelSizes: {
@@ -207,7 +207,6 @@ export const defaultPanelState = {
     parameters: 300,
     editor: 300,
     converter: 300,
-    git: 300,
     details: 300,
   },
   mobileActiveTab: 'chat',
