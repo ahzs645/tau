@@ -19,7 +19,8 @@
     "@taucad/runtime": "workspace:*",
     "@taucad/telemetry": "workspace:*",
     "@taucad/testing": "workspace:*",
-    "isbot": "catalog:"
+    "isbot": "catalog:",
+    "tslib": "catalog:"
   },
   "devDependencies": {
     "@taucad/vite": "workspace:*"
