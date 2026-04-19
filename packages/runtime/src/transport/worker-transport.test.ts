@@ -96,7 +96,7 @@ describe('createWorkerTransport', () => {
 
     transport.onMessage(handler);
 
-    const responseData = { type: 'initialized', requestId: '1' };
+    const responseData = { type: 'initialized', requestId: '1', capabilities: { routes: [], renderSchemas: {} } };
     mockWorkerInstance!.simulateMessage(responseData);
 
     expect(handler).toHaveBeenCalledWith(responseData);

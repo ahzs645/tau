@@ -11,9 +11,18 @@ import type { GeometryResponse } from '@taucad/types';
 import { asBuffer } from '@taucad/utils/file';
 import { jsonSchemaFromJson } from '@taucad/utils/schema';
 import { createExportFile } from '@taucad/types/constants';
-import type { KernelIssue } from '#types/runtime.types.js';
 import type { KernelRuntime } from '#types/runtime-kernel.types.js';
 import { defineKernel } from '#types/runtime-kernel.types.js';
+import { jscadExportSchemas } from '#kernels/jscad/jscad.schemas.js';
+import {
+  KERNEL_MODULES_KEY,
+  getModuleRegistry,
+  isRecordObject,
+  extractDefaultParameters,
+  resolveToRelative,
+  enrichIssueLocation,
+} from '#kernels/kernel-module-helpers.js';
+import type { KernelIssue } from '#types/runtime.types.js';
 import { createKernelError, createKernelSuccess } from '#kernels/kernel-helpers.js';
 import { parseStackTrace, resolveSourcePath, deriveLocationFromFrames } from '#framework/error-enrichment.js';
 import { jscadToGltf } from '#kernels/jscad/jscad-to-gltf.js';
@@ -34,8 +43,6 @@ type JscadModuleExports = {
   default?: (...args: unknown[]) => unknown;
   main?: (...args: unknown[]) => unknown;
 };
-
-const kernelModulesKey = '__KERNEL_MODULES__';
 
 // =============================================================================
 // JSCAD submodule list
@@ -59,33 +66,8 @@ const jscadSubmodules = [
 ] as const;
 
 // =============================================================================
-// Path helpers
-// =============================================================================
-
-function resolveToRelative(absolutePath: string, basePath: string): string {
-  const normalizedBase = basePath.endsWith('/') ? basePath.slice(0, -1) : basePath;
-  if (absolutePath.startsWith(`${normalizedBase}/`)) {
-    return absolutePath.slice(normalizedBase.length + 1);
-  }
-
-  return absolutePath;
-}
-
-// =============================================================================
 // Module registration helpers
 // =============================================================================
-
-function getModuleRegistry(): Map<string, Record<string, unknown>> {
-  let registry = (globalThis as Record<string, unknown>)[kernelModulesKey] as
-    | Map<string, Record<string, unknown>>
-    | undefined;
-  if (!registry) {
-    registry = new Map();
-    (globalThis as Record<string, unknown>)[kernelModulesKey] = registry;
-  }
-
-  return registry;
-}
 
 function generateModuleShim(name: string, exports: Record<string, unknown>): string {
   const registry = getModuleRegistry();
@@ -93,7 +75,7 @@ function generateModuleShim(name: string, exports: Record<string, unknown>): str
 
   const exportNames = Object.keys(exports).filter((key) => /^[$_a-z][\w$]*$/i.test(key) && key !== 'default');
   const namedExports = exportNames.map((key) => `export const ${key} = __mod.${key};`).join('\n');
-  return `const __mod = globalThis.${kernelModulesKey}.get('${name}');\n${namedExports}\nexport default __mod;\n`;
+  return `const __mod = globalThis.${KERNEL_MODULES_KEY}.get('${name}');\n${namedExports}\nexport default __mod;\n`;
 }
 
 function registerJscadModules(runtime: KernelRuntime): void {
@@ -116,7 +98,7 @@ function registerJscadModules(runtime: KernelRuntime): void {
       const subRecord = submoduleExports as Record<string, unknown>;
       const subExportNames = Object.keys(subRecord).filter((key) => /^[$_a-z][\w$]*$/i.test(key));
       const subNamed = subExportNames.map((key) => `export const ${key} = __mod.${key};`).join('\n');
-      const subCode = `const __mod = globalThis.${kernelModulesKey}.get('@jscad/modeling').${subpath};\n${subNamed}\nexport default __mod;\n`;
+      const subCode = `const __mod = globalThis.${KERNEL_MODULES_KEY}.get('@jscad/modeling').${subpath};\n${subNamed}\nexport default __mod;\n`;
       runtime.bundler.registerModule(submoduleName, {
         code: subCode,
         version: '2.12.6',
@@ -128,19 +110,6 @@ function registerJscadModules(runtime: KernelRuntime): void {
 // =============================================================================
 // Module execution helpers
 // =============================================================================
-
-function isRecordObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function extractDefaultParameters(module: unknown): Record<string, unknown> {
-  if (!isRecordObject(module)) {
-    return {};
-  }
-
-  const defaults = module['defaultParams'] ?? module['defaultParameters'];
-  return isRecordObject(defaults) ? defaults : {};
-}
 
 async function runMain(module: JscadModuleExports, parameters: Record<string, unknown>): Promise<unknown> {
   const mainFunction = module.default ?? module.main;
@@ -155,17 +124,6 @@ async function runMain(module: JscadModuleExports, parameters: Record<string, un
   }
 
   return mainFunction(parameters);
-}
-
-function enrichIssueLocation(issues: KernelIssue[], fallbackFileName: string): KernelIssue[] {
-  return issues.map((issue) => ({
-    ...issue,
-    location: issue.location ?? {
-      fileName: fallbackFileName,
-      startLineNumber: 1,
-      startColumn: 1,
-    },
-  }));
 }
 
 /**
@@ -194,6 +152,7 @@ function resolveModule(module: unknown): JscadModuleExports {
 export default defineKernel({
   name: 'JscadKernel',
   version: '1.0.0',
+  exportSchemas: jscadExportSchemas,
 
   async initialize(_options, runtime) {
     registerJscadModules(runtime);
@@ -276,6 +235,7 @@ export default defineKernel({
       const stackFrames = parseStackTrace(error, {
         sourceMap: bundleResult.sourceMap,
         resolveSourcePath: (s) => resolveSourcePath(s, basePath),
+        lastEntryName: executeResult.entryUrl,
       });
       const location = deriveLocationFromFrames(stackFrames, bundleResult.sourceMap, (s) =>
         resolveSourcePath(s, basePath),
@@ -331,7 +291,43 @@ export default defineKernel({
     return { geometry: geometries, nativeHandle: filteredShapes };
   },
 
-  async exportGeometry({ fileType, nativeHandle }, _runtime, _context) {
+  serializeHandle(nativeHandle) {
+    const { geom2, geom3, path2 } = jscadModeling.geometries;
+    return nativeHandle.map((shape) => {
+      if (geom3.isA(shape)) {
+        return { type: 'geom3', data: geom3.toCompactBinary(shape) } as const;
+      }
+      if (geom2.isA(shape)) {
+        return { type: 'geom2', data: geom2.toCompactBinary(shape) } as const;
+      }
+      if (path2.isA(shape)) {
+        return { type: 'path2', data: path2.toCompactBinary(shape) } as const;
+      }
+      // oxlint-disable-next-line @typescript-eslint/no-unsafe-argument -- JSCAD geometry types are untyped (any[]); fallback to geom3 is safe
+      return { type: 'geom3', data: geom3.toCompactBinary(shape) } as const;
+    });
+  },
+
+  deserializeHandle(data) {
+    const { geom2, geom3, path2 } = jscadModeling.geometries;
+    return data.map((entry) => {
+      switch (entry.type) {
+        case 'geom2': {
+          return geom2.fromCompactBinary(entry.data);
+        }
+        case 'path2': {
+          return path2.fromCompactBinary(entry.data);
+        }
+        default: {
+          return geom3.fromCompactBinary(entry.data);
+        }
+      }
+    });
+  },
+
+  async exportGeometry(input, _runtime, _context) {
+    const { format, nativeHandle } = input;
+
     if (nativeHandle.length === 0) {
       return createKernelError([
         {
@@ -342,31 +338,35 @@ export default defineKernel({
       ]);
     }
 
-    if (fileType === 'glb' || fileType === 'gltf') {
-      const gltfResults = await Promise.all(nativeHandle.map(async (shape) => jscadToGltf(shape)));
-      const gltfData = gltfResults[0];
-      if (!gltfData) {
+    switch (format) {
+      // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- exhaustive switch for future format expansion
+      case 'glb': {
+        const gltfResults = await Promise.all(nativeHandle.map(async (shape) => jscadToGltf(shape)));
+        const gltfData = gltfResults[0];
+        if (!gltfData) {
+          return createKernelError([
+            {
+              message: 'Failed to generate GLB from computed geometry',
+              type: 'runtime',
+              severity: 'error',
+            },
+          ]);
+        }
+
+        return createKernelSuccess([createExportFile('glb', 'model.glb', asBuffer(gltfData))]);
+      }
+
+      default: {
+        const _exhaustive: never = format;
         return createKernelError([
           {
-            message: 'Failed to generate GLTF from computed geometry',
+            message: `Export format '${_exhaustive as string}' is not supported by JSCAD. Supported formats: glb.`,
             type: 'runtime',
             severity: 'error',
           },
         ]);
       }
-
-      return createKernelSuccess([
-        createExportFile(fileType, fileType === 'glb' ? 'model.glb' : 'model.gltf', asBuffer(gltfData)),
-      ]);
     }
-
-    return createKernelError([
-      {
-        message: `Export format '${fileType}' is not yet implemented for JSCAD. Only 'glb' and 'gltf' are supported.`,
-        type: 'runtime',
-        severity: 'error',
-      },
-    ]);
   },
 });
 

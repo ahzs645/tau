@@ -199,16 +199,22 @@ describe('RuntimeWorkerClient', () => {
 
       transport.simulateResponse({
         type: 'log',
-        level: 'info',
-        message: 'test log',
-        origin: 'kernel',
-        data: { extra: true },
+        entry: {
+          id: 'log_test1',
+          timestamp: 1_700_000_000_000,
+          level: 'info',
+          message: 'test log',
+          origin: { component: 'kernel' },
+          data: { extra: true },
+        },
       } as RuntimeResponse);
 
       expect(onLog).toHaveBeenCalledWith({
+        id: 'log_test1',
+        timestamp: 1_700_000_000_000,
         level: 'info',
         message: 'test log',
-        origin: 'kernel',
+        origin: { component: 'kernel' },
         data: { extra: true },
       });
     });
@@ -222,14 +228,24 @@ describe('RuntimeWorkerClient', () => {
       transport.simulateResponse({
         type: 'logBatch',
         entries: [
-          { level: 'info', message: 'log 1' },
-          { level: 'warn', message: 'log 2' },
+          { id: 'log_a', timestamp: 1_700_000_000_001, level: 'info', message: 'log 1' },
+          { id: 'log_b', timestamp: 1_700_000_000_002, level: 'warn', message: 'log 2' },
         ],
       } as RuntimeResponse);
 
       expect(onLog).toHaveBeenCalledTimes(2);
-      expect(onLog).toHaveBeenCalledWith({ level: 'info', message: 'log 1' });
-      expect(onLog).toHaveBeenCalledWith({ level: 'warn', message: 'log 2' });
+      expect(onLog).toHaveBeenCalledWith({
+        id: 'log_a',
+        timestamp: 1_700_000_000_001,
+        level: 'info',
+        message: 'log 1',
+      });
+      expect(onLog).toHaveBeenCalledWith({
+        id: 'log_b',
+        timestamp: 1_700_000_000_002,
+        level: 'warn',
+        message: 'log 2',
+      });
     });
 
     it('should call onTelemetry when telemetry response received', () => {
@@ -405,7 +421,11 @@ describe('RuntimeWorkerClient', () => {
     let initPromise: Promise<void>;
 
     afterEach(async () => {
-      transport.simulateResponse({ type: 'initialized', requestId: '0' });
+      transport.simulateResponse({
+        type: 'initialized',
+        requestId: '0',
+        capabilities: { routes: [], renderSchemas: {} },
+      });
       await initPromise;
       channel.port1.close();
       channel.port2.close();
@@ -543,7 +563,11 @@ describe('RuntimeWorkerClient', () => {
 
       const connectPromise = runtimeClient.connect({ fileSystem: stubFs });
 
-      transport.simulateResponse({ type: 'initialized', requestId: '0' });
+      transport.simulateResponse({
+        type: 'initialized',
+        requestId: '0',
+        capabilities: { routes: [], renderSchemas: {} },
+      });
       await connectPromise;
 
       transport.simulateResponse({
@@ -608,7 +632,11 @@ describe('RuntimeWorkerClient', () => {
       expect(result).toBe(43);
       expect(Atomics.load(workerView, signalSlot.abortGeneration)).toBe(43);
 
-      transport.simulateResponse({ type: 'initialized', requestId: '0' });
+      transport.simulateResponse({
+        type: 'initialized',
+        requestId: '0',
+        capabilities: { routes: [], renderSchemas: {} },
+      });
       void initPromise;
       channel.port1.close();
       channel.port2.close();
@@ -634,7 +662,11 @@ describe('RuntimeWorkerClient', () => {
       client.setFile({ path: '/', filename: 'box.ts' }, {});
       expect(Atomics.load(view, signalSlot.abortReason)).toBe(abortReason.superseded);
 
-      transport.simulateResponse({ type: 'initialized', requestId: '0' });
+      transport.simulateResponse({
+        type: 'initialized',
+        requestId: '0',
+        capabilities: { routes: [], renderSchemas: {} },
+      });
       void initPromise;
       channel.port1.close();
       channel.port2.close();
@@ -658,7 +690,11 @@ describe('RuntimeWorkerClient', () => {
       client.setParameters({ width: 20 });
       expect(Atomics.load(view, signalSlot.abortReason)).toBe(abortReason.superseded);
 
-      transport.simulateResponse({ type: 'initialized', requestId: '0' });
+      transport.simulateResponse({
+        type: 'initialized',
+        requestId: '0',
+        capabilities: { routes: [], renderSchemas: {} },
+      });
       void initPromise;
       channel.port1.close();
       channel.port2.close();
@@ -693,7 +729,11 @@ describe('RuntimeWorkerClient', () => {
         expect(Atomics.load(view, signalSlot.abortReason)).toBe(abortReason.timeout);
         expect(Atomics.load(view, signalSlot.abortGeneration)).toBeGreaterThan(0);
 
-        transport.simulateResponse({ type: 'initialized', requestId: '0' });
+        transport.simulateResponse({
+          type: 'initialized',
+          requestId: '0',
+          capabilities: { routes: [], renderSchemas: {} },
+        });
         void initPromise;
         channel.port1.close();
         channel.port2.close();
@@ -730,7 +770,11 @@ describe('RuntimeWorkerClient', () => {
         expect(Atomics.load(view, signalSlot.abortReason)).toBe(0);
         expect(Atomics.load(view, signalSlot.abortGeneration)).toBe(0);
 
-        transport.simulateResponse({ type: 'initialized', requestId: '0' });
+        transport.simulateResponse({
+          type: 'initialized',
+          requestId: '0',
+          capabilities: { routes: [], renderSchemas: {} },
+        });
         void initPromise;
         channel.port1.close();
         channel.port2.close();
@@ -765,13 +809,103 @@ describe('RuntimeWorkerClient', () => {
 
         expect(Atomics.load(view, signalSlot.abortGeneration)).toBe(0);
 
-        transport.simulateResponse({ type: 'initialized', requestId: '0' });
+        transport.simulateResponse({
+          type: 'initialized',
+          requestId: '0',
+          capabilities: { routes: [], renderSchemas: {} },
+        });
         void initPromise;
         channel.port1.close();
         channel.port2.close();
       } finally {
         vi.useRealTimers();
       }
+    });
+  });
+
+  describe('activeKernelChanged response', () => {
+    it('should call onActiveKernelChanged when activeKernelChanged response received', () => {
+      const transport = createMockTransport();
+      const onActiveKernelChanged = vi.fn();
+      const client = new RuntimeWorkerClient(transport, vi.fn(), { onActiveKernelChanged });
+      expect(client).toBeDefined();
+
+      transport.simulateResponse({
+        type: 'activeKernelChanged',
+        kernelId: 'replicad',
+      } as RuntimeResponse);
+
+      expect(onActiveKernelChanged).toHaveBeenCalledWith('replicad');
+    });
+
+    it('should forward undefined kernelId on reset', () => {
+      const transport = createMockTransport();
+      const onActiveKernelChanged = vi.fn();
+      const client = new RuntimeWorkerClient(transport, vi.fn(), { onActiveKernelChanged });
+      expect(client).toBeDefined();
+
+      transport.simulateResponse({
+        type: 'activeKernelChanged',
+        kernelId: undefined,
+      } as RuntimeResponse);
+
+      expect(onActiveKernelChanged).toHaveBeenCalledWith(undefined);
+    });
+  });
+
+  describe('capabilitiesUpdated response', () => {
+    it('should update capabilities on capabilitiesUpdated message', () => {
+      const transport = createMockTransport();
+      const client = new RuntimeWorkerClient(transport, vi.fn());
+
+      const manifest = {
+        routes: [
+          {
+            targetFormat: 'glb',
+            kernelId: 'replicad',
+            sourceFormat: 'glb',
+            fidelity: 'mesh',
+            schema: {},
+            defaults: {},
+          },
+        ],
+        renderSchemas: {},
+      };
+
+      transport.simulateResponse({
+        type: 'capabilitiesUpdated',
+        capabilities: manifest,
+      } as RuntimeResponse);
+
+      expect(client.capabilities).toEqual(manifest);
+    });
+
+    it('should invoke onCapabilitiesUpdated callback', () => {
+      const transport = createMockTransport();
+      const onCapabilitiesUpdated = vi.fn();
+      const client = new RuntimeWorkerClient(transport, vi.fn(), { onCapabilitiesUpdated });
+      expect(client).toBeDefined();
+
+      const manifest = {
+        routes: [
+          {
+            targetFormat: 'glb',
+            kernelId: 'replicad',
+            sourceFormat: 'glb',
+            fidelity: 'mesh',
+            schema: {},
+            defaults: {},
+          },
+        ],
+        renderSchemas: {},
+      };
+
+      transport.simulateResponse({
+        type: 'capabilitiesUpdated',
+        capabilities: manifest,
+      } as RuntimeResponse);
+
+      expect(onCapabilitiesUpdated).toHaveBeenCalledWith(manifest);
     });
   });
 });

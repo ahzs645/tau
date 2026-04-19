@@ -5,7 +5,7 @@
  */
 
 import { createKernelPlugin } from '#plugins/plugin-helpers.js';
-import type { ZooOptions } from '#kernels/zoo/zoo.kernel.js';
+import { zooOptionsSchema, zooExportSchemas } from '#kernels/zoo/zoo.schemas.js';
 
 /**
  * Create a Zoo (KCL) kernel plugin registration.
@@ -24,8 +24,10 @@ import type { ZooOptions } from '#kernels/zoo/zoo.kernel.js';
  * });
  * ```
  */
-export const zoo = createKernelPlugin<ZooOptions>({
+export const zoo = createKernelPlugin({
   id: 'zoo',
   moduleUrl: new URL('zoo.kernel.js', import.meta.url).href,
   extensions: ['kcl'],
+  optionsSchema: zooOptionsSchema,
+  exportSchemas: zooExportSchemas,
 });

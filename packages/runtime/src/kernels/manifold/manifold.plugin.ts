@@ -6,7 +6,7 @@
  */
 
 import { createKernelPlugin } from '#plugins/plugin-helpers.js';
-import type { ManifoldOptions } from '#kernels/manifold/manifold.kernel.js';
+import { manifoldOptionsSchema, manifoldExportSchemas } from '#kernels/manifold/manifold.schemas.js';
 
 /**
  * Canonical regex for detecting manifold-3d usage in source code.
@@ -22,10 +22,12 @@ export const manifoldDetectPattern =
  *
  * @public
  */
-export const manifold = createKernelPlugin<ManifoldOptions>({
+export const manifold = createKernelPlugin({
   id: 'manifold',
   moduleUrl: new URL('manifold.kernel.js', import.meta.url).href,
   extensions: ['ts', 'js'],
   detectImport: manifoldDetectPattern,
   builtinModuleNames: ['manifold-3d', 'manifold-3d/manifoldCAD'],
+  optionsSchema: manifoldOptionsSchema,
+  exportSchemas: manifoldExportSchemas,
 });

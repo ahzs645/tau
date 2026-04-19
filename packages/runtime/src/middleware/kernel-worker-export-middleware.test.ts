@@ -87,7 +87,7 @@ describe('kernel-worker wrapExportGeometry middleware', () => {
     await worker.runExportGeometry('stl');
 
     expect(capturedInput).toBeDefined();
-    expect(capturedInput!.fileType).toBe('stl');
+    expect(capturedInput!.format).toBe('stl');
     expect(capturedRuntime).toBeDefined();
     expect(capturedRuntime!.logger).toBeDefined();
     expect(capturedRuntime!.filesystem).toBeDefined();

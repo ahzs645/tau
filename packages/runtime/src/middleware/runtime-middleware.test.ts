@@ -348,6 +348,7 @@ describe('wrap hook behavior', () => {
         filePath: '/projects/test/test.kcl',
         basePath: '/projects/test',
         parameters: {},
+        options: {},
       },
       // oxlint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-argument -- Mock handler for testing
       mockHandler as any,
@@ -390,6 +391,7 @@ describe('wrap hook behavior', () => {
       filePath: '/projects/test/test.kcl',
       basePath: '/projects/test',
       parameters: {},
+      options: {},
     };
     const runtime = createMiddlewareRuntime({
       onLog: vi.fn() as OnWorkerLog,
@@ -455,6 +457,7 @@ describe('wrap hook behavior', () => {
         filePath: '/projects/test/test.kcl',
         basePath: '/projects/test',
         parameters: {},
+        options: {},
       },
       // oxlint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-argument -- Mock handler for testing
       mockHandler as any,

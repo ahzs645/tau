@@ -4,6 +4,7 @@
 /* eslint-disable @typescript-eslint/naming-convention -- File names use extensions like 'box.ts' */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { NodeIO } from '@gltf-transform/core';
+import type { Document } from '@gltf-transform/core';
 import replicadKernel from '#kernels/replicad/replicad.kernel.js';
 import { replicadDetectPattern } from '#kernels/replicad/replicad.plugin.js';
 import { exampleFixtures } from '#kernels/replicad/replicad.test-fixtures.js';
@@ -16,7 +17,6 @@ import {
   createTestGeometry,
   getTestParameters,
   getTestFileSystem,
-  seedTestFileSystem,
 } from '#testing/kernel-testing.utils.js';
 import type { CreateTestWorkerOptions } from '#testing/kernel-testing.utils.js';
 import type { PerformanceEntryData } from '#types/index.js';
@@ -2048,7 +2048,7 @@ export default function main() {
   // ===========================================================================
 
   describe('exportGeometry', () => {
-    it('should export to STEP format', async () => {
+    it('should export to STEP format with actual geometry', async () => {
       const worker = await createWorker({
         'box.ts': `
           import { drawRoundedRectangle } from 'replicad';
@@ -2059,7 +2059,6 @@ export default function main() {
         `,
       });
 
-      // First create geometry
       const geometryFile = createGeometryFile('box.ts');
       const createResult = await worker.createGeometry({
         file: geometryFile,
@@ -2067,12 +2066,59 @@ export default function main() {
       });
       assertSuccess(createResult);
 
-      // Then export
       const exportResult = await worker.exportGeometry('step');
       assertSuccess(exportResult);
       expect(exportResult.data.length).toBeGreaterThan(0);
       expect(exportResult.data[0]?.bytes).toBeInstanceOf(Uint8Array);
       expect(exportResult.data[0]?.mimeType).toBe('application/step');
+
+      const stepContent = new TextDecoder().decode(exportResult.data[0]!.bytes);
+      expect(stepContent).toContain('CLOSED_SHELL');
+      expect(stepContent).toContain('ADVANCED_BREP_SHAPE_REPRESENTATION');
+    });
+
+    it('should round-trip STEP export/import preserving geometry', async () => {
+      const { importSTEP, drawRoundedRectangle, measureVolume, measureArea, isShape3D } = await import('replicad');
+
+      const worker = await createWorker({
+        'box.ts': `
+          import { drawRoundedRectangle } from 'replicad';
+
+          export default function main() {
+            return drawRoundedRectangle(50, 30).sketchOnPlane().extrude(10);
+          }
+        `,
+      });
+
+      const geometryFile = createGeometryFile('box.ts');
+      await worker.createGeometry({ file: geometryFile, parameters: {} });
+
+      const exportResult = await worker.exportGeometry('step');
+      assertSuccess(exportResult);
+
+      const stepBytes = exportResult.data[0]!.bytes;
+      const stepBlob = new Blob([stepBytes], { type: 'application/step' });
+      const importedShape = await importSTEP(stepBlob);
+
+      expect(isShape3D(importedShape)).toBe(true);
+      if (!isShape3D(importedShape)) {
+        throw new Error('Imported shape is not a 3D shape');
+      }
+
+      const originalShape = drawRoundedRectangle(50, 30).sketchOnPlane().extrude(10);
+      const originalVolume = measureVolume(originalShape);
+      const importedVolume = measureVolume(importedShape);
+
+      expect(originalVolume).toBeGreaterThan(0);
+      expect(importedVolume).toBeCloseTo(originalVolume, 2);
+
+      const originalArea = measureArea(originalShape);
+      const importedArea = measureArea(importedShape);
+
+      expect(originalArea).toBeGreaterThan(0);
+      expect(importedArea).toBeCloseTo(originalArea, 2);
+
+      expect(importedShape.faces.length).toBe(originalShape.faces.length);
     });
 
     it('should export to STL format', async () => {
@@ -2108,7 +2154,7 @@ export default function main() {
       const geometryFile = createGeometryFile('box.ts');
       await worker.createGeometry({ file: geometryFile, parameters: {} });
 
-      const exportResult = await worker.exportGeometry('stl-binary');
+      const exportResult = await worker.exportGeometry('stl', { binary: true });
       assertSuccess(exportResult);
     });
 
@@ -2150,7 +2196,7 @@ export default function main() {
       expect(exportResult.data[0]?.name).toContain('glb');
     });
 
-    it('should export STEP assembly', async () => {
+    it('should export STEP assembly with geometry for each shape', async () => {
       const worker = await createWorker({
         'assembly.ts': `
           import { drawRoundedRectangle, drawCircle } from 'replicad';
@@ -2167,8 +2213,14 @@ export default function main() {
       const geometryFile = createGeometryFile('assembly.ts');
       await worker.createGeometry({ file: geometryFile, parameters: {} });
 
-      const exportResult = await worker.exportGeometry('step-assembly');
+      const exportResult = await worker.exportGeometry('step', {});
       assertSuccess(exportResult);
+
+      const stepContent = new TextDecoder().decode(exportResult.data[0]!.bytes);
+      expect(stepContent).toContain('CLOSED_SHELL');
+      expect(stepContent).toContain('ADVANCED_BREP_SHAPE_REPRESENTATION');
+      expect(stepContent).toContain('base');
+      expect(stepContent).toContain('cylinder');
     });
 
     it('should return error when no geometry computed', async () => {
@@ -2914,14 +2966,18 @@ export default function main() {
       await geometryHelpers.expectValidGltf(result1);
 
       // Modify file content: change to 20x20x20 box
-      await seedTestFileSystem({
-        '/projects/test/main.ts': `
+      // Write directly to the existing FS instance (seedTestFileSystem creates a new
+      // fromMemoryFS, which disconnects from the bridge the worker reads through).
+      const fs1 = getTestFileSystem();
+      await fs1.writeFile(
+        '/projects/test/main.ts',
+        `
           import { drawRoundedRectangle } from 'replicad';
           export default function main() {
             return drawRoundedRectangle(20, 20).sketchOnPlane().extrude(20);
           }
         `,
-      });
+      );
 
       // Notify worker about the change
       await worker.notifyFileChanged(['/projects/test/main.ts']);
@@ -2958,15 +3014,17 @@ export default function main() {
       });
       assertSuccess(result1);
 
-      // Modify file content
-      await seedTestFileSystem({
-        '/projects/test/main.ts': `
+      // Modify file content (write to existing FS to preserve bridge connection)
+      const fs2 = getTestFileSystem();
+      await fs2.writeFile(
+        '/projects/test/main.ts',
+        `
           import { drawRoundedRectangle } from 'replicad';
           export default function main() {
             return drawRoundedRectangle(30, 30).sketchOnPlane().extrude(30);
           }
         `,
-      });
+      );
 
       // Notify with ABSOLUTE path (matching production behavior from use-project.tsx)
       await worker.notifyFileChanged(['/projects/test/main.ts']);
@@ -3056,22 +3114,27 @@ export default function main() {
       });
       assertFailure(result1);
 
-      // Fix the syntax error (seedTestFileSystem resets the FS, so re-seed all files)
-      await seedTestFileSystem({
-        '/projects/test/main.ts': `
+      // Fix the syntax error (write to existing FS to preserve bridge connection)
+      const fs3 = getTestFileSystem();
+      await fs3.writeFile(
+        '/projects/test/main.ts',
+        `
           import { makeBox } from './lib/box';
           export default function main() {
             return makeBox();
           }
         `,
-        '/projects/test/lib/box.ts': `
+      );
+      await fs3.writeFile(
+        '/projects/test/lib/box.ts',
+        `
           import { makeBaseBox } from 'replicad';
           const pattern = /valid-regex/;
           export function makeBox() {
             return makeBaseBox(10, 10, 10);
           }
         `,
-      });
+      );
 
       // Notify that the dependency changed
       await worker.notifyFileChanged(['/projects/test/lib/box.ts']);
@@ -3117,27 +3180,35 @@ export default function main() {
       });
       assertFailure(result1);
 
-      // Fix the syntax error in the transitive dependency (re-seed all files)
-      await seedTestFileSystem({
-        '/projects/test/main.ts': `
+      // Fix the syntax error in the transitive dependency (write to existing FS to preserve bridge connection)
+      const fs4 = getTestFileSystem();
+      await fs4.writeFile(
+        '/projects/test/main.ts',
+        `
           import { makeAssembly } from './lib/assembly';
           export default function main() {
             return makeAssembly();
           }
         `,
-        '/projects/test/lib/assembly.ts': `
+      );
+      await fs4.writeFile(
+        '/projects/test/lib/assembly.ts',
+        `
           import { makeBox } from './shapes';
           export function makeAssembly() {
             return makeBox();
           }
         `,
-        '/projects/test/lib/shapes.ts': `
+      );
+      await fs4.writeFile(
+        '/projects/test/lib/shapes.ts',
+        `
           import { makeBaseBox } from 'replicad';
           export function makeBox() {
             return makeBaseBox(10, 10, 10);
           }
         `,
-      });
+      );
 
       // Notify that the transitive dependency changed
       await worker.notifyFileChanged(['/projects/test/lib/shapes.ts']);
@@ -3184,28 +3255,36 @@ export default function main() {
       });
       assertFailure(result1);
 
-      // Fix the syntax error in cylinder (re-seed all files)
-      await seedTestFileSystem({
-        '/projects/test/main.ts': `
+      // Fix the syntax error in cylinder (write to existing FS to preserve bridge connection)
+      const fs5 = getTestFileSystem();
+      await fs5.writeFile(
+        '/projects/test/main.ts',
+        `
           import { makeBox } from './lib/box';
           import { makeCylinder } from './lib/cylinder';
           export default function main() {
             return [makeBox(), makeCylinder()];
           }
         `,
-        '/projects/test/lib/box.ts': `
+      );
+      await fs5.writeFile(
+        '/projects/test/lib/box.ts',
+        `
           import { makeBaseBox } from 'replicad';
           export function makeBox() {
             return makeBaseBox(10, 10, 10);
           }
         `,
-        '/projects/test/lib/cylinder.ts': `
+      );
+      await fs5.writeFile(
+        '/projects/test/lib/cylinder.ts',
+        `
           import { makeBaseBox } from 'replicad';
           export function makeCylinder() {
             return makeBaseBox(5, 5, 20);
           }
         `,
-      });
+      );
 
       // Notify that the fixed dependency changed
       await worker.notifyFileChanged(['/projects/test/lib/cylinder.ts']);
@@ -3627,14 +3706,14 @@ describe('Angular tolerance', () => {
     const coarseResult = await worker.createGeometry({
       file: geometryFile,
       parameters: {},
-      tessellation: { linearTolerance: 1, angularTolerance: 60 },
+      options: { tessellation: { linearTolerance: 1, angularTolerance: 60 } },
     });
     assertSuccess(coarseResult);
 
     const fineResult = await worker.createGeometry({
       file: geometryFile,
       parameters: {},
-      tessellation: { linearTolerance: 1, angularTolerance: 5 },
+      options: { tessellation: { linearTolerance: 1, angularTolerance: 5 } },
     });
     assertSuccess(fineResult);
 
@@ -3650,10 +3729,80 @@ describe('Angular tolerance', () => {
 });
 
 // =============================================================================
+// Normal consistency helpers
+// =============================================================================
+
+type VertexNormalEntry = { pos: number[]; normal: number[] };
+
+function extractNormalsFromDocument(document: Document): VertexNormalEntry[] {
+  const result: VertexNormalEntry[] = [];
+  for (const mesh of document.getRoot().listMeshes()) {
+    for (const primitive of mesh.listPrimitives()) {
+      if (primitive.getMode() !== 4) {
+        continue;
+      }
+      const positionAccessor = primitive.getAttribute('POSITION')!;
+      const normalAccessor = primitive.getAttribute('NORMAL')!;
+      const count = positionAccessor.getCount();
+      for (let index = 0; index < count; index++) {
+        result.push({
+          pos: [...positionAccessor.getElement(index, [0, 0, 0])],
+          normal: [...normalAccessor.getElement(index, [0, 0, 0])],
+        });
+      }
+    }
+  }
+  return result;
+}
+
+function analyzeCoLocatedNormals(
+  normals: VertexNormalEntry[],
+  predicate: (dotProduct: number) => boolean,
+): { matchCount: number; totalPairs: number } {
+  const epsilon = 1e-5;
+  const cellSize = epsilon * 2;
+  const grid = new Map<string, number[]>();
+
+  for (const [index, entry] of normals.entries()) {
+    const p = entry.pos;
+    const key = `${Math.round(p[0]! / cellSize)},${Math.round(p[1]! / cellSize)},${Math.round(p[2]! / cellSize)}`;
+    const bucket = grid.get(key);
+    if (bucket) {
+      bucket.push(index);
+    } else {
+      grid.set(key, [index]);
+    }
+  }
+
+  let matchCount = 0;
+  let totalPairs = 0;
+
+  for (const bucket of grid.values()) {
+    for (let ii = 0; ii < bucket.length; ii++) {
+      for (let jj = ii + 1; jj < bucket.length; jj++) {
+        const a = normals[bucket[ii]!]!;
+        const b = normals[bucket[jj]!]!;
+        const distance = Math.hypot(a.pos[0]! - b.pos[0]!, a.pos[1]! - b.pos[1]!, a.pos[2]! - b.pos[2]!);
+        if (distance >= epsilon) {
+          continue;
+        }
+        const dot = a.normal[0]! * b.normal[0]! + a.normal[1]! * b.normal[1]! + a.normal[2]! * b.normal[2]!;
+        totalPairs++;
+        if (predicate(dot)) {
+          matchCount++;
+        }
+      }
+    }
+  }
+
+  return { matchCount, totalPairs };
+}
+
+// =============================================================================
 // Normal consistency (OCCT V8 regression guard)
 // =============================================================================
 
-describe.skip('Normal consistency', () => {
+describe('Normal consistency', () => {
   it('should produce outward-facing normals on all faces of a convex solid', async () => {
     const result = await createTestGeometry({
       definition: replicadKernel,
@@ -3802,7 +3951,7 @@ describe.skip('Normal consistency', () => {
     ).toBeLessThan(0.05);
   });
 
-  it('should produce smooth normals across face boundaries on a filleted shape', async () => {
+  it('should produce smooth normals across face boundaries on a filleted shape', { timeout: 30_000 }, async () => {
     const result = await createTestGeometry({
       definition: replicadKernel,
       files: {
@@ -3822,54 +3971,12 @@ describe.skip('Normal consistency', () => {
     const glbData = extractGltfFromResult(result)!;
     const document = await new NodeIO().readBinary(glbData);
 
-    const allNormals: Array<{ pos: number[]; normal: number[] }> = [];
+    const allNormals = extractNormalsFromDocument(document);
 
-    for (const mesh of document.getRoot().listMeshes()) {
-      for (const primitive of mesh.listPrimitives()) {
-        if (primitive.getMode() !== 4) {
-          continue;
-        }
-        const positionAccessor = primitive.getAttribute('POSITION')!;
-        const normalAccessor = primitive.getAttribute('NORMAL')!;
-        const count = positionAccessor.getCount();
-
-        for (let i = 0; i < count; i++) {
-          allNormals.push({
-            pos: [...positionAccessor.getElement(i, [0, 0, 0])],
-            normal: [...normalAccessor.getElement(i, [0, 0, 0])],
-          });
-        }
-      }
-    }
-
-    // Co-location threshold: 0.01mm in meter-space (positions are mm/1000)
-    const EPSILON = 1e-5;
-    let smoothPairs = 0;
-    let totalPairs = 0;
-
-    for (let i = 0; i < allNormals.length; i++) {
-      for (let j = i + 1; j < allNormals.length; j++) {
-        const a = allNormals[i]!;
-        const b = allNormals[j]!;
-
-        const dx = a.pos[0]! - b.pos[0]!;
-        const dy = a.pos[1]! - b.pos[1]!;
-        const dz = a.pos[2]! - b.pos[2]!;
-        const distribution = Math.hypot(dx, dy, dz);
-
-        if (distribution < EPSILON) {
-          const dot = a.normal[0]! * b.normal[0]! + a.normal[1]! * b.normal[1]! + a.normal[2]! * b.normal[2]!;
-
-          totalPairs++;
-          if (dot > 0.7) {
-            smoothPairs++;
-          }
-        }
-      }
-    }
+    const { matchCount, totalPairs } = analyzeCoLocatedNormals(allNormals, (dot) => dot > 0.7);
 
     expect(totalPairs).toBeGreaterThan(0);
-    const smoothRatio = smoothPairs / totalPairs;
+    const smoothRatio = matchCount / totalPairs;
     expect(
       smoothRatio,
       `${(smoothRatio * 100).toFixed(1)}% of co-located normals are smooth (expected >90%)`,
@@ -3900,53 +4007,12 @@ describe.skip('Normal consistency', () => {
     const glbData = extractGltfFromResult(result)!;
     const document = await new NodeIO().readBinary(glbData);
 
-    const allNormals: Array<{ pos: number[]; normal: number[] }> = [];
+    const allNormals = extractNormalsFromDocument(document);
 
-    for (const mesh of document.getRoot().listMeshes()) {
-      for (const primitive of mesh.listPrimitives()) {
-        if (primitive.getMode() !== 4) {
-          continue;
-        }
-        const positionAccessor = primitive.getAttribute('POSITION')!;
-        const normalAccessor = primitive.getAttribute('NORMAL')!;
-        const count = positionAccessor.getCount();
-
-        for (let i = 0; i < count; i++) {
-          allNormals.push({
-            pos: [...positionAccessor.getElement(i, [0, 0, 0])],
-            normal: [...normalAccessor.getElement(i, [0, 0, 0])],
-          });
-        }
-      }
-    }
-
-    const EPSILON = 1e-5;
-    let sharpPairs = 0;
-    let totalPairs = 0;
-
-    for (let i = 0; i < allNormals.length; i++) {
-      for (let j = i + 1; j < allNormals.length; j++) {
-        const a = allNormals[i]!;
-        const b = allNormals[j]!;
-
-        const dx = a.pos[0]! - b.pos[0]!;
-        const dy = a.pos[1]! - b.pos[1]!;
-        const dz = a.pos[2]! - b.pos[2]!;
-        const distribution = Math.hypot(dx, dy, dz);
-
-        if (distribution < EPSILON) {
-          const dot = a.normal[0]! * b.normal[0]! + a.normal[1]! * b.normal[1]! + a.normal[2]! * b.normal[2]!;
-
-          totalPairs++;
-          if (dot < 0.5) {
-            sharpPairs++;
-          }
-        }
-      }
-    }
+    const { matchCount, totalPairs } = analyzeCoLocatedNormals(allNormals, (dot) => dot < 0.5);
 
     expect(totalPairs).toBeGreaterThan(0);
-    const sharpRatio = sharpPairs / totalPairs;
+    const sharpRatio = matchCount / totalPairs;
     expect(
       sharpRatio,
       `${(sharpRatio * 100).toFixed(1)}% of co-located pairs are sharp (expected >20% — tray has 90° wall-to-base edges)`,
@@ -3973,6 +4039,83 @@ describe('Example models', () => {
       await geometryHelpers.expectMeshCount(result, 1);
     });
   }
+});
+
+// =============================================================================
+// serializeHandle / deserializeHandle
+// =============================================================================
+
+describe('serializeHandle', () => {
+  it('should serialize nativeHandle to BRep strings with metadata', async () => {
+    const result = await createGeometry({
+      files: {
+        'box.ts': `
+          import { drawRoundedRectangle } from 'replicad';
+          export default function main() {
+            return {
+              shape: drawRoundedRectangle(50, 30).sketchOnPlane().extrude(10),
+              name: 'TestBox',
+              color: '#ff0000',
+              metalness: 0.8,
+              roughness: 0.3,
+            };
+          }
+        `,
+      },
+      mainFile: 'box.ts',
+    });
+
+    assertSuccess(result);
+    expect(result.serializedHandle).toBeDefined();
+
+    const serialized = result.serializedHandle as Array<{
+      brep: string;
+      metadata: Record<string, unknown>;
+    }>;
+
+    expect(serialized).toHaveLength(1);
+    expect(typeof serialized[0]!.brep).toBe('string');
+    expect(serialized[0]!.brep.length).toBeGreaterThan(0);
+    expect(serialized[0]!.metadata['name']).toBe('TestBox');
+    expect(serialized[0]!.metadata['color']).toBe('#ff0000');
+    expect(serialized[0]!.metadata['metalness']).toBe(0.8);
+    expect(serialized[0]!.metadata['roughness']).toBe(0.3);
+  });
+
+  it('should round-trip serialize/deserialize preserving shape geometry', async () => {
+    const result = await createGeometry({
+      files: {
+        'box.ts': `
+          import { drawRoundedRectangle, drawCircle } from 'replicad';
+          export default function main() {
+            return [
+              { shape: drawRoundedRectangle(50, 30).sketchOnPlane().extrude(10), name: 'Box', color: '#ff0000' },
+              { shape: drawCircle(10).sketchOnPlane().extrude(20).translate([0, 0, 10]), name: 'Cylinder', color: '#0000ff', opacity: 0.7 },
+            ];
+          }
+        `,
+      },
+      mainFile: 'box.ts',
+    });
+
+    assertSuccess(result);
+    expect(result.serializedHandle).toBeDefined();
+
+    const serialized = result.serializedHandle as Array<{
+      brep: string;
+      metadata: { name: string; color?: string; opacity?: number };
+    }>;
+
+    expect(serialized).toHaveLength(2);
+    expect(serialized[0]!.metadata.name).toBe('Box');
+    expect(serialized[1]!.metadata.name).toBe('Cylinder');
+    expect(serialized[1]!.metadata.opacity).toBe(0.7);
+  });
+
+  it('should have serializeHandle and deserializeHandle defined on the kernel', () => {
+    expect(replicadKernel.serializeHandle).toBeDefined();
+    expect(replicadKernel.deserializeHandle).toBeDefined();
+  });
 });
 
 describe('No kernel matched', () => {

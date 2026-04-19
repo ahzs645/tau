@@ -38,7 +38,9 @@ export type BundleResult = {
  * Used by JS/TS kernels through runtime.execute().
  * @public
  */
-export type ExecuteResult<T = unknown> = { success: true; value: T } | { success: false; issues: KernelIssue[] };
+export type ExecuteResult<T = unknown> =
+  | { success: true; value: T; entryUrl?: string }
+  | { success: false; issues: KernelIssue[] };
 
 /**
  * A built-in module registered on the bundler for pre-loaded libraries.

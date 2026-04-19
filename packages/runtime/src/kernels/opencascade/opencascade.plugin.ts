@@ -6,7 +6,11 @@
  */
 
 import { createKernelPlugin } from '#plugins/plugin-helpers.js';
-import type { OpenCascadeOptions } from '#kernels/opencascade/opencascade.kernel.js';
+import {
+  opencascadeOptionsSchema,
+  opencascadeRenderSchema,
+  opencascadeExportSchemas,
+} from '#kernels/opencascade/opencascade.schemas.js';
 
 /**
  * Canonical regex for detecting opencascade.js usage in source code.
@@ -36,10 +40,13 @@ export const opencascadeDetectPattern =
  * });
  * ```
  */
-export const opencascade = createKernelPlugin<OpenCascadeOptions>({
+export const opencascade = createKernelPlugin({
   id: 'opencascade',
   moduleUrl: new URL('opencascade.kernel.js', import.meta.url).href,
   extensions: ['ts', 'js'],
   detectImport: opencascadeDetectPattern,
   builtinModuleNames: ['opencascade.js'],
+  optionsSchema: opencascadeOptionsSchema,
+  renderSchema: opencascadeRenderSchema,
+  exportSchemas: opencascadeExportSchemas,
 });

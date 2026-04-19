@@ -944,7 +944,7 @@ module.exports = { main, getParameterDefinitions }
   // ===========================================================================
 
   describe('exportGeometry', () => {
-    it('should export to GLTF format', async () => {
+    it('should return error for unsupported gltf format', async () => {
       const worker = await createWorker({
         'cube.ts': `
           import { primitives } from '@jscad/modeling';
@@ -955,7 +955,6 @@ module.exports = { main, getParameterDefinitions }
         `,
       });
 
-      // First create geometry
       const geometryFile = createGeometryFile('cube.ts');
       const createResult = await worker.createGeometry({
         file: geometryFile,
@@ -963,14 +962,10 @@ module.exports = { main, getParameterDefinitions }
       });
       expect(createResult.success).toBe(true);
 
-      // Then export
       const exportResult = await worker.exportGeometry('gltf');
-      expect(exportResult.success).toBe(true);
-      if (exportResult.success) {
-        expect(exportResult.data).toBeDefined();
-        expect(exportResult.data.length).toBeGreaterThan(0);
-        expect(exportResult.data[0]?.bytes).toBeInstanceOf(Uint8Array);
-        expect(exportResult.data[0]?.mimeType).toBe('model/gltf+json');
+      expect(exportResult.success).toBe(false);
+      if (!exportResult.success) {
+        expect(exportResult.issues[0]?.message).toContain('gltf');
       }
     });
 
@@ -1658,6 +1653,64 @@ module.exports = { main, getParameterDefinitions }
         await geometryHelpers.expectMeshCount(result, 1);
       });
     });
+  });
+});
+
+// =============================================================================
+// serializeHandle / deserializeHandle
+// =============================================================================
+
+describe('serializeHandle', () => {
+  it('should serialize nativeHandle to compact binary arrays', async () => {
+    const result = await createGeometry(
+      {
+        'box.ts': `
+          const { cuboid } = require('@jscad/modeling').primitives;
+          module.exports = { main: () => cuboid({ size: [20, 20, 20] }) };
+        `,
+      },
+      'box.ts',
+    );
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      return;
+    }
+
+    expect(result.serializedHandle).toBeDefined();
+    const serialized = result.serializedHandle as Array<{ type: string; data: Float32Array }>;
+    expect(serialized).toHaveLength(1);
+    expect(serialized[0]!.type).toBe('geom3');
+    expect(serialized[0]!.data).toBeInstanceOf(Float32Array);
+    expect(serialized[0]!.data.length).toBeGreaterThan(0);
+  });
+
+  it('should serialize multiple shapes', async () => {
+    const result = await createGeometry(
+      {
+        'shapes.ts': `
+          const { cuboid, sphere } = require('@jscad/modeling').primitives;
+          module.exports = { main: () => [cuboid({ size: [10, 10, 10] }), sphere({ radius: 5 })] };
+        `,
+      },
+      'shapes.ts',
+    );
+
+    expect(result.success).toBe(true);
+    if (!result.success) {
+      return;
+    }
+
+    expect(result.serializedHandle).toBeDefined();
+    const serialized = result.serializedHandle as Array<{ type: string; data: Float32Array }>;
+    expect(serialized).toHaveLength(2);
+    expect(serialized[0]!.type).toBe('geom3');
+    expect(serialized[1]!.type).toBe('geom3');
+  });
+
+  it('should have serializeHandle and deserializeHandle defined on the kernel', () => {
+    expect(jscadKernel.serializeHandle).toBeDefined();
+    expect(jscadKernel.deserializeHandle).toBeDefined();
   });
 });
 

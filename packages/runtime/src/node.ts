@@ -28,7 +28,7 @@ import { fromNodeFS } from '#filesystem/from-node-fs.js';
 export async function createNodeClient(
   projectPath?: string,
   options?: Partial<RuntimeClientOptions>,
-): Promise<RuntimeClient<Record<string, unknown>>> {
+): Promise<RuntimeClient> {
   const fileSystem = projectPath ? fromNodeFS(projectPath) : undefined;
 
   return createRuntimeClient({

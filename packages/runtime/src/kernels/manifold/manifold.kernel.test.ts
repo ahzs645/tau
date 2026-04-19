@@ -293,7 +293,7 @@ describe('ManifoldWorker', () => {
       }
     });
 
-    it('should export GLTF after successful geometry creation', async () => {
+    it('should return error for unsupported gltf format', async () => {
       const worker = await createWorker({
         'cube.ts': `
           import { Manifold } from 'manifold-3d/manifoldCAD';
@@ -311,9 +311,9 @@ describe('ManifoldWorker', () => {
       expect(createResult.success).toBe(true);
 
       const exportResult = await worker.exportGeometry('gltf');
-      expect(exportResult.success).toBe(true);
-      if (exportResult.success) {
-        expect(exportResult.data[0]?.mimeType).toBe('model/gltf+json');
+      expect(exportResult.success).toBe(false);
+      if (!exportResult.success) {
+        expect(exportResult.issues[0]?.message).toContain('gltf');
       }
     });
 

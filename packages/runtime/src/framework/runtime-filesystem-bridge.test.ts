@@ -534,7 +534,7 @@ describe('runtime-filesystem-bridge', () => {
     }
 
     it('should resolve readFile from pool without postMessage', async () => {
-      const pool = await createTestPool();
+      const pool = createTestPool();
 
       pool.store('/cached.txt', new TextEncoder().encode('from pool'));
 
@@ -553,7 +553,7 @@ describe('runtime-filesystem-bridge', () => {
     });
 
     it('should resolve readFile utf8 from pool without postMessage', async () => {
-      const pool = await createTestPool();
+      const pool = createTestPool();
 
       pool.store('/cached.txt', new TextEncoder().encode('utf8 from pool'));
 
@@ -571,7 +571,7 @@ describe('runtime-filesystem-bridge', () => {
     });
 
     it('should fall through to bridge RPC on pool miss', async () => {
-      const pool = await createTestPool();
+      const pool = createTestPool();
 
       const fs = fromMemoryFS({ '/on-disk.txt': 'from bridge' });
       const channel = new MessageChannel();
@@ -587,7 +587,7 @@ describe('runtime-filesystem-bridge', () => {
     });
 
     it('should populate pool after successful readFile on server side', async () => {
-      const pool = await createTestPool();
+      const pool = createTestPool();
 
       // eslint-disable-next-line @typescript-eslint/naming-convention -- filesystem paths use non-camelCase names
       const fs = fromMemoryFS({ '/server.txt': 'server data' });

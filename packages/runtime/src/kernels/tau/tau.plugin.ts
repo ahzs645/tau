@@ -7,6 +7,7 @@
 
 import { supportedImportFormats } from '@taucad/converter/formats';
 import { createKernelPlugin } from '#plugins/plugin-helpers.js';
+import { tauExportSchemas } from '#kernels/tau/tau.schemas.js';
 
 /**
  * Create a Tau converter kernel plugin registration.
@@ -18,4 +19,5 @@ export const tau = createKernelPlugin({
   id: 'tau',
   moduleUrl: new URL('tau.kernel.js', import.meta.url).href,
   extensions: [...supportedImportFormats],
+  exportSchemas: tauExportSchemas,
 });

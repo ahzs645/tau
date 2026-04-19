@@ -6,6 +6,7 @@
  */
 
 import { createKernelPlugin } from '#plugins/plugin-helpers.js';
+import { jscadExportSchemas } from '#kernels/jscad/jscad.schemas.js';
 
 /**
  * Canonical regex for detecting @jscad/modeling usage in source code.
@@ -27,4 +28,5 @@ export const jscad = createKernelPlugin({
   extensions: ['ts', 'js'],
   detectImport: jscadDetectPattern,
   builtinModuleNames: ['@jscad/modeling'],
+  exportSchemas: jscadExportSchemas,
 });

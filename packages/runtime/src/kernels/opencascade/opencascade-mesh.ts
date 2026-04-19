@@ -18,7 +18,11 @@ type MeshOptions = {
 };
 
 /**
+ * Parse a hex color string into an RGB tuple.
  *
+ * @param hex - The hex color string to parse.
+ * @returns The RGB tuple.
+ * @public
  */
 export function parseHexColor(hex: string): [number, number, number] {
   const clean = hex.startsWith('#') ? hex.slice(1) : hex;
@@ -131,7 +135,7 @@ export function meshShapesToGltf(
   const progress = new oc.Message_ProgressRange();
   const fileInfo = new oc.TColStd_IndexedDataMapOfStringString();
   // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- WASM binding enum type mismatch
-  writer.Perform(document, fileInfo as unknown as Parameters<typeof writer.Perform>[1], progress);
+  writer.Perform(document, fileInfo as unknown, progress);
 
   const glbData = oc.FS.readFile(outputPath, { encoding: 'binary' }) as Uint8Array<ArrayBuffer>;
   const result = new Uint8Array(glbData);

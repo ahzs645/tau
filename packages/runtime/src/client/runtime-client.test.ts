@@ -7,7 +7,7 @@
  * to verify all RenderInput variations end-to-end.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
-import type { HashedGeometryResult } from '#types/runtime.types.js';
+import type { CapabilitiesManifest, HashedGeometryResult } from '#types/runtime.types.js';
 import type { PerformanceEntryData, RuntimeCommand, RuntimeResponse } from '#types/runtime-protocol.types.js';
 import type { RuntimeTransport } from '#transport/runtime-transport.js';
 import { createRuntimeClient, fromMemoryFS } from '#index.js';
@@ -529,7 +529,11 @@ describe('shared memory pools', () => {
       send(message: RuntimeCommand) {
         capturedCommands.push(message);
         if (message.type === 'initialize' && handler) {
-          handler({ type: 'initialized', requestId: message.requestId });
+          handler({
+            type: 'initialized',
+            requestId: message.requestId,
+            capabilities: { routes: [], renderSchemas: {} },
+          });
         }
       },
       onMessage(h) {
@@ -666,8 +670,9 @@ describe('shared memory pools', () => {
   it('should gracefully skip pool creation when SharedArrayBuffer is unavailable', async () => {
     const originalSAB = globalThis.SharedArrayBuffer;
     // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- test simulates missing SAB
+    // oxlint-disable-next-line typescript/no-extraneous-class -- test simulates missing SAB
     (globalThis as Record<string, unknown>)['SharedArrayBuffer'] = class {
-      constructor() {
+      public constructor() {
         throw new TypeError('SharedArrayBuffer is not available');
       }
     };
@@ -710,7 +715,11 @@ describe('geometry transport resolution', () => {
     const transport: RuntimeTransport = {
       send(message: RuntimeCommand) {
         if (message.type === 'initialize' && handler) {
-          handler({ type: 'initialized', requestId: message.requestId });
+          handler({
+            type: 'initialized',
+            requestId: message.requestId,
+            capabilities: { routes: [], renderSchemas: {} },
+          });
         }
       },
       onMessage(h) {
@@ -827,8 +836,9 @@ describe('geometry transport resolution', () => {
   it('should resolve geometry via inline delivery when SAB pools failed to initialize', async () => {
     const originalSAB = globalThis.SharedArrayBuffer;
     // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- test simulates missing SAB
+    // oxlint-disable-next-line typescript/no-extraneous-class -- test simulates missing SAB
     (globalThis as Record<string, unknown>)['SharedArrayBuffer'] = class {
-      constructor() {
+      public constructor() {
         throw new TypeError('SharedArrayBuffer is not available');
       }
     };
@@ -993,7 +1003,7 @@ describe('geometry transport resolution', () => {
     expect(eventResult).toBeDefined();
     expect(eventResult!.success).toBe(true);
     if (eventResult!.success && eventResult!.data[0]!.format === 'gltf') {
-      const content = eventResult!.data[0]!.content;
+      const { content } = eventResult!.data[0]!;
 
       // RuntimeClient encapsulates SAB resolution — consumers get ArrayBuffer-backed content
       expect(content.buffer).toBeInstanceOf(ArrayBuffer);
@@ -1018,7 +1028,11 @@ describe('geometry transport resolution', () => {
     const transport: RuntimeTransport = {
       send(message: RuntimeCommand) {
         if (message.type === 'initialize' && handler) {
-          handler({ type: 'initialized', requestId: message.requestId });
+          handler({
+            type: 'initialized',
+            requestId: message.requestId,
+            capabilities: { routes: [], renderSchemas: {} },
+          });
         }
         if (message.type === 'render') {
           capturedRequestId = message.requestId;
@@ -1076,4 +1090,776 @@ describe('geometry transport resolution', () => {
 
     client.terminate();
   });
+});
+
+describe('capabilities', () => {
+  it('should expose capabilities from worker after connect', async () => {
+    const manifest: CapabilitiesManifest = {
+      routes: [
+        {
+          targetFormat: 'usdz',
+          kernelId: 'replicad',
+          sourceFormat: 'glb',
+          transcoderId: 'converter',
+          fidelity: 'mesh',
+          schema: {},
+          defaults: {},
+        },
+      ],
+      renderSchemas: {},
+    };
+
+    let handler: ((response: RuntimeResponse) => void) | undefined;
+
+    const transport: RuntimeTransport = {
+      send(message: RuntimeCommand) {
+        if (message.type === 'initialize') {
+          setTimeout(() => {
+            handler!({ type: 'initialized', requestId: message.requestId, capabilities: manifest });
+          }, 0);
+        }
+      },
+      onMessage(h) {
+        handler = h;
+      },
+      // oxlint-disable-next-line no-empty-function -- mock transport
+      close() {},
+    };
+
+    const client = createRuntimeClient({
+      kernels: [],
+      transport,
+    });
+
+    expect(client.capabilities).toBeUndefined();
+
+    await client.connect({ fileSystem: fromMemoryFS() });
+
+    expect(client.capabilities).toEqual(manifest);
+    expect(client.capabilities!.routes).toHaveLength(1);
+
+    client.terminate();
+  });
+
+  it('should fire capabilities event handler on connect', async () => {
+    const manifest: CapabilitiesManifest = {
+      routes: [
+        {
+          targetFormat: 'usdz',
+          kernelId: 'replicad',
+          sourceFormat: 'glb',
+          transcoderId: 'converter',
+          fidelity: 'mesh',
+          schema: {},
+          defaults: {},
+        },
+      ],
+      renderSchemas: {},
+    };
+
+    let handler: ((response: RuntimeResponse) => void) | undefined;
+
+    const transport: RuntimeTransport = {
+      send(message: RuntimeCommand) {
+        if (message.type === 'initialize') {
+          setTimeout(() => {
+            handler!({ type: 'initialized', requestId: message.requestId, capabilities: manifest });
+          }, 0);
+        }
+      },
+      onMessage(h) {
+        handler = h;
+      },
+      // oxlint-disable-next-line no-empty-function -- mock transport
+      close() {},
+    };
+
+    const client = createRuntimeClient({
+      kernels: [],
+      transport,
+    });
+
+    const receivedManifests: unknown[] = [];
+    client.on('capabilities', (m) => receivedManifests.push(m));
+
+    await client.connect({ fileSystem: fromMemoryFS() });
+
+    expect(receivedManifests).toHaveLength(1);
+    expect(receivedManifests[0]).toEqual(manifest);
+
+    client.terminate();
+  });
+
+  it('should emit capabilities event when worker pushes capabilitiesUpdated', async () => {
+    let handler: ((message: RuntimeResponse) => void) | undefined;
+
+    const transport: RuntimeTransport = {
+      send(message: RuntimeCommand) {
+        if (message.type === 'initialize') {
+          setTimeout(() => {
+            handler!({
+              type: 'initialized',
+              requestId: message.requestId,
+              capabilities: { routes: [], renderSchemas: {} },
+            });
+          }, 0);
+        }
+      },
+      onMessage(h) {
+        handler = h;
+      },
+      // oxlint-disable-next-line no-empty-function -- mock transport
+      close() {},
+    };
+
+    const client = createRuntimeClient({
+      kernels: [],
+      transport,
+    });
+
+    await client.connect({ fileSystem: fromMemoryFS() });
+
+    const receivedManifests: unknown[] = [];
+    client.on('capabilities', (m) => receivedManifests.push(m));
+
+    const updatedManifest: CapabilitiesManifest = {
+      routes: [
+        {
+          targetFormat: 'glb',
+          kernelId: 'replicad',
+          sourceFormat: 'glb',
+          fidelity: 'mesh',
+          schema: {},
+          defaults: {},
+        },
+      ],
+      renderSchemas: {},
+    };
+
+    handler!({ type: 'capabilitiesUpdated', capabilities: updatedManifest });
+
+    // Late subscribers receive the current manifest immediately (R9 subscribe-anytime),
+    // followed by the new manifest pushed via 'capabilitiesUpdated'.
+    expect(receivedManifests).toHaveLength(2);
+    expect(receivedManifests[1]).toEqual(updatedManifest);
+    expect(client.capabilities).toEqual(updatedManifest);
+
+    client.terminate();
+  });
+});
+
+// =============================================================================
+// Subscribe-anytime capabilities (R9)
+// =============================================================================
+
+describe('subscribe-anytime capabilities', () => {
+  function createCapabilitiesTransport(manifest: CapabilitiesManifest): {
+    transport: RuntimeTransport;
+    pushResponse: (response: RuntimeResponse) => void;
+  } {
+    let handler: ((message: RuntimeResponse) => void) | undefined;
+    const transport: RuntimeTransport = {
+      send(message: RuntimeCommand) {
+        if (message.type === 'initialize') {
+          setTimeout(() => {
+            handler!({ type: 'initialized', requestId: message.requestId, capabilities: manifest });
+          }, 0);
+        }
+      },
+      onMessage(h) {
+        handler = h;
+      },
+      // oxlint-disable-next-line no-empty-function -- mock transport
+      close() {},
+    };
+    return {
+      transport,
+      pushResponse(response: RuntimeResponse) {
+        handler?.(response);
+      },
+    };
+  }
+
+  it('should fire capabilities handler immediately when subscribed AFTER manifest received', async () => {
+    const manifest: CapabilitiesManifest = {
+      routes: [],
+      renderSchemas: {},
+    };
+    const { transport } = createCapabilitiesTransport(manifest);
+    const client = createRuntimeClient({ kernels: [], transport });
+
+    await client.connect({ fileSystem: fromMemoryFS() });
+    expect(client.capabilities).toEqual(manifest);
+
+    const received: unknown[] = [];
+    client.on('capabilities', (m) => received.push(m));
+
+    expect(received).toHaveLength(1);
+    expect(received[0]).toEqual(manifest);
+
+    client.terminate();
+  });
+
+  it('should stop firing after unsubscribe', async () => {
+    const manifest: CapabilitiesManifest = {
+      routes: [],
+      renderSchemas: {},
+    };
+    const { transport, pushResponse } = createCapabilitiesTransport(manifest);
+    const client = createRuntimeClient({ kernels: [], transport });
+
+    await client.connect({ fileSystem: fromMemoryFS() });
+
+    const received: unknown[] = [];
+    const unsubscribe = client.on('capabilities', (m) => received.push(m));
+    expect(received).toHaveLength(1);
+
+    unsubscribe();
+
+    const updated: CapabilitiesManifest = {
+      routes: [
+        {
+          targetFormat: 'glb',
+          kernelId: 'replicad',
+          sourceFormat: 'glb',
+          fidelity: 'mesh',
+          schema: {},
+          defaults: {},
+        },
+      ],
+      renderSchemas: {},
+    };
+    pushResponse({ type: 'capabilitiesUpdated', capabilities: updated });
+
+    expect(received).toHaveLength(1);
+
+    client.terminate();
+  });
+
+  it('should deliver current value to each late subscriber exactly once', async () => {
+    const manifest: CapabilitiesManifest = {
+      routes: [],
+      renderSchemas: {},
+    };
+    const { transport } = createCapabilitiesTransport(manifest);
+    const client = createRuntimeClient({ kernels: [], transport });
+
+    await client.connect({ fileSystem: fromMemoryFS() });
+
+    const a: unknown[] = [];
+    const b: unknown[] = [];
+    const c: unknown[] = [];
+    client.on('capabilities', (m) => a.push(m));
+    client.on('capabilities', (m) => b.push(m));
+    client.on('capabilities', (m) => c.push(m));
+
+    expect(a).toHaveLength(1);
+    expect(b).toHaveLength(1);
+    expect(c).toHaveLength(1);
+    expect(a[0]).toEqual(manifest);
+    expect(b[0]).toEqual(manifest);
+    expect(c[0]).toEqual(manifest);
+
+    client.terminate();
+  });
+});
+
+// =============================================================================
+// routesFor / bestRouteFor helpers (R8)
+// =============================================================================
+
+describe('routesFor', () => {
+  function createClientWithManifest(manifest: CapabilitiesManifest) {
+    let handler: ((message: RuntimeResponse) => void) | undefined;
+    const transport: RuntimeTransport = {
+      send(message: RuntimeCommand) {
+        if (message.type === 'initialize') {
+          setTimeout(() => {
+            handler!({ type: 'initialized', requestId: message.requestId, capabilities: manifest });
+          }, 0);
+        }
+      },
+      onMessage(h) {
+        handler = h;
+      },
+      // oxlint-disable-next-line no-empty-function -- mock transport
+      close() {},
+    };
+    return createRuntimeClient({ kernels: [], transport });
+  }
+
+  it('should return all routes for a target format in manifest order', async () => {
+    const manifest: CapabilitiesManifest = {
+      routes: [
+        { targetFormat: 'glb', sourceFormat: 'glb', kernelId: 'replicad', fidelity: 'mesh', schema: {}, defaults: {} },
+        { targetFormat: 'glb', sourceFormat: 'glb', kernelId: 'jscad', fidelity: 'mesh', schema: {}, defaults: {} },
+        {
+          targetFormat: 'usdz',
+          sourceFormat: 'usdz',
+          kernelId: 'replicad',
+          fidelity: 'mesh',
+          schema: {},
+          defaults: {},
+        },
+      ],
+      renderSchemas: {},
+    };
+    const client = createClientWithManifest(manifest);
+    await client.connect({ fileSystem: fromMemoryFS() });
+
+    const routes = client.routesFor('glb');
+    expect(routes).toHaveLength(2);
+    expect(routes[0]!.kernelId).toBe('replicad');
+    expect(routes[1]!.kernelId).toBe('jscad');
+
+    client.terminate();
+  });
+
+  it('should return empty array when no routes match', async () => {
+    const manifest: CapabilitiesManifest = {
+      routes: [
+        { targetFormat: 'glb', sourceFormat: 'glb', kernelId: 'replicad', fidelity: 'mesh', schema: {}, defaults: {} },
+      ],
+      renderSchemas: {},
+    };
+    const client = createClientWithManifest(manifest);
+    await client.connect({ fileSystem: fromMemoryFS() });
+
+    expect(client.routesFor('usdz')).toEqual([]);
+
+    client.terminate();
+  });
+
+  it('should return empty array when manifest not yet available', () => {
+    const transport: RuntimeTransport = {
+      // oxlint-disable-next-line no-empty-function -- mock transport
+      send() {},
+      // oxlint-disable-next-line no-empty-function -- mock transport
+      onMessage() {},
+      // oxlint-disable-next-line no-empty-function -- mock transport
+      close() {},
+    };
+    const client = createRuntimeClient({ kernels: [], transport });
+    expect(client.routesFor('glb')).toEqual([]);
+    client.terminate();
+  });
+});
+
+describe('bestRouteFor', () => {
+  function createClientWithManifest(manifest: CapabilitiesManifest) {
+    let handler: ((message: RuntimeResponse) => void) | undefined;
+    const transport: RuntimeTransport = {
+      send(message: RuntimeCommand) {
+        if (message.type === 'initialize') {
+          setTimeout(() => {
+            handler!({ type: 'initialized', requestId: message.requestId, capabilities: manifest });
+          }, 0);
+        }
+      },
+      onMessage(h) {
+        handler = h;
+      },
+      // oxlint-disable-next-line no-empty-function -- mock transport
+      close() {},
+    };
+    return createRuntimeClient({ kernels: [], transport });
+  }
+
+  it('should return first manifest-order route when no kernel hint provided', async () => {
+    const manifest: CapabilitiesManifest = {
+      routes: [
+        { targetFormat: 'glb', sourceFormat: 'glb', kernelId: 'replicad', fidelity: 'mesh', schema: {}, defaults: {} },
+        { targetFormat: 'glb', sourceFormat: 'glb', kernelId: 'jscad', fidelity: 'mesh', schema: {}, defaults: {} },
+      ],
+      renderSchemas: {},
+    };
+    const client = createClientWithManifest(manifest);
+    await client.connect({ fileSystem: fromMemoryFS() });
+
+    const route = client.bestRouteFor('glb');
+    expect(route).toBeDefined();
+    expect(route!.kernelId).toBe('replicad');
+
+    client.terminate();
+  });
+
+  it('should prefer the kernel hint when matching route exists', async () => {
+    const manifest: CapabilitiesManifest = {
+      routes: [
+        { targetFormat: 'glb', sourceFormat: 'glb', kernelId: 'replicad', fidelity: 'mesh', schema: {}, defaults: {} },
+        { targetFormat: 'glb', sourceFormat: 'glb', kernelId: 'jscad', fidelity: 'mesh', schema: {}, defaults: {} },
+      ],
+      renderSchemas: {},
+    };
+    const client = createClientWithManifest(manifest);
+    await client.connect({ fileSystem: fromMemoryFS() });
+
+    const route = client.bestRouteFor('glb', 'jscad');
+    expect(route).toBeDefined();
+    expect(route!.kernelId).toBe('jscad');
+
+    client.terminate();
+  });
+
+  it('should fall back to manifest-order when kernel hint has no match', async () => {
+    const manifest: CapabilitiesManifest = {
+      routes: [
+        { targetFormat: 'glb', sourceFormat: 'glb', kernelId: 'replicad', fidelity: 'mesh', schema: {}, defaults: {} },
+        { targetFormat: 'glb', sourceFormat: 'glb', kernelId: 'jscad', fidelity: 'mesh', schema: {}, defaults: {} },
+      ],
+      renderSchemas: {},
+    };
+    const client = createClientWithManifest(manifest);
+    await client.connect({ fileSystem: fromMemoryFS() });
+
+    const route = client.bestRouteFor('glb', 'manifold');
+    expect(route).toBeDefined();
+    expect(route!.kernelId).toBe('replicad');
+
+    client.terminate();
+  });
+
+  it('should prefer brep over mesh when fidelities tie on kernel', async () => {
+    const manifest: CapabilitiesManifest = {
+      routes: [
+        {
+          targetFormat: 'step',
+          sourceFormat: 'step',
+          kernelId: 'replicad',
+          fidelity: 'mesh',
+          schema: {},
+          defaults: {},
+        },
+        {
+          targetFormat: 'step',
+          sourceFormat: 'step',
+          kernelId: 'replicad',
+          fidelity: 'brep',
+          schema: {},
+          defaults: {},
+        },
+      ],
+      renderSchemas: {},
+    };
+    const client = createClientWithManifest(manifest);
+    await client.connect({ fileSystem: fromMemoryFS() });
+
+    const route = client.bestRouteFor('step', 'replicad');
+    expect(route).toBeDefined();
+    expect(route!.fidelity).toBe('brep');
+
+    client.terminate();
+  });
+
+  it('should prefer direct routes over transcoded routes when other criteria tie', async () => {
+    const manifest: CapabilitiesManifest = {
+      routes: [
+        {
+          targetFormat: 'usdz',
+          kernelId: 'replicad',
+          fidelity: 'mesh',
+          schema: {},
+          defaults: {},
+          sourceFormat: 'glb',
+          transcoderId: 'converter',
+        },
+        {
+          targetFormat: 'usdz',
+          kernelId: 'replicad',
+          fidelity: 'mesh',
+          schema: {},
+          defaults: {},
+          sourceFormat: 'usdz',
+        },
+      ],
+      renderSchemas: {},
+    };
+    const client = createClientWithManifest(manifest);
+    await client.connect({ fileSystem: fromMemoryFS() });
+
+    const route = client.bestRouteFor('usdz', 'replicad');
+    expect(route).toBeDefined();
+    expect(route!.transcoderId).toBeUndefined();
+
+    client.terminate();
+  });
+
+  it('should return undefined when no routes match the format', async () => {
+    const manifest: CapabilitiesManifest = {
+      routes: [
+        { targetFormat: 'glb', sourceFormat: 'glb', kernelId: 'replicad', fidelity: 'mesh', schema: {}, defaults: {} },
+      ],
+      renderSchemas: {},
+    };
+    const client = createClientWithManifest(manifest);
+    await client.connect({ fileSystem: fromMemoryFS() });
+
+    expect(client.bestRouteFor('usdz')).toBeUndefined();
+
+    client.terminate();
+  });
+
+  it('should return undefined when manifest not yet available', () => {
+    const transport: RuntimeTransport = {
+      // oxlint-disable-next-line no-empty-function -- mock transport
+      send() {},
+      // oxlint-disable-next-line no-empty-function -- mock transport
+      onMessage() {},
+      // oxlint-disable-next-line no-empty-function -- mock transport
+      close() {},
+    };
+    const client = createRuntimeClient({ kernels: [], transport });
+    expect(client.bestRouteFor('glb')).toBeUndefined();
+    client.terminate();
+  });
+});
+
+// =============================================================================
+// Export schema and options integration
+// =============================================================================
+
+// =============================================================================
+// Active kernel event
+// =============================================================================
+
+describe('activeKernel event', () => {
+  function createResolvingTransportForActiveKernel(): {
+    transport: RuntimeTransport;
+    pushResponse: (response: RuntimeResponse) => void;
+  } {
+    let handler: ((message: RuntimeResponse) => void) | undefined;
+
+    const transport: RuntimeTransport = {
+      send(message: RuntimeCommand) {
+        if (message.type === 'initialize' && handler) {
+          handler({
+            type: 'initialized',
+            requestId: message.requestId,
+            capabilities: { routes: [], renderSchemas: {} },
+          });
+        }
+      },
+      onMessage(h) {
+        handler = h;
+      },
+      // oxlint-disable-next-line no-empty-function -- mock transport
+      close() {},
+    };
+
+    return {
+      transport,
+      pushResponse(response: RuntimeResponse) {
+        handler?.(response);
+      },
+    };
+  }
+
+  it('should emit activeKernel event when worker reports kernel change', async () => {
+    const { transport, pushResponse } = createResolvingTransportForActiveKernel();
+    const client = createRuntimeClient({ kernels: [], transport });
+
+    await client.connect({ fileSystem: fromMemoryFS() });
+
+    const receivedIds: Array<string | undefined> = [];
+    client.on('activeKernel', (kernelId) => receivedIds.push(kernelId));
+
+    pushResponse({ type: 'activeKernelChanged', kernelId: 'replicad' });
+
+    expect(receivedIds).toEqual(['replicad']);
+    client.terminate();
+  });
+
+  it('should update activeKernelId getter when kernel changes', async () => {
+    const { transport, pushResponse } = createResolvingTransportForActiveKernel();
+    const client = createRuntimeClient({ kernels: [], transport });
+
+    await client.connect({ fileSystem: fromMemoryFS() });
+
+    expect(client.activeKernelId).toBeUndefined();
+
+    pushResponse({ type: 'activeKernelChanged', kernelId: 'openscad' });
+
+    expect(client.activeKernelId).toBe('openscad');
+    client.terminate();
+  });
+
+  it('should reset activeKernelId to undefined on file change', async () => {
+    const { transport, pushResponse } = createResolvingTransportForActiveKernel();
+    const client = createRuntimeClient({ kernels: [], transport });
+
+    await client.connect({ fileSystem: fromMemoryFS() });
+
+    pushResponse({ type: 'activeKernelChanged', kernelId: 'replicad' });
+    expect(client.activeKernelId).toBe('replicad');
+
+    pushResponse({ type: 'activeKernelChanged', kernelId: undefined });
+    expect(client.activeKernelId).toBeUndefined();
+
+    client.terminate();
+  });
+
+  it('should allow unsubscribing from activeKernel event', async () => {
+    const { transport, pushResponse } = createResolvingTransportForActiveKernel();
+    const client = createRuntimeClient({ kernels: [], transport });
+
+    await client.connect({ fileSystem: fromMemoryFS() });
+
+    const receivedIds: Array<string | undefined> = [];
+    const unsub = client.on('activeKernel', (kernelId) => receivedIds.push(kernelId));
+
+    pushResponse({ type: 'activeKernelChanged', kernelId: 'replicad' });
+    unsub();
+    pushResponse({ type: 'activeKernelChanged', kernelId: 'openscad' });
+
+    expect(receivedIds).toEqual(['replicad']);
+    client.terminate();
+  });
+});
+
+describe('export schema and options integration', () => {
+  it('should produce different triangle counts for different STL tessellation tolerances', async () => {
+    const countStlTriangles = (stlBytes: Uint8Array<ArrayBuffer>) => {
+      const view = new DataView(stlBytes.buffer, stlBytes.byteOffset, stlBytes.byteLength);
+      return view.getUint32(80, true);
+    };
+
+    const code = {
+      'sphere.ts': `
+          import { makeSphere } from 'replicad';
+          export default function main() { return makeSphere(10); }
+        `,
+    };
+
+    const client = createRuntimeClient({
+      kernels: [replicad()],
+      bundlers: [esbuild()],
+      transport: createInProcessTransport(),
+    });
+
+    await client.render({ code });
+
+    const fine = await client.export('stl', {
+      binary: true,
+      tessellation: { linearTolerance: 0.01, angularTolerance: 5 },
+    });
+    const coarse = await client.export('stl', {
+      binary: true,
+      tessellation: { linearTolerance: 1, angularTolerance: 45 },
+    });
+
+    expect(fine.success).toBe(true);
+    expect(coarse.success).toBe(true);
+
+    if (fine.success && coarse.success) {
+      const fineTriangles = countStlTriangles(fine.data.bytes);
+      const coarseTriangles = countStlTriangles(coarse.data.bytes);
+
+      expect(fineTriangles).toBeGreaterThan(coarseTriangles);
+      expect(fineTriangles).toBeGreaterThan(100);
+      expect(coarseTriangles).toBeGreaterThan(0);
+    }
+
+    client.terminate();
+  }, 120_000);
+
+  it('should swap Y and Z bounding box extents when coordinateSystem is z-up', async () => {
+    const { NodeIO } = await import('@gltf-transform/core');
+
+    const code = {
+      'box.ts': `
+        import { makeBaseBox } from 'replicad';
+        export default function main() { return makeBaseBox(10, 20, 30); }
+      `,
+    };
+
+    const client = createRuntimeClient({
+      kernels: [replicad()],
+      bundlers: [esbuild()],
+      transport: createInProcessTransport(),
+    });
+
+    await client.render({ code });
+
+    const yUp = await client.export('glb', { coordinateSystem: 'y-up' });
+    const zUp = await client.export('glb', { coordinateSystem: 'z-up' });
+
+    expect(yUp.success).toBe(true);
+    expect(zUp.success).toBe(true);
+
+    if (yUp.success && zUp.success) {
+      const io = new NodeIO();
+
+      const yUpDocument = await io.readBinary(new Uint8Array(yUp.data.bytes));
+      const zUpDocument = await io.readBinary(new Uint8Array(zUp.data.bytes));
+
+      const yUpScene = yUpDocument.getRoot().listScenes()[0]!;
+      const zUpScene = zUpDocument.getRoot().listScenes()[0]!;
+
+      const getBBox = (scene: typeof yUpScene) => {
+        const min = [Infinity, Infinity, Infinity];
+        const max = [-Infinity, -Infinity, -Infinity];
+        for (const node of scene.listChildren()) {
+          const mesh = node.getMesh();
+          if (!mesh) {
+            continue;
+          }
+          for (const prim of mesh.listPrimitives()) {
+            const pos = prim.getAttribute('POSITION');
+            if (!pos) {
+              continue;
+            }
+            for (let i = 0; i < pos.getCount(); i++) {
+              const v = pos.getElement(i, [0, 0, 0]);
+              for (let j = 0; j < 3; j++) {
+                min[j] = Math.min(min[j]!, v[j]!);
+                max[j] = Math.max(max[j]!, v[j]!);
+              }
+            }
+          }
+        }
+        return [max[0]! - min[0]!, max[1]! - min[1]!, max[2]! - min[2]!] as [number, number, number];
+      };
+
+      const [yX, yY, yZ] = getBBox(yUpScene);
+      const [zX, zY, zZ] = getBBox(zUpScene);
+
+      expect(zX).toBeCloseTo(yX, 0);
+      expect(zY).toBeCloseTo(yZ, 0);
+      expect(zZ).toBeCloseTo(yY, 0);
+    }
+
+    client.terminate();
+  }, 120_000);
+
+  it('should expose fully-resolved schemas on export routes in capabilities', async () => {
+    const client = createRuntimeClient({
+      kernels: [replicad()],
+      bundlers: [esbuild()],
+      transport: createInProcessTransport(),
+    });
+
+    await client.render({ code: { 'box.ts': boxCode } });
+
+    const caps = client.capabilities;
+    expect(caps).toBeDefined();
+
+    const stlRoute = caps!.routes.find((r) => r.targetFormat === 'stl');
+    expect(stlRoute).toBeDefined();
+    expect(stlRoute!.schema).toHaveProperty('properties');
+
+    const { properties } = stlRoute!.schema as { properties: Record<string, unknown> };
+    expect(properties).toHaveProperty('tessellation');
+    expect(properties).toHaveProperty('coordinateSystem');
+    expect(properties).toHaveProperty('binary');
+
+    expect(stlRoute!.defaults).toEqual(
+      expect.objectContaining({
+        tessellation: { linearTolerance: 0.01, angularTolerance: 30 },
+        coordinateSystem: 'z-up',
+        binary: true,
+      }),
+    );
+
+    client.terminate();
+  }, 120_000);
 });

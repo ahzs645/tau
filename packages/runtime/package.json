@@ -34,6 +34,7 @@
     "./kernels": "./src/plugins/kernels-entry.ts",
     "./middleware": "./src/plugins/middleware-entry.ts",
     "./bundler": "./src/plugins/bundler-entry.ts",
+    "./transcoder": "./src/plugins/transcoder-factories.ts",
     "./transport": "./src/transport/index.ts",
     "./node": "./src/node.ts",
     "./filesystem": "./src/filesystem/index.ts",
@@ -116,6 +117,16 @@
         "import": {
           "types": "./dist/esm/plugins/bundler-entry.d.ts",
           "default": "./dist/esm/plugins/bundler-entry.js"
+        }
+      },
+      "./transcoder": {
+        "require": {
+          "types": "./dist/cjs/plugins/transcoder-factories.d.cts",
+          "default": "./dist/cjs/plugins/transcoder-factories.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/plugins/transcoder-factories.d.ts",
+          "default": "./dist/esm/plugins/transcoder-factories.js"
         }
       },
       "./transport": {
@@ -320,10 +331,10 @@
     "@jscad/modeling": "catalog:",
     "@kittycad/lib": "catalog:",
     "@msgpack/msgpack": "catalog:",
-    "@taucad/memory": "workspace:*",
     "@taucad/converter": "workspace:*",
     "@taucad/json-schema": "workspace:*",
     "@taucad/kcl-wasm-lib": "catalog:",
+    "@taucad/memory": "workspace:*",
     "@taucad/types": "workspace:*",
     "@taucad/utils": "workspace:*",
     "cdn-resolve": "catalog:",
@@ -355,7 +366,6 @@
   },
   "devDependencies": {
     "@taucad/tau-examples": "workspace:*",
-    "@types/json-schema": "catalog:",
     "geist": "catalog:"
   }
 }

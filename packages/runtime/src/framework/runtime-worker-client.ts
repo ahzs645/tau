@@ -3,15 +3,15 @@
  * Wraps a RuntimeTransport with request/response correlation and Promise-based methods.
  */
 
-import type { GeometryFile, ExportFormat, LogOrigin } from '@taucad/types';
+import type { FileExtension, GeometryFile, LogEntry } from '@taucad/types';
 import type {
   ExportGeometryResult,
   GetParametersResult,
   KernelIssue,
   MiddlewareRegistrations,
   BundlerRegistrations,
+  CapabilitiesManifest,
 } from '#types/runtime.types.js';
-import type { Tessellation } from '#types/runtime-kernel.types.js';
 import type {
   RuntimeResponse,
   RuntimeCommand,
@@ -19,6 +19,7 @@ import type {
   RenderPhase,
   WorkerState,
   HashedGeometryResultTransport,
+  TranscoderModuleEntry,
 } from '#types/runtime-protocol.types.js';
 import { signalSlot, abortReason, workerStateNames } from '#types/runtime-protocol.types.js';
 import { waitForSlotChange } from '#framework/async-polyfills.js';
@@ -101,7 +102,7 @@ export function isRenderTimeoutError(error: unknown): error is RenderTimeoutErro
  * Callback for worker log events.
  * @public
  */
-export type OnLogCallback = (log: { level: string; message: string; origin?: LogOrigin; data?: unknown }) => void;
+export type OnLogCallback = (log: LogEntry) => void;
 
 /**
  * Callback for worker telemetry events.
@@ -136,6 +137,8 @@ export class RuntimeWorkerClient {
   private readonly onParametersResolvedCb?: (result: GetParametersResult) => void;
   private readonly onProgressCb?: OnProgressCallback;
   private readonly onErrorCb?: (issues: KernelIssue[]) => void;
+  private readonly onActiveKernelChangedCb?: (kernelId: string | undefined) => void;
+  private readonly onCapabilitiesUpdatedCb?: (capabilities: CapabilitiesManifest) => void;
   /* oxlint-enable @typescript-eslint/parameter-properties -- re-enable after constructor fields */
 
   private nextRequestId = 0;
@@ -148,6 +151,7 @@ export class RuntimeWorkerClient {
   private renderTimeoutMs = 0;
   private renderTimeoutTimer: ReturnType<typeof setTimeout> | undefined;
 
+  private _capabilities: CapabilitiesManifest | undefined;
   private pendingInit?: { resolve: () => void; reject: (error: Error) => void };
   private pendingRender?: {
     resolve: (result: HashedGeometryResultTransport) => void;
@@ -178,6 +182,8 @@ export class RuntimeWorkerClient {
       onParametersResolved?: (result: GetParametersResult) => void;
       onProgress?: OnProgressCallback;
       onError?: (issues: KernelIssue[]) => void;
+      onActiveKernelChanged?: (kernelId: string | undefined) => void;
+      onCapabilitiesUpdated?: (capabilities: CapabilitiesManifest) => void;
     },
   ) {
     this.transport = transport;
@@ -188,6 +194,8 @@ export class RuntimeWorkerClient {
     this.onParametersResolvedCb = options?.onParametersResolved;
     this.onProgressCb = options?.onProgress;
     this.onErrorCb = options?.onError;
+    this.onActiveKernelChangedCb = options?.onActiveKernelChanged;
+    this.onCapabilitiesUpdatedCb = options?.onCapabilitiesUpdated;
 
     try {
       // GrowableSharedArrayBuffer: maxByteLength allows future expansion without worker restart
@@ -215,6 +223,7 @@ export class RuntimeWorkerClient {
     fileSystemPort: MessagePort;
     middlewareEntries: MiddlewareRegistrations;
     bundlerEntries?: BundlerRegistrations;
+    transcoderModules?: TranscoderModuleEntry[];
     /** SharedArrayBuffer for the geometry pool (zero-IPC geometry data exchange). */
     geometryPoolBuffer?: SharedArrayBuffer;
     /** SharedArrayBuffer for the file pool (zero-IPC file content caching). */
@@ -234,6 +243,7 @@ export class RuntimeWorkerClient {
         options: input.options,
         middlewareEntries: input.middlewareEntries,
         bundlerEntries: input.bundlerEntries,
+        transcoderModules: input.transcoderModules,
         fileSystemPort: input.fileSystemPort,
         signalBuffer: this.signalBuffer,
         geometryPoolBuffer: input.geometryPoolBuffer,
@@ -294,7 +304,7 @@ export class RuntimeWorkerClient {
     parameters: Record<string, unknown>;
     onParametersResolved?: (result: GetParametersResult) => void;
     onProgress?: OnProgressCallback;
-    tessellation?: Tessellation;
+    options?: Record<string, unknown>;
   }): Promise<HashedGeometryResultTransport> {
     return new Promise<HashedGeometryResultTransport>((resolve, reject) => {
       this.pendingRender = {
@@ -310,7 +320,7 @@ export class RuntimeWorkerClient {
         requestId,
         file: input.file,
         params: input.parameters,
-        tessellation: input.tessellation,
+        options: input.options,
       };
       this.transport.send(command);
     });
@@ -336,9 +346,9 @@ export class RuntimeWorkerClient {
    *
    * @param file - The geometry file to render
    * @param parameters - Parameters for the render
-   * @param tessellation - Optional tessellation quality settings
+   * @param options - Optional render options
    */
-  public setFile(file: GeometryFile, parameters?: Record<string, unknown>, tessellation?: Tessellation): void {
+  public setFile(file: GeometryFile, parameters?: Record<string, unknown>, options?: Record<string, unknown>): void {
     if (this.signalView) {
       Atomics.store(this.signalView, signalSlot.abortReason, abortReason.superseded);
     }
@@ -347,7 +357,7 @@ export class RuntimeWorkerClient {
       type: 'setFile',
       file,
       parameters: parameters ?? {},
-      tessellation,
+      options,
     };
     this.transport.send(command);
   }
@@ -405,21 +415,26 @@ export class RuntimeWorkerClient {
   /**
    * Send an export command to the worker.
    *
-   * @param format - Export file format
-   * @param tessellation - Optional tessellation quality for export meshing
+   * @param format - Export file format identifier (e.g. 'stl', 'step', 'glb')
+   * @param options - Format-specific export options. May include `tessellation`.
    * @returns Export result with blob data
    */
-  public async exportGeometry(format: ExportFormat, tessellation?: Tessellation): Promise<ExportGeometryResult> {
+  public async exportGeometry(format: FileExtension, options?: Record<string, unknown>): Promise<ExportGeometryResult> {
     return new Promise<ExportGeometryResult>((resolve, reject) => {
       this.pendingExport = { resolve, reject };
       const command: RuntimeCommand = {
         type: 'export',
         requestId: String(this.nextRequestId++),
         format,
-        tessellation,
+        options,
       };
       this.transport.send(command);
     });
+  }
+
+  /** Capabilities manifest from the worker, available after initialization. */
+  public get capabilities(): CapabilitiesManifest | undefined {
+    return this._capabilities;
   }
 
   /** Send a cleanup command to the worker. */
@@ -508,6 +523,7 @@ export class RuntimeWorkerClient {
   private handleMessage(response: RuntimeResponse): void {
     switch (response.type) {
       case 'initialized': {
+        this._capabilities = response.capabilities;
         this.pendingInit?.resolve();
         this.pendingInit = undefined;
         break;
@@ -539,12 +555,8 @@ export class RuntimeWorkerClient {
       }
 
       case 'log': {
-        this.onLog({
-          level: response.level,
-          message: response.message,
-          origin: response.origin,
-          data: response.data,
-        });
+        const { entry } = response;
+        this.onLog(entry);
         break;
       }
 
@@ -571,7 +583,8 @@ export class RuntimeWorkerClient {
       }
 
       case 'error': {
-        const errorMessage = response.issues.map((index: KernelIssue) => index.message).join('; ');
+        const { issues } = response;
+        const errorMessage = issues.map((issue: KernelIssue) => issue.message).join('; ');
         const error = new Error(errorMessage);
 
         if (this.pendingInit) {
@@ -584,7 +597,7 @@ export class RuntimeWorkerClient {
           this.pendingExport.reject(error);
           this.pendingExport = undefined;
         } else {
-          this.onErrorCb?.(response.issues);
+          this.onErrorCb?.(issues);
         }
 
         break;
@@ -592,6 +605,17 @@ export class RuntimeWorkerClient {
 
       case 'stateChanged': {
         this.reportState(response.state, response.detail);
+        break;
+      }
+
+      case 'activeKernelChanged': {
+        this.onActiveKernelChangedCb?.(response.kernelId);
+        break;
+      }
+
+      case 'capabilitiesUpdated': {
+        this._capabilities = response.capabilities;
+        this.onCapabilitiesUpdatedCb?.(response.capabilities);
         break;
       }
     }

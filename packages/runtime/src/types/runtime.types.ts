@@ -9,7 +9,19 @@
  */
 
 import type { backendProviders, kernelProviders } from '@taucad/types/constants';
-import type { ExportFile, Geometry, GeometryResponse } from '@taucad/types';
+import type { ExportFidelity, ExportFile, Geometry, GeometryResponse } from '@taucad/types';
+import type { JSONSchema7 } from '@taucad/json-schema';
+import type {
+  CollectFormatMap,
+  CollectKernelIds,
+  KernelPlugin,
+  KnownSourceFormats,
+  KnownTargetFormats,
+  KnownTranscoderIds,
+  MergeExportMap,
+  RenderOptionsFor,
+  TranscoderPlugin,
+} from '#plugins/plugin-types.js';
 
 // =============================================================================
 // Error Types
@@ -88,6 +100,7 @@ export type KernelSuccessResult<T> = {
   success: true;
   data: T;
   issues: KernelIssue[];
+  serializedHandle?: unknown;
 };
 
 /**
@@ -261,3 +274,110 @@ export type ExtractNameResult = KernelResult<string | undefined>;
  * @public
  */
 export type ExportGeometryResult = KernelResult<ExportFile[]>;
+
+// =============================================================================
+// Capabilities Manifest Types
+// =============================================================================
+
+/**
+ * A single export route exposed by the worker. Represents either a direct
+ * kernel export (when {@link ExportRoute.transcoderId} is `undefined` and
+ * `sourceFormat === targetFormat`) or a single-hop transcoder-routed export.
+ *
+ * Routes are ordered in {@link CapabilitiesManifest.routes} by manifest preference:
+ * the framework selects the first matching route for a target format, optionally
+ * narrowed by a kernel hint via {@link RuntimeClient.bestRouteFor}.
+ *
+ * The `Kernels` and `Transcoders` generics flow as a top-level type bag through
+ * {@link RuntimeClient}, allowing each leaf field (`targetFormat`, `kernelId`,
+ * `sourceFormat`, `transcoderId`, `defaults`) to project narrowly via the
+ * `Known*` helper types in `@taucad/runtime`. Wide defaults preserve today's
+ * `FileExtension`/`string`/`Record<string, unknown>` shape so the on-wire
+ * manifest type emitted by the worker stays unchanged.
+ *
+ * @template Kernels - Tuple of registered `KernelPlugin`s (carries `FormatMap`/`Id`)
+ * @template Transcoders - Tuple of registered `TranscoderPlugin`s (carries `EdgeMap`/`Id`)
+ * @template Format - Specific target format (defaults to the union of all known targets)
+ * @template Kernel - Specific kernel id (defaults to the union of all known kernel ids)
+ * @public
+ */
+// oxlint-disable @typescript-eslint/no-explicit-any -- variance: bag projection over heterogeneous tuples
+export type ExportRoute<
+  Kernels extends readonly KernelPlugin<any, any, any>[] = KernelPlugin[],
+  Transcoders extends readonly TranscoderPlugin<any, any, any>[] = TranscoderPlugin[],
+  Format extends KnownTargetFormats<Kernels, Transcoders> = KnownTargetFormats<Kernels, Transcoders>,
+  Kernel extends CollectKernelIds<Kernels> = CollectKernelIds<Kernels>,
+> = {
+  targetFormat: Format;
+  kernelId: Kernel;
+  sourceFormat: KnownSourceFormats<Kernels>;
+  transcoderId?: KnownTranscoderIds<Transcoders>;
+  fidelity: ExportFidelity;
+  schema: JSONSchema7;
+  defaults: Format extends keyof MergeExportMap<CollectFormatMap<Kernels>, Transcoders>
+    ? MergeExportMap<CollectFormatMap<Kernels>, Transcoders>[Format]
+    : Record<string, unknown>;
+};
+// oxlint-enable @typescript-eslint/no-explicit-any
+
+/**
+ * Pre-computed JSON Schema and defaults for a kernel's render options.
+ * Indexed by kernel id in {@link CapabilitiesManifest.renderSchemas}, allowing
+ * UI consumers to look up the active kernel's render-option form in O(1).
+ *
+ * The `Kernels` and `Kernel` generics narrow `defaults` to the specific render
+ * options inferred from the registered kernel's `renderSchema` via
+ * {@link RenderOptionsFor}, eliminating the legacy `Record<string, unknown>`
+ * fallback in favour of per-kernel schemas. Wide defaults preserve the
+ * legacy shape for the on-wire manifest type.
+ *
+ * @template Kernels - Tuple of registered `KernelPlugin`s
+ * @template Kernel - Specific kernel id (defaults to the union of all known kernel ids)
+ * @public
+ */
+// oxlint-disable @typescript-eslint/no-explicit-any -- variance: bag projection over heterogeneous tuples
+export type KernelRenderSchema<
+  Kernels extends readonly KernelPlugin<any, any, any>[] = KernelPlugin[],
+  Kernel extends CollectKernelIds<Kernels> = CollectKernelIds<Kernels>,
+> = {
+  schema: JSONSchema7;
+  defaults: RenderOptionsFor<Kernels, Kernel>;
+};
+// oxlint-enable @typescript-eslint/no-explicit-any
+
+/**
+ * Complete capabilities manifest emitted by the worker during initialization
+ * and re-emitted whenever the runtime's resolved capabilities change.
+ *
+ * Consumers are encouraged to access this manifest only through the helpers
+ * exposed on {@link RuntimeClient} (`routesFor`, `bestRouteFor`) so framework
+ * tiebreak rules stay encapsulated.
+ *
+ * The `Kernels` and `Transcoders` generics flow from {@link RuntimeClient} so
+ * route fields and per-kernel render schemas narrow to exactly the registered
+ * plugins. Wide defaults reproduce the on-wire manifest shape emitted by the
+ * worker.
+ *
+ * @template Kernels - Tuple of registered `KernelPlugin`s
+ * @template Transcoders - Tuple of registered `TranscoderPlugin`s
+ * @public
+ */
+// oxlint-disable @typescript-eslint/no-explicit-any -- variance: bag projection over heterogeneous tuples
+export type CapabilitiesManifest<
+  Kernels extends readonly KernelPlugin<any, any, any>[] = KernelPlugin[],
+  Transcoders extends readonly TranscoderPlugin<any, any, any>[] = TranscoderPlugin[],
+> = {
+  routes: ReadonlyArray<ExportRoute<Kernels, Transcoders>>;
+  // Inline the per-kernel schema shape (rather than referencing
+  // `KernelRenderSchema<Kernels, K>`) so the mapped-type expansion does not
+  // bind the named generic invariantly. This preserves narrow → wide
+  // assignability (R6) at the structural level: every narrow `{ <id>?: { schema; defaults } }`
+  // collapses cleanly into the wide index signature `{ [x: string]?: { schema; defaults } }`.
+  renderSchemas: {
+    [K in CollectKernelIds<Kernels>]?: {
+      schema: JSONSchema7;
+      defaults: RenderOptionsFor<Kernels, K>;
+    };
+  };
+};
+// oxlint-enable @typescript-eslint/no-explicit-any

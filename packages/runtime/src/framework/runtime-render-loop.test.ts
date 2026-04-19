@@ -268,16 +268,21 @@ describe('Autonomous render loop patterns', () => {
         });
 
       let timeoutId: ReturnType<typeof setTimeout>;
-      const result = Promise.race([
-        renderWork(),
-        new Promise<never>((_resolve, reject) => {
-          timeoutId = setTimeout(() => {
-            reject(new RenderTimeoutError(timeoutMs));
-          }, timeoutMs);
-        }),
-      ]).finally(() => {
-        clearTimeout(timeoutId!);
-      });
+      const raceWithTimeout = async (): Promise<string> => {
+        try {
+          return await Promise.race([
+            renderWork(),
+            new Promise<never>((_resolve, reject) => {
+              timeoutId = setTimeout(() => {
+                reject(new RenderTimeoutError(timeoutMs));
+              }, timeoutMs);
+            }),
+          ]);
+        } finally {
+          clearTimeout(timeoutId!);
+        }
+      };
+      const result = raceWithTimeout();
 
       vi.advanceTimersByTime(timeoutMs);
 
@@ -301,16 +306,21 @@ describe('Autonomous render loop patterns', () => {
         });
 
       let timeoutId: ReturnType<typeof setTimeout>;
-      const result = Promise.race([
-        renderWork(),
-        new Promise<never>((_resolve, reject) => {
-          timeoutId = setTimeout(() => {
-            reject(new RenderTimeoutError(timeoutMs));
-          }, timeoutMs);
-        }),
-      ]).finally(() => {
-        clearTimeout(timeoutId!);
-      });
+      const raceWithTimeout = async (): Promise<string> => {
+        try {
+          return await Promise.race([
+            renderWork(),
+            new Promise<never>((_resolve, reject) => {
+              timeoutId = setTimeout(() => {
+                reject(new RenderTimeoutError(timeoutMs));
+              }, timeoutMs);
+            }),
+          ]);
+        } finally {
+          clearTimeout(timeoutId!);
+        }
+      };
+      const result = raceWithTimeout();
 
       vi.advanceTimersByTime(100);
 

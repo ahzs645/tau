@@ -140,14 +140,29 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
       return { success: true, data: [], issues: [] };
     }
 
+    const zodSchema = this.kernelRenderZodSchemaMap.get(kernel.entry.id);
+    const resolvedInput =
+      zodSchema && Object.keys(input.options).length === 0
+        ? { ...input, options: this.revalidateRenderOptions(input.options, zodSchema) }
+        : input;
+
     try {
-      const output = await kernel.definition.createGeometry(input, runtime, kernel.ctx);
+      const output = await kernel.definition.createGeometry(resolvedInput, runtime, kernel.ctx);
 
       this.nativeHandle = output.nativeHandle;
+
+      let serializedHandle: unknown;
+      if (kernel.definition.serializeHandle) {
+        serializedHandle = kernel.definition.serializeHandle(output.nativeHandle, kernel.ctx);
+      } else if (isDirectlySerializable(output.nativeHandle)) {
+        serializedHandle = output.nativeHandle;
+      }
+
       return {
         success: true,
         data: output.geometry,
         issues: output.issues ?? [],
+        ...(serializedHandle !== undefined && { serializedHandle }),
       };
     } catch (error) {
       if (isRenderAbortedError(error)) {
@@ -205,6 +220,28 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
     return kernel.definition.exportGeometry(input, runtime, kernel.ctx);
   }
 
+  protected override async ensureNativeHandle(): Promise<void> {
+    if (this.nativeHandle !== undefined && this.nativeHandle !== null) {
+      return;
+    }
+
+    const serialized = this.lastSerializedHandle;
+    if (serialized !== undefined && serialized !== null && this.activeKernelId) {
+      const kernel = this.getActiveKernel();
+      if (kernel.definition.deserializeHandle) {
+        this.logger.debug('Restoring nativeHandle via kernel deserializeHandle');
+        this.nativeHandle = kernel.definition.deserializeHandle(serialized, kernel.ctx);
+        return;
+      }
+    }
+
+    return super.ensureNativeHandle();
+  }
+
+  protected override getActiveKernelId(): string | undefined {
+    return this.activeKernelId;
+  }
+
   protected override getAssetUrls(): string[] {
     return [];
   }
@@ -213,6 +250,7 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
     this.selectionCache.clear();
     this.cachedDetectionDeps = undefined;
     this.activeKernelId = undefined;
+    this.onActiveKernelChanged?.(undefined);
   }
 
   // =====================================================================
@@ -232,6 +270,7 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
     }
 
     this.activeKernelId = selection.kernel.entry.id;
+    this.onActiveKernelChanged?.(this.activeKernelId);
     span.end();
     return selection.kernel;
   }
@@ -254,6 +293,7 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
         default: KernelDefinition;
       };
       definition = module.default;
+
       importSpan.end();
     }
 
@@ -270,6 +310,17 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
     };
 
     this.loadedKernels.set(config.id, loaded);
+
+    if (definition.exportSchemas) {
+      this.kernelExportZodSchemasMap.set(config.id, definition.exportSchemas);
+    }
+
+    if (definition.renderSchema) {
+      this.kernelRenderZodSchemaMap.set(config.id, definition.renderSchema);
+    }
+
+    this.rebuildAndPushCapabilities();
+
     return loaded;
   }
 
@@ -436,6 +487,14 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
     return { kernel, method: 'catchall' };
   }
 
+  private revalidateRenderOptions(
+    raw: Record<string, unknown>,
+    zodSchema: { safeParse(data: unknown): { success: boolean; data?: unknown } },
+  ): Record<string, unknown> {
+    const parseResult = zodSchema.safeParse(raw);
+    return parseResult.success ? (parseResult.data as Record<string, unknown>) : raw;
+  }
+
   private getActiveKernel(): LoadedKernel {
     if (!this.activeKernelId) {
       throw new Error('No kernel selected');
@@ -452,9 +511,34 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
 
 preserveMethodNames(KernelRuntimeWorker, ['onCreateGeometry', 'onGetParameters', 'onExportGeometry']);
 
-if (isWorkerContext()) {
-  const worker = new KernelRuntimeWorker();
-  createWorkerDispatcher(worker, getWorkerMessagePort());
+/**
+ * Tier 1 auto-detection: nativeHandle types that are already serializable
+ * without kernel-provided hooks (string, Uint8Array, { glb: Uint8Array }).
+ */
+function isDirectlySerializable(value: unknown): boolean {
+  if (typeof value === 'string') {
+    return true;
+  }
+  if (value instanceof Uint8Array) {
+    return true;
+  }
+  if (
+    value !== null &&
+    typeof value === 'object' &&
+    'glb' in value &&
+    (value as Record<string, unknown>)['glb'] instanceof Uint8Array
+  ) {
+    return true;
+  }
+  return false;
 }
+
+// oxlint-disable-next-line unicorn/prefer-top-level-await -- top-level await would break CJS dist output (Rolldown error UNSUPPORTED_FEATURE); workers buffer messages so this brief async window is race-safe.
+void (async () => {
+  if (await isWorkerContext()) {
+    const worker = new KernelRuntimeWorker();
+    createWorkerDispatcher(worker, await getWorkerMessagePort());
+  }
+})();
 
 export { KernelRuntimeWorker };

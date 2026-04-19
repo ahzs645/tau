@@ -6,7 +6,11 @@
  */
 
 import { createKernelPlugin } from '#plugins/plugin-helpers.js';
-import type { ReplicadOptions } from '#kernels/replicad/replicad.kernel.js';
+import {
+  replicadOptionsSchema,
+  replicadRenderSchema,
+  replicadExportSchemas,
+} from '#kernels/replicad/replicad.schemas.js';
 
 /**
  * Canonical regex for detecting replicad usage in source code.
@@ -47,10 +51,13 @@ export const replicadDetectPattern =
  * });
  * ```
  */
-export const replicad = createKernelPlugin<ReplicadOptions>({
+export const replicad = createKernelPlugin({
   id: 'replicad',
   moduleUrl: new URL('replicad.kernel.js', import.meta.url).href,
   extensions: ['ts', 'js'],
   detectImport: replicadDetectPattern,
   builtinModuleNames: ['replicad'],
+  optionsSchema: replicadOptionsSchema,
+  renderSchema: replicadRenderSchema,
+  exportSchemas: replicadExportSchemas,
 });

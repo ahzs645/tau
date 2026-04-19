@@ -7,7 +7,14 @@
 
 import deepmerge from 'deepmerge';
 import type { PartialDeep } from 'type-fest';
-import type { ExportFormat, GeometryResponse, GeometryFile, OnWorkerLog, FileStat, FileStatEntry } from '@taucad/types';
+import type {
+  FileExtension,
+  GeometryResponse,
+  GeometryFile,
+  OnWorkerLog,
+  FileStat,
+  FileStatEntry,
+} from '@taucad/types';
 import { parentDirectory, joinPath } from '@taucad/utils/path';
 import type { Mock } from 'vitest';
 import { expect, vi } from 'vitest';
@@ -28,7 +35,7 @@ import type { PerformanceEntryData } from '#types/runtime-protocol.types.js';
 import type {
   RuntimeLogger,
   KernelRuntime,
-  KernelDefinition,
+  AnyKernelDefinition,
   RuntimeFileSystem,
   GetDependenciesInput,
   GetDependenciesResult,
@@ -46,6 +53,7 @@ import type {
 } from '#types/runtime-middleware.types.js';
 import type { Dependency } from '#types/runtime-dependency.types.js';
 import type { KernelMiddleware } from '#middleware/runtime-middleware.js';
+import { z } from 'zod';
 import { KernelRuntimeWorker } from '#framework/kernel-runtime-worker.js';
 import type { ResolvedMiddleware } from '#framework/kernel-worker.js';
 import { KernelWorker } from '#framework/kernel-worker.js';
@@ -525,6 +533,7 @@ export function createMockInput(overrides?: Partial<CreateGeometryInput>): Creat
     filePath: '/projects/test-build/test.kcl',
     basePath: '/projects/test-build',
     parameters: {},
+    options: {},
     ...overrides,
   };
 }
@@ -578,7 +587,7 @@ export type CreateTestWorkerOptions = {
  * @param definition - the kernel definition to infer extensions from
  * @returns array of file extensions the kernel handles
  */
-function inferExtensions(definition: KernelDefinition): string[] {
+function inferExtensions(definition: AnyKernelDefinition): string[] {
   const name = definition.name.toLowerCase();
 
   if (
@@ -607,7 +616,7 @@ function inferExtensions(definition: KernelDefinition): string[] {
  * @param _definition - the kernel definition (unused — detection is handled at the plugin layer)
  * @returns undefined — detection is always handled at the plugin layer
  */
-function inferDetectImport(_definition: KernelDefinition): string | undefined {
+function inferDetectImport(_definition: AnyKernelDefinition): string | undefined {
   return undefined;
 }
 
@@ -623,7 +632,7 @@ function inferDetectImport(_definition: KernelDefinition): string | undefined {
  * @public
  */
 export async function createTestWorker(
-  definition: KernelDefinition,
+  definition: AnyKernelDefinition,
   files: Record<string, string>,
   options?: CreateTestWorkerOptions,
 ): Promise<KernelRuntimeWorker> {
@@ -696,7 +705,7 @@ export async function createTestWorker(
  * @public
  */
 export async function getTestParameters(
-  definition: KernelDefinition,
+  definition: AnyKernelDefinition,
   files: Record<string, string>,
   mainFile: string,
 ): Promise<{
@@ -730,7 +739,7 @@ export async function getTestParameters(
  * @public
  */
 export async function createTestGeometry(input: {
-  definition: KernelDefinition;
+  definition: AnyKernelDefinition;
   files: Record<string, string>;
   mainFile: string;
   parameters?: Record<string, unknown>;
@@ -873,6 +882,12 @@ export type MockKernelWorkerOptions = {
   onLog?: OnWorkerLog;
   /** Mock filesystem for middleware operations */
   filesystem?: RuntimeFileSystem;
+  /** Per-format Zod schemas for export validation. Keys define supported formats (defaults to glb+gltf with empty schemas). */
+  exportZodSchemas?: Partial<Record<FileExtension, z.ZodType>>;
+  /** Zod schema for render option validation. When set, the mock kernel's render options are validated against it. */
+  renderZodSchema?: z.ZodType;
+  /** Pre-set the nativeHandle on construction (simulates prior createGeometry) */
+  nativeHandle?: unknown;
 };
 
 /**
@@ -881,6 +896,11 @@ export type MockKernelWorkerOptions = {
  * @public
  */
 export class MockKernelWorker extends KernelWorker {
+  /** Expose onCreateGeometry call count for test assertions */
+  public createGeometryCalls = 0;
+
+  public readonly exportGeometrySpy = vi.fn<(input: ExportGeometryInput, runtime: KernelRuntime) => void>();
+
   protected override readonly name = 'MockKernelWorker';
 
   private readonly testResolvedMiddleware: ResolvedMiddleware[];
@@ -921,6 +941,17 @@ export class MockKernelWorker extends KernelWorker {
     // Set up the internal _logger property directly (uses createLogger which depends on onLog)
     // @ts-expect-error - Test utility accessing internals
     this._logger = this.createLogger();
+
+    const zodSchemas = options.exportZodSchemas ?? { glb: z.object({}), gltf: z.object({}) };
+    this.kernelExportZodSchemasMap.set('mock-kernel', zodSchemas);
+
+    if (options.renderZodSchema) {
+      this.kernelRenderZodSchemaMap.set('mock-kernel', options.renderZodSchema);
+    }
+
+    if (options.nativeHandle !== undefined) {
+      this.nativeHandle = options.nativeHandle;
+    }
   }
 
   /**
@@ -941,11 +972,15 @@ export class MockKernelWorker extends KernelWorker {
   /**
    * Helper to run exportGeometry with a mock export format.
    *
-   * @param fileType - the export format to use
+   * @param format - the export format to use
+   * @param options - export options to forward to the kernel
    * @returns the export geometry result
    */
-  public async runExportGeometry(fileType = 'gltf'): Promise<ExportGeometryResult> {
-    return this.exportGeometry(fileType as ExportFormat);
+  public async runExportGeometry(
+    format: FileExtension = 'gltf',
+    options?: Record<string, unknown>,
+  ): Promise<ExportGeometryResult> {
+    return this.exportGeometry(format, options);
   }
 
   /**
@@ -976,13 +1011,15 @@ export class MockKernelWorker extends KernelWorker {
     _input: CreateGeometryInput,
     _runtime: KernelRuntime,
   ): Promise<CreateGeometryResult> {
+    this.createGeometryCalls++;
     return this.mockComputeResult;
   }
 
   protected override async onExportGeometry(
-    _input: ExportGeometryInput,
+    input: ExportGeometryInput,
     _runtime: KernelRuntime,
   ): Promise<ExportGeometryResult> {
+    this.exportGeometrySpy(input, _runtime);
     return this.mockExportResult;
   }
 
@@ -991,6 +1028,10 @@ export class MockKernelWorker extends KernelWorker {
     _runtime: KernelRuntime,
   ): Promise<GetDependenciesResult> {
     return { resolved: [filePath], unresolved: [] };
+  }
+
+  protected override getActiveKernelId(): string | undefined {
+    return 'mock-kernel';
   }
 }
 

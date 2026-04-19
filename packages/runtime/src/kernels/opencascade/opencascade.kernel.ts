@@ -10,47 +10,39 @@
  */
 
 import type { GeometryGltf } from '@taucad/types';
-import { z } from 'zod';
+import { cadMaterialDefaults, createExportFile } from '@taucad/types/constants';
 import { jsonSchemaFromJson } from '@taucad/utils/schema';
-import { createExportFile } from '@taucad/types/constants';
 import { asBuffer } from '@taucad/utils/file';
 import { defineKernel } from '#types/runtime-kernel.types.js';
 import type { KernelRuntime } from '#types/runtime-kernel.types.js';
 import type { KernelIssue } from '#types/runtime.types.js';
+import {
+  opencascadeOptionsSchema,
+  opencascadeRenderSchema,
+  opencascadeExportSchemas,
+} from '#kernels/opencascade/opencascade.schemas.js';
+import {
+  KERNEL_MODULES_KEY,
+  getModuleRegistry,
+  isRecordObject,
+  extractDefaultParameters,
+  resolveToRelative,
+  convertRawIssuesToKernelIssues,
+} from '#kernels/kernel-module-helpers.js';
+import type { RuntimeModuleExports } from '#kernels/kernel-module-helpers.js';
 import { createKernelError, createKernelSuccess } from '#kernels/kernel-helpers.js';
 import { initOpenCascade } from '#kernels/opencascade/init-opencascade.js';
 import type { OpenCascadeModule } from '#kernels/opencascade/init-opencascade.js';
-import { meshShapesToGltf } from '#kernels/opencascade/opencascade-mesh.js';
+import { meshShapesToGltf, parseHexColor } from '#kernels/opencascade/opencascade-mesh.js';
+import type { ShapeEntry } from '#kernels/opencascade/opencascade.types.js';
 
 // eslint-disable-next-line import-x/no-extraneous-dependencies -- internal # imports resolve to self
 import type { OpenCascadeInstance, TopoDS_Shape } from '#kernels/opencascade/wasm/opencascade_full.js';
 
 const fullWasmUrl = new URL('wasm/opencascade_full.wasm', import.meta.url).href;
 
-// eslint-disable-next-line @typescript-eslint/naming-convention -- module-level constant
-const KERNEL_MODULES_KEY = '__KERNEL_MODULES__';
-
 // =============================================================================
 // Types
-// =============================================================================
-
-type RuntimeModuleExports = {
-  default?: (...args: unknown[]) => unknown;
-  main?: (...args: unknown[]) => unknown;
-  defaultParams?: Record<string, unknown>;
-  defaultParameters?: Record<string, unknown>;
-  defaultName?: string;
-};
-
-type ShapeEntry = {
-  shape: TopoDS_Shape;
-  name?: string;
-  color?: string;
-  opacity?: number;
-};
-
-// =============================================================================
-// Options
 // =============================================================================
 
 /**
@@ -69,13 +61,6 @@ export type OpenCascadeWasmConfig = {
 export type OpenCascadeOptions = {
   wasm?: 'full' | OpenCascadeWasmConfig;
 };
-
-const opencascadeOptionsSchema = z.object({
-  wasm: z
-    .union([z.literal('full'), z.object({ wasmUrl: z.string(), wasmBindingsUrl: z.string() })])
-    .optional()
-    .default('full'),
-}) satisfies z.ZodType<Required<OpenCascadeOptions>>;
 
 // =============================================================================
 // WASM resolution
@@ -103,18 +88,6 @@ async function resolveWasm(wasm: 'full' | OpenCascadeWasmConfig): Promise<{
 // Helpers
 // =============================================================================
 
-function getModuleRegistry(): Map<string, Record<string, unknown>> {
-  let registry = (globalThis as Record<string, unknown>)[KERNEL_MODULES_KEY] as
-    | Map<string, Record<string, unknown>>
-    | undefined;
-  if (!registry) {
-    registry = new Map();
-    (globalThis as Record<string, unknown>)[KERNEL_MODULES_KEY] = registry;
-  }
-
-  return registry;
-}
-
 function registerOcModule(oc: OpenCascadeInstance, runtime: KernelRuntime): void {
   const registry = getModuleRegistry();
   const ocRecord = oc as Record<string, unknown>;
@@ -125,47 +98,6 @@ function registerOcModule(oc: OpenCascadeInstance, runtime: KernelRuntime): void
   const code = `const __mod = globalThis.${KERNEL_MODULES_KEY}.get('opencascade.js');\n${namedExports}\nexport default function init() {}\n`;
 
   runtime.bundler.registerModule('opencascade.js', { code, version: '3.0.0' });
-}
-
-function isRecordObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function extractDefaultParameters(module: unknown): Record<string, unknown> {
-  if (!isRecordObject(module)) {
-    return {};
-  }
-  const params = module['defaultParams'] ?? module['defaultParameters'];
-  if (isRecordObject(params)) {
-    return params;
-  }
-  return {};
-}
-
-function resolveToRelative(absolutePath: string, basePath: string): string {
-  const normalizedBase = basePath.endsWith('/') ? basePath.slice(0, -1) : basePath;
-  if (absolutePath.startsWith(`${normalizedBase}/`)) {
-    return absolutePath.slice(normalizedBase.length + 1);
-  }
-
-  return absolutePath;
-}
-
-function enrichIssueLocation(
-  issues: Array<{ message: string; severity: string; location?: unknown }>,
-  fallbackFileName: string,
-): KernelIssue[] {
-  return issues.map((issue) => ({
-    ...issue,
-    message: issue.message,
-    type: 'runtime',
-    severity: issue.severity === 'warning' ? 'warning' : 'error',
-    location: (issue.location as KernelIssue['location']) ?? {
-      fileName: fallbackFileName,
-      startLineNumber: 1,
-      startColumn: 1,
-    },
-  }));
 }
 
 function normalizeShapes(value: unknown): ShapeEntry[] {
@@ -228,6 +160,8 @@ export default defineKernel({
   name: 'OpenCascadeKernel',
   version: '1.0.0',
   optionsSchema: opencascadeOptionsSchema,
+  renderSchema: opencascadeRenderSchema,
+  exportSchemas: opencascadeExportSchemas,
 
   async initialize(options, runtime) {
     const { logger, tracer } = runtime;
@@ -254,12 +188,12 @@ export default defineKernel({
     try {
       const bundleResult = await runtime.bundler.bundle(filePath);
       if (!bundleResult.success) {
-        return createKernelError(enrichIssueLocation(bundleResult.issues, relativeFilePath));
+        return createKernelError(convertRawIssuesToKernelIssues(bundleResult.issues, relativeFilePath));
       }
 
       const executeResult = await runtime.execute(bundleResult.code);
       if (!executeResult.success) {
-        return createKernelError(enrichIssueLocation(executeResult.issues, relativeFilePath));
+        return createKernelError(convertRawIssuesToKernelIssues(executeResult.issues, relativeFilePath));
       }
 
       const defaultParameters = extractDefaultParameters(executeResult.value);
@@ -278,18 +212,18 @@ export default defineKernel({
     }
   },
 
-  async createGeometry({ filePath, basePath, parameters, tessellation }, runtime, context) {
+  async createGeometry({ filePath, basePath, parameters, options }, runtime, context) {
     const { tracer } = runtime;
     const relativeFilePath = resolveToRelative(filePath, basePath);
 
     const bundleResult = await runtime.bundler.bundle(filePath);
     if (!bundleResult.success) {
-      throw new OcctBuildError(enrichIssueLocation(bundleResult.issues, relativeFilePath));
+      throw new OcctBuildError(convertRawIssuesToKernelIssues(bundleResult.issues, relativeFilePath));
     }
 
     const executeResult = await runtime.execute(bundleResult.code);
     if (!executeResult.success) {
-      throw new OcctBuildError(enrichIssueLocation(executeResult.issues, relativeFilePath));
+      throw new OcctBuildError(convertRawIssuesToKernelIssues(executeResult.issues, relativeFilePath));
     }
 
     const module = executeResult.value as RuntimeModuleExports;
@@ -349,8 +283,8 @@ export default defineKernel({
       phase: 'computingGeometry',
     });
 
-    const linearTolerance = tessellation?.linearTolerance ?? 0.1;
-    const angularTolerance = tessellation?.angularTolerance ?? 30;
+    const { tessellation } = options;
+    const { linearTolerance, angularTolerance } = tessellation;
     const gltfData = meshShapesToGltf(context.oc, shapeEntries, {
       linearTolerance,
       angularTolerance: angularTolerance * (Math.PI / 180),
@@ -361,7 +295,8 @@ export default defineKernel({
     return { geometry, nativeHandle: shapeEntries };
   },
 
-  async exportGeometry({ fileType, tessellation, nativeHandle }, _runtime, context) {
+  async exportGeometry(input, _runtime, context) {
+    const { format, nativeHandle, options } = input;
     if (nativeHandle.length === 0) {
       return createKernelError([{ message: 'No geometry available for export', type: 'runtime', severity: 'error' }]);
     }

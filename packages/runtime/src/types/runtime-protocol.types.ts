@@ -8,7 +8,7 @@
  * commands (fileChanged, configureMiddleware, cleanup) do not require a requestId.
  */
 
-import type { GeometryFile, ExportFormat, LogLevel, LogOrigin, GeometrySvg, GeometryWebRtc } from '@taucad/types';
+import type { FileExtension, GeometryFile, GeometrySvg, GeometryWebRtc, LogEntry } from '@taucad/types';
 import type {
   GetParametersResult,
   ExportGeometryResult,
@@ -16,8 +16,8 @@ import type {
   KernelResult,
   MiddlewareRegistrations,
   BundlerRegistrations,
+  CapabilitiesManifest,
 } from '#types/runtime.types.js';
-import type { Tessellation } from '#types/runtime-kernel.types.js';
 
 // =============================================================================
 // Two-Layer Geometry Transport Types
@@ -65,6 +65,16 @@ export type GeometryTransport = GeometryResponseTransport & { readonly hash: str
 export type HashedGeometryResultTransport = KernelResult<GeometryTransport[]>;
 
 /**
+ * Entry describing a transcoder module to load during worker initialization.
+ * @internal
+ */
+export type TranscoderModuleEntry = {
+  id: string;
+  moduleUrl: string;
+  options?: Record<string, unknown>;
+};
+
+/**
  * Commands sent from the kernel machine (main thread) to the runtime worker.
  * Request/response commands include a `requestId` for correlation.
  * @internal
@@ -76,6 +86,7 @@ export type RuntimeCommand =
       options: Record<string, unknown>;
       middlewareEntries: MiddlewareRegistrations;
       bundlerEntries?: BundlerRegistrations;
+      transcoderModules?: TranscoderModuleEntry[];
       fileSystemPort?: MessagePort;
       signalBuffer?: SharedArrayBuffer;
       /** SharedArrayBuffer for the geometry pool (zero-IPC geometry data exchange). */
@@ -88,13 +99,13 @@ export type RuntimeCommand =
       requestId: string;
       file: GeometryFile;
       params: Record<string, unknown>;
-      tessellation?: Tessellation;
+      options?: Record<string, unknown>;
     }
   | {
       type: 'setFile';
       file: GeometryFile;
       parameters: Record<string, unknown>;
-      tessellation?: Tessellation;
+      options?: Record<string, unknown>;
     }
   | {
       type: 'setParameters';
@@ -103,8 +114,8 @@ export type RuntimeCommand =
   | {
       type: 'export';
       requestId: string;
-      format: ExportFormat;
-      tessellation?: Tessellation;
+      format: FileExtension;
+      options?: Record<string, unknown>;
     }
   | { type: 'cancel'; requestId: string }
   | { type: 'fileChanged'; paths: string[] }
@@ -195,7 +206,7 @@ export const abortReason = {
  * @internal
  */
 export type RuntimeResponse =
-  | { type: 'initialized'; requestId: string }
+  | { type: 'initialized'; requestId: string; capabilities: CapabilitiesManifest }
   | {
       type: 'parametersResolved';
       requestId: string;
@@ -215,24 +226,21 @@ export type RuntimeResponse =
       detail?: Record<string, unknown>;
     }
   | {
+      type: 'activeKernelChanged';
+      kernelId: string | undefined;
+    }
+  | {
       type: 'stateChanged';
       state: WorkerState;
       detail?: string;
     }
   | {
       type: 'log';
-      level: LogLevel;
-      message: string;
-      origin?: LogOrigin;
-      data?: unknown;
+      entry: LogEntry;
     }
   | {
       type: 'logBatch';
-      entries: Array<{
-        level: LogLevel;
-        message: string;
-        origin?: LogOrigin;
-        data?: unknown;
-      }>;
+      entries: LogEntry[];
     }
-  | { type: 'telemetry'; entries: PerformanceEntryData[] };
+  | { type: 'telemetry'; entries: PerformanceEntryData[] }
+  | { type: 'capabilitiesUpdated'; capabilities: CapabilitiesManifest };

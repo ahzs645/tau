@@ -67,16 +67,22 @@ function isCallable(value: unknown): value is GenericFunction {
  * Namespace objects like `BRepLib` contain static methods that need exception
  * interception but are not themselves WASM-allocated objects.
  *
+ * Host-platform objects with non-plain prototypes (e.g. `WebAssembly.Memory`,
+ * typed array `HEAP*` views) are excluded — proxying them breaks accessors
+ * like `WebAssembly.Memory.prototype.buffer`, which require the real receiver.
+ *
  * @param value - Value to classify as an OC namespace or not
  * @returns Whether `value` is a non-callable namespace object without `delete`
  */
 function isOcNamespace(value: unknown): value is Record<string, unknown> {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    !isCallable(value) &&
-    typeof (value as Record<string, unknown>)['delete'] !== 'function'
-  );
+  if (typeof value !== 'object' || value === null || isCallable(value)) {
+    return false;
+  }
+  if (typeof (value as Record<string, unknown>)['delete'] === 'function') {
+    return false;
+  }
+  const proto: unknown = Object.getPrototypeOf(value);
+  return proto === null || proto === Object.prototype;
 }
 
 /**

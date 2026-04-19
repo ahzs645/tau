@@ -130,7 +130,7 @@ describe('convertReplicadGeometriesToGltf', () => {
     };
 
     expect(json.asset.version).toBe('2.0');
-    expect(json.asset.generator).toBe('tau-runtime');
+    expect(json.asset.generator).toMatch(/^@taucad\/runtime@\d+\.\d+\.\d+/);
     expect(json.meshes).toHaveLength(1);
     expect(json.buffers[0]!.uri).toMatch(/^data:application\/octet-stream;base64,/);
   });

@@ -5,6 +5,7 @@ import { createWorkerDispatcher } from '#framework/runtime-worker-dispatcher.js'
 import type { KernelWorker } from '#framework/kernel-worker.js';
 import type { RuntimeMessagePort } from '#framework/runtime-message-adapter.js';
 import type { RuntimeCommand, RuntimeResponse } from '#types/runtime-protocol.types.js';
+import type { CapabilitiesManifest } from '#types/runtime.types.js';
 
 type MessageHandler = (data: RuntimeCommand | RuntimeResponse) => void;
 
@@ -48,6 +49,7 @@ function createMockWorker(overrides?: Partial<KernelWorker> & { geometryPool?: S
     setGeometryPoolBuffer: vi.fn(),
     setFilePoolBuffer: vi.fn(),
     geometryPool: geometryPool ?? undefined,
+    capabilitiesManifest: { routes: [], renderSchemas: {} },
     ...rest,
   };
   // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- mock<T>() proxy not assignable to KernelWorker
@@ -80,7 +82,70 @@ describe('createWorkerDispatcher', () => {
 
       await waitForMicrotasks();
       const response = port.sentMessages.find((m) => m.type === 'initialized');
-      expect(response).toEqual({ type: 'initialized', requestId: '1' });
+      expect(response).toEqual({
+        type: 'initialized',
+        requestId: '1',
+        capabilities: { routes: [], renderSchemas: {} },
+      });
+    });
+
+    it('forwards worker capabilitiesManifest in initialized response', async () => {
+      const manifest = {
+        routes: [
+          {
+            targetFormat: 'usdz',
+            kernelId: 'replicad',
+            sourceFormat: 'glb',
+            transcoderId: 'converter',
+            fidelity: 'mesh',
+            schema: {},
+            defaults: {},
+          },
+        ],
+        renderSchemas: {},
+      } as const satisfies CapabilitiesManifest;
+
+      const worker = createMockWorker({ capabilitiesManifest: manifest });
+      const port = createMockPort();
+      createWorkerDispatcher(worker, port);
+
+      port.simulateMessage({
+        type: 'initialize',
+        requestId: '10',
+        options: {},
+        middlewareEntries: [],
+      });
+
+      await waitForMicrotasks();
+      const response = port.sentMessages.find((m) => m.type === 'initialized');
+      expect(response).toEqual({
+        type: 'initialized',
+        requestId: '10',
+        capabilities: manifest,
+      });
+    });
+
+    it('forwards transcoderModules to worker.initialize', async () => {
+      const worker = createMockWorker();
+      const port = createMockPort();
+      createWorkerDispatcher(worker, port);
+
+      const transcoderModules = [{ id: 'converter', moduleUrl: 'test://converter' }];
+
+      port.simulateMessage({
+        type: 'initialize',
+        requestId: '11',
+        options: {},
+        middlewareEntries: [],
+        transcoderModules,
+      });
+
+      await waitForMicrotasks();
+      expect(worker.initialize).toHaveBeenCalledWith(
+        expect.objectContaining({
+          transcoderModules,
+        }),
+      );
     });
 
     it('responds with error when init throws', async () => {
@@ -379,8 +444,8 @@ describe('createWorkerDispatcher', () => {
       const content = new Uint8Array([10, 20, 30]);
 
       const gltfResult = {
-        success: true as const,
-        data: [{ format: 'gltf' as const, content, hash: 'dep-hash-0' }],
+        success: true,
+        data: [{ format: 'gltf', content, hash: 'dep-hash-0' }],
         issues: [],
       };
 
@@ -409,7 +474,7 @@ describe('createWorkerDispatcher', () => {
       const response = port.sentMessages.find((m) => m.type === 'geometryComputed');
       expect(response).toBeDefined();
 
-      const result = (response as { result: { success: boolean; data: unknown[] } }).result;
+      const { result } = response as { result: { success: boolean; data: unknown[] } };
       expect(result.success).toBe(true);
 
       const geo = result.data[0] as { format: string; content: { delivery: string; key: string } };
@@ -424,8 +489,8 @@ describe('createWorkerDispatcher', () => {
       const content = new Uint8Array([10, 20, 30]);
 
       const gltfResult = {
-        success: true as const,
-        data: [{ format: 'gltf' as const, content, hash: 'oversized-0' }],
+        success: true,
+        data: [{ format: 'gltf', content, hash: 'oversized-0' }],
         issues: [],
       };
 
@@ -447,8 +512,8 @@ describe('createWorkerDispatcher', () => {
       const response = port.sentMessages.find((m) => m.type === 'geometryComputed');
       expect(response).toBeDefined();
 
-      const result = (response as { result: { success: boolean; data: unknown[] } }).result;
-      const geo = result.data[0] as { format: string; content: { delivery: string; bytes: Uint8Array } };
+      const { result } = response as { result: { success: boolean; data: unknown[] } };
+      const geo = result.data[0] as { format: string; content: { delivery: string; bytes: Uint8Array<ArrayBuffer> } };
       expect(geo.format).toBe('gltf');
       expect(geo.content.delivery).toBe('inline');
       expect(geo.content.bytes).toEqual(content);
@@ -463,8 +528,8 @@ describe('createWorkerDispatcher', () => {
       const storeSpy = vi.spyOn(pool, 'store');
 
       const gltfResult = {
-        success: true as const,
-        data: [{ format: 'gltf' as const, content, hash: 'pre-stored-0' }],
+        success: true,
+        data: [{ format: 'gltf', content, hash: 'pre-stored-0' }],
         issues: [],
       };
 
@@ -486,7 +551,7 @@ describe('createWorkerDispatcher', () => {
       expect(storeSpy).not.toHaveBeenCalled();
 
       const response = port.sentMessages.find((m) => m.type === 'geometryComputed');
-      const result = (response as { result: { data: unknown[] } }).result;
+      const { result } = response as { result: { data: unknown[] } };
       const geo = result.data[0] as { format: string; content: { delivery: string } };
       expect(geo.content.delivery).toBe('pooled');
     });
@@ -494,8 +559,8 @@ describe('createWorkerDispatcher', () => {
     it('should produce inline delivery when no pool is configured', async () => {
       const content = new Uint8Array([1, 2, 3]);
       const gltfResult = {
-        success: true as const,
-        data: [{ format: 'gltf' as const, content, hash: 'h1' }],
+        success: true,
+        data: [{ format: 'gltf', content, hash: 'h1' }],
         issues: [],
       };
 
@@ -516,8 +581,8 @@ describe('createWorkerDispatcher', () => {
       const response = port.sentMessages.find((m) => m.type === 'geometryComputed');
       expect(response).toBeDefined();
 
-      const result = (response as { result: { success: boolean; data: unknown[] } }).result;
-      const geo = result.data[0] as { format: string; content: { delivery: string; bytes: Uint8Array } };
+      const { result } = response as { result: { success: boolean; data: unknown[] } };
+      const geo = result.data[0] as { format: string; content: { delivery: string; bytes: Uint8Array<ArrayBuffer> } };
       expect(geo.format).toBe('gltf');
       expect(geo.content.delivery).toBe('inline');
       expect(geo.content.bytes).toEqual(content);
@@ -525,10 +590,10 @@ describe('createWorkerDispatcher', () => {
 
     it('should pass SVG geometries through unchanged', async () => {
       const svgResult = {
-        success: true as const,
+        success: true,
         data: [
           {
-            format: 'svg' as const,
+            format: 'svg',
             paths: ['M0 0'],
             viewbox: '0 0 100 100',
             name: 'test',
@@ -555,7 +620,7 @@ describe('createWorkerDispatcher', () => {
       const response = port.sentMessages.find((m) => m.type === 'geometryComputed');
       expect(response).toBeDefined();
 
-      const result = (response as { result: { success: boolean; data: unknown[] } }).result;
+      const { result } = response as { result: { success: boolean; data: unknown[] } };
       const geo = result.data[0] as { format: string; paths: string[] };
       expect(geo.format).toBe('svg');
       expect(geo.paths).toEqual(['M0 0']);
@@ -572,8 +637,8 @@ describe('createWorkerDispatcher', () => {
         geometryPool: pool,
       });
       Object.defineProperty(worker, 'onGeometryComputed', {
-        set(fn: (result: unknown) => void) {
-          capturedCallback = fn;
+        set(function_: (result: unknown) => void) {
+          capturedCallback = function_;
         },
         get() {
           return capturedCallback;
@@ -602,7 +667,7 @@ describe('createWorkerDispatcher', () => {
       const geoResponse = port.sentMessages.find((m) => m.type === 'geometryComputed');
       expect(geoResponse).toBeDefined();
 
-      const result = (geoResponse as { result: { data: unknown[] } }).result;
+      const { result } = geoResponse as { result: { data: unknown[] } };
       const geo = result.data[0] as { format: string; content: { delivery: string } };
       expect(geo.format).toBe('gltf');
       expect(geo.content.delivery).toBe('pooled');
@@ -611,7 +676,7 @@ describe('createWorkerDispatcher', () => {
     it('should not affect export transferables', async () => {
       const exportBytes = new Uint8Array([1, 2, 3, 4]);
       const exportResult = {
-        success: true as const,
+        success: true,
         data: [{ bytes: exportBytes, mimeType: 'model/stl' }],
         issues: [],
       };
@@ -631,8 +696,117 @@ describe('createWorkerDispatcher', () => {
       await waitForMicrotasks();
       const response = port.sentMessages.find((m) => m.type === 'exported');
       expect(response).toBeDefined();
-      const result = (response as { result: { data: Array<{ bytes: Uint8Array }> } }).result;
+      const { result } = response as { result: { data: Array<{ bytes: Uint8Array<ArrayBuffer> }> } };
       expect(result.data[0]!.bytes).toEqual(exportBytes);
+    });
+  });
+
+  describe('activeKernelChanged callback', () => {
+    it('should post activeKernelChanged when onActiveKernelChanged fires with a kernel id', async () => {
+      let capturedCallback: ((kernelId: string | undefined) => void) | undefined;
+
+      const worker = createMockWorker();
+      Object.defineProperty(worker, 'onActiveKernelChanged', {
+        set(function_: (kernelId: string | undefined) => void) {
+          capturedCallback = function_;
+        },
+        get() {
+          return capturedCallback;
+        },
+      });
+
+      const port = createMockPort();
+      createWorkerDispatcher(worker, port);
+
+      port.simulateMessage({
+        type: 'initialize',
+        requestId: '1',
+        options: {},
+        middlewareEntries: [],
+      });
+
+      await waitForMicrotasks();
+      expect(capturedCallback).toBeDefined();
+
+      capturedCallback!('replicad');
+      const response = port.sentMessages.find((m) => m.type === 'activeKernelChanged');
+      expect(response).toEqual({ type: 'activeKernelChanged', kernelId: 'replicad' });
+    });
+
+    it('should forward undefined kernelId on reset', async () => {
+      let capturedCallback: ((kernelId: string | undefined) => void) | undefined;
+
+      const worker = createMockWorker();
+      Object.defineProperty(worker, 'onActiveKernelChanged', {
+        set(function_: (kernelId: string | undefined) => void) {
+          capturedCallback = function_;
+        },
+        get() {
+          return capturedCallback;
+        },
+      });
+
+      const port = createMockPort();
+      createWorkerDispatcher(worker, port);
+
+      port.simulateMessage({
+        type: 'initialize',
+        requestId: '1',
+        options: {},
+        middlewareEntries: [],
+      });
+
+      await waitForMicrotasks();
+      capturedCallback!(undefined);
+      const response = port.sentMessages.find((m) => m.type === 'activeKernelChanged');
+      expect(response).toEqual({ type: 'activeKernelChanged', kernelId: undefined });
+    });
+  });
+
+  describe('capabilitiesUpdated callback', () => {
+    it('should post capabilitiesUpdated when onCapabilitiesUpdated fires', async () => {
+      let capturedCallback: ((capabilities: unknown) => void) | undefined;
+
+      const worker = createMockWorker();
+      Object.defineProperty(worker, 'onCapabilitiesUpdated', {
+        set(function_: (capabilities: unknown) => void) {
+          capturedCallback = function_;
+        },
+        get() {
+          return capturedCallback;
+        },
+      });
+
+      const port = createMockPort();
+      createWorkerDispatcher(worker, port);
+
+      port.simulateMessage({
+        type: 'initialize',
+        requestId: '1',
+        options: {},
+        middlewareEntries: [],
+      });
+
+      await waitForMicrotasks();
+      expect(capturedCallback).toBeDefined();
+
+      const manifest = {
+        routes: [
+          {
+            targetFormat: 'glb',
+            kernelId: 'test',
+            sourceFormat: 'glb',
+            fidelity: 'mesh',
+            schema: {},
+            defaults: {},
+          },
+        ],
+        renderSchemas: {},
+      };
+      capturedCallback!(manifest);
+
+      const response = port.sentMessages.find((m) => m.type === 'capabilitiesUpdated');
+      expect(response).toEqual({ type: 'capabilitiesUpdated', capabilities: manifest });
     });
   });
 });
