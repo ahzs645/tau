@@ -20,6 +20,7 @@ import { focusTrapAttribute } from '#components/chat/chat-textarea-types.js';
 import { useSelector } from '@xstate/react';
 import { useChatActions, useChatContext } from '#hooks/use-chat.js';
 import type { useModels } from '#hooks/use-models.js';
+import { useKernel } from '#hooks/use-kernel.js';
 import { useFeature } from '#flags/use-feature.js';
 import { ChatEditor } from '#components/chat/tiptap/chat-editor.js';
 import { useChatEditor, buildEditorContentJson } from '#components/chat/tiptap/use-chat-editor.js';
@@ -299,6 +300,9 @@ const ChatTextareaLeftControls = memo(function ({
   readonly fileInputReference: React.RefObject<HTMLInputElement | null>;
   readonly handleFileChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
 }): React.JSX.Element {
+  const { selectedKernel } = useKernel();
+  const selectedKernelName = selectedKernel?.name;
+
   return (
     <div className='absolute bottom-2 left-2 flex flex-row items-center gap-1 text-muted-foreground'>
       <ChatTextareaModeControl />
@@ -331,7 +335,7 @@ const ChatTextareaLeftControls = memo(function ({
         </ChatModelSelector>
         <TooltipContent>
           <span>Select model{` `}</span>
-          <span>({selectedModel?.slug ?? 'Offline'})</span>
+          <span>({selectedModel?.name ?? 'Offline'})</span>
         </TooltipContent>
       </Tooltip>
       {/* Kernel selector */}
@@ -339,7 +343,7 @@ const ChatTextareaLeftControls = memo(function ({
         <Tooltip>
           <ChatKernelSelector
             data-chat-textarea-focustrap
-            popoverProperties={{ align: 'start' }}
+            popoverProperties={{ align: 'start', className: 'w-[360px]' }}
             onSelect={focusEditor}
             onClose={focusEditor}
           >
@@ -363,7 +367,8 @@ const ChatTextareaLeftControls = memo(function ({
             )}
           </ChatKernelSelector>
           <TooltipContent>
-            <span>Select kernel</span>
+            <span>Select kernel{` `}</span>
+            <span>({selectedKernelName})</span>
           </TooltipContent>
         </Tooltip>
       ) : null}
