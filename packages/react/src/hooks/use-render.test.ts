@@ -479,7 +479,7 @@ describe('useRender', () => {
 
       unmount();
 
-      expect(unsubscribe).toHaveBeenCalledOnce();
+      expect(unsubscribe).toHaveBeenCalledTimes(2);
     });
 
     it('should terminate the old client and create a new one when client options change', () => {

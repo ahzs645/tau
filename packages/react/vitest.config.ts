@@ -5,7 +5,7 @@ export default defineConfig({
   plugins: [nxViteTsPaths()],
   test: {
     globals: true,
-    environment: 'jsdom',
+    environment: 'happy-dom',
     setupFiles: ['./vitest.setup.ts'],
     typecheck: {
       enabled: true,
