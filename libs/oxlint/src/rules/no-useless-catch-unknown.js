@@ -22,21 +22,21 @@ export const noUselessCatchUnknownRule = {
   create(context) {
     return {
       CatchClause(node) {
-        const param = node.param;
-        if (!param?.typeAnnotation) {
+        const { param: parameter } = node;
+        if (!parameter?.typeAnnotation) {
           return;
         }
 
-        const annotation = param.typeAnnotation.typeAnnotation;
+        const annotation = parameter.typeAnnotation.typeAnnotation;
         if (annotation?.type !== 'TSUnknownKeyword') {
           return;
         }
 
         context.report({
-          node: param.typeAnnotation,
+          node: parameter.typeAnnotation,
           messageId: 'unnecessary',
           fix(fixer) {
-            return fixer.removeRange(param.typeAnnotation.range);
+            return fixer.removeRange(parameter.typeAnnotation.range);
           },
         });
       },

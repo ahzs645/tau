@@ -424,8 +424,11 @@ export const validateJsdocCodeblocksRule = {
               continue;
             }
 
-            const basename = path.basename(context.filename, path.extname(context.filename));
-            const directory = path.dirname(context.filename);
+            const sourceFilename = path.isAbsolute(context.filename)
+              ? context.filename
+              : path.resolve(context.cwd ?? process.cwd(), context.filename.replaceAll(/[<>]/g, '_'));
+            const basename = path.basename(sourceFilename, path.extname(sourceFilename));
+            const directory = path.dirname(sourceFilename);
             const virtualPath = path.join(directory, `__jsdoc_${basename}_${codeblocks.length}.ts`);
 
             codeblocks.push({ virtualPath, strippedCode: code, codeStartIndex, mapToRaw });

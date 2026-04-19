@@ -6,7 +6,7 @@
  * Matches hex color strings: #rgb, #rgba, #rrggbb, #rrggbbaa.
  * Anchored to avoid matching CSS IDs like `'#some-id'`.
  */
-const HEX_COLOR_PATTERN = /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+const HEX_COLOR_PATTERN = /^#(?:[\da-f]{3}|[\da-f]{4}|[\da-f]{6}|[\da-f]{8})$/i;
 
 /**
  * Matches functional CSS color notations with actual values: rgb(...), rgba(...), hsl(...), hsla(...).
@@ -45,7 +45,7 @@ export const noHardcodedColorRule = {
           return;
         }
 
-        const value = node.value;
+        const { value } = node;
 
         if (CSS_VAR_PATTERN.test(value)) {
           return;
