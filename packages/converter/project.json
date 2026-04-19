@@ -3,10 +3,5 @@
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
   "sourceRoot": "packages/converter",
   "projectType": "library",
-  "tags": ["scope:shared", "type:lib"],
-  "targets": {
-    "build": {
-      "outputs": ["{projectRoot}/src/assets/**"]
-    }
-  }
+  "tags": ["scope:shared", "type:lib"]
 }
