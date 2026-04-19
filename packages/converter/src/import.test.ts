@@ -455,9 +455,12 @@ const loaderTestCases: LoaderTestCase[] = [
   }),
 
   createCubeTestCase('3mf', {
-    geometry: createGeometryVariant(assimpCubeGeometry, {
-      boundingBox: { center: [0, 0, 1] },
-    }),
+    // The 3MF source authors the cube in millimetres with Z-up. The new R10'
+    // importer stamps `AI_METADATA_UNIT_SCALE_TO_METERS=0.001` and
+    // `AI_METADATA_UP_AXIS=2` on the scene; the R12 glTF2 exporter bakes
+    // the inverse transform, so the GLB we ship matches the same
+    // metres + Y-up shape as the plain `standardCubeGeometry` fixture.
+    geometry: standardCubeGeometry,
     structure: 'containerWithMeshChild',
   }),
 

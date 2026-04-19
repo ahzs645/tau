@@ -16,7 +16,7 @@ catalog:
   '@inkjs/ui': ^2.0.0
   '@jscad/modeling': ^2.13.0
   '@kittycad/lib': ^2.0.48
-  '@langchain/anthropic': ^1.3.20
+  '@langchain/anthropic': ^1.3.26
   '@langchain/cerebras': ^1.0.2
   '@langchain/classic': ^1.0.20
   '@langchain/community': ^1.1.19
@@ -91,7 +91,9 @@ catalog:
   '@zenfs/core': ^2.5.0
   '@zenfs/dom': ^1.2.7
   cdn-resolve: ^2.1.2
+  citty: ^0.2.2
   comlink: ^4.4.2
+  consola: ^3.4.2
   culori: ^4.0.2
   deepagents: ^1.8.4
   deepmerge: ^4.3.1
