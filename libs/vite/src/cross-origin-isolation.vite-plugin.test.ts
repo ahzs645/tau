@@ -61,7 +61,18 @@ describe('crossOriginIsolation', () => {
     const next = vi.fn();
     server.handlers[0]!({}, response, next);
 
-    expect(response.setHeader).toHaveBeenCalledWith('Cross-Origin-Embedder-Policy', 'credentialless');
+    expect(response.setHeader).toHaveBeenCalledWith('Cross-Origin-Embedder-Policy', 'require-corp');
+  });
+
+  it('should set Cross-Origin-Resource-Policy header', () => {
+    const server = createMockServer();
+    (plugin.configureServer as (server: unknown) => void)(server);
+
+    const response = { setHeader: vi.fn() };
+    const next = vi.fn();
+    server.handlers[0]!({}, response, next);
+
+    expect(response.setHeader).toHaveBeenCalledWith('Cross-Origin-Resource-Policy', 'same-origin');
   });
 
   it('should call next() to continue the middleware chain', () => {
@@ -75,7 +86,7 @@ describe('crossOriginIsolation', () => {
     expect(next).toHaveBeenCalledOnce();
   });
 
-  it('should set both headers on every request', () => {
+  it('should set all headers on every request', () => {
     const server = createMockServer();
     (plugin.configureServer as (server: unknown) => void)(server);
 
@@ -85,6 +96,6 @@ describe('crossOriginIsolation', () => {
     server.handlers[0]!({}, response, next);
     server.handlers[0]!({}, response, next);
 
-    expect(response.setHeader).toHaveBeenCalledTimes(4);
+    expect(response.setHeader).toHaveBeenCalledTimes(6);
   });
 });
