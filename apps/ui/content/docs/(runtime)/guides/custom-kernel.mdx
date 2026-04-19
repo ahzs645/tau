@@ -52,7 +52,7 @@ export default defineKernel<MyContext, MyNativeHandle>({
   },
 
   async getDependencies({ filePath }, _runtime, _context) {
-    return [filePath];
+    return { resolved: [filePath], unresolved: [] };
   },
 
   async getParameters(input, runtime, _context) {
@@ -73,11 +73,11 @@ export default defineKernel<MyContext, MyNativeHandle>({
     return { geometry, nativeHandle };
   },
 
-  async exportGeometry({ fileType, nativeHandle }, { logger }, _context) {
-    if (fileType !== 'glb') {
+  async exportGeometry({ format, nativeHandle }, { logger }, _context) {
+    if (format !== 'glb') {
       return createKernelError([
         {
-          message: `Unsupported export format: ${fileType}`,
+          message: `Unsupported export format: ${format}`,
           type: 'runtime',
           severity: 'error',
         },

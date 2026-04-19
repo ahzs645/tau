@@ -21,11 +21,11 @@ Choose and configure a filesystem implementation so your runtime client can read
 
 ### 1. Import Filesystem Constructors
 
-`fromMemoryFS` and `fromFsLike` are available from the main entry. `fromNodeFS` requires the filesystem subpath (it is Node.js-only):
+`fromMemoryFS` and `fromFsLike` are available from the main entry. `fromNodeFS` requires the Node.js subpath (it depends on Node.js APIs):
 
 ```typescript
 import { fromMemoryFS, fromFsLike } from '@taucad/runtime';
-import { fromNodeFS } from '@taucad/runtime/filesystem';
+import { fromNodeFS } from '@taucad/runtime/filesystem/node';
 ```
 
 ### 2. Use fromNodeFS for Disk-Based Projects
@@ -34,7 +34,7 @@ Use `fromNodeFS` when your project files live on disk. Pass the base path; all f
 
 ```typescript
 import { createRuntimeClient } from '@taucad/runtime';
-import { fromNodeFS } from '@taucad/runtime/filesystem';
+import { fromNodeFS } from '@taucad/runtime/filesystem/node';
 import { replicad } from '@taucad/runtime/kernels';
 import { esbuild } from '@taucad/runtime/bundler';
 
@@ -121,7 +121,8 @@ import { createBridgePort, exposeFileSystem, createFileSystemBridge } from '@tau
 **`createBridgePort(fileSystem)`** -- Creates a `MessagePort` bridge to a filesystem implementation. Returns a `BridgeHandle` with `{ port, dispose() }`. The port can be transferred to a worker:
 
 ```typescript @ts-nocheck
-import { createBridgePort, fromNodeFS } from '@taucad/runtime/filesystem';
+import { createBridgePort } from '@taucad/runtime/filesystem';
+import { fromNodeFS } from '@taucad/runtime/filesystem/node';
 
 const fileSystem = fromNodeFS('/path/to/project');
 const { port, dispose } = createBridgePort(fileSystem);

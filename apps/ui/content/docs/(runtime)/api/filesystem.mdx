@@ -56,7 +56,7 @@ For cross-worker filesystem access, these utilities create MessagePort-based bri
 
 ```typescript
 import { createRuntimeClient } from '@taucad/runtime';
-import { fromNodeFS } from '@taucad/runtime/filesystem';
+import { fromNodeFS } from '@taucad/runtime/filesystem/node';
 import { replicad } from '@taucad/runtime/kernels';
 import { esbuild } from '@taucad/runtime/bundler';
 
@@ -86,7 +86,8 @@ const client = createRuntimeClient({
 ### Filesystem Bridge
 
 ```typescript @ts-nocheck
-import { createBridgePort, fromNodeFS } from '@taucad/runtime/filesystem';
+import { createBridgePort } from '@taucad/runtime/filesystem';
+import { fromNodeFS } from '@taucad/runtime/filesystem/node';
 
 const fileSystem = fromNodeFS('/path/to/project');
 const { port, dispose } = createBridgePort(fileSystem);
