@@ -1,5 +1,5 @@
 {
-  "name": "taucad",
+  "name": "@taucad/cli",
   "version": "0.0.1",
   "description": "CLI for @taucad/runtime",
   "type": "module",
