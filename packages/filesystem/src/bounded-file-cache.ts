@@ -52,14 +52,16 @@ export class BoundedFileCache {
 
   /**
    * Insert or update a cache entry, evicting oldest entries if limits are exceeded.
-   * Files exceeding `maxSingleFileBytes` are silently skipped.
+   * Returns `false` (without storing) when the entry exceeds `maxSingleFileBytes`,
+   * so callers can take action instead of swallowing the rejection silently.
    *
    * @param path - Cache key (absolute file path).
    * @param data - File content bytes.
+   * @returns `true` when the entry was stored; `false` when rejected.
    */
-  public set(path: string, data: Uint8Array<ArrayBuffer>): void {
+  public set(path: string, data: Uint8Array<ArrayBuffer>): boolean {
     if (data.byteLength > this.maxSingleFileBytes) {
-      return;
+      return false;
     }
 
     const existing = this._map.get(path);
@@ -85,6 +87,7 @@ export class BoundedFileCache {
 
     this._map.set(path, data);
     this._totalBytes += newLength;
+    return true;
   }
 
   /**

@@ -103,6 +103,37 @@ describe('BoundedFileCache', () => {
       cache.set('/exact', data);
       expect(cache.get('/exact')).toEqual(data);
     });
+
+    it('should return false from set when entry exceeds maxSingleFileBytes', () => {
+      const cache = new BoundedFileCache({
+        maxEntries: 10,
+        maxTotalBytes: 1000,
+        maxSingleFileBytes: 2,
+      });
+      const large = new Uint8Array([1, 2, 3]);
+      const accepted = cache.set('/large', large);
+      expect(accepted).toBe(false);
+    });
+
+    it('should return true from set when entry is accepted', () => {
+      const cache = new BoundedFileCache({
+        maxEntries: 10,
+        maxTotalBytes: 100,
+        maxSingleFileBytes: 10,
+      });
+      const accepted = cache.set('/small', new Uint8Array([1, 2, 3]));
+      expect(accepted).toBe(true);
+    });
+
+    it('should return true from set when accepted after eviction', () => {
+      const cache = new BoundedFileCache({ maxEntries: 2, maxTotalBytes: 100 });
+      cache.set('/a', new Uint8Array([1]));
+      cache.set('/b', new Uint8Array([2]));
+      const accepted = cache.set('/c', new Uint8Array([3]));
+      expect(accepted).toBe(true);
+      expect(cache.has('/a')).toBe(false);
+      expect(cache.has('/c')).toBe(true);
+    });
   });
 
   describe('peek', () => {
