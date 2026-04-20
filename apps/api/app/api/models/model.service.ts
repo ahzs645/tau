@@ -67,22 +67,6 @@ export class ModelService implements OnModuleInit {
     return this.providerService.getProvider(modelConfig.provider.id).otelProviderName;
   }
 
-  /**
-   * Check if streaming doubles cache token counts for a given model.
-   * Some providers (like Anthropic) report cache values in both message_start
-   * and message_delta events, causing them to be summed during chunk aggregation.
-   */
-  public streamingDoublesCacheTokens(modelId: string): boolean {
-    const modelConfig = this.models.find((model) => model.id === modelId);
-    if (!modelConfig) {
-      return false;
-    }
-
-    const provider = this.providerService.getProvider(modelConfig.provider.id);
-
-    return Boolean(provider.streamingDoublesCacheTokens);
-  }
-
   public normalizeUsageTokens(modelId: string, usage: ChatUsageTokens): ChatUsageTokens {
     const modelConfig = this.models.find((model) => model.id === modelId);
     if (!modelConfig) {

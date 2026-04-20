@@ -13,9 +13,6 @@ export const providerSchema = z.object({
   inputTokensIncludesCacheWriteTokens: z
     .boolean()
     .describe('Whether the input tokens include cached write (creation) tokens'),
-  streamingDoublesCacheTokens: z
-    .boolean()
-    .describe('Whether streaming aggregation doubles cache token counts (requires halving to correct)'),
   configuration: z
     .object({
       apiKey: z.string().describe('The API key of the provider').optional(),

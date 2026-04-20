@@ -10,7 +10,6 @@ describe('createContextUsageMiddleware', () => {
     buildModel: vi.fn(),
     getModelCost: vi.fn(),
     normalizeUsageTokens: vi.fn(),
-    streamingDoublesCacheTokens: vi.fn(),
     getOtelProviderName: vi.fn(),
   };
 

@@ -44,17 +44,8 @@ export const createUsageTrackingMiddleware = (metricsService: MetricsService): A
       if (lastMessage?.usage_metadata) {
         const usage = lastMessage.usage_metadata;
 
-        let cacheReadTokens = usage.input_token_details?.cache_read ?? 0;
-        let cacheWriteTokens = usage.input_token_details?.cache_creation ?? 0;
-
-        // Some providers (like Anthropic) have cache values doubled due to streaming
-        // aggregation - both message_start and message_delta report cache values,
-        // which get summed during chunk concatenation. We need to halve them.
-        if (modelService.streamingDoublesCacheTokens(modelId)) {
-          cacheReadTokens = Math.round(cacheReadTokens / 2);
-          cacheWriteTokens = Math.round(cacheWriteTokens / 2);
-        }
-
+        const cacheReadTokens = usage.input_token_details?.cache_read ?? 0;
+        const cacheWriteTokens = usage.input_token_details?.cache_creation ?? 0;
         const reasoningTokens = usage.output_token_details?.reasoning ?? 0;
 
         const rawUsage = {

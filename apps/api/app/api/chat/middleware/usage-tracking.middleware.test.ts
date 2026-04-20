@@ -63,7 +63,6 @@ describe('createUsageTrackingMiddleware', () => {
     vi.spyOn(metricsService.genAiCost, 'add');
 
     mockModelService.getOtelProviderName.mockReturnValue('anthropic');
-    mockModelService.streamingDoublesCacheTokens.mockReturnValue(false);
     mockModelService.normalizeUsageTokens.mockImplementation((_id, usage) => usage);
     mockModelService.getModelCost.mockReturnValue({
       inputTokensCost: 0.001,
@@ -206,6 +205,42 @@ describe('createUsageTrackingMiddleware', () => {
       expect.objectContaining({
         type: 'usage',
         model: 'claude-3.5-sonnet',
+      }),
+    );
+  });
+
+  it('should pass through LangChain Anthropic cache counts into normalizeUsageTokens', () => {
+    mockModelService.normalizeUsageTokens.mockImplementation((_id, usage) => ({
+      inputTokens: usage.inputTokens - usage.cacheReadTokens - usage.cacheWriteTokens,
+      outputTokens: usage.outputTokens,
+      reasoningTokens: usage.reasoningTokens,
+      cacheReadTokens: usage.cacheReadTokens,
+      cacheWriteTokens: usage.cacheWriteTokens,
+    }));
+
+    const middleware = createUsageTrackingMiddleware(metricsService);
+    const afterModel = resolveMiddlewareHook(middleware.afterModel);
+
+    // Mirrors LangChain buildUsageMetadata: input_tokens = API input + cache_read + cache_creation
+    const aiMessage = createAIMessageWithUsage({
+      inputTokens: 255_000,
+      outputTokens: 1000,
+      cacheRead: 100_000,
+      cacheCreation: 5000,
+    });
+
+    afterModel(
+      // oxlint-disable-next-line @typescript-eslint/no-explicit-any -- Partial mock state/runtime for middleware testing
+      { messages: [aiMessage] } as any,
+      // oxlint-disable-next-line @typescript-eslint/no-explicit-any -- Partial mock state/runtime for middleware testing
+      { context: { modelId: 'anthropic-claude-opus-4.7', modelService: mockModelService }, writer } as any,
+    );
+
+    expect(writer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        inputTokens: 150_000,
+        cacheReadTokens: 100_000,
+        cacheWriteTokens: 5000,
       }),
     );
   });

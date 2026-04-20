@@ -57,7 +57,6 @@ export class ProviderService {
         },
         inputTokensIncludesCacheReadTokens: true,
         inputTokensIncludesCacheWriteTokens: false,
-        streamingDoublesCacheTokens: false,
         createClass: (options) => new ChatOpenAI({ useResponsesApi: true, ...options }),
       },
       ollama: {
@@ -68,7 +67,6 @@ export class ProviderService {
         },
         inputTokensIncludesCacheReadTokens: false,
         inputTokensIncludesCacheWriteTokens: false,
-        streamingDoublesCacheTokens: false,
         createClass: (options) => new ChatOllama(options),
       },
       anthropic: {
@@ -77,11 +75,9 @@ export class ProviderService {
         configuration: {
           apiKey: configService.get('ANTHROPIC_API_KEY', { infer: true }),
         },
-        // LangChain adds cache tokens to input_tokens for Anthropic streaming
+        // LangChain's buildUsageMetadata sums API input_tokens + cache_read + cache_creation into usage_metadata.input_tokens
         inputTokensIncludesCacheReadTokens: true,
         inputTokensIncludesCacheWriteTokens: true,
-        // LangChain's streaming aggregation doubles cache values (message_start + message_delta)
-        streamingDoublesCacheTokens: true,
         createClass: (options) =>
           new ChatAnthropic({
             ...options,
@@ -107,7 +103,6 @@ export class ProviderService {
         },
         inputTokensIncludesCacheReadTokens: true,
         inputTokensIncludesCacheWriteTokens: false,
-        streamingDoublesCacheTokens: false,
         createClass(options) {
           const credentials = configService.get('GOOGLE_VERTEX_AI_CREDENTIALS', { infer: true });
 
@@ -132,7 +127,6 @@ export class ProviderService {
         },
         inputTokensIncludesCacheReadTokens: false,
         inputTokensIncludesCacheWriteTokens: false,
-        streamingDoublesCacheTokens: false,
         createClass: (options) => new ChatCerebras(options),
       },
       together: {
@@ -144,7 +138,6 @@ export class ProviderService {
         },
         inputTokensIncludesCacheReadTokens: false,
         inputTokensIncludesCacheWriteTokens: false,
-        streamingDoublesCacheTokens: false,
         createClass: (options) => new ChatOpenAI(options),
       },
     };
