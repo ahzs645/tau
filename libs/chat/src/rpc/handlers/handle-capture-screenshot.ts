@@ -2,7 +2,7 @@ import type { CaptureScreenshotRpcInput, CaptureScreenshotRpcResult } from '#sch
 import type { RpcGraphicsClient } from '#rpc/rpc-dependencies.js';
 
 export async function handleCaptureScreenshot(
-  _input: CaptureScreenshotRpcInput,
+  input: CaptureScreenshotRpcInput,
   graphics: RpcGraphicsClient | undefined,
 ): Promise<CaptureScreenshotRpcResult> {
   if (!graphics) {
@@ -13,5 +13,5 @@ export async function handleCaptureScreenshot(
     };
   }
 
-  return graphics.captureScreenshot();
+  return graphics.captureScreenshot({ targetFile: input.targetFile });
 }

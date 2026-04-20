@@ -50,7 +50,11 @@ export type TestModelInput = z.infer<typeof testModelInputSchema>;
  * @public
  */
 export const editTestsInputSchema = z.object({
-  codeEdit: z.string().describe('The edit to apply to test.json using // ... existing code ... pattern'),
+  codeEdit: z
+    .string()
+    .describe(
+      'The edit to apply to test.json using // ... existing code ... pattern. test.json is a per-file map keyed by source file path (e.g. "main.ts", "lib/pen.ts") whose values are { "requirements": [...] }. Add or update top-level keys to introduce new files; do not delete sibling files\' requirements. A top-level "requirements" array (without a file-path key) is rejected by post-write validation.',
+    ),
 });
 /** @public */
 export type EditTestsInput = z.infer<typeof editTestsInputSchema>;

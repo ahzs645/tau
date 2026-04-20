@@ -846,7 +846,7 @@ describe('Chat RPC WebSocket Transport Resilience', () => {
       chatId,
       toolCallId: 'tool_fetch_geometry_001',
       rpcName: 'fetch_geometry',
-      args: {},
+      args: { targetFile: 'main.ts' },
     });
 
     expect(rpcResult, 'RPC failed — the response payload may have exceeded maxHttpBufferSize').toMatchObject({
@@ -903,7 +903,7 @@ describe('Chat RPC WebSocket Transport Resilience', () => {
       chatId,
       toolCallId: 'tool_001',
       rpcName: 'fetch_geometry',
-      args: {},
+      args: { targetFile: 'main.ts' },
     });
 
     expect(result).toMatchObject({ success: true });
@@ -948,7 +948,7 @@ describe('Chat RPC WebSocket Transport Resilience', () => {
       chatId,
       toolCallId: 'tool_timeout',
       rpcName: 'fetch_geometry',
-      args: {},
+      args: { targetFile: 'main.ts' },
     });
 
     expect(result).toMatchObject({ errorCode: 'TIMEOUT' });
@@ -995,7 +995,7 @@ describe('Chat RPC WebSocket Transport Resilience', () => {
       chatId,
       toolCallId: 'tool_disconnect',
       rpcName: 'fetch_geometry',
-      args: {},
+      args: { targetFile: 'main.ts' },
     });
 
     expect(result).toMatchObject({ errorCode: 'CLIENT_DISCONNECTED' });

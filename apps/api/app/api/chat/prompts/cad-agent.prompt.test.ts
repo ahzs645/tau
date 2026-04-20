@@ -332,4 +332,33 @@ describe('getCadSystemPrompt', () => {
       expect(result.static).not.toContain('<test_requirements>');
     });
   });
+
+  // ===================================================================
+  // Multi-file test.json migration (R5 of multi-file plan)
+  // ===================================================================
+
+  describe('multi-file test.json shape in <test_requirements>', () => {
+    const extractTestRequirements = (prompt: string) =>
+      /<test_requirements>([\S\s]*?)<\/test_requirements>/.exec(prompt)?.[1] ?? '';
+
+    it('should embed the multi-file test.json shape in <test_requirements>', async () => {
+      const result = await getCadSystemPrompt('openscad', 'agent', true);
+      const block = extractTestRequirements(result.static);
+
+      // The fenced JSON example must contain a quoted source-path key
+      // (e.g. "main.ts" / "main.scad") at the top level
+      expect(block).toMatch(/"main\.\w+"\s*:\s*{/);
+      // The JSON example must NOT start with a flat top-level { "requirements": [...] }
+      // — every example requires a source-file-path key at the top.
+      const jsonExample = /```json\s*([\S\s]*?)```/.exec(block)?.[1] ?? '';
+      expect(jsonExample).not.toMatch(/^\s*{\s*"requirements"\s*:/);
+    });
+
+    it('should explain that adding a new file requires a new key, not deleting existing ones', async () => {
+      const result = await getCadSystemPrompt('openscad', 'agent', true);
+      const block = extractTestRequirements(result.static);
+      expect(block).toMatch(/per[ -]file|keyed by source file/i);
+      expect(block).toMatch(/preserve|never delete|do not delete|keep sibling/i);
+    });
+  });
 });

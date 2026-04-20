@@ -67,12 +67,17 @@ const testModelPartWithCounts = (passes: number, failures: number): Part =>
     ...testModelPart(),
     state: 'output-available',
     output: {
-      passes: Array.from({ length: passes }, (_, i) => ({ id: `p${i}`, requirement: `req-pass-${i}` })),
+      passes: Array.from({ length: passes }, (_, i) => ({
+        id: `p${i}`,
+        requirement: `req-pass-${i}`,
+        targetFile: 'main.scad',
+      })),
       failures: Array.from({ length: failures }, (_, i) => ({
         id: `f${i}`,
         requirement: `req-fail-${i}`,
         reason: 'reason',
         suggestion: 'suggestion',
+        targetFile: 'main.scad',
       })),
     },
   }) as unknown as Part;

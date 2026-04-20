@@ -111,7 +111,7 @@ const toolSerializers = {
     output(output) {
       const lines = [`${output.passed}/${output.total} passed`];
       for (const failure of output.failures) {
-        lines.push(`- FAIL: ${failure.requirement}`, `  ${failure.reason}`);
+        lines.push(`- FAIL [${failure.targetFile}]: ${failure.requirement}`, `  ${failure.reason}`);
       }
 
       return joinLines(...lines);

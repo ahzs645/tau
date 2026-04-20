@@ -31,6 +31,7 @@ export const rpcClientErrorCodeSchema = zod.enum([
   'IO_ERROR',
   'PARSE_ERROR',
   'UNKNOWN',
+  'UNKNOWN_COMPILATION_UNIT',
 ]);
 
 /**
@@ -192,7 +193,9 @@ const getKernelResultRpc = defineRpc({
 });
 
 const captureObservationsRpc = defineRpc({
-  input: zod.object({}),
+  input: zod.object({
+    targetFile: zod.string(),
+  }),
   success: zod.object({
     observations: zod.array(observationSchema),
   }),
@@ -201,6 +204,7 @@ const captureObservationsRpc = defineRpc({
 const fetchGeometryRpc = defineRpc({
   input: zod.object({
     artifactId: zod.string().optional(),
+    targetFile: zod.string(),
   }),
   success: zod.object({
     glb: zod.instanceof(Uint8Array),
@@ -209,7 +213,9 @@ const fetchGeometryRpc = defineRpc({
 });
 
 const captureScreenshotRpc = defineRpc({
-  input: zod.object({}),
+  input: zod.object({
+    targetFile: zod.string(),
+  }),
   success: zod.object({
     images: zod.array(
       zod.object({

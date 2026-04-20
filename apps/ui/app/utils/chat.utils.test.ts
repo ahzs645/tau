@@ -355,7 +355,7 @@ describe('serializeMessage', () => {
       );
     });
 
-    it('serializes tool-test_model output-available', () => {
+    it('serializes tool-test_model output-available with [targetFile] prefix on each failure', () => {
       const message = baseMessage([
         {
           type: 'tool-test_model',
@@ -364,21 +364,35 @@ describe('serializeMessage', () => {
           input: {},
           output: {
             passed: 2,
-            total: 3,
-            passes: [{ id: 'p1', requirement: 'r1' }],
+            total: 4,
+            passes: [{ id: 'p1', requirement: 'r1', targetFile: 'main.scad' }],
             failures: [
               {
                 id: 'f1',
-                requirement: 'req',
-                reason: 'failed',
-                suggestion: 'fix',
+                requirement: 'req-main',
+                reason: 'main failed',
+                suggestion: 'fix main',
+                targetFile: 'main.scad',
+              },
+              {
+                id: 'f2',
+                requirement: 'req-lib',
+                reason: 'lib failed',
+                suggestion: 'fix lib',
+                targetFile: 'lib/bracket.scad',
               },
             ],
+            geometryArtifactPaths: {
+              /* eslint-disable @typescript-eslint/naming-convention -- file-path keys can't be camelCase */
+              'main.scad': '.tau/artifacts/c1__main.scad.glb',
+              'lib/bracket.scad': '.tau/artifacts/c1__lib_bracket.scad.glb',
+              /* eslint-enable @typescript-eslint/naming-convention -- end file-path key allowance */
+            },
           },
         },
       ]);
       expect(serializeMessage(message)).toBe(
-        '<tool_call name="test_model">\n</tool_call>\n<tool_result>\n2/3 passed\n- FAIL: req\n  failed\n</tool_result>',
+        '<tool_call name="test_model">\n</tool_call>\n<tool_result>\n2/4 passed\n- FAIL [main.scad]: req-main\n  main failed\n- FAIL [lib/bracket.scad]: req-lib\n  lib failed\n</tool_result>',
       );
     });
 

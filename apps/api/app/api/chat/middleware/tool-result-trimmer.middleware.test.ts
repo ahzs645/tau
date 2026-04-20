@@ -6,8 +6,14 @@ import type { CreateFileOutput, EditFileOutput, GetKernelResultOutput, Screensho
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { toolResultTrimmerMiddleware } from '#api/chat/middleware/tool-result-trimmer.middleware.js';
 
+const defaultTargetFile = 'main.scad';
+
 /**
  * Creates a mock TestModelOutput with the given failures.
+ *
+ * Per the multi-file test.json migration every failure/pass carries a
+ * `targetFile`. Tests pass already-tagged failures in; this helper tags any
+ * passes with the same default file so fixtures stay terse.
  */
 function createTestModelOutput(failures: TestFailure[], passed: number): TestModelOutput {
   return {
@@ -15,9 +21,11 @@ function createTestModelOutput(failures: TestFailure[], passed: number): TestMod
     passes: Array.from({ length: passed }, (_, index) => ({
       id: `pass_${index + 1}`,
       requirement: `Passed requirement ${index + 1}`,
+      targetFile: defaultTargetFile,
     })),
     passed,
     total: failures.length + passed,
+    geometryArtifactPaths: { [defaultTargetFile]: `.tau/artifacts/call_default__${defaultTargetFile}.glb` },
   };
 }
 
@@ -108,6 +116,7 @@ describe('toolResultTrimmerMiddleware', () => {
           requirement: 'Model should be a sphere',
           reason: 'Model is a cube',
           suggestion: 'Use sphere() primitive',
+          targetFile: defaultTargetFile,
         },
       ];
       const toolMessage = createTestModelToolMessage(failures, 3);
@@ -150,7 +159,9 @@ describe('toolResultTrimmerMiddleware', () => {
 
   describe('multi-message chat - multiple tool messages', () => {
     it('should trim passed count from all TestModelOutput messages in conversation', async () => {
-      const failures1: TestFailure[] = [{ id: 'req_1', requirement: 'Test 1', reason: 'Failed', suggestion: 'Fix it' }];
+      const failures1: TestFailure[] = [
+        { id: 'req_1', requirement: 'Test 1', reason: 'Failed', suggestion: 'Fix it', targetFile: defaultTargetFile },
+      ];
       const failures2: TestFailure[] = [];
 
       const messages: BaseMessage[] = [
@@ -187,7 +198,9 @@ describe('toolResultTrimmerMiddleware', () => {
     });
 
     it('should trim passed count from tool messages without name in multi-message chat', async () => {
-      const failures1: TestFailure[] = [{ id: 'req_1', requirement: 'Test 1', reason: 'Failed', suggestion: 'Fix it' }];
+      const failures1: TestFailure[] = [
+        { id: 'req_1', requirement: 'Test 1', reason: 'Failed', suggestion: 'Fix it', targetFile: defaultTargetFile },
+      ];
       const failures2: TestFailure[] = [];
 
       const messages: BaseMessage[] = [
@@ -213,7 +226,9 @@ describe('toolResultTrimmerMiddleware', () => {
 
   describe('deserialized messages from checkpoint', () => {
     it('should trim passed count from deserialized ToolMessage objects', async () => {
-      const failures: TestFailure[] = [{ id: 'req_1', requirement: 'Test 1', reason: 'Failed', suggestion: 'Fix it' }];
+      const failures: TestFailure[] = [
+        { id: 'req_1', requirement: 'Test 1', reason: 'Failed', suggestion: 'Fix it', targetFile: defaultTargetFile },
+      ];
       // This simulates a message loaded from PostgresSaver that lost its prototype
       const deserializedMessage = createDeserializedToolMessage(failures, 2);
 
@@ -294,7 +309,9 @@ describe('toolResultTrimmerMiddleware', () => {
 
   describe('preserves other message properties', () => {
     it('should preserve tool_call_id and other properties after trimming', async () => {
-      const failures: TestFailure[] = [{ id: 'req_1', requirement: 'Test', reason: 'Failed', suggestion: 'Fix' }];
+      const failures: TestFailure[] = [
+        { id: 'req_1', requirement: 'Test', reason: 'Failed', suggestion: 'Fix', targetFile: defaultTargetFile },
+      ];
       const toolMessage = createTestModelToolMessage(failures, 2, {
         toolCallId: 'call_preserve_test',
       });
@@ -315,12 +332,14 @@ describe('toolResultTrimmerMiddleware', () => {
           requirement: 'Model should be a sphere',
           reason: 'Top view shows toroidal structure',
           suggestion: 'Use sphere() primitive instead of torus',
+          targetFile: defaultTargetFile,
         },
         {
           id: 'req_hole',
           requirement: 'Hole should be centered',
           reason: 'Hole is offset by 5mm',
           suggestion: 'Translate hole to origin',
+          targetFile: defaultTargetFile,
         },
       ];
 
@@ -338,6 +357,91 @@ describe('toolResultTrimmerMiddleware', () => {
       // Failures and total should be preserved exactly
       expect(parsed.failures).toEqual(failures);
       expect(parsed.total).toBe(4);
+    });
+  });
+
+  // ==========================================================================
+  // Multi-file test.json migration
+  // ==========================================================================
+
+  describe('multi-file test_model trimming', () => {
+    it('should preserve targetFile on every retained failure after trimming', async () => {
+      const failures: TestFailure[] = [
+        {
+          id: 'req_main_width',
+          requirement: 'Main is 100mm wide',
+          reason: 'Got 80mm',
+          suggestion: 'Increase width parameter to 100',
+          targetFile: 'main.scad',
+        },
+        {
+          id: 'req_lib_solid',
+          requirement: 'Lib component is a single solid',
+          reason: 'Got 2 components',
+          suggestion: 'Union the parts',
+          targetFile: 'lib/bracket.scad',
+        },
+      ];
+      const toolMessage = createTestModelToolMessage(failures, 0);
+
+      await callWrapModelCall({ messages: [toolMessage] }, handler);
+
+      const [request] = handler.mock.calls[0] as [TestRequest];
+      const trimmedMessage = request.messages[0] as ToolMessage;
+      const parsed = parseTestModelOutput(trimmedMessage);
+
+      expect(parsed.failures).toHaveLength(2);
+      expect(parsed.failures.map((f) => f.targetFile)).toEqual(['main.scad', 'lib/bracket.scad']);
+    });
+
+    it('should drop geometryArtifactPaths from trimmed test_model output', async () => {
+      const failures: TestFailure[] = [
+        {
+          id: 'req_1',
+          requirement: 'Width = 100mm',
+          reason: 'Width is 80mm',
+          suggestion: 'Adjust',
+          targetFile: 'main.scad',
+        },
+      ];
+      const toolMessage = createTestModelToolMessage(failures, 1);
+
+      await callWrapModelCall({ messages: [toolMessage] }, handler);
+
+      const [request] = handler.mock.calls[0] as [TestRequest];
+      const trimmedMessage = request.messages[0] as ToolMessage;
+      const parsed = JSON.parse(trimmedMessage.content as string) as Record<string, unknown>;
+
+      expect(parsed['geometryArtifactPaths']).toBeUndefined();
+      expect(parsed['passes']).toBeUndefined();
+      expect(parsed['passed']).toBeUndefined();
+      expect(parsed['failures']).toBeDefined();
+      expect(parsed['total']).toBe(2);
+    });
+
+    it('should still detect test_model shape via isTestModelShape on multi-file output', async () => {
+      const failures: TestFailure[] = [
+        {
+          id: 'req_1',
+          requirement: 'Width = 100mm',
+          reason: 'Width is 80mm',
+          suggestion: 'Adjust',
+          targetFile: 'main.scad',
+        },
+      ];
+      // Drop the message name so detection must come from content shape alone
+      const toolMessage = createTestModelToolMessage(failures, 2, { includeName: false });
+
+      await callWrapModelCall({ messages: [toolMessage] }, handler);
+
+      const [request] = handler.mock.calls[0] as [TestRequest];
+      const trimmedMessage = request.messages[0] as ToolMessage;
+      const parsed = JSON.parse(trimmedMessage.content as string) as Record<string, unknown>;
+
+      // If detection failed the message would pass through unchanged with passed/passes still present.
+      expect(parsed['passed']).toBeUndefined();
+      expect(parsed['passes']).toBeUndefined();
+      expect(parsed['geometryArtifactPaths']).toBeUndefined();
     });
   });
 

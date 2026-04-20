@@ -4,24 +4,38 @@ import { editTestsInputSchema, isRpcClientError } from '@taucad/chat';
 import { assertRpcExecution, assertRpcSuccess, ToolError } from '@taucad/chat/utils';
 import type { ChatTool, EditTestsInput, EditTestsOutput } from '@taucad/chat';
 import { toolName, rpcName } from '@taucad/chat/constants';
+import { testFileSchema } from '@taucad/testing';
 import type { ChatRpcConfigurable } from '#api/tools/tool.types.js';
 
 export const editTestsToolDefinition = {
   name: toolName.editTests,
-  description: `Edit test.json to add, modify, or remove test requirements.
+  description: `Edit test.json to add, modify, or remove per-file test requirements.
+
+test.json is a per-file map keyed by source file path. Each entry holds the
+requirements that will be evaluated against THAT file's geometry only. Add or
+update keys when introducing new files; do not delete other files' requirements.
 
 Uses the same pattern as edit_file - specify edits with // ... existing code ... to represent unchanged sections.
 
 Example:
 {
-  "requirements": [
-    { "id": "req_width", "type": "measurement", "description": "Model is 100mm wide", "check": "boundingBox", "expected": { "size": { "x": 100 } }, "tolerance": 1 },
-    { "id": "req_centered", "type": "measurement", "description": "Centered at origin XY", "check": "boundingBox", "expected": { "center": { "x": 0, "y": 0 } }, "tolerance": 0.5 },
-    { "id": "req_solid", "type": "measurement", "description": "Single connected solid", "check": "connectedComponents", "expected": { "count": 1 } }
-  ]
+  "main.ts": {
+    "requirements": [
+      { "id": "req_width", "type": "measurement", "description": "Model is 100mm wide", "check": "boundingBox", "expected": { "size": { "x": 100 } }, "tolerance": 1 },
+      { "id": "req_centered", "type": "measurement", "description": "Centered at origin XY", "check": "boundingBox", "expected": { "center": { "x": 0, "y": 0 } }, "tolerance": 0.5 },
+      { "id": "req_solid", "type": "measurement", "description": "Single connected solid", "check": "connectedComponents", "expected": { "count": 1 } }
+    ]
+  },
+  "lib/pen.ts": {
+    "requirements": [
+      { "id": "req_pen_solid", "type": "measurement", "description": "Pen is a single watertight solid", "check": "watertight" }
+    ]
+  }
 }
 
-Checks: boundingBox (size/center — specify only axes to check), meshCount (number of returned shapes), connectedComponents (disconnected pieces — use for "single solid" checks), vertexCount.
+Checks: boundingBox (size/center — specify only axes to check), meshCount (number of returned shapes), connectedComponents (disconnected pieces — use for "single solid" checks), vertexCount, watertight.
+
+The outer object MUST be keyed by source file path; any other shape (including a top-level "requirements" array) is rejected by post-write validation.
 
 Use this tool BEFORE making model changes (TDD approach).`,
   schema: editTestsInputSchema,
@@ -29,14 +43,10 @@ Use this tool BEFORE making model changes (TDD approach).`,
 
 const testFile = 'test.json';
 
-// Default test.json content when file doesn't exist
-const defaultTestFile = JSON.stringify(
-  {
-    requirements: [],
-  },
-  null,
-  2,
-);
+// Default test.json content when file doesn't exist: an empty per-file map.
+// The agent must explicitly add a top-level source-file key (e.g. "main.ts") via
+// codeEdit; we never pre-populate any file path on the agent's behalf.
+const defaultTestFile = JSON.stringify({}, null, 2);
 
 export const editTestsTool: ChatTool<
   typeof editTestsInputSchema,
@@ -90,6 +100,33 @@ export const editTestsTool: ChatTool<
     throw new ToolError({
       errorCode: 'TOOL_EXECUTION_ERROR',
       message: `Failed to apply edit to test.json: ${editResult.error}`,
+      toolName: toolName.editTests,
+      toolCallId,
+    });
+  }
+
+  // Step 2.5: Validate the edited content against the per-file testFileSchema
+  // before persisting. Catches model-introduced shape errors (top-level
+  // "requirements" array, missing per-file keys, etc.) at the source.
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(editResult.editedContent);
+  } catch (parseError) {
+    const message = parseError instanceof Error ? parseError.message : String(parseError);
+    throw new ToolError({
+      errorCode: 'TOOL_EXECUTION_ERROR',
+      message: `Edited test.json is not valid JSON: ${message}`,
+      toolName: toolName.editTests,
+      toolCallId,
+    });
+  }
+
+  const validation = testFileSchema.safeParse(parsed);
+  if (!validation.success) {
+    const issues = validation.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
+    throw new ToolError({
+      errorCode: 'TOOL_EXECUTION_ERROR',
+      message: `Edited test.json does not match the per-file shape. Issues: ${issues}. Each top-level key must be a source file path; each value must be { "requirements": [...] }.`,
       toolName: toolName.editTests,
       toolCallId,
     });

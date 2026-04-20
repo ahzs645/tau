@@ -8,6 +8,7 @@ category: audit
 related:
   - docs/research/assimp-transform-architecture-landscape.md
   - docs/research/3mf-export-scale-orientation-manifold.md
+  - docs/research/3mf-export-rendering-artifacts.md
   - docs/research/converter-runtime-consolidation.md
 ---
 
@@ -304,3 +305,8 @@ grep -B1 -A2 'ContractDefaults [a-z]\+\s*{' \
 ```
 
 The deleted `_inspect-extents.test.ts` diagnostic from the rebaselining session can be reconstructed by adding a Vitest case that calls `getInspectReport` on each fixture's GLB output and `console.log`s `report.scenes[0].sceneExtras.bbox`.
+
+## See Also
+
+- `docs/research/3mf-export-rendering-artifacts.md` — Bambu Studio rendering-artifact root cause analysis for 3MF export. Explains the multi-mesh structure preservation and `lib3mf` precision truncation that informed the export-side counterpart to this import audit. Resolved in `taucad-assimpjs-0.0.18`.
+- `docs/research/3mf-export-scale-orientation-manifold.md` — sibling investigation into 3MF unit/axis/manifold defects that motivated this import test categorisation.

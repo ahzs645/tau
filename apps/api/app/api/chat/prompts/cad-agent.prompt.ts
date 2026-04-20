@@ -2,6 +2,7 @@
 // Every change to this prompt must cite before/after eval evidence.
 // Format: // EVAL(<case>): <before> → <after> via <change description>
 // Example: // EVAL(cube-20mm): 80% → 95% via anti-gold-plating rules
+// EVAL(multi-file-test-json): pending benchmark-2026-04-20 — multi-file test.json shape in <test_requirements>; structural format change (file-keyed map) so the agent emits per-CU requirements via edit_tests instead of a flat array. Validate with `pnpm nx benchmark:models api -- --filter tool-use,smoke` once the migration ships.
 
 import type { KernelProvider } from '@taucad/runtime';
 import { toolName } from '@taucad/chat/constants';
@@ -88,17 +89,23 @@ export async function getCadSystemPrompt(
     ? `<test_requirements>
 Write deterministic measurement requirements. Each should test one measurable property.
 
+\`test.json\` is a per-file map keyed by source file path. Each value is \`{ "requirements": [...] }\` scoped to that compilation unit. \`${toolName.testModel}\` runs every file in the map in parallel and tags each pass/failure with its \`targetFile\`.
+
 \`\`\`json
 {
-  "requirements": [
-    { "id": "req_width", "type": "measurement", "description": "Box is 100mm wide", "check": "boundingBox", "expected": { "size": { "x": 100 } }, "tolerance": 1 },
-    { "id": "req_height", "type": "measurement", "description": "Box is 25mm tall", "check": "boundingBox", "expected": { "size": { "z": 25 } }, "tolerance": 1 },
-    { "id": "req_centered", "type": "measurement", "description": "Centered at origin XY", "check": "boundingBox", "expected": { "center": { "x": 0, "y": 0 } }, "tolerance": 0.5 },
-    { "id": "req_solid", "type": "measurement", "description": "Single connected solid", "check": "connectedComponents", "expected": { "count": 1 } },
-    { "id": "req_watertight", "type": "measurement", "description": "Mesh is watertight", "check": "watertight" }
-  ]
+  "main${config.fileExtension}": {
+    "requirements": [
+      { "id": "req_width", "type": "measurement", "description": "Box is 100mm wide", "check": "boundingBox", "expected": { "size": { "x": 100 } }, "tolerance": 1 },
+      { "id": "req_height", "type": "measurement", "description": "Box is 25mm tall", "check": "boundingBox", "expected": { "size": { "z": 25 } }, "tolerance": 1 },
+      { "id": "req_centered", "type": "measurement", "description": "Centered at origin XY", "check": "boundingBox", "expected": { "center": { "x": 0, "y": 0 } }, "tolerance": 0.5 },
+      { "id": "req_solid", "type": "measurement", "description": "Single connected solid", "check": "connectedComponents", "expected": { "count": 1 } },
+      { "id": "req_watertight", "type": "measurement", "description": "Mesh is watertight", "check": "watertight" }
+    ]
+  }
 }
 \`\`\`
+
+When you add a new file (e.g. \`lib/bracket${config.fileExtension}\`), add a new top-level key for it and preserve every sibling file's existing requirements — never delete other files' entries. To add tests for an existing file, edit the \`requirements\` array under that file's key.
 
 Available checks: \`boundingBox\` (size/center — specify only the axes you care about), \`meshCount\` (number of returned shapes), \`connectedComponents\` (number of disconnected pieces — use for "single solid" checks), \`vertexCount\`, \`watertight\` (closed manifold with no boundary edges).
 </test_requirements>`

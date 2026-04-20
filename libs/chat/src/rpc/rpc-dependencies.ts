@@ -57,12 +57,15 @@ export type RpcRuntimeClient = {
 /**
  * Abstract graphics client for capturing observations (screenshots).
  * Only available in browser environments with a mounted 3D view.
+ *
+ * Every method takes an explicit `targetFile` so the agent must name the
+ * compilation unit it is acting on; there is no project-level fallback.
  * @public
  */
 export type RpcGraphicsClient = {
-  captureObservations(): Promise<CaptureObservationsRpcResult>;
-  fetchGeometry(): Promise<FetchGeometryRpcResult>;
-  captureScreenshot(): Promise<CaptureScreenshotRpcResult>;
+  captureObservations(args: { targetFile: string }): Promise<CaptureObservationsRpcResult>;
+  fetchGeometry(args: { targetFile: string }): Promise<FetchGeometryRpcResult>;
+  captureScreenshot(args: { targetFile: string }): Promise<CaptureScreenshotRpcResult>;
 };
 
 /**

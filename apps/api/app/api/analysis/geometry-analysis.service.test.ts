@@ -139,6 +139,14 @@ describe('GeometryAnalysisService', () => {
   let compoundGlb: Uint8Array<ArrayBuffer>;
   let fusedGlb: Uint8Array<ArrayBuffer>;
 
+  // Test wrapper: defaults targetFile to 'test.ts' so existing assertions stay focused
+  // on requirement evaluation. Per-targetFile fan-out is covered by tool-test-model.test.ts.
+  const runTests = async (
+    glb: Uint8Array<ArrayBuffer>,
+    requirements: MeasurementTestRequirement[],
+    targetFile = 'test.ts',
+  ) => service.runMeasurementTests(glb, requirements, targetFile);
+
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
       providers: [GeometryAnalysisService],
@@ -167,7 +175,7 @@ describe('GeometryAnalysisService', () => {
 
   describe('buffer alignment', () => {
     it('should handle GLB with byteOffset === 0', async () => {
-      const result = await service.runMeasurementTests(boxGlb, [meshCountRequirement('m1', 'has mesh', 1)]);
+      const result = await runTests(boxGlb, [meshCountRequirement('m1', 'has mesh', 1)]);
 
       expect(result.passed).toBe(1);
       expect(result.failures).toHaveLength(0);
@@ -180,7 +188,7 @@ describe('GeometryAnalysisService', () => {
       const misaligned = new Uint8Array(padded, 3); // ByteOffset = 3 (not divisible by 4)
       misaligned.set(boxGlb);
 
-      const result = await service.runMeasurementTests(misaligned, [meshCountRequirement('m1', 'has mesh', 1)]);
+      const result = await runTests(misaligned, [meshCountRequirement('m1', 'has mesh', 1)]);
 
       expect(result.passed).toBe(1);
       expect(result.failures).toHaveLength(0);
@@ -194,7 +202,7 @@ describe('GeometryAnalysisService', () => {
   describe('bounding box', () => {
     it('should pass for a box with correct dimensions', async () => {
       // MakeBaseBox(10, 20, 30) → glTF uses meters, so 0.01 × 0.02 × 0.03 m
-      const result = await service.runMeasurementTests(boxGlb, [
+      const result = await runTests(boxGlb, [
         boundingBoxRequirement({
           id: 'bb1',
           description: 'box size',
@@ -207,7 +215,7 @@ describe('GeometryAnalysisService', () => {
     });
 
     it('should fail for a box with wrong dimensions', async () => {
-      const result = await service.runMeasurementTests(boxGlb, [
+      const result = await runTests(boxGlb, [
         boundingBoxRequirement({
           id: 'bb1',
           description: 'wrong size',
@@ -222,7 +230,7 @@ describe('GeometryAnalysisService', () => {
 
     it('should validate center position', async () => {
       // Centered box → center at origin in glTF coordinates
-      const result = await service.runMeasurementTests(boxGlb, [
+      const result = await runTests(boxGlb, [
         boundingBoxRequirement({
           id: 'bb1',
           description: 'centered at origin',
@@ -234,7 +242,7 @@ describe('GeometryAnalysisService', () => {
     });
 
     it('should respect custom tolerance', async () => {
-      const result = await service.runMeasurementTests(boxGlb, [
+      const result = await runTests(boxGlb, [
         boundingBoxRequirement({
           id: 'bb1',
           description: 'loose tolerance',
@@ -247,7 +255,7 @@ describe('GeometryAnalysisService', () => {
     });
 
     it('should accept a single axis in size (partial check)', async () => {
-      const result = await service.runMeasurementTests(boxGlb, [
+      const result = await runTests(boxGlb, [
         boundingBoxRequirement({
           id: 'bb_x_only',
           description: 'check X size only',
@@ -261,7 +269,7 @@ describe('GeometryAnalysisService', () => {
 
     it('should accept two axes in center (partial check)', async () => {
       // Box center in glTF: x=0, y=0.015 (half height), z=0 — check only x and z
-      const result = await service.runMeasurementTests(boxGlb, [
+      const result = await runTests(boxGlb, [
         boundingBoxRequirement({
           id: 'bb_xz_center',
           description: 'check X and Z center only',
@@ -275,7 +283,7 @@ describe('GeometryAnalysisService', () => {
     });
 
     it('should fail only the checked axis when partial size is wrong', async () => {
-      const result = await service.runMeasurementTests(boxGlb, [
+      const result = await runTests(boxGlb, [
         boundingBoxRequirement({
           id: 'bb_z_wrong',
           description: 'wrong Z size',
@@ -299,7 +307,7 @@ describe('GeometryAnalysisService', () => {
         expected: { notValid: true },
       };
 
-      const result = await service.runMeasurementTests(boxGlb, [requirement]);
+      const result = await runTests(boxGlb, [requirement]);
 
       expect(result.passed).toBe(0);
       expect(result.failures).toHaveLength(1);
@@ -315,7 +323,7 @@ describe('GeometryAnalysisService', () => {
         expected: {},
       };
 
-      const result = await service.runMeasurementTests(boxGlb, [requirement]);
+      const result = await runTests(boxGlb, [requirement]);
 
       expect(result.passed).toBe(0);
       expect(result.failures).toHaveLength(1);
@@ -329,19 +337,19 @@ describe('GeometryAnalysisService', () => {
 
   describe('mesh count', () => {
     it('should pass for single-shape result with meshCount 1', async () => {
-      const result = await service.runMeasurementTests(boxGlb, [meshCountRequirement('mc1', 'single mesh', 1)]);
+      const result = await runTests(boxGlb, [meshCountRequirement('mc1', 'single mesh', 1)]);
 
       expect(result.passed).toBe(1);
     });
 
     it('should pass for multi-shape result', async () => {
-      const result = await service.runMeasurementTests(multiShapeGlb, [meshCountRequirement('mc1', 'two meshes', 2)]);
+      const result = await runTests(multiShapeGlb, [meshCountRequirement('mc1', 'two meshes', 2)]);
 
       expect(result.passed).toBe(1);
     });
 
     it('should fail when mesh count does not match', async () => {
-      const result = await service.runMeasurementTests(boxGlb, [meshCountRequirement('mc1', 'wrong count', 5)]);
+      const result = await runTests(boxGlb, [meshCountRequirement('mc1', 'wrong count', 5)]);
 
       expect(result.passed).toBe(0);
       expect(result.failures[0]!.reason).toContain('Mesh count');
@@ -356,7 +364,7 @@ describe('GeometryAnalysisService', () => {
         expected: {},
       };
 
-      const result = await service.runMeasurementTests(boxGlb, [requirement]);
+      const result = await runTests(boxGlb, [requirement]);
 
       expect(result.passed).toBe(0);
       expect(result.failures[0]!.reason).toContain('Missing expected.count');
@@ -369,26 +377,20 @@ describe('GeometryAnalysisService', () => {
 
   describe('connected components', () => {
     it('should report 1 component for a single solid box', async () => {
-      const result = await service.runMeasurementTests(boxGlb, [
-        connectedComponentsRequirement('cc1', 'single solid', 1),
-      ]);
+      const result = await runTests(boxGlb, [connectedComponentsRequirement('cc1', 'single solid', 1)]);
 
       expect(result.passed).toBe(1);
       expect(result.failures).toHaveLength(0);
     });
 
     it('should report 2 components for a compound of non-overlapping boxes', async () => {
-      const result = await service.runMeasurementTests(compoundGlb, [
-        connectedComponentsRequirement('cc1', 'two disconnected pieces', 2),
-      ]);
+      const result = await runTests(compoundGlb, [connectedComponentsRequirement('cc1', 'two disconnected pieces', 2)]);
 
       expect(result.passed).toBe(1);
     });
 
     it('should fail when expecting 1 component but compound has 2', async () => {
-      const result = await service.runMeasurementTests(compoundGlb, [
-        connectedComponentsRequirement('cc1', 'single solid', 1),
-      ]);
+      const result = await runTests(compoundGlb, [connectedComponentsRequirement('cc1', 'single solid', 1)]);
 
       expect(result.passed).toBe(0);
       expect(result.failures[0]!.reason).toContain('Connected components');
@@ -398,18 +400,14 @@ describe('GeometryAnalysisService', () => {
     });
 
     it('should report 1 component for overlapping fused shapes', async () => {
-      const result = await service.runMeasurementTests(fusedGlb, [
-        connectedComponentsRequirement('cc1', 'fused solid', 1),
-      ]);
+      const result = await runTests(fusedGlb, [connectedComponentsRequirement('cc1', 'fused solid', 1)]);
 
       expect(result.passed).toBe(1);
     });
 
     it('should count components across multiple meshes', async () => {
       // MultiShapeGlb has 2 separate shapes (box + sphere) as 2 meshes, each is 1 component
-      const result = await service.runMeasurementTests(multiShapeGlb, [
-        connectedComponentsRequirement('cc1', 'two separate shapes', 2),
-      ]);
+      const result = await runTests(multiShapeGlb, [connectedComponentsRequirement('cc1', 'two separate shapes', 2)]);
 
       expect(result.passed).toBe(1);
     });
@@ -423,7 +421,7 @@ describe('GeometryAnalysisService', () => {
         expected: {},
       };
 
-      const result = await service.runMeasurementTests(boxGlb, [requirement]);
+      const result = await runTests(boxGlb, [requirement]);
 
       expect(result.passed).toBe(0);
       expect(result.failures[0]!.reason).toContain('Missing expected.count');
@@ -436,7 +434,7 @@ describe('GeometryAnalysisService', () => {
 
   describe('vertex count', () => {
     it('should pass when vertex count is within tolerance', async () => {
-      const probe = await service.runMeasurementTests(boxGlb, [
+      const probe = await runTests(boxGlb, [
         vertexCountRequirement({ id: 'vc1', description: 'probe', count: 0, tolerance: 999_999 }),
       ]);
 
@@ -444,7 +442,7 @@ describe('GeometryAnalysisService', () => {
     });
 
     it('should fail when vertex count is outside tolerance', async () => {
-      const result = await service.runMeasurementTests(boxGlb, [
+      const result = await runTests(boxGlb, [
         vertexCountRequirement({ id: 'vc1', description: 'wrong count', count: 999_999 }),
       ]);
 
@@ -461,7 +459,7 @@ describe('GeometryAnalysisService', () => {
         expected: {},
       };
 
-      const result = await service.runMeasurementTests(boxGlb, [requirement]);
+      const result = await runTests(boxGlb, [requirement]);
 
       expect(result.passed).toBe(0);
       expect(result.failures[0]!.reason).toContain('Missing expected.count');
@@ -470,8 +468,8 @@ describe('GeometryAnalysisService', () => {
     it('should produce more vertices for a sphere than a box', async () => {
       const probe = vertexCountRequirement({ id: 'vc1', description: 'probe', count: 0, tolerance: 0 });
 
-      const boxResult = await service.runMeasurementTests(boxGlb, [probe]);
-      const sphereResult = await service.runMeasurementTests(sphereGlb, [probe]);
+      const boxResult = await runTests(boxGlb, [probe]);
+      const sphereResult = await runTests(sphereGlb, [probe]);
 
       const extractVertexCount = (reason: string): number => Number(/got (\d+)/.exec(reason)?.[1]);
 
@@ -488,7 +486,7 @@ describe('GeometryAnalysisService', () => {
 
   describe('multiple requirements', () => {
     it('should evaluate all requirements and report mixed results', async () => {
-      const result = await service.runMeasurementTests(boxGlb, [
+      const result = await runTests(boxGlb, [
         meshCountRequirement('pass1', 'correct mesh count', 1),
         meshCountRequirement('fail1', 'wrong mesh count', 99),
         boundingBoxRequirement({
@@ -514,7 +512,7 @@ describe('GeometryAnalysisService', () => {
     it('should return failures for all requirements when GLB is invalid', async () => {
       const garbage = new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7]);
 
-      const result = await service.runMeasurementTests(garbage, [
+      const result = await runTests(garbage, [
         meshCountRequirement('m1', 'mesh', 1),
         boundingBoxRequirement({ id: 'bb1', description: 'box', expected: { size: { x: 1, y: 1, z: 1 } } }),
       ]);
@@ -526,7 +524,7 @@ describe('GeometryAnalysisService', () => {
     });
 
     it('should return failures for empty Uint8Array', async () => {
-      const result = await service.runMeasurementTests(new Uint8Array(0), [meshCountRequirement('m1', 'mesh', 1)]);
+      const result = await runTests(new Uint8Array(0), [meshCountRequirement('m1', 'mesh', 1)]);
 
       expect(result.passed).toBe(0);
       expect(result.failures[0]!.reason).toContain('GLB analysis failed');
@@ -547,7 +545,7 @@ describe('GeometryAnalysisService', () => {
         expected: {},
       } as const;
 
-      const result = await service.runMeasurementTests(boxGlb, [requirement]);
+      const result = await runTests(boxGlb, [requirement]);
 
       expect(result.passed).toBe(0);
       expect(result.failures[0]!.reason).toContain('Unknown check type');

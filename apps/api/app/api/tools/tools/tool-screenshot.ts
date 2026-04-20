@@ -8,30 +8,33 @@ import type { ChatRpcConfigurable } from '#api/tools/tool.types.js';
 
 export const screenshotToolDefinition = {
   name: toolName.screenshot,
-  description: `Capture a screenshot of the current 3D model for visual inspection.
+  description: `Capture a screenshot of a specific compilation unit's 3D model for visual inspection.
+
+You MUST pass \`targetFile\` (the source file path of the compilation unit to screenshot, e.g. "main.ts" or "lib/bracket.scad"). There is no implicit fallback — if no viewer panel currently displays \`targetFile\`, the call fails with UNKNOWN_COMPILATION_UNIT.
 
 Modes:
-- single: Captures the current camera perspective (1 image)
-- multi_angle: Captures a labeled composite of all 6 orthographic views (front, back, right, left, top, bottom) as a single image`,
+- single: Captures the current camera perspective of the targetFile's viewer (1 image)
+- multi_angle: Captures a labeled composite of all 6 orthographic views (front, back, right, left, top, bottom) of the targetFile as a single image`,
   schema: screenshotInputSchema,
 } as const;
 
 export const screenshotTool = tool(async (args, runtime: ToolRuntime): Promise<ScreenshotOutput> => {
   const { chatRpcService, thread_id: chatId } = runtime.configurable as ChatRpcConfigurable;
   const { toolCallId } = runtime;
+  const { targetFile } = args;
 
   if (args.mode === 'multi_angle') {
     const result = await chatRpcService.sendRpcRequest({
       chatId,
       toolCallId,
       rpcName: rpcName.captureObservations,
-      args: {},
+      args: { targetFile },
     });
 
     assertRpcSuccess(result, {
       toolName: toolName.screenshot,
       toolCallId,
-      clientErrorMessage: 'Failed to capture multi-angle screenshots',
+      clientErrorMessage: `Failed to capture multi-angle screenshots for ${targetFile}`,
     });
 
     return {
@@ -47,13 +50,13 @@ export const screenshotTool = tool(async (args, runtime: ToolRuntime): Promise<S
     chatId,
     toolCallId,
     rpcName: rpcName.captureScreenshot,
-    args: {},
+    args: { targetFile },
   });
 
   assertRpcSuccess(result, {
     toolName: toolName.screenshot,
     toolCallId,
-    clientErrorMessage: 'Failed to capture screenshot',
+    clientErrorMessage: `Failed to capture screenshot for ${targetFile}`,
   });
 
   return {

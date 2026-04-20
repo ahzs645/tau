@@ -45,12 +45,23 @@ export const testRequirementSchema = measurementTestRequirementSchema;
 export type TestRequirement = z.infer<typeof testRequirementSchema>;
 
 /**
- * Test file schema (test.json structure).
+ * Per-file entry inside a `test.json` map. Holds the requirements that will be
+ * evaluated against THAT file's compiled geometry.
  * @public
  */
-export const testFileSchema = z.object({
+export const testFileEntrySchema = z.object({
   requirements: z.array(testRequirementSchema),
 });
+/** @public */
+export type TestFileEntry = z.infer<typeof testFileEntrySchema>;
+
+/**
+ * Test file schema -- a `test.json` is a map keyed by source file path so the
+ * agent can attach independent measurement requirements to each compilation
+ * unit and test multiple files concurrently.
+ * @public
+ */
+export const testFileSchema = z.record(z.string(), testFileEntrySchema);
 /** @public */
 export type TestFile = z.infer<typeof testFileSchema>;
 
@@ -59,7 +70,8 @@ export type TestFile = z.infer<typeof testFileSchema>;
 // =============================================================================
 
 /**
- * Test failure result -- failures include detailed feedback for the LLM.
+ * Test failure result -- failures include detailed feedback for the LLM and
+ * are tagged with the source file whose geometry failed the requirement.
  * @public
  */
 export const testFailureSchema = z.object({
@@ -67,17 +79,19 @@ export const testFailureSchema = z.object({
   requirement: z.string().describe('Description of the requirement that failed'),
   reason: z.string().describe('Why the test failed'),
   suggestion: z.string().describe('Actionable suggestion to fix the issue'),
+  targetFile: z.string().describe('Source file whose geometry produced this failure'),
 });
 /** @public */
 export type TestFailure = z.infer<typeof testFailureSchema>;
 
 /**
- * Test pass result -- passes are simpler, just id and description.
+ * Test pass result -- passes are simpler, just id/description/targetFile.
  * @public
  */
 export const testPassSchema = z.object({
   id: z.string().describe('ID of the passed requirement'),
   requirement: z.string().describe('Description of the requirement that passed'),
+  targetFile: z.string().describe('Source file whose geometry satisfied this requirement'),
 });
 /** @public */
 export type TestPass = z.infer<typeof testPassSchema>;
@@ -85,6 +99,8 @@ export type TestPass = z.infer<typeof testPassSchema>;
 /**
  * Output schema for test_model tool.
  * Includes both failures (with detailed feedback) and passes (for UI display).
+ * `geometryArtifactPaths` maps each tested source file to the captured GLB
+ * artifact written for that compilation unit.
  * @public
  */
 export const testModelOutputSchema = z.object({
@@ -92,7 +108,10 @@ export const testModelOutputSchema = z.object({
   passes: z.array(testPassSchema).describe('Array of passed tests'),
   passed: z.number().describe('Number of tests that passed'),
   total: z.number().describe('Total number of tests run'),
-  geometryArtifactPath: z.string().optional().describe('Filesystem path to the captured GLB artifact'),
+  geometryArtifactPaths: z
+    .record(z.string(), z.string())
+    .optional()
+    .describe('Map of source file path → captured GLB artifact path'),
 });
 /** @public */
 export type TestModelOutput = z.infer<typeof testModelOutputSchema>;

@@ -13,21 +13,23 @@ export class GeometryAnalysisService {
   public async runMeasurementTests(
     glb: Uint8Array<ArrayBuffer>,
     requirements: MeasurementTestRequirement[],
+    targetFile: string,
   ): Promise<TestModelOutput> {
-    this.logger.log(`Running ${requirements.length} measurement tests`);
+    this.logger.log(`Running ${requirements.length} measurement tests for ${targetFile}`);
 
     let stats;
     try {
       stats = await analyzeGlb(glb);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(`GLB analysis failed: ${message}`);
+      this.logger.error(`GLB analysis failed for ${targetFile}: ${message}`);
       return {
         failures: requirements.map((r) => ({
           id: r.id,
           requirement: r.description,
           reason: `GLB analysis failed: ${message}`,
           suggestion: 'Ensure the model compiles and produces valid geometry.',
+          targetFile,
         })),
         passes: [],
         passed: 0,
@@ -41,18 +43,19 @@ export class GeometryAnalysisService {
     for (const requirement of requirements) {
       const result = evaluateRequirement(requirement, stats);
       if (result.passed) {
-        passes.push({ id: requirement.id, requirement: requirement.description });
+        passes.push({ id: requirement.id, requirement: requirement.description, targetFile });
       } else {
         failures.push({
           id: requirement.id,
           requirement: requirement.description,
           reason: result.reason,
           suggestion: result.suggestion,
+          targetFile,
         });
       }
     }
 
-    this.logger.log(`Measurement results: ${passes.length} passed, ${failures.length} failed`);
+    this.logger.log(`Measurement results for ${targetFile}: ${passes.length} passed, ${failures.length} failed`);
 
     return {
       failures,

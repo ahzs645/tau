@@ -222,8 +222,16 @@ function detectToolNameFromContent(content: unknown): string | undefined {
  */
 const toolResultTrimmers: Record<string, (result: unknown) => unknown> = {
   /**
-   * Trims the test model result by removing the 'passed' count.
-   * The LLM can infer it from total - failures.length if needed.
+   * Trims the test model result down to its diagnostic essentials.
+   *
+   * - `failures` is preserved verbatim (each entry already carries `targetFile`
+   *   from the multi-file test.json migration so the LLM can attribute each
+   *   failure to its compilation unit).
+   * - `total` is preserved.
+   * - `passes`, `passed`, and `geometryArtifactPaths` are dropped: pass count
+   *   is inferable as `total - failures.length`, and the artifact-path map is
+   *   only useful at the moment of capture (the UI/UX layer reads it before
+   *   trimming).
    */
   [toolName.testModel]: createTrimmer(toolName.testModel, (result) => {
     // Guard: return unchanged if expected structure is missing (error/malformed response)
@@ -234,7 +242,6 @@ const toolResultTrimmers: Record<string, (result: unknown) => unknown> = {
     return {
       failures: result.failures,
       total: result.total,
-      // REMOVED: passed, passes - LLM can infer from total - failures.length
     };
   }),
 
