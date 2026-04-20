@@ -160,6 +160,27 @@ const createReasoningPart = (text = 'Some streaming reasoning text'): ReasoningU
   state: 'streaming',
 });
 
+const createReasoningPartWithTiming = (
+  options: {
+    readonly text?: string;
+    readonly state?: 'streaming' | 'done';
+    readonly reasoningStartedAtMs?: number;
+    readonly reasoningEndedAtMs?: number;
+  } = {},
+): ReasoningUIPart => {
+  const { text = 'Some reasoning text', state = 'done', reasoningStartedAtMs, reasoningEndedAtMs } = options;
+  const common: Record<string, number> = {};
+  if (reasoningStartedAtMs !== undefined) {
+    common['reasoningStartedAtMs'] = reasoningStartedAtMs;
+  }
+  if (reasoningEndedAtMs !== undefined) {
+    common['reasoningEndedAtMs'] = reasoningEndedAtMs;
+  }
+  const providerMetadata =
+    Object.keys(common).length > 0 ? ({ common } satisfies Record<string, Record<string, number>>) : undefined;
+  return { type: 'reasoning', text, state, providerMetadata };
+};
+
 const getElements = (): { scrollContainer: HTMLElement; content: HTMLElement } => {
   const markdown = screen.getByTestId('markdown-content');
   const content = markdown.parentElement;
@@ -450,6 +471,227 @@ describe('ChatMessageReasoning', () => {
       expect(removeSpy).toHaveBeenCalledWith('touchstart', expect.any(Function));
       expect(removeSpy).toHaveBeenCalledWith('keydown', expect.any(Function));
       expect(removeSpy).toHaveBeenCalledWith('pointerdown', expect.any(Function));
+    });
+  });
+
+  describe('duration label', () => {
+    const mutedClass = 'text-foreground/60';
+
+    type LabelSpans = {
+      readonly button: HTMLButtonElement;
+      readonly verbText: string;
+      readonly suffixText?: string;
+      readonly verbSpan: HTMLSpanElement;
+      readonly suffixSpan?: HTMLSpanElement;
+    };
+
+    /**
+     * Resolve the toggle button's two-tone label spans by walking the DOM
+     * directly. testing-library's `getByText` normalizes whitespace and does
+     * not match text spread across child elements, both of which interact
+     * badly with the `<verb> <muted suffix>` two-tone structure under test.
+     */
+    const readLabelSpans = (): LabelSpans => {
+      const buttons = screen.getAllByRole('button');
+      const button = buttons.find((b): b is HTMLButtonElement => b.querySelector('svg.lucide-brain') !== null);
+      if (!button) {
+        throw new Error('could not locate the toggle button');
+      }
+      const labelWrapper = button.querySelector(':scope > span.flex');
+      if (!labelWrapper) {
+        throw new Error('could not locate the label wrapper span');
+      }
+      const innerSpans = labelWrapper.querySelectorAll(':scope > span');
+      const verbSpan = innerSpans[0];
+      const suffixSpan = innerSpans[1];
+      if (!(verbSpan instanceof HTMLSpanElement)) {
+        throw new Error('expected a verb span');
+      }
+      return {
+        button,
+        verbText: verbSpan.textContent,
+        suffixText:
+          suffixSpan instanceof HTMLSpanElement && suffixSpan.textContent ? suffixSpan.textContent : undefined,
+        verbSpan,
+        suffixSpan: suffixSpan instanceof HTMLSpanElement ? suffixSpan : undefined,
+      };
+    };
+
+    it('should render "Thought process" fallback for done parts with no providerMetadata.common', () => {
+      mockChatStatus.current = 'idle';
+      render(<ChatMessageReasoning part={createReasoningPartWithTiming({ state: 'done' })} hasContent={false} />);
+
+      const spans = readLabelSpans();
+      expect(spans.verbText).toBe('Thought');
+      expect(spans.suffixText?.trim()).toBe('process');
+      // The legacy fallback still uses the two-tone treatment so the suffix
+      // visually recedes consistently with the new states.
+      expect(spans.verbSpan.className).not.toContain(mutedClass);
+      expect(spans.suffixSpan?.className).toContain(mutedClass);
+    });
+
+    it('should render "Thinking…" while streaming with reasoningStartedAtMs but no reasoningEndedAtMs (sub-second)', () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date('2026-04-20T00:00:00Z'));
+        render(
+          <ChatMessageReasoning
+            part={createReasoningPartWithTiming({
+              state: 'streaming',
+              reasoningStartedAtMs: Date.now(),
+            })}
+            hasContent={false}
+          />,
+        );
+
+        const spans = readLabelSpans();
+        expect(spans.verbText).toBe('Thinking…');
+        expect(spans.suffixText).toBeUndefined();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('should advance the live counter to "Thinking for 3s" after 3000ms while streaming', () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date('2026-04-20T00:00:00Z'));
+        const startedAtMs = Date.now();
+
+        render(
+          <ChatMessageReasoning
+            part={createReasoningPartWithTiming({ state: 'streaming', reasoningStartedAtMs: startedAtMs })}
+            hasContent={false}
+          />,
+        );
+
+        act(() => {
+          vi.advanceTimersByTime(3000);
+        });
+
+        const spans = readLabelSpans();
+        expect(spans.verbText).toBe('Thinking');
+        expect(spans.suffixText?.trim()).toBe('for 3s');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('should render "Thought briefly" for state=done with sub-second timing', () => {
+      mockChatStatus.current = 'idle';
+      render(
+        <ChatMessageReasoning
+          part={createReasoningPartWithTiming({
+            state: 'done',
+            reasoningStartedAtMs: 1_700_000_000_000,
+            reasoningEndedAtMs: 1_700_000_000_500,
+          })}
+          hasContent={false}
+        />,
+      );
+
+      const spans = readLabelSpans();
+      expect(spans.verbText).toBe('Thought');
+      expect(spans.suffixText?.trim()).toBe('briefly');
+    });
+
+    it('should render "Thought for 2s" for state=done with a 2-second elapsed timing', () => {
+      mockChatStatus.current = 'idle';
+      render(
+        <ChatMessageReasoning
+          part={createReasoningPartWithTiming({
+            state: 'done',
+            reasoningStartedAtMs: 1_700_000_000_000,
+            reasoningEndedAtMs: 1_700_000_002_000,
+          })}
+          hasContent={false}
+        />,
+      );
+
+      const spans = readLabelSpans();
+      expect(spans.verbText).toBe('Thought');
+      expect(spans.suffixText?.trim()).toBe('for 2s');
+    });
+
+    it('should render "Thought for 1m 12s" for state=done with a 72-second elapsed timing', () => {
+      mockChatStatus.current = 'idle';
+      render(
+        <ChatMessageReasoning
+          part={createReasoningPartWithTiming({
+            state: 'done',
+            reasoningStartedAtMs: 1_700_000_000_000,
+            reasoningEndedAtMs: 1_700_000_072_000,
+          })}
+          hasContent={false}
+        />,
+      );
+
+      const spans = readLabelSpans();
+      expect(spans.verbText).toBe('Thought');
+      expect(spans.suffixText?.trim()).toBe('for 1m 12s');
+    });
+
+    it('should render the verb in the foreground tone and the suffix in the muted tone', () => {
+      mockChatStatus.current = 'idle';
+      render(
+        <ChatMessageReasoning
+          part={createReasoningPartWithTiming({
+            state: 'done',
+            reasoningStartedAtMs: 1_700_000_000_000,
+            reasoningEndedAtMs: 1_700_000_002_000,
+          })}
+          hasContent={false}
+        />,
+      );
+
+      const spans = readLabelSpans();
+      expect(spans.verbSpan.className).not.toContain(mutedClass);
+      expect(spans.suffixSpan?.className).toContain(mutedClass);
+    });
+
+    it('should not render an empty muted suffix span for a single-word label like "Thinking…"', () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date('2026-04-20T00:00:00Z'));
+        render(
+          <ChatMessageReasoning
+            part={createReasoningPartWithTiming({
+              state: 'streaming',
+              reasoningStartedAtMs: Date.now(),
+            })}
+            hasContent={false}
+          />,
+        );
+
+        const spans = readLabelSpans();
+        expect(spans.verbText).toBe('Thinking…');
+        expect(spans.suffixSpan).toBeUndefined();
+        const mutedSpans = spans.button.querySelectorAll(`span.${mutedClass.replace('/', String.raw`\/`)}`);
+        expect(mutedSpans.length).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('should anchor the live counter on the server-stamped time without client-arrival skew compensation', () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date('2026-04-20T00:00:05Z'));
+        const startedAtMs = Date.now() - 5000;
+
+        render(
+          <ChatMessageReasoning
+            part={createReasoningPartWithTiming({ state: 'streaming', reasoningStartedAtMs: startedAtMs })}
+            hasContent={false}
+          />,
+        );
+
+        const spans = readLabelSpans();
+        expect(spans.verbText).toBe('Thinking');
+        expect(spans.suffixText?.trim()).toBe('for 5s');
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });

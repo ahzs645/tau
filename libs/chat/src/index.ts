@@ -19,6 +19,7 @@ export * from '#schemas/context-payload.schema.js';
 export * from '#schemas/metadata.schema.js';
 export * from '#schemas/message.schema.js';
 export * from '#schemas/message-data.schema.js';
+export * from '#schemas/common-reasoning-metadata.schema.js';
 export type * from '#schemas/tool-schemas-registry.js';
 export * from '#schemas/rpc.schema.js';
 export * from '#types/rpc.types.js';

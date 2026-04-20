@@ -6,11 +6,14 @@ import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 // auto-pin effect re-run the moment the scroll container actually attaches,
 // even when an earlier render took a different JSX path that omitted the refs.
 import { Brain, ChevronRight } from 'lucide-react';
+import { getReasoningStartedAtMs, getReasoningDurationMs } from '@taucad/chat';
 import { MarkdownViewerChat } from '#components/markdown/markdown-viewer-chat.js';
 import { useChatSelector } from '#hooks/use-chat.js';
 import { ChatToolCard, ChatToolCardHeader, ChatToolCardTitle } from '#components/chat/chat-tool-card.js';
 import { Button } from '#components/ui/button.js';
 import { cn } from '#utils/ui.utils.js';
+import { formatReasoningDuration } from '#utils/format-reasoning-duration.js';
+import { useReasoningStopwatch } from '#utils/use-reasoning-stopwatch.js';
 
 /**
  * Maximum characters rendered in preview mode.
@@ -182,6 +185,28 @@ export function ChatMessageReasoning({ part, hasContent }: ChatMessageReasoningP
     });
   }, []);
 
+  // Three-state header label (see docs/research/reasoning-duration-display.md):
+  //   1. Streaming with a server-stamped startedAtMs → live "Thinking for Ns".
+  //   2. Done with both endpoints stamped → "Thought for Ns" / "Thought briefly".
+  //   3. No common timing metadata → legacy "Thought process" fallback so
+  //      pre-instrumentation persisted messages still render cleanly.
+  const reasoningStartedAtMs = getReasoningStartedAtMs(part);
+  const finalReasoningDurationMs = getReasoningDurationMs(part);
+  const isReasoningStreaming = part.state === 'streaming';
+  const liveReasoningElapsedMs = useReasoningStopwatch(reasoningStartedAtMs, isReasoningStreaming);
+
+  const reasoningLabel = isReasoningStreaming
+    ? formatReasoningDuration(liveReasoningElapsedMs, { verb: 'Thinking' })
+    : finalReasoningDurationMs === undefined
+      ? 'Thought process'
+      : formatReasoningDuration(finalReasoningDurationMs);
+
+  // Two-tone presentation: leading verb ("Thought" / "Thinking") in the
+  // foreground, the trailing duration suffix in muted color so the most
+  // important word reads first while the suffix recedes.
+  const [reasoningLabelVerb, ...reasoningLabelRest] = reasoningLabel.split(' ');
+  const reasoningLabelSuffix = reasoningLabelRest.length > 0 ? ` ${reasoningLabelRest.join(' ')}` : '';
+
   if (!hasReasoningText) {
     return (
       <ChatToolCard variant='minimal' status='loading' isDefaultOpen={false}>
@@ -201,7 +226,10 @@ export function ChatMessageReasoning({ part, hasContent }: ChatMessageReasoningP
         onClick={handleToggle}
       >
         <Brain className='size-3 shrink-0' />
-        <span className='flex min-w-0 items-baseline gap-1'>Thought process</span>
+        <span className='flex min-w-0 items-baseline gap-1'>
+          <span>{reasoningLabelVerb}</span>
+          {reasoningLabelSuffix && <span className='text-foreground/60'>{reasoningLabelSuffix}</span>}
+        </span>
         <ChevronRight
           className={cn('size-3 shrink-0 transition-transform duration-200', isContentVisible && 'rotate-90')}
         />

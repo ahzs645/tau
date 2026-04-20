@@ -19,6 +19,7 @@ import { createStaticToolTransform } from '#api/chat/utils/static-tool-transform
 import { createErrorTransform } from '#api/chat/utils/error-transform.js';
 import { createToolOutputTransform } from '#api/chat/utils/tool-output-transform.js';
 import { createNewlineTrimTransform } from '#api/chat/utils/newline-trim-transform.js';
+import { createReasoningTimingTransform } from '#api/chat/utils/reasoning-timing-transform.js';
 import { createLatexDelimiterTransform } from '#api/chat/utils/latex-delimiter-transform.js';
 import { ChatExceptionFilter } from '#api/chat/chat-exception.filter.js';
 import { ChatAbortError, isChatAbortError, registerChatAbort } from '#api/chat/utils/chat-abort.js';
@@ -160,6 +161,11 @@ export class ChatController {
       void response.header('x-accel-buffering', 'no');
 
       const uiMessageStream = toUIMessageStream(stream)
+        // Stamp reasoning-start / reasoning-end with server-side timestamps
+        // BEFORE any other transform that could mutate or wrap chunks. The
+        // hot path (reasoning-delta) is a synchronous identity pass-through
+        // — see docs/research/reasoning-duration-display.md § Finding 6.
+        .pipeThrough(createReasoningTimingTransform())
         .pipeThrough(createStaticToolTransform())
         .pipeThrough(createToolOutputTransform())
         .pipeThrough(createNewlineTrimTransform())

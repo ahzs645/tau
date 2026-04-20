@@ -6,6 +6,7 @@
 import { z } from 'zod';
 import { messageMetadataSchema } from '#schemas/metadata.schema.js';
 import { providerMetadataSchema } from '#schemas/message-provider.schema.js';
+import { commonReasoningMetadataSchema } from '#schemas/common-reasoning-metadata.schema.js';
 import type { MyUIMessage } from '#types/message.types.js';
 import { usageDataSchema, contextCompactionDataSchema, contextUsageDataSchema } from '#schemas/message-data.schema.js';
 import { editFileInputSchema, editFileOutputSchema } from '#schemas/tools/edit-file.tool.schema.js';
@@ -197,7 +198,15 @@ export const uiMessagesSchema: z.ZodType<MyUIMessage[]> = z
               type: z.literal('reasoning'),
               text: z.string(),
               state: z.enum(['streaming', 'done']).optional(),
-              providerMetadata: providerMetadataSchema.optional(),
+              // Narrowed: the `common` namespace carries Tau-attached
+              // reasoning timing metadata (server-stamped on
+              // reasoning-start/end). The intersection keeps validation
+              // for sibling provider namespaces (anthropic, openai, …)
+              // via the loose record while typing `common` strictly.
+              // See docs/research/reasoning-duration-display.md § Finding 7.
+              providerMetadata: providerMetadataSchema
+                .and(z.object({ common: commonReasoningMetadataSchema.optional() }))
+                .optional(),
             }),
             z.object({
               type: z.literal('source-url'),
