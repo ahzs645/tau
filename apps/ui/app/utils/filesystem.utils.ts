@@ -1,52 +1,4 @@
 /**
- * Extensions that are always binary.
- *
- * These are file types that are never valid UTF-8/text, and are always
- * binary by their format specification.
- */
-const binaryExtensions = new Set([
-  // Images
-  'png',
-  'jpg',
-  'jpeg',
-  'gif',
-  'bmp',
-  'ico',
-  'webp',
-
-  // 3D Binary/Model formats
-  'glb',
-  '3ds',
-
-  // Archives/compression
-  'zip',
-  'gz',
-  'rar',
-  '7z',
-
-  // Executables/libraries
-  'exe',
-  'dll',
-  'so',
-  'dylib',
-
-  // Fonts
-  'ttf',
-  'otf',
-  'woff',
-  'woff2',
-  'eot',
-
-  // Audio/Video
-  'mp3',
-  'mp4',
-  'avi',
-  'mov',
-  'wav',
-  'flac',
-]);
-
-/**
  * Extract the file extension from a filename.
  * Returns the extension without the leading dot, or empty string if no extension.
  *
@@ -65,38 +17,6 @@ export function getFileExtension(filename: string): string {
   }
 
   return filename.slice(lastDotIndex + 1).toLowerCase();
-}
-
-/**
- * Detect if a file is binary using extension + null byte check (VSCode approach)
- *
- * @param filename - The filename to check.
- * @param data - Optional file data to inspect for null bytes.
- * @returns True if the file is binary, false otherwise.
- *
- * @example
- * isBinaryFile('image.png') // true
- * isBinaryFile('main.ts') // false
- */
-export function isBinaryFile(filename: string, data?: Uint8Array<ArrayBuffer>): boolean {
-  // Fast path: check extension
-  // oxlint-disable-next-line unicorn-js/prevent-abbreviations -- ext is conventional abbreviation for extension
-  const ext = getFileExtension(filename).toLowerCase();
-  if (binaryExtensions.has(ext)) {
-    return true;
-  }
-
-  // Fallback: check for null bytes (like Git does)
-  if (data) {
-    const sampleSize = Math.min(8000, data.length);
-    for (let i = 0; i < sampleSize; i++) {
-      if (data[i] === 0) {
-        return true;
-      }
-    }
-  }
-
-  return false;
 }
 
 /**

@@ -2,6 +2,8 @@ import { BoundedFileCache } from '@taucad/filesystem';
 import type { SharedPool } from '@taucad/memory';
 import type { FileWriteSource, FileManagerProxy } from '#machines/file-manager.machine.types.js';
 import { joinPath } from '@taucad/utils/path';
+import { headSniffByteLength, seemsBinary } from '#lib/seems-binary.js';
+import { BinaryFileError, FileNotFoundError, FileTooLargeError } from '#lib/file-content-errors.js';
 
 export type ContentChangeEvent =
   | { type: 'written'; path: string; data: Uint8Array<ArrayBuffer>; source: FileWriteSource }
@@ -9,6 +11,27 @@ export type ContentChangeEvent =
   | { type: 'renamed'; oldPath: string; newPath: string }
   | { type: 'deleted'; path: string; source: FileWriteSource }
   | { type: 'batchWritten'; paths: string[]; source: FileWriteSource };
+
+/**
+ * Discriminated outcome of a content resolve.
+ * The hook + render layer route on `kind` instead of guessing from cache state.
+ */
+export type FileContentResult =
+  | { kind: 'loading' }
+  | { kind: 'text'; content: Uint8Array<ArrayBuffer> }
+  | { kind: 'binary'; size: number; head: Uint8Array<ArrayBuffer> }
+  | { kind: 'too-large'; size: number; limit: number }
+  | { kind: 'orphaned' }
+  | { kind: 'error'; cause: unknown };
+
+export type ResolveOptions = {
+  /** Bypass binary sniff and treat the bytes as text regardless. */
+  readonly forceText?: boolean;
+  /** Override the open-time size limit for this resolve only. */
+  readonly sizeLimit?: number;
+};
+
+export type OutcomeChangeEvent = { path: string; result: FileContentResult };
 
 type FileContentServiceInit = {
   proxy: FileManagerProxy;
@@ -18,6 +41,13 @@ type FileContentServiceInit = {
     maxTotalBytes?: number;
     maxSingleFileBytes?: number;
   };
+  /**
+   * Open-time size policy. Files exceeding this limit produce a `too-large`
+   * outcome before the bytes are admitted to the cache. Distinct from
+   * `cacheOptions.maxSingleFileBytes`, which only bounds memory pressure.
+   * Defaults to 50 MiB (matches VS Code's web confirmation limit).
+   */
+  openSizeBytes?: number;
   /** Reader-side shared file pool for zero-IPC cached reads across threads. */
   filePool?: SharedPool;
 };
@@ -25,30 +55,49 @@ type FileContentServiceInit = {
 const defaultMaxEntries = 500;
 const defaultMaxTotalBytes = 128 * 1024 * 1024;
 const defaultMaxSingleFileBytes = 1024 * 1024;
+const defaultOpenSizeBytes = 50 * 1024 * 1024;
+
+/**
+ * Shared sentinel for unresolved paths. `peekOutcome` MUST return a
+ * referentially-stable value when nothing has changed, otherwise
+ * `useSyncExternalStore` consumers re-render in a loop and the
+ * surrounding error boundary remounts the project tree (crash-loop).
+ */
+const loadingOutcome: FileContentResult = { kind: 'loading' };
+
+export type OrphanChangeEvent = { path: string; orphaned: boolean };
 
 /**
  * Single content authority on the main thread.
  * All content operations (read, write, rename, delete, duplicate)
  * go through this service. No consumer ever calls the proxy for
  * content operations directly.
+ *
+ * `resolve` returns a discriminated `FileContentResult` so that the
+ * binary/too-large/orphaned/error decisions are made inside the read
+ * pipeline rather than guessed from cache content in the render layer.
+ * Callers that just want bytes use `resolveBytes`, which throws typed
+ * errors for non-text outcomes.
  */
-export type OrphanChangeEvent = { path: string; orphaned: boolean };
-
 export class FileContentService {
   private readonly cache: BoundedFileCache;
   private readonly proxy: FileManagerProxy;
   private readonly filePool: SharedPool | undefined;
+  private readonly openSizeBytes: number;
   private rootDirectory: string;
-  private readonly pendingResolves = new Map<string, Promise<Uint8Array<ArrayBuffer>>>();
+  private readonly pendingResolves = new Map<string, Promise<FileContentResult>>();
+  private readonly outcomes = new Map<string, FileContentResult>();
   private readonly pathSubscribers = new Map<string, Set<() => void>>();
   private readonly globalSubscribers = new Set<(event: ContentChangeEvent) => void>();
   private readonly orphanedPaths = new Set<string>();
   private readonly orphanSubscribers = new Set<(event: OrphanChangeEvent) => void>();
+  private readonly outcomeSubscribers = new Set<(event: OutcomeChangeEvent) => void>();
 
   public constructor(init: FileContentServiceInit) {
     this.proxy = init.proxy;
     this.rootDirectory = init.rootDirectory;
     this.filePool = init.filePool;
+    this.openSizeBytes = init.openSizeBytes ?? defaultOpenSizeBytes;
     this.cache = new BoundedFileCache({
       maxEntries: init.cacheOptions?.maxEntries ?? defaultMaxEntries,
       maxTotalBytes: init.cacheOptions?.maxTotalBytes ?? defaultMaxTotalBytes,
@@ -57,31 +106,28 @@ export class FileContentService {
   }
 
   /**
-   * Resolve file content. Cache hit returns immediately.
-   * Cache miss reads from the worker. Concurrent reads for the same path
-   * join via a shared promise (VS Code `joinPendingResolves` pattern).
+   * Resolve file content, returning a discriminated outcome that captures
+   * the binary/too-large/orphaned/error decision inside the read pipeline.
+   * Cache hit short-circuits the read and re-uses the cached `text` outcome.
    */
-  public async resolve(path: string): Promise<Uint8Array<ArrayBuffer>> {
+  public async resolve(path: string, options?: ResolveOptions): Promise<FileContentResult> {
     const cached = this.cache.get(path);
-    if (cached !== undefined) {
-      return cached;
-    }
-
-    if (this.filePool) {
-      const absolutePath = joinPath(this.rootDirectory, path);
-      const poolData = this.filePool.resolveCopy(absolutePath);
-      if (poolData) {
-        this.cache.set(path, poolData);
-        return poolData;
+    if (cached !== undefined && !this.shouldRecompute(options)) {
+      const existing = this.outcomes.get(path);
+      if (existing?.kind === 'text') {
+        return existing;
       }
+      const refreshed: FileContentResult = { kind: 'text', content: cached };
+      this.publishOutcome(path, refreshed);
+      return refreshed;
     }
 
     const pending = this.pendingResolves.get(path);
-    if (pending !== undefined) {
+    if (pending !== undefined && !this.shouldRecompute(options)) {
       return pending;
     }
 
-    const promise = this.resolveFromWorker(path);
+    const promise = this.computeOutcome(path, options);
     this.pendingResolves.set(path, promise);
 
     try {
@@ -89,6 +135,52 @@ export class FileContentService {
     } finally {
       this.pendingResolves.delete(path);
     }
+  }
+
+  /**
+   * Resolve file content as raw bytes, throwing typed errors for
+   * non-text outcomes. Use this when the caller expects text bytes
+   * (e.g. KCL LSP, RPC handlers, chat-stack-trace).
+   */
+  public async resolveBytes(path: string, options?: ResolveOptions): Promise<Uint8Array<ArrayBuffer>> {
+    const result = await this.resolve(path, options);
+    switch (result.kind) {
+      case 'text': {
+        return result.content;
+      }
+      case 'binary': {
+        throw new BinaryFileError(`File '${path}' is binary and cannot be read as text`, {
+          path,
+          size: result.size,
+        });
+      }
+      case 'too-large': {
+        throw new FileTooLargeError(
+          `File '${path}' (${result.size} bytes) exceeds open-time size limit (${result.limit} bytes)`,
+          { path, size: result.size, limit: result.limit },
+        );
+      }
+      case 'orphaned': {
+        throw new FileNotFoundError(`File '${path}' was not found`, { path });
+      }
+      case 'error': {
+        throw result.cause instanceof Error ? result.cause : new Error(String(result.cause));
+      }
+      case 'loading': {
+        // ComputeOutcome never resolves to 'loading'; this branch is unreachable
+        // but keeps the discriminator exhaustive for future kinds.
+        throw new Error(`Unexpected 'loading' outcome for '${path}'`);
+      }
+    }
+  }
+
+  /**
+   * Sync snapshot of the most recent outcome for a path.
+   * Returns `{ kind: 'loading' }` when no outcome has been computed yet.
+   * Compatible with `useSyncExternalStore`.
+   */
+  public peekOutcome(path: string): FileContentResult {
+    return this.outcomes.get(path) ?? loadingOutcome;
   }
 
   /**
@@ -100,7 +192,7 @@ export class FileContentService {
     await this.proxy.writeFile(absolutePath, data);
     this.cache.set(path, localCopy);
     this.setOrphaned(path, false);
-    this.notifyPathSubscribers(path);
+    this.publishOutcome(path, { kind: 'text', content: localCopy });
     this.notifyGlobalSubscribers({ type: 'written', path, data: localCopy, source });
   }
 
@@ -126,7 +218,7 @@ export class FileContentService {
 
     for (const [path, localCopy] of clones) {
       this.cache.set(path, localCopy);
-      this.notifyPathSubscribers(path);
+      this.publishOutcome(path, { kind: 'text', content: localCopy });
     }
 
     this.notifyGlobalSubscribers({ type: 'batchWritten', paths, source });
@@ -140,8 +232,12 @@ export class FileContentService {
     const absoluteNewPath = joinPath(this.rootDirectory, newPath);
     await this.proxy.rename(absoluteOldPath, absoluteNewPath);
     this.cache.rename(oldPath, newPath);
+    const oldOutcome = this.outcomes.get(oldPath);
+    if (oldOutcome) {
+      this.outcomes.delete(oldPath);
+      this.publishOutcome(newPath, oldOutcome);
+    }
     this.notifyPathSubscribers(oldPath);
-    this.notifyPathSubscribers(newPath);
     this.notifyGlobalSubscribers({ type: 'renamed', oldPath, newPath });
   }
 
@@ -153,15 +249,15 @@ export class FileContentService {
     await this.proxy.unlink(absolutePath);
     this.cache.delete(path);
     this.setOrphaned(path, true);
-    this.notifyPathSubscribers(path);
+    this.publishOutcome(path, { kind: 'orphaned' });
     this.notifyGlobalSubscribers({ type: 'deleted', path, source });
   }
 
   /**
-   * Duplicate a file. Reads source via resolve, writes dest via write.
+   * Duplicate a file. Reads source via resolveBytes, writes dest via write.
    */
   public async duplicate(sourcePath: string, destinationPath: string): Promise<void> {
-    const data = await this.resolve(sourcePath);
+    const data = await this.resolveBytes(sourcePath);
     await this.write(destinationPath, data, 'user');
   }
 
@@ -215,6 +311,18 @@ export class FileContentService {
   }
 
   /**
+   * Subscribe to outcome transitions for any path. Fires once per outcome
+   * change with the new discriminated result. Mirrors VS Code's
+   * `TextFileEditorModelManager.onDidResolve` channel.
+   */
+  public onDidChangeOutcome(handler: (event: OutcomeChangeEvent) => void): () => void {
+    this.outcomeSubscribers.add(handler);
+    return () => {
+      this.outcomeSubscribers.delete(handler);
+    };
+  }
+
+  /**
    * Subscribe to changes for a specific path (or all paths if undefined).
    * Compatible with `useSyncExternalStore`.
    */
@@ -259,6 +367,7 @@ export class FileContentService {
     this.cache.clear();
     this.pendingResolves.clear();
     this.orphanedPaths.clear();
+    this.outcomes.clear();
   }
 
   /**
@@ -271,6 +380,80 @@ export class FileContentService {
     this.globalSubscribers.clear();
     this.orphanedPaths.clear();
     this.orphanSubscribers.clear();
+    this.outcomes.clear();
+    this.outcomeSubscribers.clear();
+  }
+
+  private shouldRecompute(options?: ResolveOptions): boolean {
+    return Boolean(options?.forceText) || options?.sizeLimit !== undefined;
+  }
+
+  private async computeOutcome(path: string, options?: ResolveOptions): Promise<FileContentResult> {
+    const data = await this.readBytes(path);
+    if (data === undefined) {
+      // ReadBytes already published the orphaned/error outcome.
+      return this.outcomes.get(path) ?? { kind: 'orphaned' };
+    }
+
+    const limit = options?.sizeLimit ?? this.openSizeBytes;
+    const forceText = Boolean(options?.forceText);
+
+    if (!forceText && seemsBinary(data)) {
+      const head = data.slice(0, headSniffByteLength);
+      const outcome: FileContentResult = { kind: 'binary', size: data.byteLength, head };
+      this.publishOutcome(path, outcome);
+      return outcome;
+    }
+
+    if (data.byteLength > limit) {
+      const outcome: FileContentResult = { kind: 'too-large', size: data.byteLength, limit };
+      this.publishOutcome(path, outcome);
+      return outcome;
+    }
+
+    this.cache.set(path, data);
+    const outcome: FileContentResult = { kind: 'text', content: data };
+    this.publishOutcome(path, outcome);
+    this.notifyGlobalSubscribers({ type: 'read', path, data });
+    return outcome;
+  }
+
+  private async readBytes(path: string): Promise<Uint8Array<ArrayBuffer> | undefined> {
+    if (this.filePool) {
+      const absolutePath = joinPath(this.rootDirectory, path);
+      const poolData = this.filePool.resolveCopy(absolutePath);
+      if (poolData) {
+        this.setOrphaned(path, false);
+        return poolData;
+      }
+    }
+
+    const absolutePath = joinPath(this.rootDirectory, path);
+    try {
+      const data = await this.proxy.readFile(absolutePath);
+      this.setOrphaned(path, false);
+      return data;
+    } catch (error) {
+      if (error instanceof Error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
+        this.setOrphaned(path, true);
+        this.publishOutcome(path, { kind: 'orphaned' });
+        return undefined;
+      }
+      this.publishOutcome(path, { kind: 'error', cause: error });
+      return undefined;
+    }
+  }
+
+  private publishOutcome(path: string, result: FileContentResult): void {
+    const previous = this.outcomes.get(path);
+    if (previous && outcomesEqual(previous, result)) {
+      return;
+    }
+    this.outcomes.set(path, result);
+    for (const handler of this.outcomeSubscribers) {
+      handler({ path, result });
+    }
+    this.notifyPathSubscribers(path);
   }
 
   private setOrphaned(path: string, orphaned: boolean): void {
@@ -302,21 +485,32 @@ export class FileContentService {
       handler(event);
     }
   }
+}
 
-  private async resolveFromWorker(path: string): Promise<Uint8Array<ArrayBuffer>> {
-    const absolutePath = joinPath(this.rootDirectory, path);
-    try {
-      const data = await this.proxy.readFile(absolutePath);
-      this.cache.set(path, data);
-      this.setOrphaned(path, false);
-      this.notifyPathSubscribers(path);
-      this.notifyGlobalSubscribers({ type: 'read', path, data });
-      return data;
-    } catch (error) {
-      if (error instanceof Error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
-        this.setOrphaned(path, true);
-      }
-      throw error;
+function outcomesEqual(a: FileContentResult, b: FileContentResult): boolean {
+  if (a.kind !== b.kind) {
+    return false;
+  }
+  switch (a.kind) {
+    case 'loading':
+    case 'orphaned': {
+      return true;
+    }
+    case 'text': {
+      const other = b as Extract<FileContentResult, { kind: 'text' }>;
+      return a.content === other.content;
+    }
+    case 'binary': {
+      const other = b as Extract<FileContentResult, { kind: 'binary' }>;
+      return a.size === other.size && a.head === other.head;
+    }
+    case 'too-large': {
+      const other = b as Extract<FileContentResult, { kind: 'too-large' }>;
+      return a.size === other.size && a.limit === other.limit;
+    }
+    case 'error': {
+      const other = b as Extract<FileContentResult, { kind: 'error' }>;
+      return a.cause === other.cause;
     }
   }
 }

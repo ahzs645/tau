@@ -199,10 +199,17 @@ export class MonacoModelService {
     const capturedEpoch = this.epoch;
 
     try {
-      const content = await this.contentService.resolve(path);
+      const result = await this.contentService.resolve(path);
 
       // Check epoch hasn't changed during async read
       if (this.epoch !== capturedEpoch || this.abortController?.signal.aborted) {
+        return undefined;
+      }
+
+      // Only text outcomes back a Monaco model. Binary, too-large, orphaned,
+      // and error outcomes intentionally return undefined so the editor falls
+      // back to its placeholder UI.
+      if (result.kind !== 'text') {
         return undefined;
       }
 
@@ -212,7 +219,7 @@ export class MonacoModelService {
         return recheck;
       }
 
-      const text = decodeTextFile(content);
+      const text = decodeTextFile(result.content);
       const language = this.detectLanguage(path);
       const model = this.monaco.editor.createModel(text, language, uri);
 
@@ -226,7 +233,7 @@ export class MonacoModelService {
       this.syncedPaths.add(path);
       return model;
     } catch {
-      // File not found or read error -- silently return undefined
+      // Read error -- silently return undefined
       return undefined;
     }
   }
@@ -463,13 +470,19 @@ export class MonacoModelService {
     const uri = this.createUri(filePath);
 
     try {
-      const content = await this.contentService.resolve(filePath);
+      const result = await this.contentService.resolve(filePath);
 
       if (this.epoch !== capturedEpoch || this.abortController?.signal.aborted) {
         return;
       }
 
-      const text = decodeTextFile(content);
+      // Background model warm-up only applies to text content; binary,
+      // too-large, orphaned, and error outcomes do not produce models.
+      if (result.kind !== 'text') {
+        return;
+      }
+
+      const text = decodeTextFile(result.content);
 
       // Check if model already exists (may have been recreated by the Editor
       // component with stale content after setBuildSession disposed it).

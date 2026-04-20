@@ -71,10 +71,11 @@ export const ChatViewer = memo(function ({
     return false;
   }, [entryFile, fileTree]);
 
-  // Derive isMissing from content service orphan state (VS Code pattern).
-  // useFileContent auto-loads on cache miss; resolve failure sets orphan.
-  const { isOrphaned } = useFileContent(entryFile);
-  const isMissing = isOrphaned && !isDirectory;
+  // Derive isMissing from content service orphan outcome (VS Code pattern).
+  // useFileContent auto-loads on cache miss; missing files resolve to the
+  // 'orphaned' outcome via the discriminated FileContentResult contract.
+  const fileContent = useFileContent(entryFile);
+  const isMissing = fileContent.kind === 'orphaned' && !isDirectory;
 
   // Get the current view settings from editor state for this panel
   const viewSettings = useSelector(editorRef, (state) => state.context.viewSettings);

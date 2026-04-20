@@ -164,7 +164,7 @@ export function FileManagerProvider({
       if (!contentService) {
         throw new Error('Content service not initialized');
       }
-      return contentService.resolve(path);
+      return contentService.resolveBytes(path);
     },
     [contentService],
   );

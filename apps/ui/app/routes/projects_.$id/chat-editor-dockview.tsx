@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import type { ComponentProps } from 'react';
 import { useMonaco } from '@monaco-editor/react';
 import { useSelector } from '@xstate/react';
@@ -33,8 +33,10 @@ import { useFloatingPanel } from '#components/ui/floating-panel.js';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
 import { formatKeyCombination } from '#utils/keys.utils.js';
 import { keyCombinationEditor } from '#routes/projects_.$id/chat-editor-layout.js';
-import { getFileExtension, isBinaryFile, decodeTextFile, encodeTextFile } from '#utils/filesystem.utils.js';
+import { getFileExtension, decodeTextFile, encodeTextFile } from '#utils/filesystem.utils.js';
 import { ChatEditorBinaryWarning } from '#routes/projects_.$id/chat-editor-binary-warning.js';
+import { ChatEditorTooLargeWarning } from '#routes/projects_.$id/chat-editor-too-large-warning.js';
+import { ChatEditorErrorPlaceholder } from '#routes/projects_.$id/chat-editor-error-placeholder.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import { useFileContent } from '#hooks/use-file-content.js';
 import { useViewContext } from '#routes/projects_.$id/chat-interface-view-context.js';
@@ -74,7 +76,7 @@ const components = {
  * FileEditor - renders a Monaco editor for a single file.
  * Each Dockview panel gets its own instance.
  */
-const FileEditor = memo(function ({
+export const FileEditor = memo(function ({
   filePath,
   panelApi,
 }: {
@@ -85,7 +87,7 @@ const FileEditor = memo(function ({
   const { editorRef, compilationUnits, mainEntryFile } = useProject();
   const cadActor = compilationUnits.get(mainEntryFile);
   const fileManager = useFileManager();
-  const [forceOpenBinary, setForceOpenBinary] = useState(false);
+  const { contentService } = fileManager;
   const { modelService, markerService } = useMonacoServices();
   const planModeEnabled = useFeature('planMode');
 
@@ -96,30 +98,15 @@ const FileEditor = memo(function ({
     markerService,
   });
 
-  // Read file content from content service (auto-loads on cache miss)
-  const { content: fileContent, isOrphaned: isMissing } = useFileContent(filePath);
-
-  const activeFile = useMemo(() => {
-    if (!fileContent) {
-      return undefined;
-    }
-
-    const name = filePath.split('/').pop() ?? filePath;
-    return {
-      path: filePath,
-      name,
-      isBinary: isBinaryFile(name, fileContent),
-      content: fileContent,
-      language: languageFromExtension[getFileExtension(name) as keyof typeof languageFromExtension],
-    };
-  }, [filePath, fileContent]);
+  // Read file content from content service (auto-loads on cache miss).
+  // The discriminated outcome is the single source of truth for the render
+  // gate — there is no local "force open" state because the override is
+  // expressed by re-resolving with `forceText` / `sizeLimit` options.
+  const result = useFileContent(filePath);
 
   const handleFileSelectorSelect = useCallback(
     (path: string) => {
-      // Open the selected file through the editor machine
       editorRef.send({ type: 'openFile', path, source: 'user' });
-
-      // Update the Dockview panel to show the new file
       panelApi.updateParameters({ filePath: path });
       const fileName = path.split('/').pop() ?? path;
       panelApi.setTitle(fileName);
@@ -127,30 +114,32 @@ const FileEditor = memo(function ({
     [editorRef, panelApi],
   );
 
-  // Reset force open when file path changes
-  useEffect(() => {
-    setForceOpenBinary(false);
-  }, [filePath]);
+  const handleForceOpenBinary = useCallback(() => {
+    if (!contentService) {
+      return;
+    }
+    void contentService.resolve(filePath, {
+      forceText: true,
+      sizeLimit: Number.MAX_SAFE_INTEGER,
+    });
+  }, [contentService, filePath]);
+
+  const handleOpenAnywayLarge = useCallback(() => {
+    if (!contentService) {
+      return;
+    }
+    void contentService.resolve(filePath, { sizeLimit: Number.MAX_SAFE_INTEGER });
+  }, [contentService, filePath]);
 
   const handleCodeChange = useCallback(
     (value: ComponentProps<typeof CodeEditor>['value']) => {
-      if (!activeFile) {
-        return;
-      }
-
       const encoded = encodeTextFile(value ?? '');
-      void fileManager.writeFile(activeFile.path, encoded, {
+      void fileManager.writeFile(filePath, encoded, {
         source: 'editor',
       });
     },
-    [activeFile, fileManager],
+    [fileManager, filePath],
   );
-
-  const editorContent = activeFile ? decodeTextFile(activeFile.content) : '';
-
-  const handleForceOpenBinary = useCallback(() => {
-    setForceOpenBinary(true);
-  }, []);
 
   // Acquire/release ref-counted editor model hold
   useEffect(() => {
@@ -164,53 +153,62 @@ const FileEditor = memo(function ({
     };
   }, [modelService, filePath]);
 
-  if (isMissing) {
-    return (
-      <div className='flex h-full flex-col items-center justify-center gap-4 text-muted-foreground'>
-        <FileX className='size-12 stroke-1' />
-        <div className='flex flex-col items-center gap-1'>
-          <p className='text-sm font-medium'>File not found</p>
-          <p className='max-w-60 truncate text-xs'>{filePath}</p>
+  switch (result.kind) {
+    case 'loading': {
+      return (
+        <div className='flex h-full items-center justify-center'>
+          <Loader className='size-8 stroke-1 text-muted-foreground' />
         </div>
-        <FileSelector
-          selectedFile={undefined}
-          placeholder='Select file to edit...'
-          className='h-8 w-50'
-          title='Open File'
-          description='Choose a file to open in the editor'
-          searchPlaceholder='Search files...'
-          emptyMessage='No files found.'
-          onSelect={handleFileSelectorSelect}
-        />
-      </div>
-    );
+      );
+    }
+    case 'binary': {
+      return <ChatEditorBinaryWarning onForceOpen={handleForceOpenBinary} />;
+    }
+    case 'too-large': {
+      return <ChatEditorTooLargeWarning size={result.size} limit={result.limit} onOpenAnyway={handleOpenAnywayLarge} />;
+    }
+    case 'error': {
+      return <ChatEditorErrorPlaceholder cause={result.cause} />;
+    }
+    case 'orphaned': {
+      return (
+        <div className='flex h-full flex-col items-center justify-center gap-4 text-muted-foreground'>
+          <FileX className='size-12 stroke-1' />
+          <div className='flex flex-col items-center gap-1'>
+            <p className='text-sm font-medium'>File not found</p>
+            <p className='max-w-60 truncate text-xs'>{filePath}</p>
+          </div>
+          <FileSelector
+            selectedFile={undefined}
+            placeholder='Select file to edit...'
+            className='h-8 w-50'
+            title='Open File'
+            description='Choose a file to open in the editor'
+            searchPlaceholder='Search files...'
+            emptyMessage='No files found.'
+            onSelect={handleFileSelectorSelect}
+          />
+        </div>
+      );
+    }
+    case 'text': {
+      const name = filePath.split('/').pop() ?? filePath;
+      const language = languageFromExtension[getFileExtension(name) as keyof typeof languageFromExtension];
+      const editorContent = decodeTextFile(result.content);
+      const ViewerComponent = resolveViewer({ path: filePath, name }, { planModeEnabled });
+      return (
+        <div className='flex h-full flex-col bg-background'>
+          <ViewerComponent
+            filePath={filePath}
+            content={editorContent}
+            language={language}
+            onChange={handleCodeChange}
+            onValidate={handleValidate}
+          />
+        </div>
+      );
+    }
   }
-
-  if (!activeFile) {
-    return (
-      <div className='flex h-full items-center justify-center'>
-        <Loader className='size-8 stroke-1 text-muted-foreground' />
-      </div>
-    );
-  }
-
-  if (activeFile.isBinary && !forceOpenBinary) {
-    return <ChatEditorBinaryWarning onForceOpen={handleForceOpenBinary} />;
-  }
-
-  const ViewerComponent = resolveViewer(activeFile, { planModeEnabled });
-
-  return (
-    <div className='flex h-full flex-col bg-background'>
-      <ViewerComponent
-        filePath={filePath}
-        content={editorContent}
-        language={activeFile.language}
-        onChange={handleCodeChange}
-        onValidate={handleValidate}
-      />
-    </div>
-  );
 });
 
 /**

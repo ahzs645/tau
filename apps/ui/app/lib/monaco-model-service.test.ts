@@ -10,7 +10,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type * as Monaco from 'monaco-editor';
 import { MonacoModelService } from '#lib/monaco-model-service.js';
 import type { ModelServiceConfig } from '#lib/monaco-model-service.js';
-import type { ContentChangeEvent } from '#lib/file-content-service.js';
+import type { ContentChangeEvent, FileContentResult } from '#lib/file-content-service.js';
+
+function textResult(text: string): FileContentResult {
+  return { kind: 'text', content: new TextEncoder().encode(text) };
+}
 
 vi.mock('#lib/monaco.constants.js', () => ({
   isJsLikeFile: (path: string) => /\.(js|jsx|ts|tsx|mjs|cjs)$/.test(path),
@@ -145,7 +149,7 @@ function createMockContentService(): MockContentService {
         mock._handler = undefined;
       };
     }),
-    resolve: vi.fn(async () => new TextEncoder().encode('')),
+    resolve: vi.fn(async (): Promise<FileContentResult> => textResult('')),
     peek: vi.fn(() => undefined),
   };
   return mock;
@@ -185,7 +189,7 @@ describe('MonacoModelService', () => {
 
   describe('disposeAllModels', () => {
     it('should only dispose tracked models, not untracked ones', async () => {
-      contentService.resolve.mockResolvedValueOnce(new TextEncoder().encode('const x = 1;'));
+      contentService.resolve.mockResolvedValueOnce(textResult('const x = 1;'));
       await service.getOrEnsureModel('src/app.ts');
 
       const untrackedModel = createMockModel('/lib.es2015.d.ts', 'declare const Array: any;');
@@ -201,7 +205,7 @@ describe('MonacoModelService', () => {
     });
 
     it('should dispose models from editorHolds', async () => {
-      contentService.resolve.mockResolvedValueOnce(new TextEncoder().encode('export {};'));
+      contentService.resolve.mockResolvedValueOnce(textResult('export {};'));
       await service.acquireModel('src/editor-held.ts');
 
       const model = models.get('file:///src/editor-held.ts');
@@ -212,7 +216,7 @@ describe('MonacoModelService', () => {
     });
 
     it('should dispose models from backgroundAccessTimes', async () => {
-      contentService.resolve.mockResolvedValueOnce(new TextEncoder().encode('export {};'));
+      contentService.resolve.mockResolvedValueOnce(textResult('export {};'));
       await service.getOrEnsureModel('src/background.ts');
 
       const model = models.get('file:///src/background.ts');
@@ -230,7 +234,7 @@ describe('MonacoModelService', () => {
       models.set('file:///lib.dom.d.ts', tsLibDom);
       models.set('file:///node_modules/@types/react/index.d.ts', ataModel);
 
-      contentService.resolve.mockResolvedValueOnce(new TextEncoder().encode('const y = 2;'));
+      contentService.resolve.mockResolvedValueOnce(textResult('const y = 2;'));
       await service.getOrEnsureModel('src/index.ts');
 
       service.setProjectSession();
@@ -253,7 +257,7 @@ describe('MonacoModelService', () => {
     });
 
     it('should handle models that have already been disposed externally', async () => {
-      contentService.resolve.mockResolvedValueOnce(new TextEncoder().encode('export {};'));
+      contentService.resolve.mockResolvedValueOnce(textResult('export {};'));
       await service.getOrEnsureModel('src/already-gone.ts');
 
       models.delete('file:///src/already-gone.ts');
@@ -266,7 +270,7 @@ describe('MonacoModelService', () => {
 
   describe('acquireModel / releaseModel', () => {
     it('should create and return a model on first acquire', async () => {
-      contentService.resolve.mockResolvedValueOnce(new TextEncoder().encode('const x = 1;'));
+      contentService.resolve.mockResolvedValueOnce(textResult('const x = 1;'));
       const model = await service.acquireModel('src/app.ts');
 
       expect(model).toBeDefined();
@@ -274,7 +278,7 @@ describe('MonacoModelService', () => {
     });
 
     it('should ref-count multiple acquires', async () => {
-      contentService.resolve.mockResolvedValue(new TextEncoder().encode('const x = 1;'));
+      contentService.resolve.mockResolvedValue(textResult('const x = 1;'));
       await service.acquireModel('src/app.ts');
       await service.acquireModel('src/app.ts');
 
@@ -292,7 +296,7 @@ describe('MonacoModelService', () => {
     });
 
     it('should transition model to background on final release', async () => {
-      contentService.resolve.mockResolvedValueOnce(new TextEncoder().encode('export {};'));
+      contentService.resolve.mockResolvedValueOnce(textResult('export {};'));
       await service.acquireModel('src/bg.ts');
 
       service.releaseModel('src/bg.ts');
@@ -303,12 +307,59 @@ describe('MonacoModelService', () => {
     });
 
     it('should return the same model for repeated acquires', async () => {
-      contentService.resolve.mockResolvedValue(new TextEncoder().encode('const x = 1;'));
+      contentService.resolve.mockResolvedValue(textResult('const x = 1;'));
       const model1 = await service.acquireModel('src/app.ts');
       const model2 = await service.acquireModel('src/app.ts');
 
       expect(model1).toBe(model2);
       expect(monaco.editor.createModel).toHaveBeenCalledTimes(1);
+    });
+
+    it('should return undefined and skip model creation for binary outcomes', async () => {
+      contentService.resolve.mockResolvedValueOnce({
+        kind: 'binary',
+        size: 1024,
+        head: new Uint8Array([0, 1, 2]),
+      });
+
+      const model = await service.getOrEnsureModel('src/asset.ts');
+
+      expect(model).toBeUndefined();
+      expect(monaco.editor.createModel).not.toHaveBeenCalled();
+    });
+
+    it('should return undefined and skip model creation for too-large outcomes', async () => {
+      contentService.resolve.mockResolvedValueOnce({
+        kind: 'too-large',
+        size: 100_000_000,
+        limit: 5_000_000,
+      });
+
+      const model = await service.getOrEnsureModel('src/huge.ts');
+
+      expect(model).toBeUndefined();
+      expect(monaco.editor.createModel).not.toHaveBeenCalled();
+    });
+
+    it('should return undefined and skip model creation for orphaned outcomes', async () => {
+      contentService.resolve.mockResolvedValueOnce({ kind: 'orphaned' });
+
+      const model = await service.getOrEnsureModel('src/missing.ts');
+
+      expect(model).toBeUndefined();
+      expect(monaco.editor.createModel).not.toHaveBeenCalled();
+    });
+
+    it('should return undefined and skip model creation for error outcomes', async () => {
+      contentService.resolve.mockResolvedValueOnce({
+        kind: 'error',
+        cause: new Error('disk failure'),
+      });
+
+      const model = await service.getOrEnsureModel('src/broken.ts');
+
+      expect(model).toBeUndefined();
+      expect(monaco.editor.createModel).not.toHaveBeenCalled();
     });
   });
 
