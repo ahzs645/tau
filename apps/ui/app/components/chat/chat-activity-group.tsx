@@ -6,9 +6,11 @@ import { ChatActivitySummary } from '#components/chat/chat-activity-summary.js';
 import { useActivityFoldContext } from '#components/chat/chat-activity-fold-context.js';
 
 type ChatActivityGroupProps = {
-  /** Verb fragment, e.g. `"Explored"`. Rendered with emphasis. */
-  readonly summaryVerb: string;
-  /** Detail fragment, e.g. `"5 files, 1 search"`. Rendered de-emphasized. */
+  /** Past-tense verb fragment, e.g. `"Explored"`. Rendered when the header is closed. */
+  readonly summaryVerbPast: string;
+  /** Present-participle counterpart, e.g. `"Exploring"`. Rendered when the header is open. */
+  readonly summaryVerbActive: string;
+  /** Detail fragment, e.g. `"5 files, 1 search"`. Rendered de-emphasized when closed. */
   readonly summaryDetail: string;
   readonly children: React.ReactNode;
   /**
@@ -40,7 +42,8 @@ type ChatActivityGroupProps = {
  * automatic `isLast` behavior.
  */
 export function ChatActivityGroup({
-  summaryVerb,
+  summaryVerbPast,
+  summaryVerbActive,
   summaryDetail,
   children,
   isLast = false,
@@ -69,10 +72,15 @@ export function ChatActivityGroup({
         <Button
           variant='ghost'
           size='xs'
-          className='-ml-2 flex max-w-full min-w-0 items-center gap-1.5 overflow-hidden hover:bg-transparent dark:hover:bg-transparent'
+          className='-ml-2 flex w-full min-w-0 items-center justify-start gap-1.5 overflow-hidden hover:bg-transparent dark:hover:bg-transparent'
         >
           <ChevronRight className='size-3 shrink-0 text-muted-foreground transition-transform duration-200 [[data-state=open]>&]:rotate-90' />
-          <ChatActivitySummary verb={summaryVerb} detail={summaryDetail} />
+          <ChatActivitySummary
+            verb={summaryVerbPast}
+            verbActive={summaryVerbActive}
+            detail={summaryDetail}
+            isActive={isLast}
+          />
         </Button>
       </CollapsibleTrigger>
       <CollapsibleContent>

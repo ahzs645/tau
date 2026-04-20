@@ -100,7 +100,7 @@ export function ChatMessageDataUsage({
             <h4 className='font-medium'>Usage Details</h4>
             {model ? (
               <div className='flex items-baseline gap-2 text-xs'>
-                <SvgIcon id={model.provider.id} className='size-4 translate-y-[0.25em] text-muted-foreground' />
+                <SvgIcon id={model.details.family} className='size-4 translate-y-[0.25em] text-muted-foreground' />
                 <span className='font-mono'>{model.name}</span>
               </div>
             ) : undefined}

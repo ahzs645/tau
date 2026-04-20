@@ -5,9 +5,14 @@ import { ChatActivitySection } from '#components/chat/chat-activity-section.js';
 import { ChatActivityGroup } from '#components/chat/chat-activity-group.js';
 
 describe('ChatActivitySection', () => {
-  it('should render the two-tone verb + detail label', () => {
+  it('should render the two-tone verb + detail label when closed', () => {
     render(
-      <ChatActivitySection summaryVerb='Explored' summaryDetail='12 searches, 2 fetches'>
+      <ChatActivitySection
+        summaryVerbPast='Explored'
+        summaryVerbActive='Exploring'
+        summaryDetail='12 searches, 2 fetches'
+        hasDownstreamText
+      >
         <div>activity content</div>
       </ChatActivitySection>,
     );
@@ -20,9 +25,63 @@ describe('ChatActivitySection', () => {
     expect(detailSpan).toHaveClass('text-foreground/50');
   });
 
+  it('should render only the present-participle verb with an ellipsis when isLast', () => {
+    render(
+      <ChatActivitySection
+        summaryVerbPast='Explored'
+        summaryVerbActive='Exploring'
+        summaryDetail='12 searches, 2 fetches'
+        isLast
+      >
+        <div>activity content</div>
+      </ChatActivitySection>,
+    );
+
+    expect(screen.getByText('Exploring…')).toBeInTheDocument();
+    expect(screen.queryByText('Explored')).not.toBeInTheDocument();
+    expect(screen.queryByText('12 searches, 2 fetches')).not.toBeInTheDocument();
+  });
+
+  it('should keep present tense even when the user collapses a live (isLast) section', async () => {
+    render(
+      <ChatActivitySection
+        summaryVerbPast='Explored'
+        summaryVerbActive='Exploring'
+        summaryDetail='12 searches, 2 fetches'
+        isLast
+      >
+        <div>activity content</div>
+      </ChatActivitySection>,
+    );
+
+    await userEvent.click(screen.getByRole('button'));
+
+    expect(screen.getByText('Exploring…')).toBeInTheDocument();
+    expect(screen.queryByText('Explored')).not.toBeInTheDocument();
+  });
+
+  it('should keep past tense even when the user expands a concluded section', async () => {
+    render(
+      <ChatActivitySection
+        summaryVerbPast='Explored'
+        summaryVerbActive='Exploring'
+        summaryDetail='12 searches, 2 fetches'
+        hasDownstreamText
+      >
+        <div>activity content</div>
+      </ChatActivitySection>,
+    );
+
+    await userEvent.click(screen.getByRole('button'));
+
+    expect(screen.getByText('Explored')).toBeInTheDocument();
+    expect(screen.getByText('12 searches, 2 fetches')).toBeInTheDocument();
+    expect(screen.queryByText('Exploring…')).not.toBeInTheDocument();
+  });
+
   it('should render only the verb when detail is empty (e.g. fallback "Activity")', () => {
     render(
-      <ChatActivitySection summaryVerb='Activity' summaryDetail=''>
+      <ChatActivitySection summaryVerbPast='Activity' summaryVerbActive='Working' summaryDetail='' hasDownstreamText>
         <div>content</div>
       </ChatActivitySection>,
     );
@@ -34,7 +93,7 @@ describe('ChatActivitySection', () => {
 
   it('should default to expanded when no hasDownstreamText', () => {
     render(
-      <ChatActivitySection summaryVerb='Activity' summaryDetail=''>
+      <ChatActivitySection summaryVerbPast='Activity' summaryVerbActive='Working' summaryDetail=''>
         <div data-testid='body'>content</div>
       </ChatActivitySection>,
     );
@@ -44,7 +103,7 @@ describe('ChatActivitySection', () => {
 
   it('should default to collapsed when hasDownstreamText is true', () => {
     render(
-      <ChatActivitySection summaryVerb='Activity' summaryDetail='' hasDownstreamText>
+      <ChatActivitySection summaryVerbPast='Activity' summaryVerbActive='Working' summaryDetail='' hasDownstreamText>
         <div data-testid='body'>content</div>
       </ChatActivitySection>,
     );
@@ -54,7 +113,7 @@ describe('ChatActivitySection', () => {
 
   it('should toggle when the trigger is clicked', async () => {
     render(
-      <ChatActivitySection summaryVerb='Activity' summaryDetail='' hasDownstreamText>
+      <ChatActivitySection summaryVerbPast='Activity' summaryVerbActive='Working' summaryDetail='' hasDownstreamText>
         <div data-testid='body'>content</div>
       </ChatActivitySection>,
     );
@@ -70,7 +129,7 @@ describe('ChatActivitySection', () => {
 
   it('should set aria-expanded on the trigger button', async () => {
     render(
-      <ChatActivitySection summaryVerb='Activity' summaryDetail='' hasDownstreamText>
+      <ChatActivitySection summaryVerbPast='Activity' summaryVerbActive='Working' summaryDetail='' hasDownstreamText>
         <div>content</div>
       </ChatActivitySection>,
     );
@@ -84,7 +143,7 @@ describe('ChatActivitySection', () => {
 
   it('should respect user toggle even after initial collapse', async () => {
     render(
-      <ChatActivitySection summaryVerb='Activity' summaryDetail='' hasDownstreamText>
+      <ChatActivitySection summaryVerbPast='Activity' summaryVerbActive='Working' summaryDetail='' hasDownstreamText>
         <div data-testid='body'>content</div>
       </ChatActivitySection>,
     );
@@ -96,7 +155,7 @@ describe('ChatActivitySection', () => {
 
   it('should be open when isLast is true (no downstream text)', () => {
     render(
-      <ChatActivitySection summaryVerb='Activity' summaryDetail='' isLast>
+      <ChatActivitySection summaryVerbPast='Activity' summaryVerbActive='Working' summaryDetail='' isLast>
         <div data-testid='body'>content</div>
       </ChatActivitySection>,
     );
@@ -106,7 +165,7 @@ describe('ChatActivitySection', () => {
 
   it('should close when isLast transitions to false (downstream text arrives)', () => {
     const { rerender } = render(
-      <ChatActivitySection summaryVerb='Activity' summaryDetail='' isLast>
+      <ChatActivitySection summaryVerbPast='Activity' summaryVerbActive='Working' summaryDetail='' isLast>
         <div data-testid='body'>content</div>
       </ChatActivitySection>,
     );
@@ -114,7 +173,13 @@ describe('ChatActivitySection', () => {
     expect(screen.getByTestId('body')).toBeInTheDocument();
 
     rerender(
-      <ChatActivitySection summaryVerb='Activity' summaryDetail='' isLast={false} hasDownstreamText>
+      <ChatActivitySection
+        summaryVerbPast='Activity'
+        summaryVerbActive='Working'
+        summaryDetail=''
+        isLast={false}
+        hasDownstreamText
+      >
         <div data-testid='body'>content</div>
       </ChatActivitySection>,
     );
@@ -124,21 +189,29 @@ describe('ChatActivitySection', () => {
 
   it('should render a child ChatActivityGroup flat (no inner header) when nested inside the section', () => {
     render(
-      <ChatActivitySection summaryVerb='Explored' summaryDetail='12 searches'>
-        <ChatActivityGroup summaryVerb='Explored' summaryDetail='12 searches'>
+      <ChatActivitySection
+        summaryVerbPast='Explored'
+        summaryVerbActive='Exploring'
+        summaryDetail='12 searches'
+        hasDownstreamText
+      >
+        <ChatActivityGroup summaryVerbPast='Explored' summaryVerbActive='Exploring' summaryDetail='12 searches'>
           <div data-testid='inner-row'>tool row</div>
         </ChatActivityGroup>
       </ChatActivitySection>,
     );
 
-    expect(screen.getByTestId('inner-row')).toBeInTheDocument();
-    expect(screen.getAllByText('Explored')).toHaveLength(1);
-    expect(screen.getAllByText('12 searches')).toHaveLength(1);
+    // Section is concluded (hasDownstreamText, !isLast): header reads
+    // "Explored 12 searches" past-tense; inner group is suppressed by
+    // disableInnerFold and renders nothing in the closed body.
+    expect(screen.getByText('Explored')).toBeInTheDocument();
+    expect(screen.getByText('12 searches')).toBeInTheDocument();
+    expect(screen.queryByText('Exploring…')).not.toBeInTheDocument();
   });
 
   it('should respect user toggle over isLast', async () => {
     const { rerender } = render(
-      <ChatActivitySection summaryVerb='Activity' summaryDetail='' isLast>
+      <ChatActivitySection summaryVerbPast='Activity' summaryVerbActive='Working' summaryDetail='' isLast>
         <div data-testid='body'>content</div>
       </ChatActivitySection>,
     );
@@ -149,7 +222,13 @@ describe('ChatActivitySection', () => {
     expect(screen.queryByTestId('body')).not.toBeInTheDocument();
 
     rerender(
-      <ChatActivitySection summaryVerb='Activity' summaryDetail='' isLast={false} hasDownstreamText>
+      <ChatActivitySection
+        summaryVerbPast='Activity'
+        summaryVerbActive='Working'
+        summaryDetail=''
+        isLast={false}
+        hasDownstreamText
+      >
         <div data-testid='body'>content</div>
       </ChatActivitySection>,
     );
@@ -160,7 +239,13 @@ describe('ChatActivitySection', () => {
     expect(screen.getByTestId('body')).toBeInTheDocument();
 
     rerender(
-      <ChatActivitySection summaryVerb='Activity' summaryDetail='' isLast={false} hasDownstreamText>
+      <ChatActivitySection
+        summaryVerbPast='Activity'
+        summaryVerbActive='Working'
+        summaryDetail=''
+        isLast={false}
+        hasDownstreamText
+      >
         <div data-testid='body'>content</div>
       </ChatActivitySection>,
     );

@@ -8,9 +8,11 @@ import { ActivityFoldContext } from '#components/chat/chat-activity-fold-context
 const foldDisabledValue = { disableInnerFold: true } as const;
 
 type ChatActivitySectionProps = {
-  /** Verb fragment, e.g. `"Explored"`. Rendered with emphasis in the header. */
-  readonly summaryVerb: string;
-  /** Detail fragment, e.g. `"12 searches, 2 fetches"`. Rendered de-emphasized. */
+  /** Past-tense verb fragment, e.g. `"Explored"`. Rendered when the header is closed. */
+  readonly summaryVerbPast: string;
+  /** Present-participle counterpart, e.g. `"Exploring"`. Rendered when the header is open. */
+  readonly summaryVerbActive: string;
+  /** Detail fragment, e.g. `"12 searches, 2 fetches"`. Rendered de-emphasized when closed. */
   readonly summaryDetail: string;
   readonly children: React.ReactNode;
   /**
@@ -32,7 +34,8 @@ type ChatActivitySectionProps = {
  * component so both fold levels share the same verb/detail typography.
  */
 export function ChatActivitySection({
-  summaryVerb,
+  summaryVerbPast,
+  summaryVerbActive,
   summaryDetail,
   children,
   hasDownstreamText = false,
@@ -54,10 +57,15 @@ export function ChatActivitySection({
         <Button
           variant='ghost'
           size='xs'
-          className='-ml-2 flex max-w-full min-w-0 items-center gap-1.5 overflow-hidden hover:bg-transparent dark:hover:bg-transparent'
+          className='-ml-2 flex w-full min-w-0 items-center justify-start gap-1.5 overflow-hidden hover:bg-transparent dark:hover:bg-transparent'
         >
           <ChevronRight className='size-3 shrink-0 text-muted-foreground transition-transform duration-200 [[data-state=open]>&]:rotate-90' />
-          <ChatActivitySummary verb={summaryVerb} detail={summaryDetail} />
+          <ChatActivitySummary
+            verb={summaryVerbPast}
+            verbActive={summaryVerbActive}
+            detail={summaryDetail}
+            isActive={isLast}
+          />
         </Button>
       </CollapsibleTrigger>
       <CollapsibleContent>

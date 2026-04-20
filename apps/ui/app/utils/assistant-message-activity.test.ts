@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { MyUIMessage } from '@taucad/chat';
-import type { ActivityGroup } from '#utils/assistant-message-activity.js';
+import type { ActivityGroup, FoldableRun, StandaloneRun } from '#utils/assistant-message-activity.js';
 import {
   classifyActivityPart,
   groupAssistantParts,
-  findActivityPrefixEnd,
   findLastMeaningfulPartIndex,
+  isSectionFoldable,
+  partitionActivityRuns,
 } from '#utils/assistant-message-activity.js';
 
 type Parts = MyUIMessage['parts'];
@@ -36,10 +37,45 @@ const deleteFilePart = (state?: string) => toolPart('tool-delete_file', state);
 const editTestsPart = (state?: string) => toolPart('tool-edit_tests', state);
 const webSearchPart = (state?: string) => toolPart('tool-web_search', state);
 const webBrowserPart = (state?: string) => toolPart('tool-web_browser', state);
-const testModelPart = (state?: string) => toolPart('tool-test_model', state);
-const screenshotPart = (state?: string) => toolPart('tool-screenshot', state);
+const screenshotPart = (state?: string): Part =>
+  ({
+    ...toolPart('tool-screenshot', state),
+    output: { images: [] },
+  }) as unknown as Part;
 const kernelResultPart = (state?: string) => toolPart('tool-get_kernel_result', state);
+const testModelPart = (state?: string): Part =>
+  ({
+    ...toolPart('tool-test_model', state),
+    output: { passes: [], failures: [] },
+  }) as unknown as Part;
 const transferPart = (state?: string) => toolPart('tool-transfer_to_cad_expert', state);
+
+type ScreenshotImage = { view: string; dataUrl: string };
+
+const screenshotPartWithImages = (images: readonly ScreenshotImage[]): Part =>
+  ({
+    ...screenshotPart(),
+    state: 'output-available',
+    output: { images },
+  }) as unknown as Part;
+
+const compositeScreenshotPart = (): Part =>
+  screenshotPartWithImages([{ view: 'composite', dataUrl: 'data:image/png;base64,AAAA' }]);
+
+const testModelPartWithCounts = (passes: number, failures: number): Part =>
+  ({
+    ...testModelPart(),
+    state: 'output-available',
+    output: {
+      passes: Array.from({ length: passes }, (_, i) => ({ id: `p${i}`, requirement: `req-pass-${i}` })),
+      failures: Array.from({ length: failures }, (_, i) => ({
+        id: `f${i}`,
+        requirement: `req-fail-${i}`,
+        reason: 'reason',
+        suggestion: 'suggestion',
+      })),
+    },
+  }) as unknown as Part;
 
 const expectAggregated = (group: ActivityGroup) => {
   expect(group.kind).toBe('aggregated');
@@ -107,10 +143,10 @@ describe('classifyActivityPart', () => {
     expect(classifyActivityPart(editTestsPart())).toBe('write');
   });
 
-  it('should classify get_kernel_result, screenshot, test_model into cad category', () => {
-    expect(classifyActivityPart(kernelResultPart())).toBe('cad');
-    expect(classifyActivityPart(screenshotPart())).toBe('cad');
-    expect(classifyActivityPart(testModelPart())).toBe('cad');
+  it('should classify get_kernel_result, screenshot, test_model into research category', () => {
+    expect(classifyActivityPart(kernelResultPart())).toBe('research');
+    expect(classifyActivityPart(screenshotPart())).toBe('research');
+    expect(classifyActivityPart(testModelPart())).toBe('research');
   });
 
   it('should classify transfer tools as transfer', () => {
@@ -231,17 +267,14 @@ describe('groupAssistantParts', () => {
       }
     });
 
-    it('should keep consecutive cad tools as singletons', () => {
+    it('should aggregate consecutive CAD verification tools into a single research group', () => {
       const parts: Parts = [kernelResultPart(), screenshotPart(), testModelPart()];
       const groups = groupAssistantParts(parts);
 
-      expect(groups).toHaveLength(3);
-      for (const group of groups) {
-        expect(group.kind).toBe('singleton');
-        if (group.kind === 'singleton') {
-          expect(group.category).toBe('cad');
-        }
-      }
+      expect(groups).toHaveLength(1);
+      const group = expectAggregated(groups[0]!);
+      expect(group.category).toBe('research');
+      expect(group.parts).toHaveLength(3);
     });
 
     it('should keep a single research tool as an aggregated group with one part', () => {
@@ -441,6 +474,58 @@ describe('groupAssistantParts', () => {
       expect(third.parts).toHaveLength(1);
     });
 
+    it('should bridge reasoning across CAD verification tools (kernel/test/screenshot) into one aggregated research group', () => {
+      const parts: Parts = [
+        reasoningPart('R-lead'),
+        kernelResultPart(),
+        reasoningPart('R-mid-1'),
+        testModelPartWithCounts(2, 2),
+        reasoningPart('R-mid-2'),
+        compositeScreenshotPart(),
+        reasoningPart('R-trail'),
+      ];
+      const groups = groupAssistantParts(parts);
+
+      // Leading + aggregated + trailing reasoning singleton (per peel-at-flush semantics).
+      expect(groups).toHaveLength(3);
+
+      const leading = groups[0]!;
+      expect(leading.kind).toBe('singleton');
+      if (leading.kind === 'singleton') {
+        expect(leading.category).toBe('reasoning');
+        expect(leading.partIndex).toBe(0);
+      }
+
+      const aggregated = expectAggregated(groups[1]!);
+      expect(aggregated.category).toBe('research');
+      expect(aggregated.parts).toHaveLength(5);
+      expect(aggregated.parts.map((p) => p.type)).toEqual([
+        'tool-get_kernel_result',
+        'reasoning',
+        'tool-test_model',
+        'reasoning',
+        'tool-screenshot',
+      ]);
+      expect(aggregated.partIndices).toEqual([1, 2, 3, 4, 5]);
+      expect(aggregated.summary).toBe('Explored 1 render, 6 images, 4 tests');
+
+      const trailing = groups[2]!;
+      expect(trailing.kind).toBe('singleton');
+      if (trailing.kind === 'singleton') {
+        expect(trailing.category).toBe('reasoning');
+        expect(trailing.partIndex).toBe(6);
+      }
+
+      // The full sequence collapses into a single foldable run for ChatActivitySection.
+      const runs = partitionActivityRuns(groups);
+      expect(runs).toHaveLength(1);
+      expect(runs[0]!.kind).toBe('foldable-run');
+      if (runs[0]!.kind === 'foldable-run') {
+        expect(runs[0]!.groups).toHaveLength(3);
+        expect(runs[0]!.startIndex).toBe(0);
+      }
+    });
+
     it('should not bridge across reasoning followed by a non-research part', () => {
       const parts: Parts = [grepPart(), reasoningPart(), editFilePart()];
       const groups = groupAssistantParts(parts);
@@ -496,45 +581,6 @@ describe('groupAssistantParts', () => {
     });
   });
 
-  describe('findActivityPrefixEnd', () => {
-    it('should return 0 when the first group is text', () => {
-      const parts: Parts = [textPart('Hello')];
-      const groups = groupAssistantParts(parts);
-
-      expect(findActivityPrefixEnd(groups)).toBe(0);
-    });
-
-    it('should return groups.length when there is no text', () => {
-      const parts: Parts = [reasoningPart(), readFilePart(), grepPart()];
-      const groups = groupAssistantParts(parts);
-
-      expect(findActivityPrefixEnd(groups)).toBe(groups.length);
-    });
-
-    it('should return the index of the first text singleton', () => {
-      const parts: Parts = [reasoningPart(), readFilePart(), grepPart(), textPart('Answer')];
-      const groups = groupAssistantParts(parts);
-
-      // Groups: [reasoning singleton, research aggregated, text singleton]
-      expect(findActivityPrefixEnd(groups)).toBe(2);
-    });
-
-    it('should treat reasoning as part of the activity prefix', () => {
-      const parts: Parts = [reasoningPart(), textPart('Answer')];
-      const groups = groupAssistantParts(parts);
-
-      expect(findActivityPrefixEnd(groups)).toBe(1);
-    });
-
-    it('should ignore empty text when finding the prefix end', () => {
-      const parts: Parts = [webSearchPart(), webSearchPart(), textPart('')];
-      const groups = groupAssistantParts(parts);
-
-      // Empty text is skipped at classification → not in groups → no real downstream text
-      expect(findActivityPrefixEnd(groups)).toBe(groups.length);
-    });
-  });
-
   describe('findLastMeaningfulPartIndex', () => {
     it('should return -1 for an empty parts array', () => {
       expect(findLastMeaningfulPartIndex([])).toBe(-1);
@@ -582,7 +628,7 @@ describe('groupAssistantParts', () => {
       const groups = groupAssistantParts(parts);
 
       const group = expectAggregated(groups[0]!);
-      expect(group.summaryVerb).toBe('Explored');
+      expect(group.summaryVerbPast).toBe('Explored');
       expect(group.summaryDetail).toBe('2 files, 1 search');
       expect(group.summary).toBe('Explored 2 files, 1 search');
     });
@@ -592,7 +638,7 @@ describe('groupAssistantParts', () => {
       const groups = groupAssistantParts(parts);
 
       const group = expectAggregated(groups[0]!);
-      expect(group.summaryVerb).toBe('Explored');
+      expect(group.summaryVerbPast).toBe('Explored');
       expect(group.summaryDetail).toBe('2 searches, 1 fetch');
       expect(group.summary).toBe('Explored 2 searches, 1 fetch');
     });
@@ -602,7 +648,7 @@ describe('groupAssistantParts', () => {
       const groups = groupAssistantParts(parts);
 
       const group = expectAggregated(groups[0]!);
-      expect(group.summaryVerb).toBe('Explored');
+      expect(group.summaryVerbPast).toBe('Explored');
       expect(group.summaryDetail).toBe('1 file, 3 searches');
       expect(group.summary).toBe('Explored 1 file, 3 searches');
     });
@@ -612,7 +658,7 @@ describe('groupAssistantParts', () => {
       const groups = groupAssistantParts(parts);
 
       const group = expectAggregated(groups[0]!);
-      expect(group.summaryVerb).toBe('Explored');
+      expect(group.summaryVerbPast).toBe('Explored');
       expect(group.summaryDetail).toBe('1 file, 1 search, 1 fetch');
       expect(group.summary).toBe('Explored 1 file, 1 search, 1 fetch');
     });
@@ -631,7 +677,7 @@ describe('groupAssistantParts', () => {
       const groups = groupAssistantParts(parts);
 
       const group = expectAggregated(groups[0]!);
-      expect(group.summaryVerb).toBe('Explored');
+      expect(group.summaryVerbPast).toBe('Explored');
       expect(group.summaryDetail).toBe('2 files, 4 searches, 2 fetches');
       expect(group.summary).toBe('Explored 2 files, 4 searches, 2 fetches');
     });
@@ -644,7 +690,7 @@ describe('groupAssistantParts', () => {
       expect(group.summaryDetail).toBe('1 file, 1 search, 1 fetch');
     });
 
-    it('should always satisfy the invariant: summary equals summaryVerb + space + summaryDetail', () => {
+    it('should always satisfy the invariant: summary equals summaryVerbPast + space + summaryDetail', () => {
       const fixtures: Parts[] = [
         [readFilePart()],
         [webSearchPart(), webBrowserPart()],
@@ -654,8 +700,308 @@ describe('groupAssistantParts', () => {
       for (const parts of fixtures) {
         const groups = groupAssistantParts(parts);
         const group = expectAggregated(groups[0]!);
-        expect(group.summary).toBe(`${group.summaryVerb} ${group.summaryDetail}`);
+        expect(group.summary).toBe(`${group.summaryVerbPast} ${group.summaryDetail}`);
       }
     });
+
+    it('should count a single get_kernel_result call as 1 render', () => {
+      const groups = groupAssistantParts([kernelResultPart()]);
+
+      const group = expectAggregated(groups[0]!);
+      expect(group.summary).toBe('Explored 1 render');
+    });
+
+    it('should pluralize renders when there are multiple kernel checks', () => {
+      const groups = groupAssistantParts([kernelResultPart(), kernelResultPart(), kernelResultPart()]);
+
+      const group = expectAggregated(groups[0]!);
+      expect(group.summary).toBe('Explored 3 renders');
+    });
+
+    it('should count actual screenshot images returned by output-available calls', () => {
+      const parts: Parts = [
+        screenshotPartWithImages([
+          { view: 'front', dataUrl: 'data:image/png;base64,AAAA' },
+          { view: 'top', dataUrl: 'data:image/png;base64,BBBB' },
+        ]),
+      ];
+      const groups = groupAssistantParts(parts);
+
+      const group = expectAggregated(groups[0]!);
+      expect(group.summary).toBe('Explored 2 images');
+    });
+
+    it('should expand a composite multi-angle screenshot to 6 images', () => {
+      const groups = groupAssistantParts([compositeScreenshotPart()]);
+
+      const group = expectAggregated(groups[0]!);
+      expect(group.summary).toBe('Explored 6 images');
+    });
+
+    it('should sum image counts across multiple screenshot calls (composite + single)', () => {
+      const parts: Parts = [
+        compositeScreenshotPart(),
+        screenshotPartWithImages([{ view: 'current', dataUrl: 'data:image/png;base64,CCCC' }]),
+      ];
+      const groups = groupAssistantParts(parts);
+
+      const group = expectAggregated(groups[0]!);
+      expect(group.summary).toBe('Explored 7 images');
+    });
+
+    it('should contribute a 1-image streaming placeholder for screenshots before output is available', () => {
+      const groups = groupAssistantParts([screenshotPart('input-streaming')]);
+
+      const group = expectAggregated(groups[0]!);
+      expect(group.summary).toBe('Explored 1 image');
+    });
+
+    it('should count test cases as passes + failures from test_model output', () => {
+      const groups = groupAssistantParts([testModelPartWithCounts(2, 1)]);
+
+      const group = expectAggregated(groups[0]!);
+      expect(group.summary).toBe('Explored 3 tests');
+    });
+
+    it('should omit the tests segment entirely when test_model is still streaming', () => {
+      const groups = groupAssistantParts([readFilePart(), testModelPart('input-streaming')]);
+
+      const group = expectAggregated(groups[0]!);
+      expect(group.summary).toBe('Explored 1 file');
+    });
+
+    it('should sum test counts across multiple test_model calls', () => {
+      const parts: Parts = [testModelPartWithCounts(2, 0), testModelPartWithCounts(0, 3)];
+      const groups = groupAssistantParts(parts);
+
+      const group = expectAggregated(groups[0]!);
+      expect(group.summary).toBe('Explored 5 tests');
+    });
+
+    it('should produce the singular form "1 test"', () => {
+      const groups = groupAssistantParts([testModelPartWithCounts(1, 0)]);
+
+      const group = expectAggregated(groups[0]!);
+      expect(group.summary).toBe('Explored 1 test');
+    });
+
+    it('should emit segments in order files, searches, fetches, renders, images, tests', () => {
+      const parts: Parts = [
+        webBrowserPart(),
+        testModelPartWithCounts(2, 1),
+        compositeScreenshotPart(),
+        kernelResultPart(),
+        grepPart(),
+        readFilePart(),
+      ];
+      const groups = groupAssistantParts(parts);
+
+      const group = expectAggregated(groups[0]!);
+      expect(group.summary).toBe('Explored 1 file, 1 search, 1 fetch, 1 render, 6 images, 3 tests');
+    });
+
+    it('should produce the screenshot-scenario summary "Explored 1 render, 6 images, 4 tests"', () => {
+      const parts: Parts = [kernelResultPart(), testModelPartWithCounts(4, 0), compositeScreenshotPart()];
+      const groups = groupAssistantParts(parts);
+
+      const group = expectAggregated(groups[0]!);
+      expect(group.summary).toBe('Explored 1 render, 6 images, 4 tests');
+    });
+  });
+});
+
+// ── isSectionFoldable ────────────────────────────────────────────────────────
+
+describe('isSectionFoldable', () => {
+  const singleton = (category: ActivityGroup['category']): ActivityGroup => ({
+    kind: 'singleton',
+    part: textPart(),
+    partIndex: 0,
+    category,
+  });
+
+  it('should return true for reasoning singletons', () => {
+    expect(isSectionFoldable(singleton('reasoning'))).toBe(true);
+  });
+
+  it('should return true for aggregated research groups', () => {
+    const groups = groupAssistantParts([readFilePart(), grepPart()]);
+    expect(isSectionFoldable(groups[0]!)).toBe(true);
+  });
+
+  it('should return false for write singletons', () => {
+    expect(isSectionFoldable(singleton('write'))).toBe(false);
+  });
+
+  it('should return false for transfer, data, and text singletons', () => {
+    expect(isSectionFoldable(singleton('transfer'))).toBe(false);
+    expect(isSectionFoldable(singleton('data'))).toBe(false);
+    expect(isSectionFoldable(singleton('text'))).toBe(false);
+  });
+});
+
+// ── partitionActivityRuns ────────────────────────────────────────────────────
+
+describe('partitionActivityRuns', () => {
+  const expectFoldable = (run: ReturnType<typeof partitionActivityRuns>[number]): FoldableRun => {
+    expect(run.kind).toBe('foldable-run');
+    if (run.kind !== 'foldable-run') {
+      throw new Error('Expected foldable-run');
+    }
+    return run;
+  };
+
+  const expectStandalone = (run: ReturnType<typeof partitionActivityRuns>[number]): StandaloneRun => {
+    expect(run.kind).toBe('standalone');
+    if (run.kind !== 'standalone') {
+      throw new Error('Expected standalone');
+    }
+    return run;
+  };
+
+  it('should return an empty array for empty input', () => {
+    expect(partitionActivityRuns([])).toEqual([]);
+  });
+
+  it('should coalesce reasoning + research into a single foldable run', () => {
+    const groups = groupAssistantParts([reasoningPart(), readFilePart(), grepPart()]);
+    const runs = partitionActivityRuns(groups);
+
+    expect(runs).toHaveLength(1);
+    const foldable = expectFoldable(runs[0]!);
+    expect(foldable.groups).toHaveLength(2);
+    expect(foldable.startIndex).toBe(0);
+  });
+
+  it('should emit a single foldable run when the entire message is research', () => {
+    const groups = groupAssistantParts([readFilePart(), grepPart(), webSearchPart()]);
+    const runs = partitionActivityRuns(groups);
+
+    expect(runs).toHaveLength(1);
+    const foldable = expectFoldable(runs[0]!);
+    expect(foldable.groups).toHaveLength(1);
+    expect(foldable.startIndex).toBe(0);
+  });
+
+  it('should emit standalone runs for consecutive write singletons (no foldable run)', () => {
+    const groups = groupAssistantParts([editFilePart(), createFilePart()]);
+    const runs = partitionActivityRuns(groups);
+
+    expect(runs).toHaveLength(2);
+    expectStandalone(runs[0]!);
+    expectStandalone(runs[1]!);
+    expect((runs[0] as StandaloneRun).groupIndex).toBe(0);
+    expect((runs[1] as StandaloneRun).groupIndex).toBe(1);
+  });
+
+  it('should split a foldable run when a write group breaks it', () => {
+    const groups = groupAssistantParts([readFilePart(), editFilePart(), grepPart()]);
+    const runs = partitionActivityRuns(groups);
+
+    expect(runs).toHaveLength(3);
+    const first = expectFoldable(runs[0]!);
+    expect(first.groups).toHaveLength(1);
+    expect(first.startIndex).toBe(0);
+
+    const middle = expectStandalone(runs[1]!);
+    expect(middle.group.category).toBe('write');
+    expect(middle.groupIndex).toBe(1);
+
+    const third = expectFoldable(runs[2]!);
+    expect(third.groups).toHaveLength(1);
+    expect(third.startIndex).toBe(2);
+  });
+
+  it('should NOT split a foldable run when CAD verification tools are interleaved', () => {
+    const groups = groupAssistantParts([readFilePart(), kernelResultPart(), grepPart()]);
+    const runs = partitionActivityRuns(groups);
+
+    expect(runs).toHaveLength(1);
+    const foldable = expectFoldable(runs[0]!);
+    expect(foldable.groups).toHaveLength(1);
+    expect(foldable.groups[0]!.kind).toBe('aggregated');
+    expect(foldable.groups[0]!.category).toBe('research');
+  });
+
+  it('should handle the screenshot scenario: reasoning, research, write, research, write, text', () => {
+    const groups = groupAssistantParts([
+      reasoningPart(),
+      readFilePart(),
+      editFilePart(),
+      grepPart(),
+      createFilePart(),
+      textPart('Final answer'),
+    ]);
+    const runs = partitionActivityRuns(groups);
+
+    expect(runs).toHaveLength(5);
+    const first = expectFoldable(runs[0]!);
+    expect(first.groups).toHaveLength(2);
+    expect(first.startIndex).toBe(0);
+
+    expect(expectStandalone(runs[1]!).group.category).toBe('write');
+    const middleFoldable = expectFoldable(runs[2]!);
+    expect(middleFoldable.groups).toHaveLength(1);
+    expect(expectStandalone(runs[3]!).group.category).toBe('write');
+    expect(expectStandalone(runs[4]!).group.category).toBe('text');
+  });
+
+  it('should emit text after a foldable run as a trailing standalone', () => {
+    const groups = groupAssistantParts([readFilePart(), textPart('Answer')]);
+    const runs = partitionActivityRuns(groups);
+
+    expect(runs).toHaveLength(2);
+    expectFoldable(runs[0]!);
+    const trailing = expectStandalone(runs[1]!);
+    expect(trailing.group.category).toBe('text');
+    expect(trailing.groupIndex).toBe(1);
+  });
+
+  it('should keep reasoning-only sequences in a single foldable run (renderer decides not to wrap)', () => {
+    const groups = groupAssistantParts([reasoningPart('R1'), reasoningPart('R2')]);
+    const runs = partitionActivityRuns(groups);
+
+    expect(runs).toHaveLength(1);
+    const foldable = expectFoldable(runs[0]!);
+    expect(foldable.groups).toHaveLength(2);
+    expect(foldable.groups.every((g) => g.category === 'reasoning')).toBe(true);
+  });
+
+  it('should preserve absolute indices through standalone breaks', () => {
+    const groups = groupAssistantParts([
+      readFilePart(),
+      editFilePart(),
+      reasoningPart(),
+      grepPart(),
+      createFilePart(),
+      webSearchPart(),
+    ]);
+    const runs = partitionActivityRuns(groups);
+
+    // Groups: [research(0), write(1), reasoning(2)+research(3), write(4), research(5)]
+    expect(runs).toHaveLength(5);
+    expect(expectFoldable(runs[0]!).startIndex).toBe(0);
+    expect(expectStandalone(runs[1]!).groupIndex).toBe(1);
+    const middleFoldable = expectFoldable(runs[2]!);
+    expect(middleFoldable.startIndex).toBe(2);
+    expect(middleFoldable.groups).toHaveLength(2);
+    expect(expectStandalone(runs[3]!).groupIndex).toBe(4);
+    expect(expectFoldable(runs[4]!).startIndex).toBe(5);
+  });
+
+  it('should keep transfer and data singletons as standalones', () => {
+    const groups = groupAssistantParts([
+      readFilePart(),
+      transferPart(),
+      { type: 'data-context-compaction', data: {} } as unknown as Part,
+      grepPart(),
+    ]);
+    const runs = partitionActivityRuns(groups);
+
+    expect(runs).toHaveLength(4);
+    expectFoldable(runs[0]!);
+    expect(expectStandalone(runs[1]!).group.category).toBe('transfer');
+    expect(expectStandalone(runs[2]!).group.category).toBe('data');
+    expectFoldable(runs[3]!);
   });
 });

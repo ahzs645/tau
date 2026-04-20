@@ -197,7 +197,7 @@ export function ChatMessageReasoning({ part, hasContent }: ChatMessageReasoningP
       <Button
         variant='ghost'
         size='xs'
-        className='-ml-2 h-4 max-w-full min-w-0 gap-1.5 overflow-hidden font-medium text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent'
+        className='-ml-2 flex h-4 w-full min-w-0 justify-start gap-1.5 overflow-hidden font-medium text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent'
         onClick={handleToggle}
       >
         <Brain className='size-3 shrink-0' />

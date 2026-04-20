@@ -11,7 +11,7 @@ describe('ChatActivityGroup', () => {
   describe('isLast=true (latest streaming group)', () => {
     it('should render children inline with no header chrome', () => {
       render(
-        <ChatActivityGroup summaryVerb='Explored' summaryDetail='5 files' isLast>
+        <ChatActivityGroup summaryVerbPast='Explored' summaryVerbActive='Exploring' summaryDetail='5 files' isLast>
           <div data-testid='child'>row marker</div>
         </ChatActivityGroup>,
       );
@@ -19,12 +19,13 @@ describe('ChatActivityGroup', () => {
       expect(screen.getByTestId('child')).toBeInTheDocument();
       expect(screen.queryByRole('button')).not.toBeInTheDocument();
       expect(screen.queryByText('Explored')).not.toBeInTheDocument();
+      expect(screen.queryByText('Exploring…')).not.toBeInTheDocument();
       expect(screen.queryByText('5 files')).not.toBeInTheDocument();
     });
 
     it('should expose a header when the user explicitly collapses the live group', async () => {
       const { rerender } = render(
-        <ChatActivityGroup summaryVerb='Explored' summaryDetail='5 files' isLast>
+        <ChatActivityGroup summaryVerbPast='Explored' summaryVerbActive='Exploring' summaryDetail='5 files' isLast>
           <div data-testid='child'>row marker</div>
         </ChatActivityGroup>,
       );
@@ -33,7 +34,12 @@ describe('ChatActivityGroup', () => {
       // then toggle back. We can't toggle without a trigger, so instead simulate the override path
       // by first letting isLast be false (showing button), clicking to expand, then toggling to collapsed.
       rerender(
-        <ChatActivityGroup summaryVerb='Explored' summaryDetail='5 files' isLast={false}>
+        <ChatActivityGroup
+          summaryVerbPast='Explored'
+          summaryVerbActive='Exploring'
+          summaryDetail='5 files'
+          isLast={false}
+        >
           <div data-testid='child'>row marker</div>
         </ChatActivityGroup>,
       );
@@ -44,7 +50,7 @@ describe('ChatActivityGroup', () => {
       await userEvent.click(trigger);
 
       rerender(
-        <ChatActivityGroup summaryVerb='Explored' summaryDetail='5 files' isLast>
+        <ChatActivityGroup summaryVerbPast='Explored' summaryVerbActive='Exploring' summaryDetail='5 files' isLast>
           <div data-testid='child'>row marker</div>
         </ChatActivityGroup>,
       );
@@ -53,12 +59,41 @@ describe('ChatActivityGroup', () => {
       expect(screen.getByRole('button')).toBeInTheDocument();
       expect(screen.queryByTestId('child')).not.toBeInTheDocument();
     });
+
+    it('should show present tense after the user collapses a live (isLast) group', async () => {
+      const { rerender } = render(
+        <ChatActivityGroup
+          summaryVerbPast='Explored'
+          summaryVerbActive='Exploring'
+          summaryDetail='5 files'
+          isLast={false}
+        >
+          <div data-testid='child'>row marker</div>
+        </ChatActivityGroup>,
+      );
+
+      const trigger = screen.getByRole('button');
+      // Expand then collapse to set the user-collapse override
+      await userEvent.click(trigger);
+      await userEvent.click(trigger);
+
+      rerender(
+        <ChatActivityGroup summaryVerbPast='Explored' summaryVerbActive='Exploring' summaryDetail='5 files' isLast>
+          <div data-testid='child'>row marker</div>
+        </ChatActivityGroup>,
+      );
+
+      // Header surfaces (user-collapsed override) and renders present tense because isLast=true
+      expect(screen.getByRole('button')).toBeInTheDocument();
+      expect(screen.getByText('Exploring…')).toBeInTheDocument();
+      expect(screen.queryByText('Explored')).not.toBeInTheDocument();
+    });
   });
 
   describe('isLast=false (closed older group)', () => {
     it('should render the collapsed header with two-tone verb + detail spans', () => {
       render(
-        <ChatActivityGroup summaryVerb='Explored' summaryDetail='3 files, 1 search'>
+        <ChatActivityGroup summaryVerbPast='Explored' summaryVerbActive='Exploring' summaryDetail='3 files, 1 search'>
           <div data-testid='child'>hidden</div>
         </ChatActivityGroup>,
       );
@@ -75,9 +110,29 @@ describe('ChatActivityGroup', () => {
       expect(detailSpan).toHaveClass('text-foreground/50');
     });
 
+    it('should keep past tense regardless of open/closed when isLast=false', async () => {
+      render(
+        <ChatActivityGroup summaryVerbPast='Explored' summaryVerbActive='Exploring' summaryDetail='3 files, 1 search'>
+          <div data-testid='child'>row marker</div>
+        </ChatActivityGroup>,
+      );
+
+      // Closed: past tense
+      expect(screen.getByText('Explored')).toBeInTheDocument();
+      expect(screen.getByText('3 files, 1 search')).toBeInTheDocument();
+      expect(screen.queryByText('Exploring…')).not.toBeInTheDocument();
+
+      // Expanded: still past tense — tense is driven by isLast, not open state
+      await userEvent.click(screen.getByRole('button'));
+
+      expect(screen.getByText('Explored')).toBeInTheDocument();
+      expect(screen.getByText('3 files, 1 search')).toBeInTheDocument();
+      expect(screen.queryByText('Exploring…')).not.toBeInTheDocument();
+    });
+
     it('should expand on click and render children flat (no border-l, no pl-4)', async () => {
       render(
-        <ChatActivityGroup summaryVerb='Explored' summaryDetail='3 files'>
+        <ChatActivityGroup summaryVerbPast='Explored' summaryVerbActive='Exploring' summaryDetail='3 files'>
           <div data-testid='child'>row marker</div>
         </ChatActivityGroup>,
       );
@@ -94,7 +149,7 @@ describe('ChatActivityGroup', () => {
 
     it('should collapse again when clicked twice', async () => {
       render(
-        <ChatActivityGroup summaryVerb='Explored' summaryDetail='2 files'>
+        <ChatActivityGroup summaryVerbPast='Explored' summaryVerbActive='Exploring' summaryDetail='2 files'>
           <div data-testid='child'>row marker</div>
         </ChatActivityGroup>,
       );
@@ -112,7 +167,7 @@ describe('ChatActivityGroup', () => {
     it('should render children directly with no button, no chevron, no summary text', () => {
       render(
         <ActivityFoldContext.Provider value={foldDisabledValue}>
-          <ChatActivityGroup summaryVerb='Explored' summaryDetail='12 searches'>
+          <ChatActivityGroup summaryVerbPast='Explored' summaryVerbActive='Exploring' summaryDetail='12 searches'>
             <div data-testid='child'>row marker</div>
           </ChatActivityGroup>
         </ActivityFoldContext.Provider>,
@@ -121,13 +176,19 @@ describe('ChatActivityGroup', () => {
       expect(screen.getByTestId('child')).toBeInTheDocument();
       expect(screen.queryByRole('button')).not.toBeInTheDocument();
       expect(screen.queryByText('Explored')).not.toBeInTheDocument();
+      expect(screen.queryByText('Exploring…')).not.toBeInTheDocument();
       expect(screen.queryByText('12 searches')).not.toBeInTheDocument();
     });
 
     it('should render flat regardless of isLast=true', () => {
       render(
         <ActivityFoldContext.Provider value={foldDisabledValue}>
-          <ChatActivityGroup summaryVerb='Explored' summaryDetail='12 searches' isLast>
+          <ChatActivityGroup
+            summaryVerbPast='Explored'
+            summaryVerbActive='Exploring'
+            summaryDetail='12 searches'
+            isLast
+          >
             <div data-testid='child'>row marker</div>
           </ChatActivityGroup>
         </ActivityFoldContext.Provider>,
@@ -140,7 +201,12 @@ describe('ChatActivityGroup', () => {
     it('should render flat regardless of isLast=false', () => {
       render(
         <ActivityFoldContext.Provider value={foldDisabledValue}>
-          <ChatActivityGroup summaryVerb='Explored' summaryDetail='12 searches' isLast={false}>
+          <ChatActivityGroup
+            summaryVerbPast='Explored'
+            summaryVerbActive='Exploring'
+            summaryDetail='12 searches'
+            isLast={false}
+          >
             <div data-testid='child'>row marker</div>
           </ChatActivityGroup>
         </ActivityFoldContext.Provider>,
@@ -154,7 +220,12 @@ describe('ChatActivityGroup', () => {
     it('should still render its own chrome when disableInnerFold is explicitly false', () => {
       render(
         <ActivityFoldContext.Provider value={foldEnabledValue}>
-          <ChatActivityGroup summaryVerb='Explored' summaryDetail='12 searches' isLast={false}>
+          <ChatActivityGroup
+            summaryVerbPast='Explored'
+            summaryVerbActive='Exploring'
+            summaryDetail='12 searches'
+            isLast={false}
+          >
             <div data-testid='child'>row marker</div>
           </ChatActivityGroup>
         </ActivityFoldContext.Provider>,
@@ -168,7 +239,7 @@ describe('ChatActivityGroup', () => {
   describe('user toggle override across isLast transitions', () => {
     it('should keep an expanded older group open after isLast flips back to true', async () => {
       const { rerender } = render(
-        <ChatActivityGroup summaryVerb='Explored' summaryDetail='2 files'>
+        <ChatActivityGroup summaryVerbPast='Explored' summaryVerbActive='Exploring' summaryDetail='2 files'>
           <div data-testid='child'>row marker</div>
         </ChatActivityGroup>,
       );
@@ -177,7 +248,7 @@ describe('ChatActivityGroup', () => {
       expect(screen.getByTestId('child')).toBeInTheDocument();
 
       rerender(
-        <ChatActivityGroup summaryVerb='Explored' summaryDetail='2 files' isLast>
+        <ChatActivityGroup summaryVerbPast='Explored' summaryVerbActive='Exploring' summaryDetail='2 files' isLast>
           <div data-testid='child'>row marker</div>
         </ChatActivityGroup>,
       );

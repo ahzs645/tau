@@ -6,10 +6,10 @@ import type { MyMessagePart, UsageData } from '@taucad/chat';
 import { useChatActions, useChatSelector } from '#hooks/use-chat.js';
 import { serializeMessage } from '#utils/chat.utils.js';
 import { parseInlineReferences } from '#utils/at-reference.utils.js';
-import type { ActivityGroup } from '#utils/assistant-message-activity.js';
+import type { ActivityGroup, AggregatedGroup } from '#utils/assistant-message-activity.js';
 import {
   groupAssistantParts,
-  findActivityPrefixEnd,
+  partitionActivityRuns,
   findLastMeaningfulPartIndex,
 } from '#utils/assistant-message-activity.js';
 import { AtReferenceChip } from '#components/chat/at-reference-chip.js';
@@ -272,13 +272,46 @@ function renderActivityGroup(
   return (
     <ChatActivityGroup
       key={`${context.messageId}-group-${groupIndex}`}
-      summaryVerb={group.summaryVerb}
+      summaryVerbPast={group.summaryVerbPast}
+      summaryVerbActive={group.summaryVerbActive}
       summaryDetail={group.summaryDetail}
       isLast={context.isLastGroup}
     >
       {group.parts.map((part, i) => renderAssistantPart(part, group.partIndices[i]!, context))}
     </ChatActivityGroup>
   );
+}
+
+function getGroupKeyPartIndex(group: ActivityGroup): number {
+  return group.kind === 'singleton' ? group.partIndex : (group.partIndices[0] ?? 0);
+}
+
+function composeRunSummary(aggregated: readonly AggregatedGroup[]): {
+  verb: string;
+  verbActive: string;
+  detail: string;
+} {
+  if (aggregated.length === 0) {
+    return { verb: 'Activity', verbActive: 'Working', detail: '' };
+  }
+
+  const firstVerb = aggregated[0]!.summaryVerbPast;
+  const firstVerbActive = aggregated[0]!.summaryVerbActive;
+  const allSameVerb = aggregated.every((group) => group.summaryVerbPast === firstVerb);
+  const allSameVerbActive = aggregated.every((group) => group.summaryVerbActive === firstVerbActive);
+  if (allSameVerb) {
+    return {
+      verb: firstVerb,
+      verbActive: allSameVerbActive ? firstVerbActive : '',
+      detail: aggregated.map((group) => group.summaryDetail).join(', '),
+    };
+  }
+
+  return {
+    verb: '',
+    verbActive: allSameVerbActive ? firstVerbActive : '',
+    detail: aggregated.map((group) => group.summary).join(', '),
+  };
 }
 
 function AssistantParts({
@@ -289,35 +322,8 @@ function AssistantParts({
   readonly messageId: string;
 }): React.JSX.Element {
   const groups = useMemo(() => groupAssistantParts(parts), [parts]);
-  const prefixEnd = useMemo(() => findActivityPrefixEnd(groups), [groups]);
+  const runs = useMemo(() => partitionActivityRuns(groups), [groups]);
   const lastMeaningfulIndex = useMemo(() => findLastMeaningfulPartIndex(parts), [parts]);
-  const hasDownstreamText = prefixEnd < groups.length;
-  const hasActivityPrefix = prefixEnd > 0;
-
-  const prefixGroups = hasActivityPrefix ? groups.slice(0, prefixEnd) : [];
-  const suffixGroups = groups.slice(prefixEnd);
-
-  const activitySummary = useMemo(() => {
-    const aggregated = prefixGroups.filter((group) => group.kind === 'aggregated');
-    if (aggregated.length === 0) {
-      return { verb: 'Activity', detail: '' };
-    }
-
-    const firstVerb = aggregated[0]!.summaryVerb;
-    const allSameVerb = aggregated.every((group) => group.summaryVerb === firstVerb);
-    if (allSameVerb) {
-      return {
-        verb: firstVerb,
-        detail: aggregated.map((group) => group.summaryDetail).join(', '),
-      };
-    }
-
-    return {
-      verb: '',
-      detail: aggregated.map((group) => group.summary).join(', '),
-    };
-  }, [prefixGroups]);
-
   const lastGroupIndex = groups.length - 1;
 
   const renderContextForGroup = useCallback(
@@ -329,25 +335,42 @@ function AssistantParts({
     [messageId, lastMeaningfulIndex, lastGroupIndex],
   );
 
-  const shouldWrapInSection = prefixGroups.length > 1 && hasDownstreamText;
-
   return (
     <>
-      {shouldWrapInSection ? (
-        <ChatActivitySection
-          summaryVerb={activitySummary.verb}
-          summaryDetail={activitySummary.detail}
-          hasDownstreamText={hasDownstreamText}
-          isLast={!hasDownstreamText}
-        >
-          {prefixGroups.map((group, i) => renderActivityGroup(group, i, renderContextForGroup(i)))}
-        </ChatActivitySection>
-      ) : (
-        prefixGroups.map((group, i) => renderActivityGroup(group, i, renderContextForGroup(i)))
-      )}
-      {suffixGroups.map((group, i) => {
-        const absoluteIndex = prefixEnd + i;
-        return renderActivityGroup(group, absoluteIndex, renderContextForGroup(absoluteIndex));
+      {runs.map((run, runIndex) => {
+        const isLastRun = runIndex === runs.length - 1;
+
+        if (run.kind === 'standalone') {
+          return renderActivityGroup(run.group, run.groupIndex, renderContextForGroup(run.groupIndex));
+        }
+
+        const aggregatedInRun = run.groups.filter((group): group is AggregatedGroup => group.kind === 'aggregated');
+        const shouldWrap = run.groups.length > 1 && aggregatedInRun.length > 0;
+
+        if (!shouldWrap) {
+          return run.groups.map((group, j) => {
+            const absoluteIndex = run.startIndex + j;
+            return renderActivityGroup(group, absoluteIndex, renderContextForGroup(absoluteIndex));
+          });
+        }
+
+        const summary = composeRunSummary(aggregatedInRun);
+        const sectionKey = `${messageId}-section-${getGroupKeyPartIndex(run.groups[0]!)}`;
+        return (
+          <ChatActivitySection
+            key={sectionKey}
+            summaryVerbPast={summary.verb}
+            summaryVerbActive={summary.verbActive}
+            summaryDetail={summary.detail}
+            hasDownstreamText={!isLastRun}
+            isLast={isLastRun}
+          >
+            {run.groups.map((group, j) => {
+              const absoluteIndex = run.startIndex + j;
+              return renderActivityGroup(group, absoluteIndex, renderContextForGroup(absoluteIndex));
+            })}
+          </ChatActivitySection>
+        );
       })}
     </>
   );

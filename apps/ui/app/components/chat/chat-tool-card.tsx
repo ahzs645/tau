@@ -175,7 +175,7 @@ function ChatToolCardHeader({ children, className }: ChatToolCardHeaderProps): R
           variant='ghost'
           size='xs'
           className={cn(
-            '-ml-2 max-w-full min-w-0 gap-1.5 overflow-hidden font-medium text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent',
+            '-ml-2 flex w-full min-w-0 justify-start gap-1.5 overflow-hidden font-medium text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent',
             className,
           )}
         >

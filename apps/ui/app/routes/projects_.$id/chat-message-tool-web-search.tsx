@@ -59,7 +59,7 @@ function SourcesList({ sources }: { readonly sources: WebSource[] }): React.JSX.
       {/* Expandable section for additional sources */}
       {hasMoreSources ? (
         <Collapsible open={isExpanded} onOpenChange={setIsExpanded}>
-          <CollapsibleTrigger className='group flex items-center gap-1.5 py-0.5 text-xs text-muted-foreground hover:text-foreground'>
+          <CollapsibleTrigger className='group flex w-full items-center gap-1.5 py-0.5 text-xs text-muted-foreground hover:text-foreground'>
             <ChevronRight
               className={cn('size-3 shrink-0 transition-transform duration-200', isExpanded && 'rotate-90')}
             />
