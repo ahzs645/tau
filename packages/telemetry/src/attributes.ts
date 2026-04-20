@@ -26,6 +26,9 @@ export const AttributeKey = {
   GEN_AI_OPERATION_NAME: 'gen_ai.operation.name',
   GEN_AI_RESPONSE_MODEL: 'gen_ai.response.model',
   WS_DIRECTION: 'ws.direction',
+  GEN_AI_SAFEGUARD_PATTERN: 'gen_ai.agent.safeguard.pattern',
+  GEN_AI_SAFEGUARD_ACTION: 'gen_ai.agent.safeguard.action',
+  GEN_AI_SAFEGUARD_HELPED: 'gen_ai.agent.safeguard.helped',
 } as const;
 
 /**
@@ -53,6 +56,33 @@ export const GenAiToolStatus = {
 export const GenAiTokenType = {
   INPUT: 'input',
   OUTPUT: 'output',
+} as const;
+
+/**
+ * Action values for GenAI agent safeguard interventions.
+ *
+ * - `nudge`: A `<system-reminder>` HumanMessage was appended to state.messages
+ *   to redirect the agent away from a detected anti-pattern.
+ * - `terminate`: The model call was short-circuited with a synthetic AIMessage
+ *   that has no `tool_calls`, ending the agent loop.
+ * @public
+ */
+export const GenAiSafeguardAction = {
+  NUDGE: 'nudge',
+  TERMINATE: 'terminate',
+} as const;
+
+/**
+ * Whether the agent changed its behavior on the turn following a safeguard
+ * nudge.
+ * - `true`: the agent's next tool call differed from the offending signature
+ *   (or it produced no tool calls at all)
+ * - `false`: the agent repeated the offending tool call signature anyway
+ * @public
+ */
+export const GenAiSafeguardHelped = {
+  TRUE: 'true',
+  FALSE: 'false',
 } as const;
 
 /**

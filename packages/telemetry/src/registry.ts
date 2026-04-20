@@ -144,6 +144,27 @@ export const TauMetrics = {
     }),
   }),
 
+  /**
+   * Agent loop safeguards: counts how often a doom-loop / anti-pattern
+   * detector ([apps/api/app/api/chat/middleware/agent-safeguards.middleware.ts])
+   * decided to intervene with a `<system-reminder>` nudge or with a synthetic
+   * `AIMessage` termination. Tracks whether the nudge changed the agent's
+   * behavior on the next turn (`helped=true|false`) so we can tune detector
+   * thresholds against real production traffic.
+   */
+  genAiAgentSafeguardInterventions: defineCounter({
+    name: 'gen_ai.agent.safeguard.interventions',
+    unit: '{intervention}',
+    description: 'Agent-loop safeguard interventions (nudge or terminate) by detected anti-pattern',
+    attributes: z.object({
+      'gen_ai.agent.safeguard.pattern': z.string().optional(),
+      'gen_ai.agent.safeguard.action': z.string().optional(),
+      'gen_ai.agent.safeguard.helped': z.string().optional(),
+      'gen_ai.request.model': z.string().optional(),
+      'gen_ai.provider.name': z.string().optional(),
+    }),
+  }),
+
   // --- Infrastructure ---
 
   redisConnectionState: defineGauge({

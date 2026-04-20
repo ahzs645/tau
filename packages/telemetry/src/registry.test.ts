@@ -5,7 +5,12 @@ describe('TauMetrics', () => {
   const metrics = Object.values(TauMetrics);
 
   it('should define all canonical metrics', () => {
-    expect(metrics).toHaveLength(21);
+    expect(metrics).toHaveLength(22);
+  });
+
+  it('should expose the agent-safeguard counter with the canonical OTEL name', () => {
+    expect(TauMetrics.genAiAgentSafeguardInterventions.name).toBe('gen_ai.agent.safeguard.interventions');
+    expect(TauMetrics.genAiAgentSafeguardInterventions.type).toBe('counter');
   });
 
   it('should use lowercase dot-delimited names for all metrics', () => {

@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { AttributeKey, KernelStatus, GenAiToolStatus, GenAiTokenType, RpcStatus } from '#attributes.js';
+import {
+  AttributeKey,
+  KernelStatus,
+  GenAiToolStatus,
+  GenAiTokenType,
+  RpcStatus,
+  GenAiSafeguardAction,
+  GenAiSafeguardHelped,
+} from '#attributes.js';
 
 describe('AttributeKey', () => {
   it('should have unique values across all keys', () => {
@@ -40,5 +48,27 @@ describe('RpcStatus', () => {
   it('should define ok and error values', () => {
     expect(RpcStatus.OK).toBe('ok');
     expect(RpcStatus.ERROR).toBe('error');
+  });
+});
+
+describe('agent safeguard attribute keys', () => {
+  it('should expose pattern, action, and helped keys under gen_ai.agent.safeguard.*', () => {
+    expect(AttributeKey.GEN_AI_SAFEGUARD_PATTERN).toBe('gen_ai.agent.safeguard.pattern');
+    expect(AttributeKey.GEN_AI_SAFEGUARD_ACTION).toBe('gen_ai.agent.safeguard.action');
+    expect(AttributeKey.GEN_AI_SAFEGUARD_HELPED).toBe('gen_ai.agent.safeguard.helped');
+  });
+});
+
+describe('GenAiSafeguardAction', () => {
+  it('should define nudge and terminate values', () => {
+    expect(GenAiSafeguardAction.NUDGE).toBe('nudge');
+    expect(GenAiSafeguardAction.TERMINATE).toBe('terminate');
+  });
+});
+
+describe('GenAiSafeguardHelped', () => {
+  it('should define string-coerced boolean values', () => {
+    expect(GenAiSafeguardHelped.TRUE).toBe('true');
+    expect(GenAiSafeguardHelped.FALSE).toBe('false');
   });
 });
