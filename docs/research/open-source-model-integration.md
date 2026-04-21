@@ -276,7 +276,6 @@ together: {
   },
   inputTokensIncludesCacheReadTokens: false,
   inputTokensIncludesCacheWriteTokens: false,
-  streamingDoublesCacheTokens: false,
   createClass: (options) => new ChatOpenAI(options),
 },
 
