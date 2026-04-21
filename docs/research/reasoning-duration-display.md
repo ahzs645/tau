@@ -4,7 +4,7 @@ description: 'Architecture for capturing and rendering per-reasoning-block durat
 status: draft
 created: '2026-04-20'
 updated: '2026-04-20'
-revision: 5
+revision: 6
 category: architecture
 related:
   - docs/research/chat-rendering-audit.md
@@ -340,6 +340,59 @@ We searched github.com/vercel/ai for prior reports of this specific behaviour (`
 #### Resolution
 
 Carry the `reasoningStartedAtMs` forward to the `reasoning-end` chunk via the per-stream `Map<reasoningId, startedAtMs>` documented in [Finding 7](#finding-7-minimal-state-server-design). After the fix, `reasoning-end` emits `providerMetadata = { common: { reasoningStartedAtMs: t0, reasoningEndedAtMs: t1 } }`, both keys survive the reducer's last-writer-wins replacement, and the assembled `ReasoningUIPart` has both endpoints.
+
+### Finding 9: AI SDK reducer leaves `ReasoningUIPart.state` stuck at `'streaming'` on `finish-step` without `reasoning-end`
+
+**Source-verified in `node_modules/.pnpm/ai@6.0.141_zod@4.3.6/node_modules/ai/dist/index.js:5556-5570` and `:5804-5807`** (mirrored in upstream `repos/ai/packages/ai/src/ui/process-ui-message-stream.ts`). The `processUIMessageStream` reducer **only** flips `ReasoningUIPart.state` from `'streaming'` to `'done'` inside the `case "reasoning-end"` branch:
+
+```javascript
+case "reasoning-end": {
+  const reasoningPart = state.activeReasoningParts[chunk.id];
+  // …
+  reasoningPart.state = "done";
+  reasoningPart.providerMetadata =
+    chunk.providerMetadata ?? reasoningPart.providerMetadata;
+  delete state.activeReasoningParts[chunk.id];
+  // …
+}
+```
+
+On `case "finish-step"`, the reducer clears the `activeReasoningParts` lookup map so the next assistant step starts fresh, **but it does not iterate `state.message.parts` to flush any leftover reasoning parts to `'done'`**:
+
+```javascript
+case "finish-step": {
+  state.activeTextParts = {};
+  state.activeReasoningParts = {};
+  // …
+}
+```
+
+#### Concrete consequence
+
+Whenever the chat-level stream concludes without a matching `reasoning-end` for every `reasoning-start` — abort, network drop, provider error, or a model that simply omits the end marker — the persisted `parts[i].state` stays at `'streaming'` for the lifetime of the message. A naive UI gate of `isReasoningStreaming = part.state === 'streaming'` then keeps the live "Thinking for Ns" counter ticking forever, even though no further chunks can possibly arrive. Reloading the page reproduces the same orphan: the persisted message comes back with `state: 'streaming'`, and a freshly-mounted `<ChatMessageReasoning>` would compute `Date.now() - persistedStartedAtMs` and render a multi-day duration.
+
+This was the bug captured in the screenshot: chat status had flipped to `'ready'` (cost + final timestamp finalized in the message footer), but the reasoning header continued to read "Thinking for 1m 16s" and increment.
+
+#### Why we can't fix this in the AI SDK upstream
+
+Patching `finish-step` to iterate `state.message.parts` and force-flush any `state === 'streaming'` reasoning part to `'done'` is the structurally correct fix, but it would require an upstream PR + release + bump cycle and is not a blocker for our deployment. We treat the SDK behaviour as a contract.
+
+#### Resolution: stateless client-side derivation
+
+Drop the `part.state` read entirely from the live-counter gate in [`apps/ui/app/routes/projects_.$id/chat-message-reasoning.tsx`](../../apps/ui/app/routes/projects_.$id/chat-message-reasoning.tsx). The gate becomes:
+
+```typescript
+const isChatStreaming = useChatSelector((state) => state.status === 'streaming');
+const isReasoningStreaming = isChatStreaming && finalReasoningDurationMs === undefined;
+```
+
+`chat.status === 'streaming'` is the canonical "is anything still arriving?" signal — it flips off the instant `finish-step` / `finish` / `error` / abort lands, regardless of whether the per-part `state` was correctly updated. The fallback label is unified on `'Thought briefly'` (replacing the previous `'Thought process'` literal) for consistency with the formatter's sub-second bucket and to honestly reflect that we don't have a final duration to render. This applies to both:
+
+- **Orphan in the current session** — was live "Thinking for X", chat flips ready, gate flips false, counter freezes, label flips to `'Thought briefly'`.
+- **Persisted reload of orphan** — chat status is `'ready'` from mount, gate is false from the first render, no `Date.now() - persistedStartedAtMs` lie ever appears.
+- **Legacy / uninstrumented part** — no `reasoningStartedAtMs`, no `finalDur`, gate false, label `'Thought briefly'`.
+
+The snapshot-on-transition variant (rendering "Thought for ~1m 16s" by snapping the live elapsed at the streaming→idle transition) was rejected because it required a `useRef` + `useEffect` to distinguish "in-session orphan" from "persisted-history orphan" (otherwise stale parts would render multi-day durations on reload). The stateless derivation is simpler, requires no transition tracking, and orphans are rare enough that an honest `'Thought briefly'` is preferable to a fabricated number.
 
 ## Recommendations
 
