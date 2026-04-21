@@ -3,6 +3,7 @@ import { createActor, waitFor } from 'xstate';
 import type { Chat, MyUIMessage } from '@taucad/chat';
 import type { ChatError } from '@taucad/types';
 import { chatPersistenceMachine } from '#hooks/chat-persistence.machine.js';
+import type { ChatRequest } from '#hooks/chat-persistence.machine.js';
 import { fromSafeAsync } from '#lib/xstate.lib.js';
 
 type MockMessage = { id: string; role: string; parts: Array<{ type: string; text?: string }> };
@@ -51,6 +52,45 @@ function createTestActor(options?: {
     input: { activeChatId: options?.activeChatId },
   });
 }
+
+type EmittedEvent =
+  | { type: 'dispatchRequest'; request: ChatRequest }
+  | { type: 'dispatchStop' }
+  | { type: 'applyFinishedRequest'; messages: MyUIMessage[] }
+  | { type: 'applyStoppedRequest'; messages: MyUIMessage[] }
+  | { type: 'applyResumedRequest'; messages: MyUIMessage[]; pendingRequest: ChatRequest };
+
+/**
+ * Variant of `createTestActor` that also captures every requestLifecycle
+ * emit into an `emitLog`. Listeners are registered before `actor.start()`
+ * so the log captures the very first transition.
+ */
+function createTestActorWithEmits(options?: Parameters<typeof createTestActor>[0]) {
+  const actor = createTestActor(options);
+  const emitLog: EmittedEvent[] = [];
+
+  actor.on('dispatchRequest', (event) => emitLog.push(event));
+  actor.on('dispatchStop', (event) => emitLog.push(event));
+  actor.on('applyFinishedRequest', (event) => emitLog.push(event));
+  actor.on('applyStoppedRequest', (event) => emitLog.push(event));
+  actor.on('applyResumedRequest', (event) => emitLog.push(event));
+
+  return { actor, emitLog };
+}
+
+const sampleMessage: MyUIMessage = {
+  id: 'msg_user_1',
+  role: 'user',
+  parts: [{ type: 'text', text: 'hi' }],
+  metadata: { createdAt: 0, status: 'pending' },
+};
+
+const sampleChatError: ChatError = {
+  category: 'generic',
+  title: 'Boom',
+  message: 'Something failed',
+  code: 'INTERNAL_ERROR',
+};
 
 describe('chatPersistenceMachine', () => {
   afterEach(() => {
@@ -334,6 +374,220 @@ describe('chatPersistenceMachine', () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+  });
+
+  // ===========================================================================
+  // requestLifecycle
+  // ===========================================================================
+  describe('requestLifecycle', () => {
+    it('should start with requestLifecycle in idle', () => {
+      const { actor } = createTestActorWithEmits({ activeChatId: 'chat_abc' });
+      actor.start();
+      expect(actor.getSnapshot().matches({ requestLifecycle: 'idle' })).toBe(true);
+      actor.stop();
+    });
+
+    it('should transition idle to invoking on startRequest and emit dispatchRequest with the request payload', () => {
+      const { actor, emitLog } = createTestActorWithEmits({ activeChatId: 'chat_abc' });
+      actor.start();
+
+      const request: ChatRequest = { kind: 'send', message: sampleMessage };
+      actor.send({ type: 'startRequest', request });
+
+      expect(actor.getSnapshot().matches({ requestLifecycle: 'invoking' })).toBe(true);
+      expect(emitLog).toEqual([{ type: 'dispatchRequest', request }]);
+      actor.stop();
+    });
+
+    it('should clear persistedError synchronously when entering invoking from idle', () => {
+      const { actor } = createTestActorWithEmits({ activeChatId: 'chat_abc' });
+      actor.start();
+
+      // Seed an error directly via the existing setPersistedError event.
+      actor.send({ type: 'setPersistedError', error: sampleChatError });
+      expect(actor.getSnapshot().context.persistedError).toEqual(sampleChatError);
+
+      // The clear must happen in the same tick as startRequest (no await).
+      actor.send({ type: 'startRequest', request: { kind: 'regenerate' } });
+      expect(actor.getSnapshot().context.persistedError).toBeUndefined();
+      expect(actor.getSnapshot().matches({ requestLifecycle: 'invoking' })).toBe(true);
+      actor.stop();
+    });
+
+    it('should transition invoking to stopping on a second startRequest, emit dispatchStop, store the new request as pendingRequest, and clear persistedError', () => {
+      const { actor, emitLog } = createTestActorWithEmits({ activeChatId: 'chat_abc' });
+      actor.start();
+
+      const first: ChatRequest = { kind: 'send', message: sampleMessage };
+      const second: ChatRequest = { kind: 'send', message: { ...sampleMessage, id: 'msg_user_2' } };
+
+      actor.send({ type: 'startRequest', request: first });
+      // Manually set persistedError to verify the second start clears it again.
+      actor.send({ type: 'setPersistedError', error: sampleChatError });
+      expect(actor.getSnapshot().context.persistedError).toEqual(sampleChatError);
+
+      actor.send({ type: 'startRequest', request: second });
+
+      expect(actor.getSnapshot().matches({ requestLifecycle: 'stopping' })).toBe(true);
+      expect(actor.getSnapshot().context.pendingRequest).toEqual(second);
+      expect(actor.getSnapshot().context.persistedError).toBeUndefined();
+      expect(emitLog.map((event) => event.type)).toEqual(['dispatchRequest', 'dispatchStop']);
+      actor.stop();
+    });
+
+    it('should transition invoking to stopping on stopRequest with no pendingRequest stored', () => {
+      const { actor, emitLog } = createTestActorWithEmits({ activeChatId: 'chat_abc' });
+      actor.start();
+
+      actor.send({ type: 'startRequest', request: { kind: 'regenerate' } });
+      actor.send({ type: 'stopRequest' });
+
+      expect(actor.getSnapshot().matches({ requestLifecycle: 'stopping' })).toBe(true);
+      expect(actor.getSnapshot().context.pendingRequest).toBeUndefined();
+      expect(emitLog.map((event) => event.type)).toEqual(['dispatchRequest', 'dispatchStop']);
+      actor.stop();
+    });
+
+    it('should transition invoking to idle on requestFinished without isError, emit applyFinishedRequest, and clear persistedError', () => {
+      const { actor, emitLog } = createTestActorWithEmits({ activeChatId: 'chat_abc' });
+      actor.start();
+
+      actor.send({ type: 'startRequest', request: { kind: 'regenerate' } });
+      // Stale error left over from a previous failed request: success path must clear it.
+      actor.send({ type: 'setPersistedError', error: sampleChatError });
+
+      const finalMessages: MyUIMessage[] = [sampleMessage];
+      actor.send({ type: 'requestFinished', messages: finalMessages, isAbort: false, isError: false });
+
+      expect(actor.getSnapshot().matches({ requestLifecycle: 'idle' })).toBe(true);
+      expect(actor.getSnapshot().context.persistedError).toBeUndefined();
+      const lastEmit = emitLog.at(-1);
+      expect(lastEmit).toEqual({ type: 'applyFinishedRequest', messages: finalMessages });
+      actor.stop();
+    });
+
+    it('should transition invoking to idle on requestFinished with isError, emit applyFinishedRequest, and PRESERVE persistedError', () => {
+      const { actor, emitLog } = createTestActorWithEmits({ activeChatId: 'chat_abc' });
+      actor.start();
+
+      actor.send({ type: 'startRequest', request: { kind: 'regenerate' } });
+      // Mid-stream error, set by ChatProvider's onError handler before onFinish fires.
+      actor.send({ type: 'setPersistedError', error: sampleChatError });
+
+      const finalMessages: MyUIMessage[] = [sampleMessage];
+      actor.send({ type: 'requestFinished', messages: finalMessages, isAbort: false, isError: true });
+
+      expect(actor.getSnapshot().matches({ requestLifecycle: 'idle' })).toBe(true);
+      expect(actor.getSnapshot().context.persistedError).toEqual(sampleChatError);
+      const lastEmit = emitLog.at(-1);
+      expect(lastEmit).toEqual({ type: 'applyFinishedRequest', messages: finalMessages });
+      actor.stop();
+    });
+
+    it('should transition stopping to invoking on requestFinished when pendingRequest is set, emit applyResumedRequest then dispatchRequest, and clear pendingRequest', () => {
+      const { actor, emitLog } = createTestActorWithEmits({ activeChatId: 'chat_abc' });
+      actor.start();
+
+      const first: ChatRequest = { kind: 'send', message: sampleMessage };
+      const queued: ChatRequest = { kind: 'send', message: { ...sampleMessage, id: 'msg_user_2' } };
+
+      actor.send({ type: 'startRequest', request: first });
+      actor.send({ type: 'startRequest', request: queued });
+      const interruptedMessages: MyUIMessage[] = [sampleMessage];
+      actor.send({ type: 'requestFinished', messages: interruptedMessages, isAbort: true, isError: false });
+
+      expect(actor.getSnapshot().matches({ requestLifecycle: 'invoking' })).toBe(true);
+      expect(actor.getSnapshot().context.pendingRequest).toBeUndefined();
+
+      const types = emitLog.map((event) => event.type);
+      expect(types).toEqual(['dispatchRequest', 'dispatchStop', 'applyResumedRequest', 'dispatchRequest']);
+
+      const resumed = emitLog[2];
+      const dispatched = emitLog[3];
+      expect(resumed).toEqual({
+        type: 'applyResumedRequest',
+        messages: interruptedMessages,
+        pendingRequest: queued,
+      });
+      expect(dispatched).toEqual({ type: 'dispatchRequest', request: queued });
+      actor.stop();
+    });
+
+    it('should transition stopping to idle on requestFinished without pendingRequest and emit applyStoppedRequest', () => {
+      const { actor, emitLog } = createTestActorWithEmits({ activeChatId: 'chat_abc' });
+      actor.start();
+
+      actor.send({ type: 'startRequest', request: { kind: 'regenerate' } });
+      actor.send({ type: 'stopRequest' });
+      const interruptedMessages: MyUIMessage[] = [sampleMessage];
+      actor.send({ type: 'requestFinished', messages: interruptedMessages, isAbort: true, isError: false });
+
+      expect(actor.getSnapshot().matches({ requestLifecycle: 'idle' })).toBe(true);
+      const lastEmit = emitLog.at(-1);
+      expect(lastEmit).toEqual({ type: 'applyStoppedRequest', messages: interruptedMessages });
+      actor.stop();
+    });
+
+    it('should replace pendingRequest if startRequest fires again while stopping', () => {
+      const { actor, emitLog } = createTestActorWithEmits({ activeChatId: 'chat_abc' });
+      actor.start();
+
+      const first: ChatRequest = { kind: 'send', message: sampleMessage };
+      const second: ChatRequest = { kind: 'send', message: { ...sampleMessage, id: 'msg_user_2' } };
+      const third: ChatRequest = { kind: 'send', message: { ...sampleMessage, id: 'msg_user_3' } };
+
+      actor.send({ type: 'startRequest', request: first });
+      actor.send({ type: 'startRequest', request: second });
+      // Third startRequest while still in stopping must REPLACE the pending request.
+      actor.send({ type: 'startRequest', request: third });
+
+      expect(actor.getSnapshot().matches({ requestLifecycle: 'stopping' })).toBe(true);
+      expect(actor.getSnapshot().context.pendingRequest).toEqual(third);
+      // No additional dispatchStop emit on the third tap.
+      expect(emitLog.filter((event) => event.type === 'dispatchStop').length).toBe(1);
+      actor.stop();
+    });
+
+    it('should ignore requestFinished while requestLifecycle is idle', () => {
+      const { actor, emitLog } = createTestActorWithEmits({ activeChatId: 'chat_abc' });
+      actor.start();
+
+      actor.send({
+        type: 'requestFinished',
+        messages: [sampleMessage],
+        isAbort: false,
+        isError: false,
+      });
+
+      expect(actor.getSnapshot().matches({ requestLifecycle: 'idle' })).toBe(true);
+      expect(emitLog).toEqual([]);
+      actor.stop();
+    });
+
+    it('should keep emit ordering deterministic across the resume path', () => {
+      const { actor, emitLog } = createTestActorWithEmits({ activeChatId: 'chat_abc' });
+      actor.start();
+
+      const first: ChatRequest = { kind: 'regenerate' };
+      const queued: ChatRequest = { kind: 'send', message: sampleMessage };
+
+      actor.send({ type: 'startRequest', request: first });
+      actor.send({ type: 'startRequest', request: queued });
+      actor.send({
+        type: 'requestFinished',
+        messages: [sampleMessage],
+        isAbort: true,
+        isError: false,
+      });
+
+      expect(emitLog.map((event) => event.type)).toEqual([
+        'dispatchRequest',
+        'dispatchStop',
+        'applyResumedRequest',
+        'dispatchRequest',
+      ]);
+      actor.stop();
     });
   });
 });

@@ -8,7 +8,7 @@
  * following the pattern from use-project.tsx.
  */
 
-import { setup, assign } from 'xstate';
+import { setup, assign, emit } from 'xstate';
 import type { Chat, MyUIMessage } from '@taucad/chat';
 import type { ChatError } from '@taucad/types';
 import { fromSafeAsync } from '#lib/xstate.lib.js';
@@ -18,6 +18,21 @@ export type ChatPersistenceMachineInput = {
   activeChatId?: string;
   resourceId?: string;
 };
+
+/**
+ * A chat request kicked off by the UI. Routed through the requestLifecycle
+ * sub-machine so every entry point clears persistedError synchronously.
+ *
+ * - `send`: brand-new user message
+ * - `regenerate`: re-roll the last assistant turn with the existing message tail
+ * - `edit`: replace a user message and regenerate from there
+ * - `retry`: roll back to a prior user message (optionally re-targeting a model) and regenerate
+ */
+export type ChatRequest =
+  | { kind: 'send'; message: MyUIMessage }
+  | { kind: 'regenerate' }
+  | { kind: 'edit'; messageId: string; content: string; model: string; imageUrls?: string[] }
+  | { kind: 'retry'; messageId: string; modelId?: string };
 
 // Context
 export type ChatPersistenceMachineContext = {
@@ -30,6 +45,8 @@ export type ChatPersistenceMachineContext = {
   pendingMessages?: MyUIMessage[];
   // Persisted error - survives page reload
   persistedError?: ChatError;
+  // Request queued while a previous request is being stopped; consumed on requestFinished
+  pendingRequest?: ChatRequest;
 };
 
 export type ChatRetrievedEvent = { type: 'chatRetrieved'; chat: Chat | undefined };
@@ -43,7 +60,28 @@ type ChatPersistenceMachineEvents =
   | { type: 'clearPersistedError' }
   // Flush pending state immediately (bypasses debounce, used on tab close)
   | { type: 'flushNow' }
+  // Request lifecycle
+  | { type: 'startRequest'; request: ChatRequest }
+  | { type: 'stopRequest' }
+  | { type: 'requestFinished'; messages: MyUIMessage[]; isAbort: boolean; isError: boolean }
   | ChatRetrievedEvent;
+
+/**
+ * Events emitted by the machine for the React shell (`ChatProvider`) to
+ * translate into AI SDK side effects via `actor.on(...)` subscriptions.
+ *
+ * These run synchronously inside the originating transition, so any
+ * `assign({ persistedError: undefined })` in the same transition lands
+ * before the listener calls `chat.sendMessage`/`regenerate` and the AI
+ * SDK clears its own `chat.error` — both error layers reset in a single
+ * React frame, eliminating the stale-banner flicker.
+ */
+type ChatPersistenceMachineEmitted =
+  | { type: 'dispatchRequest'; request: ChatRequest }
+  | { type: 'dispatchStop' }
+  | { type: 'applyFinishedRequest'; messages: MyUIMessage[] }
+  | { type: 'applyStoppedRequest'; messages: MyUIMessage[] }
+  | { type: 'applyResumedRequest'; messages: MyUIMessage[]; pendingRequest: ChatRequest };
 
 const loadChatActor = fromSafeAsync<ChatRetrievedEvent, { chatId: string }>(async () => {
   throw new Error('loadChatActor not provided');
@@ -67,6 +105,8 @@ export const chatPersistenceMachine = setup({
     context: {} as ChatPersistenceMachineContext,
     // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate types
     events: {} as ChatPersistenceMachineEvents,
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate types
+    emitted: {} as ChatPersistenceMachineEmitted,
     // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate types
     input: {} as ChatPersistenceMachineInput,
   },
@@ -104,6 +144,7 @@ export const chatPersistenceMachine = setup({
       loadError: undefined,
       pendingMessages: undefined,
       persistedError: undefined,
+      pendingRequest: undefined,
     };
   },
   type: 'parallel',
@@ -228,6 +269,94 @@ export const chatPersistenceMachine = setup({
                 pendingMessages: ({ event }) => event.messages,
               }),
             },
+          },
+        },
+      },
+    },
+    // Chat request lifecycle - centralizes send/regenerate/edit/retry/stop so
+    // every "request starts" path clears persistedError synchronously, eliminating
+    // the stale error banner flicker. Side effects flow out via emits to the
+    // ChatProvider listeners (which drive the AI SDK calls).
+    requestLifecycle: {
+      initial: 'idle',
+      states: {
+        idle: {
+          on: {
+            startRequest: {
+              target: 'invoking',
+              actions: [
+                assign({ persistedError: undefined }),
+                emit(({ event }) => ({ type: 'dispatchRequest', request: event.request })),
+              ],
+            },
+          },
+        },
+        invoking: {
+          on: {
+            // A new request while one is in flight: queue it, stop the in-flight one,
+            // and resume the queued one in `requestFinished`.
+            startRequest: {
+              target: 'stopping',
+              actions: [
+                assign({
+                  persistedError: undefined,
+                  pendingRequest: ({ event }) => event.request,
+                }),
+                emit({ type: 'dispatchStop' }),
+              ],
+            },
+            stopRequest: {
+              target: 'stopping',
+              actions: emit({ type: 'dispatchStop' }),
+            },
+            requestFinished: {
+              target: 'idle',
+              actions: [
+                // Mid-stream errors keep persistedError (set by onError) visible.
+                // Success/abort clear it as a safety net for any stale state.
+                assign({
+                  persistedError: ({ context, event }) => (event.isError ? context.persistedError : undefined),
+                }),
+                emit(({ event }) => ({ type: 'applyFinishedRequest', messages: event.messages })),
+              ],
+            },
+          },
+        },
+        stopping: {
+          on: {
+            // Allow the queued request to be replaced by a newer tap before the
+            // stop completes. The newest pendingRequest wins.
+            startRequest: {
+              actions: assign({
+                persistedError: undefined,
+                pendingRequest: ({ event }) => event.request,
+              }),
+            },
+            requestFinished: [
+              {
+                guard: ({ context }) => context.pendingRequest !== undefined,
+                target: 'invoking',
+                actions: [
+                  emit(({ context, event }) => ({
+                    type: 'applyResumedRequest',
+                    messages: event.messages,
+                    pendingRequest: context.pendingRequest!,
+                  })),
+                  emit(({ context }) => ({
+                    type: 'dispatchRequest',
+                    request: context.pendingRequest!,
+                  })),
+                  assign({ pendingRequest: undefined }),
+                ],
+              },
+              {
+                target: 'idle',
+                actions: emit(({ event }) => ({
+                  type: 'applyStoppedRequest',
+                  messages: event.messages,
+                })),
+              },
+            ],
           },
         },
       },

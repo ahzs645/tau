@@ -19,6 +19,7 @@ import { idPrefix } from '@taucad/types/constants';
 import type { ChatError } from '@taucad/types';
 import { draftMachine } from '#hooks/draft.machine.js';
 import { chatPersistenceMachine } from '#hooks/chat-persistence.machine.js';
+import type { ChatRequest } from '#hooks/chat-persistence.machine.js';
 import { useChats } from '#hooks/use-chats.js';
 import { inspect } from '#machines/inspector.js';
 import { ENV } from '#environment.config.js';
@@ -28,7 +29,64 @@ import type { ChatMode } from '#routes/projects_.$id/chat-mode-selector.js';
 
 type UseChatReturn = ReturnType<typeof useChat<MyUIMessage>>;
 
-type PendingMessage = Parameters<UseChatReturn['sendMessage']>[0];
+type SendMessageInput = Parameters<UseChatReturn['sendMessage']>[0];
+
+/**
+ * Build the user message that replaces an edited message in the transcript.
+ * Mirrors the prior inline construction in `useChatActions.editMessage`.
+ */
+function buildEditedMessage(request: Extract<ChatRequest, { kind: 'edit' }>): MyUIMessage {
+  return {
+    id: request.messageId,
+    role: 'user',
+    parts: [
+      { type: 'text', text: request.content },
+      ...(request.imageUrls?.map(
+        (url) =>
+          ({
+            type: 'file',
+            url,
+            mediaType: extractMimeTypeFromDataUrl(url),
+          }) as const,
+      ) ?? []),
+    ],
+    metadata: {
+      createdAt: Date.now(),
+      status: 'pending',
+      model: request.model,
+    },
+  };
+}
+
+/**
+ * Build the message slice that retry replaces. Returns `undefined` if the
+ * target message is no longer in the transcript (race with a concurrent
+ * setMessages). Mirrors the prior inline logic in `useChatActions.retryMessage`.
+ */
+function buildRetryMessages(
+  messages: MyUIMessage[],
+  request: Extract<ChatRequest, { kind: 'retry' }>,
+): MyUIMessage[] | undefined {
+  const messageIndex = messages.findIndex((m) => m.id === request.messageId);
+  if (messageIndex === -1) {
+    return undefined;
+  }
+
+  const sliceIndex = Math.max(messageIndex - 1, 0);
+  const previousMessage = messages[sliceIndex];
+
+  if (previousMessage && request.modelId) {
+    return [
+      ...messages.slice(0, sliceIndex),
+      {
+        ...previousMessage,
+        metadata: { ...previousMessage.metadata, model: request.modelId },
+      },
+    ];
+  }
+
+  return messages.slice(0, messageIndex);
+}
 
 // Single context for all chat state
 type ChatContextValue = {
@@ -38,7 +96,6 @@ type ChatContextValue = {
   chatName: string;
   isLoadingChat: boolean;
   queuePersist: (messages: MyUIMessage[]) => void;
-  pendingMessageRef: React.RefObject<PendingMessage | undefined>;
   draftActorRef: ReturnType<typeof useActorRef<typeof draftMachine>>;
   persistenceActorRef: ReturnType<typeof useActorRef<typeof chatPersistenceMachine>>;
 };
@@ -55,42 +112,27 @@ export function ChatProvider({
   readonly resourceId?: string;
   readonly chatId?: string;
 }): React.JSX.Element {
-  const { getChat, updateChat, chats } = useChats(resourceId ?? '');
+  const { getChat, patchChat, setMessageEdit, clearMessageEdit, chats } = useChats(resourceId ?? '');
 
   // Refs for functions that actors need access to (set after useChat is created)
   const setMessagesRef = useRef<UseChatReturn['setMessages'] | undefined>(undefined);
-  const regenerateRef = useRef<UseChatReturn['regenerate'] | undefined>(undefined);
+  const regenerateRef = useRef<(() => void) | undefined>(undefined);
   const initializeDraftRef = useRef<((chat: NonNullable<Awaited<ReturnType<typeof getChat>>>) => void) | undefined>(
     undefined,
   );
-
-  // Pending message ref for interrupt-then-send flow.
-  // When user sends while streaming/submitted, the message is queued here
-  // and processed in onFinish after the old request fully completes.
-  const pendingMessageRef = useRef<PendingMessage | undefined>(undefined);
 
   // Create draft machine with provided actors (like use-project.tsx pattern)
   const draftActorRef = useActorRef(
     draftMachine.provide({
       actors: {
         persistDraftActor: fromSafeAsync(async ({ input }) => {
-          await updateChat(input.chatId, { draft: input.draft }, { ignoreKeys: ['draft'] });
+          await patchChat(input.chatId, 'draft', input.draft);
         }),
         persistEditDraftActor: fromSafeAsync(async ({ input }) => {
-          await updateChat(
-            input.chatId,
-            { messageEdits: { [input.messageId]: input.draft } },
-            { ignoreKeys: ['messageEdits'] },
-          );
+          await setMessageEdit(input.chatId, input.messageId, input.draft);
         }),
         clearMessageEditActor: fromSafeAsync(async ({ input }) => {
-          const loadedChat = await getChat(input.chatId);
-          if (loadedChat?.messageEdits?.[input.messageId]) {
-            const updatedEdits = { ...loadedChat.messageEdits };
-            // oxlint-disable-next-line @typescript-eslint/no-dynamic-delete -- need to remove message edit
-            delete updatedEdits[input.messageId];
-            await updateChat(input.chatId, { messageEdits: updatedEdits }, { ignoreKeys: ['messageEdits'] });
-          }
+          await clearMessageEdit(input.chatId, input.messageId);
         }),
       },
     }),
@@ -128,13 +170,13 @@ export function ChatProvider({
           return { type: 'chatRetrieved', chat: loadedChat };
         }),
         persistMessagesActor: fromSafeAsync(async ({ input }) => {
-          await updateChat(input.chatId, { messages: input.messages }, { ignoreKeys: ['messages'] });
+          await patchChat(input.chatId, 'messages', input.messages);
         }),
         persistErrorActor: fromSafeAsync(async ({ input }) => {
-          await updateChat(input.chatId, { error: input.error }, { ignoreKeys: ['error'] });
+          await patchChat(input.chatId, 'error', input.error);
         }),
         clearErrorActor: fromSafeAsync(async ({ input }) => {
-          await updateChat(input.chatId, { error: undefined }, { ignoreKeys: ['error'] });
+          await patchChat(input.chatId, 'error', undefined);
         }),
       },
     }),
@@ -150,8 +192,10 @@ export function ChatProvider({
   // Track loading state from persistence machine
   const isLoadingChat = useSelector(persistenceActorRef, (state) => state.context.isLoadingChat);
 
-  // Initialize useChat with callbacks for event-driven persistence
-  // Tool execution is handled via WebSocket, not onToolCall/sendAutomaticallyWhen
+  // Initialize useChat. The lifecycle (send/regenerate/edit/retry/stop, queue-while-streaming)
+  // is owned by `chatPersistenceMachine.requestLifecycle`; the callbacks below just forward
+  // events into the machine, which then emits side-effect requests for the listeners installed
+  // in the useEffect further down.
   const chat = useChat<MyUIMessage>({
     id: activeChatId,
     transport: new DefaultChatTransport({
@@ -160,89 +204,117 @@ export function ChatProvider({
     }),
     generateId: () => generatePrefixedId(idPrefix.message),
     onFinish({ messages, isAbort, isError }) {
-      if (isAbort) {
-        // If a message is queued (user sent while streaming/submitted),
-        // finalize interrupted tool parts and trigger the new request.
-        const pendingMessage = pendingMessageRef.current;
-        if (pendingMessage) {
-          pendingMessageRef.current = undefined;
-
-          const sanitizedMessages = finalizeInterruptedToolParts(messages);
-          const newMessages = [...sanitizedMessages, pendingMessage as MyUIMessage];
-
-          setMessagesRef.current?.(newMessages);
-          persistenceActorRef.send({
-            type: 'queuePersist',
-            messages: newMessages,
-          });
-
-          // Defer to next microtask so the old makeRequest's finally block
-          // (which nulls activeResponse) completes before we start a new one.
-          queueMicrotask(() => {
-            void regenerateRef.current?.();
-          });
-        } else {
-          // Pure stop (no follow-up message).
-          // Finalize any interrupted tool parts and persist current state.
-          let sanitizedMessages = finalizeInterruptedToolParts(messages);
-
-          // If stopped before any AI response, the last message is the user's
-          // pending message. Mark it as cancelled to prevent auto-regeneration
-          // on page reload (loadChatActor checks for pending user messages).
-          const lastMessage = sanitizedMessages.at(-1);
-          if (lastMessage?.role === 'user' && lastMessage.metadata?.status === 'pending') {
-            sanitizedMessages = sanitizedMessages.with(-1, {
-              ...lastMessage,
-              metadata: { ...lastMessage.metadata, status: 'cancelled' },
-            });
-          }
-
-          setMessagesRef.current?.(sanitizedMessages);
-          persistenceActorRef.send({
-            type: 'queuePersist',
-            messages: sanitizedMessages,
-          });
-        }
-
-        return;
-      }
-
-      if (isError) {
-        // Error mid-stream: finalize any interrupted tool parts and persist messages
-        // so partial AI output survives reload and is available on retry.
-        const sanitizedMessages = finalizeInterruptedToolParts(messages);
-        setMessagesRef.current?.(sanitizedMessages);
-        persistenceActorRef.send({
-          type: 'queuePersist',
-          messages: sanitizedMessages,
-        });
-        // Error itself is already persisted via the onError callback
-        return;
-      }
-
-      // Success: persist messages and clear any stale persisted error.
-      // clearPersistedError acts as a safety net for cases where the error
-      // was not cleared before the request (e.g. auto-regeneration on load).
-      persistenceActorRef.send({ type: 'queuePersist', messages });
-      persistenceActorRef.send({ type: 'clearPersistedError' });
+      persistenceActorRef.send({ type: 'requestFinished', messages, isAbort, isError });
     },
     onError(error) {
       persistenceActorRef.send({ type: 'handleError', error });
-      // Parse and persist the error for display after page reload
-      const normalizedError = parseErrorForPersistence(error);
       persistenceActorRef.send({
         type: 'setPersistedError',
-        error: normalizedError,
+        error: parseErrorForPersistence(error),
       });
     },
   });
 
+  // Stable ref so emit listeners always read the latest AI SDK chat instance
+  // without requiring the effect to resubscribe on every render.
+  const chatRef = useRef<UseChatReturn>(chat);
+  chatRef.current = chat;
+
   // Update refs so actors can access current functions
   setMessagesRef.current = chat.setMessages;
-  regenerateRef.current = chat.regenerate;
+  regenerateRef.current = () => {
+    persistenceActorRef.send({ type: 'startRequest', request: { kind: 'regenerate' } });
+  };
   initializeDraftRef.current = (loadedChat) => {
     draftActorRef.send({ type: 'initializeFromChat', chat: loadedChat });
   };
+
+  // Subscribe to lifecycle emits from the persistence machine. These run
+  // synchronously inside the originating transition, so any persistedError
+  // assign in the same transition lands before the AI SDK clears its own
+  // chat.error — both layers reset in a single React frame (no flicker).
+  useEffect(() => {
+    const dispatchSubscription = persistenceActorRef.on('dispatchRequest', ({ request }) => {
+      const c = chatRef.current;
+      switch (request.kind) {
+        case 'send': {
+          void c.sendMessage(request.message);
+          return;
+        }
+
+        case 'regenerate': {
+          void c.regenerate();
+          return;
+        }
+
+        case 'edit': {
+          const messageIndex = c.messages.findIndex((m) => m.id === request.messageId);
+          if (messageIndex === -1) {
+            return;
+          }
+          const next = [...c.messages.slice(0, messageIndex), buildEditedMessage(request)];
+          c.setMessages(next);
+          void c.regenerate();
+          return;
+        }
+
+        case 'retry': {
+          const next = buildRetryMessages(c.messages, request);
+          if (!next) {
+            return;
+          }
+          c.setMessages(next);
+          void c.regenerate();
+        }
+      }
+    });
+
+    const stopSubscription = persistenceActorRef.on('dispatchStop', () => {
+      void chatRef.current.stop();
+    });
+
+    const finishedSubscription = persistenceActorRef.on('applyFinishedRequest', ({ messages }) => {
+      const sanitized = finalizeInterruptedToolParts(messages);
+      // Only update messages when sanitization changed something to avoid
+      // unnecessary AI SDK state churn on the success path.
+      if (sanitized !== messages) {
+        chatRef.current.setMessages(sanitized);
+      }
+      persistenceActorRef.send({ type: 'queuePersist', messages: sanitized });
+    });
+
+    const stoppedSubscription = persistenceActorRef.on('applyStoppedRequest', ({ messages }) => {
+      let sanitized = finalizeInterruptedToolParts(messages);
+
+      // If stopped before any AI response, the last message is the user's
+      // pending message. Mark it as cancelled to prevent auto-regeneration
+      // on page reload (loadChatActor checks for pending user messages).
+      const last = sanitized.at(-1);
+      if (last?.role === 'user' && last.metadata?.status === 'pending') {
+        sanitized = sanitized.with(-1, {
+          ...last,
+          metadata: { ...last.metadata, status: 'cancelled' },
+        });
+      }
+
+      chatRef.current.setMessages(sanitized);
+      persistenceActorRef.send({ type: 'queuePersist', messages: sanitized });
+    });
+
+    const resumedSubscription = persistenceActorRef.on('applyResumedRequest', ({ messages }) => {
+      const sanitized = finalizeInterruptedToolParts(messages);
+      chatRef.current.setMessages(sanitized);
+      persistenceActorRef.send({ type: 'queuePersist', messages: sanitized });
+    });
+
+    return () => {
+      dispatchSubscription.unsubscribe();
+      stopSubscription.unsubscribe();
+      finishedSubscription.unsubscribe();
+      stoppedSubscription.unsubscribe();
+      resumedSubscription.unsubscribe();
+    };
+  }, [persistenceActorRef]);
 
   // Load chat when activeChatId changes
   useEffect(() => {
@@ -280,7 +352,6 @@ export function ChatProvider({
       chatName,
       isLoadingChat,
       queuePersist,
-      pendingMessageRef,
       draftActorRef,
       persistenceActorRef,
     }),
@@ -384,7 +455,7 @@ export function useChatSelector<T>(selector: (state: CombinedChatState) => T): T
 
 // Hook for chat actions
 export function useChatActions(): {
-  sendMessage: (message: Parameters<UseChatReturn['sendMessage']>[0]) => void;
+  sendMessage: (message: SendMessageInput) => void;
   regenerate: () => void;
   stop: () => void;
   setMessages: (messages: MyUIMessage[]) => void;
@@ -404,38 +475,29 @@ export function useChatActions(): {
   editMessage: (messageId: string, content: string, model: string, metadata?: unknown, imageUrls?: string[]) => void;
   retryMessage: (messageId: string, modelId?: string) => void;
 } {
-  const { chat, queuePersist, pendingMessageRef, draftActorRef, persistenceActorRef } = useChatContext();
+  const { chat, draftActorRef, persistenceActorRef } = useChatContext();
 
   return useMemo(
     () => ({
-      // UseChat actions (direct)
-      sendMessage(message: Parameters<UseChatReturn['sendMessage']>[0]) {
-        // Clear draft when sending
+      // Lifecycle actions: thin event forwarders. The persistence machine's
+      // requestLifecycle owns clear-error / queue-while-streaming / interrupt
+      // semantics — see chat-persistence.machine.ts.
+      sendMessage(message: SendMessageInput) {
         draftActorRef.send({ type: 'clearDraft' });
-
-        // Clear any persisted error when starting a new request
-        persistenceActorRef.send({ type: 'clearPersistedError' });
-
-        // If currently streaming or submitted, queue the message and stop.
-        // The pending message will be processed in onFinish(isAbort) after
-        // the old makeRequest fully completes, avoiding concurrent requests.
-        if (chat.status === 'streaming' || chat.status === 'submitted') {
-          pendingMessageRef.current = message;
-          void chat.stop();
-          return;
-        }
-
-        // Normal path: no request in progress
-        queuePersist([...chat.messages, message as MyUIMessage]);
-        void chat.sendMessage(message);
+        // The 'send' kind requires a full MyUIMessage. All in-app callers pass
+        // a full message (chat-textarea constructs one via createMessage); the
+        // text/files convenience union is not exercised internally.
+        persistenceActorRef.send({
+          type: 'startRequest',
+          // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- AI SDK sendMessage union narrows to MyUIMessage at all call sites
+          request: { kind: 'send', message: message as MyUIMessage },
+        });
       },
       regenerate() {
-        // Clear any persisted error when retrying
-        persistenceActorRef.send({ type: 'clearPersistedError' });
-        void chat.regenerate();
+        persistenceActorRef.send({ type: 'startRequest', request: { kind: 'regenerate' } });
       },
       stop() {
-        void chat.stop();
+        persistenceActorRef.send({ type: 'stopRequest' });
       },
       setMessages(messages: MyUIMessage[]) {
         chat.setMessages(messages);
@@ -489,74 +551,30 @@ export function useChatActions(): {
         draftActorRef.send({ type: 'clearMessageEdit', messageId });
       },
 
-      // Edit and retry - uses both useChat and draft machine
       // oxlint-disable-next-line max-params -- matches the callback signature used across chat components
       editMessage(messageId: string, content: string, model: string, _metadata?: unknown, imageUrls?: string[]) {
-        // Clear the edit from draft machine
         draftActorRef.send({ type: 'clearMessageEdit', messageId });
-
-        // Find message index
-        const messageIndex = chat.messages.findIndex((m) => m.id === messageId);
-        if (messageIndex === -1) {
+        // Validate before transitioning — avoids leaving requestLifecycle in a
+        // partially-driven state if the message is gone.
+        if (!chat.messages.some((m) => m.id === messageId)) {
           return;
         }
-
-        // Create new message with updated content
-        const newMessage: MyUIMessage = {
-          id: messageId,
-          role: 'user',
-          parts: [
-            { type: 'text', text: content },
-            ...(imageUrls?.map(
-              (url) =>
-                ({
-                  type: 'file',
-                  url,
-                  mediaType: extractMimeTypeFromDataUrl(url),
-                }) as const,
-            ) ?? []),
-          ],
-          metadata: {
-            createdAt: Date.now(),
-            status: 'pending',
-            model,
-          },
-        };
-
-        // Update messages array - keep messages up to the edited one
-        const newMessages = [...chat.messages.slice(0, messageIndex), newMessage];
-        chat.setMessages(newMessages);
-        void chat.regenerate();
+        persistenceActorRef.send({
+          type: 'startRequest',
+          request: { kind: 'edit', messageId, content, model, imageUrls },
+        });
       },
 
       retryMessage(messageId: string, modelId?: string) {
-        const messageIndex = chat.messages.findIndex((m) => m.id === messageId);
-        if (messageIndex === -1) {
+        if (!chat.messages.some((m) => m.id === messageId)) {
           return;
         }
-
-        const sliceIndex = Math.max(messageIndex - 1, 0);
-        const previousMessage = chat.messages[sliceIndex];
-
-        if (previousMessage && modelId) {
-          // Update the previous message with the new model
-          const updatedMessages = [
-            ...chat.messages.slice(0, sliceIndex),
-            {
-              ...previousMessage,
-              metadata: { ...previousMessage.metadata, model: modelId },
-            },
-          ];
-          chat.setMessages(updatedMessages);
-        } else {
-          // Just slice the messages array
-          const newMessages = chat.messages.slice(0, messageIndex);
-          chat.setMessages(newMessages);
-        }
-
-        void chat.regenerate();
+        persistenceActorRef.send({
+          type: 'startRequest',
+          request: { kind: 'retry', messageId, modelId },
+        });
       },
     }),
-    [chat, pendingMessageRef, draftActorRef, persistenceActorRef, queuePersist],
+    [chat, draftActorRef, persistenceActorRef],
   );
 }
