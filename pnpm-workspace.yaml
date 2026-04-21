@@ -124,6 +124,7 @@ catalog:
   madge: ^8.0.0
   manifold-3d: 3.3.2
   mermaid: ^11.12.3
+  netlify-cli: ^25.1.0
   nx: 22.5.2
   openscad-wasm-prebuilt: ^1.2.0
   oxfmt: ^0.36.0

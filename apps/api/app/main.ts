@@ -70,7 +70,13 @@ async function bootstrap() {
   app.enableVersioning({
     type: VersioningType.URI,
   });
-  await app.register(helmet);
+  // `crossOriginResourcePolicy: 'cross-origin'` lets Netlify-hosted UIs (which
+  // set COEP `require-corp` via netlify.toml) consume API responses from a
+  // different origin. Helmet defaults to `same-origin`, which would block those
+  // reads.
+  await app.register(helmet, {
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+  });
 
   const fastifyInstance = app.getHttpAdapter().getInstance();
   const fastifyOtel = new FastifyOtelInstrumentation();

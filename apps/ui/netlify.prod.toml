@@ -1,0 +1,63 @@
+# Netlify configuration for Tau UI (production site: `taucad-prod`)
+#
+# AUTHORITATIVE for the production Netlify site. By convention, dashboard
+# env-var overrides are forbidden for endpoint URLs and NODE_ENV — change
+# them here in source so a PR review covers the full env diff. Only
+# **secrets** that cannot be committed (e.g. POSTHOG_API_KEY,
+# SENTRY_AUTH_TOKEN, third-party keys) live in the Netlify dashboard.
+#
+# This config is invoked by `.github/workflows/prod-deploy-ui.yml` via
+# `netlify deploy --prod --config apps/ui/netlify.prod.toml`. The site has
+# `skip_automatic_builds: true` (set by `scripts/netlify-provision-prod.sh`),
+# so there is no `[context.deploy-preview]` or `[context.branch-deploy]` —
+# the only deploy path is the manual `workflow_dispatch`.
+#
+# Staging uses `apps/ui/netlify.toml` (default Netlify config), wired to the
+# `taucad` site via the Netlify GitHub integration. Both files share the
+# same `[build]` command and `[[headers]]` block so security posture stays
+# in sync; only endpoints diverge.
+#
+# NX_PREFER_NODE_STRIP_TYPES: NODE_ENV=production causes pnpm to skip
+# devDependencies (including @swc/core). Nx needs a TS transpiler to load
+# plugin config files (e.g. playwright.config.ts) during project graph
+# construction. This env var tells Nx to use Node's native type stripping
+# instead of SWC/ts-node, which requires no additional packages.
+
+[build]
+command = "NX_PREFER_NODE_STRIP_TYPES=true pnpm nx build ui"
+publish = "apps/ui/build/client"
+
+# Production context — the only deploy context for this site (PR previews
+# and branch deploys live on the staging `taucad` site, not here).
+[context.production]
+command = "NX_PREFER_NODE_STRIP_TYPES=true pnpm nx build ui"
+[context.production.environment]
+NODE_ENV = "production"
+TAU_API_URL = "https://api.tau.new"
+TAU_WEBSOCKET_URL = "wss://api.tau.new"
+TAU_FRONTEND_URL = "https://tau.new"
+
+[[headers]]
+for = "/*"
+[headers.values]
+# XSS Protection
+X-XSS-Protection = "1; mode=block"
+X-Content-Type-Options = "nosniff"
+# Clickjacking Protection
+X-Frame-Options = "DENY"
+# HSTS (forces HTTPS)
+Strict-Transport-Security = "max-age=63072000; includeSubDomains; preload"
+# Referrer Policy
+Referrer-Policy = "strict-origin-when-cross-origin"
+# Permissions Policy (Feature Policy)
+Permissions-Policy = "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=(), interest-cohort=()"
+# Cross-Origin Policies
+Cross-Origin-Opener-Policy = "same-origin"
+Cross-Origin-Resource-Policy = "same-origin"
+Cross-Origin-Embedder-Policy = "require-corp"
+# JavaScript Profiling
+Document-Policy = "js-profiling"
+# Content Security Policy (CSP) - Start with report-only mode
+# NOTE: Test thoroughly before switching to enforcing mode
+# Remove '-Report-Only' suffix to enforce
+Content-Security-Policy-Report-Only = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.zoo.dev https://api.kittycad.io wss:; worker-src 'self' blob:; child-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; upgrade-insecure-requests;"

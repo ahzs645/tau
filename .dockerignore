@@ -1,8 +1,8 @@
 # =============================================================================
-# .dockerignore — shared by apps/ui/Dockerfile and apps/api/Dockerfile
+# .dockerignore — used by apps/api/Dockerfile (the only Dockerfile in the repo).
 #
-# Build context is the repo root. Both builds use COPY . . to ingest the full
-# Nx monorepo, so only exclude items that NEITHER build needs.
+# Build context is the repo root. The API Docker build uses COPY . . to ingest
+# the full Nx monorepo, so only exclude items that the build doesn't need.
 # =============================================================================
 
 # -- Version control ----------------------------------------------------------

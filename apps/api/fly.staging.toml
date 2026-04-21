@@ -22,8 +22,12 @@ LOG_SERVICE = 'fly'
 LOG_LEVEL = 'info'
 OTEL_METRICS_PORT = '9464'
 OTEL_EXPORTER_OTLP_COMPRESSION = 'gzip'
-# Additional CORS origins for Netlify preview deployments and review apps
-ADDITIONAL_CORS_ORIGINS = '["https://deploy-preview-*--taucad.netlify.app","https://tau-ui-pr-*.fly.dev"]'
+# Additional CORS origins for the Netlify-hosted UI:
+#   - https://deploy-preview-*--taucad.netlify.app : per-PR Netlify deploy previews
+#   - https://taucad.netlify.app                   : Netlify default domain for the `taucad` site
+# The narrow `deploy-preview-*` glob is intentional — do not broaden to `*--taucad.netlify.app`,
+# which would silently allow non-PR branch deploys (currently disabled per allowed_branches).
+ADDITIONAL_CORS_ORIGINS = '["https://deploy-preview-*--taucad.netlify.app","https://taucad.netlify.app"]'
 
 [http_service]
 internal_port = 3000

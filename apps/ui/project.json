@@ -7,7 +7,7 @@
   "targets": {
     "build": {
       "dependsOn": ["copy-assets", "^copy-assets"],
-      "outputs": ["{projectRoot}/build", "{projectRoot}/.netlify"],
+      "outputs": ["{projectRoot}/build"],
       "options": {
         "env": {
           "NODE_OPTIONS": "--max-old-space-size=8192"
@@ -37,24 +37,6 @@
     },
     "typecheck": {
       "dependsOn": ["typegen"]
-    },
-    "deploy": {
-      "executor": "nx:run-commands",
-      "options": {
-        "command": "fly deploy --config ./apps/ui/fly.staging.toml --dockerfile ./apps/ui/Dockerfile"
-      }
-    },
-    "deploy:prod": {
-      "executor": "nx:run-commands",
-      "options": {
-        "command": "fly deploy --config ./apps/ui/fly.prod.toml --dockerfile ./apps/ui/Dockerfile"
-      }
-    },
-    "launch": {
-      "executor": "nx:run-commands",
-      "options": {
-        "command": "fly launch --config ./apps/ui/fly.prod.toml"
-      }
     },
     "sourcemaps": {
       "executor": "nx:run-commands",

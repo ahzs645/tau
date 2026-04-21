@@ -1,0 +1,69 @@
+# Manual production deploy of Tau UI to Netlify (`taucad-prod` site, https://tau.new).
+#
+# Triggered exclusively via `workflow_dispatch` so a human can stage releases
+# off the back of a known-good `main` revision (or any other ref). The Netlify
+# `taucad-prod` site is configured with `skip_automatic_builds: true` (set by
+# `scripts/netlify-provision-prod.sh`), so this workflow is the only deploy path.
+#
+# Build flow:
+#   1. checkout → setup-nx → `pnpm nx build ui` (NX_PREFER_NODE_STRIP_TYPES so
+#      pnpm prod-skip of devDeps doesn't break Nx graph construction)
+#   2. inject + upload PostHog source maps via the `ui:sourcemaps` Nx target
+#   3. `netlify deploy --prod --config apps/ui/netlify.prod.toml` via
+#      `pnpm -F @taucad/scripts exec netlify` (catalog-pinned in
+#      pnpm-workspace.yaml, installed under @taucad/scripts)
+#
+# Required GitHub `production` environment values (provisioned by
+# `scripts/netlify-provision-prod.sh`):
+#   - secrets.NETLIFY_AUTH_TOKEN  : Netlify personal access token
+#   - vars.NETLIFY_PROD_SITE_ID   : `taucad-prod` site ID
+#   - secrets.POSTHOG_CLI_TOKEN   : PostHog CLI token for source-map upload
+#   - secrets.POSTHOG_CLI_ENV_ID  : PostHog CLI environment ID
+
+name: Deploy UI to Netlify Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref to deploy (default: main)'
+        required: false
+        default: 'main'
+
+concurrency: deploy-ui-netlify-prod
+
+jobs:
+  deploy:
+    name: Deploy UI to Netlify (taucad-prod)
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Setup Nx Environment
+        uses: ./.github/actions/setup-nx
+
+      - name: Build UI
+        run: NX_PREFER_NODE_STRIP_TYPES=true pnpm nx build ui
+
+      - name: Inject + upload PostHog source maps
+        run: pnpm nx run ui:sourcemaps
+        env:
+          POSTHOG_CLI_TOKEN: ${{ secrets.POSTHOG_CLI_TOKEN }}
+          POSTHOG_CLI_ENV_ID: ${{ secrets.POSTHOG_CLI_ENV_ID }}
+
+      - name: Deploy to Netlify (taucad-prod)
+        run: |
+          pnpm -F @taucad/scripts exec netlify deploy \
+            --prod \
+            --site "${NETLIFY_PROD_SITE_ID}" \
+            --config apps/ui/netlify.prod.toml \
+            --dir apps/ui/build/client \
+            --functions apps/ui/build/server \
+            --message "prod ${GITHUB_SHA::7}"
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_PROD_SITE_ID: ${{ vars.NETLIFY_PROD_SITE_ID }}

@@ -1,5 +1,10 @@
-# Reusable workflow for deploying to Fly.io
-# Supports both staging (taucad.dev) and production (tau.new) environments
+# Reusable workflow for deploying API to Fly.io.
+# Supports the staging API (`tau-api-staging`, `api.taucad.dev`) and the
+# production API (`tau-api`, `api.tau.new`).
+#
+# The UI is hosted on Netlify (staging site `taucad` / production site
+# `taucad-prod`); see docs/architecture/ui-deployment-topology.md for the
+# full topology.
 
 name: Deploy to Fly.io
 
@@ -13,7 +18,7 @@ on:
       app:
         required: true
         type: string
-        description: 'App to deploy (api or ui)'
+        description: 'App to deploy (api)'
   workflow_dispatch:
     # Manual trigger from GitHub UI
     inputs:
@@ -30,7 +35,6 @@ on:
         description: 'App to deploy'
         options:
           - api
-          - ui
 
 jobs:
   deploy:
@@ -59,18 +63,8 @@ jobs:
 
           echo "Deploying ${{ inputs.app }} to ${{ inputs.environment }} using $CONFIG_FILE"
 
-          # UI: inject source maps via build arg + secrets (secrets come from GH environment)
-          if [ "${{ inputs.app }}" = "ui" ]; then
-            flyctl deploy --remote-only \
-              --config "$CONFIG_FILE" \
-              --dockerfile "apps/${{ inputs.app }}/Dockerfile" \
-              --build-arg INJECT_SOURCEMAPS=true \
-              --build-secret POSTHOG_CLI_TOKEN="${{ secrets.POSTHOG_CLI_TOKEN }}" \
-              --build-secret POSTHOG_CLI_ENV_ID="${{ secrets.POSTHOG_CLI_ENV_ID }}"
-          else
-            flyctl deploy --remote-only \
-              --config "$CONFIG_FILE" \
-              --dockerfile "apps/${{ inputs.app }}/Dockerfile"
-          fi
+          flyctl deploy --remote-only \
+            --config "$CONFIG_FILE" \
+            --dockerfile "apps/${{ inputs.app }}/Dockerfile"
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

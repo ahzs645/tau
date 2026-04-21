@@ -29,14 +29,7 @@ jobs:
         uses: ./.github/actions/setup-nx
 
       - name: Check formatting
-        # TODO: replace with `pnpm dlx oxfmt@catalog: --check` once pnpm/pnpm#10594 is fixed
-        # NOTE: awk extraction is fragile — it assumes oxfmt appears as a top-level catalog
-        # entry in pnpm-workspace.yaml. If the YAML structure changes (e.g. nested catalogs,
-        # renamed keys), this will silently break. A more robust alternative would be to read
-        # the version from a dedicated file or package.json field.
-        run: |
-          version=$(awk '/^  oxfmt:/{gsub(/["'"'"']/, "", $2); print $2}' pnpm-workspace.yaml)
-          pnpm dlx "oxfmt@${version}" --check
+        run: pnpm format:check
 
   docs:
     name: Validate docs frontmatter
@@ -168,8 +161,11 @@ jobs:
           echo "$affected_apps" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-  # Staging deployments (taucad.dev) - deploy after builds pass to ensure Nx Cloud cache is populated
-  # This prevents OOM errors during Docker/Depot builds for memory-intensive UI builds
+  # Staging deployments — deploy after builds pass so the Nx Cloud cache is populated.
+  # The staging UI is hosted on Netlify (`taucad` site, custom domain `taucad.dev`)
+  # and rebuilt automatically by the Netlify GitHub integration on every push to
+  # `main` (production context) and on every PR (deploy-preview context); only
+  # the API ships to Fly here (`tau-api-staging`).
   deploy-api-staging:
     name: Deploy API (Staging)
     needs: [formatting, affected, changes]
@@ -178,14 +174,4 @@ jobs:
     with:
       environment: staging
       app: api
-    secrets: inherit
-
-  deploy-ui-staging:
-    name: Deploy UI (Staging)
-    needs: [formatting, affected, changes]
-    if: contains(fromJSON(needs.changes.outputs.affected_apps), 'ui')
-    uses: ./.github/workflows/deploy.yml
-    with:
-      environment: staging
-      app: ui
     secrets: inherit
