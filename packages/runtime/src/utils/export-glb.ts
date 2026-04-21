@@ -1,6 +1,7 @@
 import { cadMaterialDefaults } from '@taucad/types/constants';
 import type { Color, IndexedPolyhedron, VertexTransformFunction } from '#framework/common.js';
 import { transformVerticesGltf } from '#framework/common.js';
+import { srgbTupleToLinear } from '#utils/color-space.js';
 import { writeGlb, writeGltfJson } from '#utils/glb-writer.js';
 import type { GlbInput, GlbNode, GlbPrimitive } from '#utils/glb-writer.js';
 
@@ -217,17 +218,22 @@ function colorGroupToPrimitive(geometry: ColorGroupGeometry): GlbPrimitive {
 
   const colorString = `rgba(${Math.round(color[0] * 255)},${Math.round(color[1] * 255)},${Math.round(color[2] * 255)},${color[3].toFixed(2)})`;
 
+  // `color` is sRGB-encoded `[0..1]` (e.g. parsed from OpenSCAD OFF integer
+  // colors). glTF `baseColorFactor` is linear-space — see
+  // docs/policy/color-space-policy.md.
+  const linearBaseColor = srgbTupleToLinear(color);
+
   return {
     mode: 4,
     positions,
     normals,
     indices,
     material: {
-      baseColorFactor: color,
+      baseColorFactor: linearBaseColor,
       metallicFactor: cadMaterialDefaults.metalnessFactor,
       roughnessFactor: cadMaterialDefaults.roughnessFactor,
       doubleSided: true,
-      alphaMode: color[3] < 1 ? 'BLEND' : 'OPAQUE',
+      alphaMode: linearBaseColor[3] < 1 ? 'BLEND' : 'OPAQUE',
       name: colorString,
     },
   };

@@ -10,6 +10,7 @@ import { cadMaterialDefaults } from '@taucad/types/constants';
 // eslint-disable-next-line import-x/no-extraneous-dependencies -- internal # imports resolve to self
 import type { OpenCascadeInstance } from '#kernels/opencascade/wasm/opencascade_full.js';
 import type { ShapeEntry } from '#kernels/opencascade/opencascade.types.js';
+import { srgbToLinear } from '#utils/color-space.js';
 
 type MeshOptions = {
   linearTolerance: number;
@@ -85,8 +86,16 @@ export function meshShapesToGltf(
       const visTool = oc.XCAFDoc_DocumentTool.VisMaterialTool(mainLabel);
       const pbrMat = new oc.XCAFDoc_VisMaterialPBR();
       if (entry.color) {
-        const [r, g, b] = parseHexColor(entry.color);
-        const baseColor = new oc.Quantity_ColorRGBA(r, g, b, entry.opacity ?? 1);
+        const [sr, sg, sb] = parseHexColor(entry.color);
+        // The 4-double `Quantity_ColorRGBA` constructor treats inputs as
+        // **linear** RGB. CSS hex strings are sRGB, so convert per channel —
+        // see docs/policy/color-space-policy.md.
+        const baseColor = new oc.Quantity_ColorRGBA(
+          srgbToLinear(sr),
+          srgbToLinear(sg),
+          srgbToLinear(sb),
+          entry.opacity ?? 1,
+        );
         pbrMat.BaseColor = baseColor;
         baseColor.delete();
       }

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { Document } from '@gltf-transform/core';
 import { NodeIO } from '@gltf-transform/core';
+import { srgbToLinear } from '#utils/color-space.js';
 import { convertOffToGltf } from '#utils/off-to-gltf.js';
 
 /**
@@ -32,13 +33,13 @@ describe('convertOffToGltf', () => {
       const materials = document.getRoot().listMaterials();
       expect(materials).toHaveLength(1);
 
-      // Color should be on the material's baseColorFactor, not vertex colors
+      // Color should be on the material's baseColorFactor (linear), not vertex colors
       const material = materials[0]!;
       const baseColor = material.getBaseColorFactor();
       expect(baseColor[0]).toBeCloseTo(0, 2); // R
       expect(baseColor[1]).toBeCloseTo(0, 2); // G
-      expect(baseColor[2]).toBeCloseTo(1, 2); // B
-      expect(baseColor[3]).toBeCloseTo(127 / 255, 2); // A ≈ 0.498
+      expect(baseColor[2]).toBeCloseTo(srgbToLinear(1), 2); // B (linear)
+      expect(baseColor[3]).toBeCloseTo(127 / 255, 2); // A ≈ 0.498 (alpha is not gamma-corrected)
 
       // Primitives should NOT have vertex colors (color is on material)
       const primitives = meshes[0]!.listPrimitives();
@@ -108,14 +109,14 @@ describe('convertOffToGltf', () => {
       expect(opaqueMaterials).toHaveLength(1);
       expect(blendMaterials).toHaveLength(1);
 
-      // Check each material has correct color
+      // Check each material has correct color (linear-space)
       const opaqueColor = opaqueMaterials[0]!.getBaseColorFactor();
-      expect(opaqueColor[0]).toBeCloseTo(1, 2); // R
+      expect(opaqueColor[0]).toBeCloseTo(1, 2); // R = 1 (linear == sRGB at endpoints)
       expect(opaqueColor[3]).toBeCloseTo(1, 2); // A
 
       const blendColor = blendMaterials[0]!.getBaseColorFactor();
-      expect(blendColor[1]).toBeCloseTo(1, 2); // G
-      expect(blendColor[3]).toBeCloseTo(128 / 255, 2); // A
+      expect(blendColor[1]).toBeCloseTo(1, 2); // G = 1
+      expect(blendColor[3]).toBeCloseTo(128 / 255, 2); // A (not gamma-corrected)
     });
 
     it('should preserve RGB-only colors with default alpha of 1 on material', async () => {
@@ -135,9 +136,10 @@ describe('convertOffToGltf', () => {
 
       const material = materials[0]!;
       const baseColor = material.getBaseColorFactor();
-      expect(baseColor[0]).toBeCloseTo(255 / 255, 2); // R
-      expect(baseColor[1]).toBeCloseTo(128 / 255, 2); // G
-      expect(baseColor[2]).toBeCloseTo(64 / 255, 2); // B
+      // BaseColorFactor is linear; OFF integer colors are sRGB
+      expect(baseColor[0]).toBeCloseTo(srgbToLinear(255 / 255), 2); // R
+      expect(baseColor[1]).toBeCloseTo(srgbToLinear(128 / 255), 2); // G
+      expect(baseColor[2]).toBeCloseTo(srgbToLinear(64 / 255), 2); // B
       expect(baseColor[3]).toBeCloseTo(1, 2); // A = 1 (default)
 
       // Material should be OPAQUE since all faces are fully opaque
@@ -162,11 +164,11 @@ describe('convertOffToGltf', () => {
       const material = materials[0]!;
       const baseColor = material.getBaseColorFactor();
 
-      // Verify the glass color values on material
-      expect(baseColor[0]).toBeCloseTo(153 / 255, 2); // R ≈ 0.6
-      expect(baseColor[1]).toBeCloseTo(204 / 255, 2); // G ≈ 0.8
-      expect(baseColor[2]).toBeCloseTo(242 / 255, 2); // B ≈ 0.95
-      expect(baseColor[3]).toBeCloseTo(127 / 255, 2); // A ≈ 0.5
+      // BaseColorFactor is linear; OFF integer colors are sRGB
+      expect(baseColor[0]).toBeCloseTo(srgbToLinear(153 / 255), 2); // R sRGB ≈ 0.6
+      expect(baseColor[1]).toBeCloseTo(srgbToLinear(204 / 255), 2); // G sRGB ≈ 0.8
+      expect(baseColor[2]).toBeCloseTo(srgbToLinear(242 / 255), 2); // B sRGB ≈ 0.95
+      expect(baseColor[3]).toBeCloseTo(127 / 255, 2); // A ≈ 0.5 (alpha not gamma-corrected)
 
       // Should use BLEND mode for transparency
       expect(material.getAlphaMode()).toBe('BLEND');

@@ -2,18 +2,9 @@ import { cadMaterialDefaults } from '@taucad/types/constants';
 import { normalizeColor } from '#kernels/replicad/utils/normalize-color.js';
 import { transformNormalArray, transformVertexArray } from '#framework/common.js';
 import type { GeometryReplicad } from '#kernels/replicad/replicad.types.js';
+import { srgbHexToLinearTuple } from '#utils/color-space.js';
 import { writeGlb, writeGltfJson } from '#utils/glb-writer.js';
 import type { GlbInput, GlbNode, GlbPrimitive } from '#utils/glb-writer.js';
-
-/**
- * `sRGB` EOTF: decode a single sRGB channel value to linear light.
- *
- * @param channel - the sRGB channel value
- * @returns the linear light value
- */
-function srgbToLinear(channel: number): number {
-  return channel <= 0.040_45 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
-}
 
 /**
  * Build a GlbNode from a single replicad geometry (surface + optional edge lines).
@@ -35,12 +26,8 @@ function buildNodeFromReplicadGeometry(geometry: GeometryReplicad, geometryIndex
     if (geometry.color) {
       try {
         const normalizedColor = normalizeColor(geometry.color);
-        const hex = normalizedColor.color;
-        const r = srgbToLinear(Number.parseInt(hex.slice(1, 3), 16) / 255);
-        const g = srgbToLinear(Number.parseInt(hex.slice(3, 5), 16) / 255);
-        const b = srgbToLinear(Number.parseInt(hex.slice(5, 7), 16) / 255);
         const alpha = geometry.opacity ?? normalizedColor.alpha;
-        baseColor = [r, g, b, alpha];
+        baseColor = srgbHexToLinearTuple(normalizedColor.color, alpha);
       } catch (error) {
         console.warn('Failed to parse color:', geometry.color, error);
         throw new Error('Failed to parse color', { cause: error });

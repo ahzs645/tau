@@ -76,6 +76,24 @@ describe('convertReplicadGeometriesToGltf', () => {
     expect(material.getAlphaMode()).toBe('OPAQUE');
   });
 
+  // Discriminating test: pure primaries pass for both correct and incorrect
+  // implementations because sRGB endpoints (0 and 1) map to themselves under
+  // the gamma curve. Mid-gray exposes the bug — sRGB-as-linear would yield
+  // ~0.502, the correct linear value is ~0.216.
+  // See docs/policy/color-space-policy.md.
+  it('should encode mid-gray #808080 to linear ~0.216 (not sRGB 0.502)', async () => {
+    const geometry = createSimpleGeometry({ color: '#808080', opacity: 1 });
+    const glb = convertReplicadGeometriesToGltf([geometry], 'glb');
+    const document = await new NodeIO().readBinary(glb);
+    const material = document.getRoot().listMaterials()[0]!;
+
+    const color = material.getBaseColorFactor();
+    expect(color[0]).toBeCloseTo(0.215_861, 3);
+    expect(color[1]).toBeCloseTo(0.215_861, 3);
+    expect(color[2]).toBeCloseTo(0.215_861, 3);
+    expect(color[3]).toBeCloseTo(1, 2);
+  });
+
   it('should set BLEND alphaMode for semi-transparent geometry', async () => {
     const geometry = createSimpleGeometry({ color: '#ff0000', opacity: 0.5 });
     const glb = convertReplicadGeometriesToGltf([geometry], 'glb');

@@ -1,6 +1,7 @@
 import { geometries, maths } from '@jscad/modeling';
 import { cadMaterialDefaults } from '@taucad/types/constants';
 import { transformNormalArray, transformVertexArray } from '#framework/common.js';
+import { srgbTupleToLinear } from '#utils/color-space.js';
 import { writeGlb } from '#utils/glb-writer.js';
 import type { GlbInput, GlbNode, GlbPrimitive } from '#utils/glb-writer.js';
 
@@ -183,17 +184,21 @@ function buildNodeFromJscadShape(shape: unknown, shapeIndex: number): GlbNode | 
     materialName = `rgba(${Math.round(color[0] * 255)},${Math.round(color[1] * 255)},${Math.round(color[2] * 255)},${color[3].toFixed(2)})`;
   }
 
+  // JSCAD `colorize()` produces sRGB-encoded `[0..1]` tuples. glTF
+  // `baseColorFactor` is linear-space — see docs/policy/color-space-policy.md.
+  const linearBaseColor = srgbTupleToLinear(baseColor);
+
   const primitive: GlbPrimitive = {
     mode: 4,
     positions,
     normals: normalsArray,
     indices: indicesArray,
     material: {
-      baseColorFactor: baseColor,
+      baseColorFactor: linearBaseColor,
       metallicFactor: cadMaterialDefaults.metalnessFactor,
       roughnessFactor: cadMaterialDefaults.roughnessFactor,
       doubleSided: true,
-      alphaMode: baseColor[3] < 1 ? 'BLEND' : 'OPAQUE',
+      alphaMode: linearBaseColor[3] < 1 ? 'BLEND' : 'OPAQUE',
       name: materialName,
     },
   };

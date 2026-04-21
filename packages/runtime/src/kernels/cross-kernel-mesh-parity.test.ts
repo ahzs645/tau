@@ -22,6 +22,7 @@ import replicadKernel from '#kernels/replicad/replicad.kernel.js';
 import opencascadeKernel from '#kernels/opencascade/opencascade.kernel.js';
 import { assertSuccess, createGeometryFile, createTestWorker } from '#testing/kernel-testing.utils.js';
 import { extractGltfFromResult } from '#testing/kernel-geometry-testing.utils.js';
+import { colorParityCases, expectLinearBaseColor } from '#testing/color-testing.utils.js';
 import type { CreateGeometryResult } from '#types/runtime.types.js';
 
 type VertexNormal = {
@@ -205,70 +206,74 @@ export default function main() {
     expect(posMatchPct, 'Position precision should match at 0.00001 resolution').toBeGreaterThanOrEqual(0.95);
   });
 
-  it('should produce matching material properties for a colored cylinder', async () => {
-    const testColor = '#1565C0';
-    const geometryFile = createGeometryFile('colored-cylinder.ts');
+  describe('non-PBR color parity (replicad vs OCCT TOC_sRGB)', () => {
+    for (const { hex, label, opacity } of colorParityCases) {
+      // OCCT non-PBR `Quantity_Color` has no alpha channel; translucent cases
+      // are exercised in the PBR parity block below.
+      if (opacity < 1) {
+        continue;
+      }
 
-    const replicadWorker = await createTestWorker(replicadKernel, {
-      'colored-cylinder.ts': `
+      it(`should match linear baseColorFactor for ${label} (${hex})`, async () => {
+        const geometryFile = createGeometryFile('colored-cylinder.ts');
+
+        const replicadWorker = await createTestWorker(replicadKernel, {
+          'colored-cylinder.ts': `
 import { makeCylinder } from 'replicad';
 export default function main() {
-  return { shape: makeCylinder(5, 20), color: '${testColor}' };
+  return { shape: makeCylinder(5, 20), color: '${hex}' };
 }`,
-    });
-    const replicadResult = (await replicadWorker.createGeometry({
-      file: geometryFile,
-      parameters: {},
-    })) as CreateGeometryResult;
-    assertSuccess(replicadResult, 'replicad createGeometry (colored)');
-    const replicadGlb = extractGltfFromResult(replicadResult);
-    expect(replicadGlb, 'Replicad GLB data').toBeDefined();
+        });
+        const replicadResult = (await replicadWorker.createGeometry({
+          file: geometryFile,
+          parameters: {},
+        })) as CreateGeometryResult;
+        assertSuccess(replicadResult, `replicad createGeometry (${hex})`);
+        const replicadGlb = extractGltfFromResult(replicadResult);
+        expect(replicadGlb, 'Replicad GLB data').toBeDefined();
 
-    const occtWorker = await createTestWorker(opencascadeKernel, {
-      'colored-cylinder.ts': `
+        const occtWorker = await createTestWorker(opencascadeKernel, {
+          'colored-cylinder.ts': `
 import { BRepPrimAPI_MakeCylinder } from 'opencascade.js';
 export default function main() {
-  return { shape: new BRepPrimAPI_MakeCylinder(5, 20).Shape(), color: '${testColor}' };
+  return { shape: new BRepPrimAPI_MakeCylinder(5, 20).Shape(), color: '${hex}' };
 }`,
-    });
-    const occtResult = (await occtWorker.createGeometry({
-      file: geometryFile,
-      parameters: {},
-    })) as CreateGeometryResult;
-    assertSuccess(occtResult, 'occt createGeometry (colored)');
-    const occtGlb = extractGltfFromResult(occtResult);
-    expect(occtGlb, 'OCCT GLB data').toBeDefined();
+        });
+        const occtResult = (await occtWorker.createGeometry({
+          file: geometryFile,
+          parameters: {},
+        })) as CreateGeometryResult;
+        assertSuccess(occtResult, `occt createGeometry (${hex})`);
+        const occtGlb = extractGltfFromResult(occtResult);
+        expect(occtGlb, 'OCCT GLB data').toBeDefined();
 
-    const io = new NodeIO();
-    const replicadDocument = await io.readBinary(replicadGlb!);
-    const occtDocument = await io.readBinary(occtGlb!);
+        const io = new NodeIO();
+        const replicadDocument = await io.readBinary(replicadGlb!);
+        const occtDocument = await io.readBinary(occtGlb!);
 
-    const replicadMaterials = replicadDocument.getRoot().listMaterials();
-    const occtMaterials = occtDocument.getRoot().listMaterials();
+        const rMat = replicadDocument.getRoot().listMaterials()[0]!;
+        const oMat = occtDocument.getRoot().listMaterials()[0]!;
 
-    expect(replicadMaterials.length, 'Replicad should have at least one material').toBeGreaterThan(0);
-    expect(occtMaterials.length, 'OCCT should have at least one material').toBeGreaterThan(0);
+        const rBaseColor = rMat.getBaseColorFactor();
+        const oBaseColor = oMat.getBaseColorFactor();
 
-    const rMat = replicadMaterials[0]!;
-    const oMat = occtMaterials[0]!;
+        // Both kernels must round-trip the sRGB hex to the **same** linear
+        // baseColorFactor (alpha = 1 for non-PBR).
+        expectLinearBaseColor(rBaseColor, hex, { tolerance: 0.02 });
+        expectLinearBaseColor(oBaseColor, hex, { tolerance: 0.02 });
 
-    const rBaseColor = rMat.getBaseColorFactor();
-    const oBaseColor = oMat.getBaseColorFactor();
-    const rMetallic = rMat.getMetallicFactor();
-    const oMetallic = oMat.getMetallicFactor();
-    const rRoughness = rMat.getRoughnessFactor();
-    const oRoughness = oMat.getRoughnessFactor();
+        const colorTolerance = 0.02;
+        for (let i = 0; i < 3; i++) {
+          expect(
+            Math.abs(rBaseColor[i]! - oBaseColor[i]!),
+            `baseColorFactor[${i}] differs: replicad=${rBaseColor[i]!.toFixed(4)}, occt=${oBaseColor[i]!.toFixed(4)}`,
+          ).toBeLessThan(colorTolerance);
+        }
 
-    const colorTolerance = 0.02;
-    for (let i = 0; i < 4; i++) {
-      expect(
-        Math.abs(rBaseColor[i]! - oBaseColor[i]!),
-        `baseColorFactor[${i}] differs: replicad=${rBaseColor[i]!.toFixed(4)}, occt=${oBaseColor[i]!.toFixed(4)}`,
-      ).toBeLessThan(colorTolerance);
+        expect(rMat.getMetallicFactor(), 'metallicFactor should match').toBeCloseTo(oMat.getMetallicFactor(), 2);
+        expect(rMat.getRoughnessFactor(), 'roughnessFactor should match').toBeCloseTo(oMat.getRoughnessFactor(), 2);
+      });
     }
-
-    expect(rMetallic, 'metallicFactor should match').toBeCloseTo(oMetallic, 2);
-    expect(rRoughness, 'roughnessFactor should match').toBeCloseTo(oRoughness, 2);
   });
 
   it('should produce matching PBR material properties for explicit metalness/roughness', async () => {
@@ -321,5 +326,20 @@ export default function main() {
 
     expect(rMat.getMetallicFactor(), 'Cross-kernel metallicFactor').toBeCloseTo(oMat.getMetallicFactor(), 2);
     expect(rMat.getRoughnessFactor(), 'Cross-kernel roughnessFactor').toBeCloseTo(oMat.getRoughnessFactor(), 2);
+
+    // Both kernels' PBR paths (`Quantity_ColorRGBA(linear)` for OCCT, custom
+    // GLB writer for replicad) must end up at the **same** linear
+    // baseColorFactor — this is the cross-kernel regression guard for the
+    // OCCT PBR sRGB-as-linear bug fixed in #fix-occt-pbr.
+    const rBaseColor = rMat.getBaseColorFactor();
+    const oBaseColor = oMat.getBaseColorFactor();
+    expectLinearBaseColor(rBaseColor, testColor, { tolerance: 0.02 });
+    expectLinearBaseColor(oBaseColor, testColor, { tolerance: 0.02 });
+    for (let i = 0; i < 3; i++) {
+      expect(
+        Math.abs(rBaseColor[i]! - oBaseColor[i]!),
+        `PBR baseColorFactor[${i}] differs: replicad=${rBaseColor[i]!.toFixed(4)}, occt=${oBaseColor[i]!.toFixed(4)}`,
+      ).toBeLessThan(0.02);
+    }
   });
 });
