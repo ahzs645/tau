@@ -125,7 +125,7 @@ export default function UsageDashboard(): React.JSX.Element {
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant='outline' className='gap-2'>
-                <Filter className='size-4' />
+                <Filter className='size-3.5' />
                 Models
                 {filters.models.length > 0 ? (
                   <Badge variant='secondary' className='ml-1 rounded-full px-1.5 py-0.5 text-xs'>
@@ -160,7 +160,7 @@ export default function UsageDashboard(): React.JSX.Element {
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant='outline' className='gap-2'>
-                <Filter className='size-4' />
+                <Filter className='size-3.5' />
                 Providers
                 {filters.providers.length > 0 ? (
                   <Badge variant='secondary' className='ml-1 rounded-full px-1.5 py-0.5 text-xs'>
@@ -195,7 +195,7 @@ export default function UsageDashboard(): React.JSX.Element {
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant='outline' className='gap-2'>
-                <Filter className='size-4' />
+                <Filter className='size-3.5' />
                 Projects
                 {filters.projects.length > 0 ? (
                   <Badge variant='secondary' className='ml-1 rounded-full px-1.5 py-0.5 text-xs'>
@@ -228,14 +228,14 @@ export default function UsageDashboard(): React.JSX.Element {
         {/* Clear Filters */}
         {hasActiveFilters ? (
           <Button variant='ghost' size='sm' className='gap-2' onClick={clearFilters}>
-            <X className='size-4' />
+            <X className='size-3.5' />
             Clear filters
           </Button>
         ) : undefined}
 
         {/* Time Bucket Toggle */}
         <div className='ml-auto flex items-center gap-2'>
-          <Clock className='size-4 text-muted-foreground' />
+          <Clock className='size-3.5 text-muted-foreground' />
           <ToggleGroup
             type='single'
             variant='outline'
@@ -256,7 +256,7 @@ export default function UsageDashboard(): React.JSX.Element {
 
           {/* Refresh Button */}
           <Button variant='outline' size='sm' className='gap-2' onClick={refetch}>
-            <RefreshCw className='size-4' />
+            <RefreshCw className='size-3.5' />
             Refresh
           </Button>
         </div>
