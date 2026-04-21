@@ -1,4 +1,18 @@
-import { XIcon, SlidersHorizontal, Search, ChevronRight, ChevronDown, Pencil, Trash } from 'lucide-react';
+import {
+  XIcon,
+  SlidersHorizontal,
+  Search,
+  ChevronDown,
+  CopyMinus,
+  CopyPlus,
+  Pencil,
+  Trash,
+  MoreHorizontal,
+  X as CloseIcon,
+  Download,
+  Eye,
+  FileCode,
+} from 'lucide-react';
 import { useCallback, memo, useState, useMemo, useRef, useEffect } from 'react';
 import { useSelector } from '@xstate/react';
 import type { ActorRefFrom } from 'xstate';
@@ -7,6 +21,27 @@ import { PaneviewReact } from 'dockview-react';
 import { hasJsonSchemaObjectProperties } from '@taucad/utils/schema';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
+} from '#components/ui/context-menu.js';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from '#components/ui/dropdown-menu.js';
+import { ExportSelector } from '#components/files/export-selector.js';
 import {
   FloatingPanel,
   FloatingPanelClose,
@@ -37,8 +72,8 @@ import { formatKeyCombination } from '#utils/keys.utils.js';
 import { useProject, useMainGraphics } from '#hooks/use-project.js';
 import { Parameters } from '#components/geometry/parameters/parameters.js';
 import type { cadMachine } from '#machines/cad.machine.js';
-import { getActiveGroupValues } from '#utils/parameter-config.utils.js';
-import { sortCompilationEntries } from '#routes/projects_.$id/compilation-unit.utils.js';
+import { createDefaultEntry, getActiveGroupValues } from '#utils/parameter-config.utils.js';
+import { sortGeometryUnitEntries } from '#routes/projects_.$id/geometry-unit.utils.js';
 import { usePaneviewPersistence, getInitialPanelOptions } from '#routes/projects_.$id/use-chat-interface-state.js';
 
 const toggleParametersKeyCombination = {
@@ -174,6 +209,16 @@ function ParameterGroupSelector({
                   setCreateValue(event.target.value);
                 }}
                 onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    // Cmdk's <Command> intercepts Enter on its root and calls preventDefault before
+                    // dispatching select to the highlighted item, which (a) cancels the form's implicit
+                    // submit and (b) selects whichever group the mouse is hovering over, closing the
+                    // popover. Stop propagation so cmdk never sees the key, and commit explicitly.
+                    event.preventDefault();
+                    event.stopPropagation();
+                    handleCommitCreate();
+                    return;
+                  }
                   if (event.key === 'Escape') {
                     event.preventDefault();
                     event.stopPropagation();
@@ -216,6 +261,14 @@ function ParameterGroupSelector({
                 setRenameValue(event.target.value);
               }}
               onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  // Same cmdk-swallows-Enter problem as the create form above; stop propagation
+                  // and commit explicitly so the rename actually applies.
+                  event.preventDefault();
+                  event.stopPropagation();
+                  handleCommitRename();
+                  return;
+                }
                 if (event.key === 'Escape') {
                   event.preventDefault();
                   event.stopPropagation();
@@ -331,10 +384,10 @@ function ParameterGroupSelector({
 }
 
 // ---------------------------------------------------------------------------
-// CU parameters panel body (used in both flat and paneview modes)
+// geometry unit parameters panel body (used in both flat and paneview modes)
 // ---------------------------------------------------------------------------
 
-function CompilationUnitParameters({
+function GeometryUnitParameters({
   entryFile,
   cadRef,
   enableSearch,
@@ -345,7 +398,7 @@ function CompilationUnitParameters({
   readonly enableSearch: boolean;
   readonly isAllExpanded: boolean;
 }): React.JSX.Element {
-  const { parameterEntries, setCompilationUnitParameters } = useProject();
+  const { parameterEntries, setGeometryUnitParameters } = useProject();
   const graphicsActor = useMainGraphics();
 
   const parameters = useMemo(
@@ -361,9 +414,9 @@ function CompilationUnitParameters({
 
   const handleParametersChange = useCallback(
     (newParams: Record<string, unknown>) => {
-      setCompilationUnitParameters(entryFile, newParams);
+      setGeometryUnitParameters(entryFile, newParams);
     },
-    [setCompilationUnitParameters, entryFile],
+    [setGeometryUnitParameters, entryFile],
   );
 
   return (
@@ -392,7 +445,7 @@ type ParametersPanelParams = {
 
 function ParametersPanelBody({ params }: { readonly params: ParametersPanelParams }): React.JSX.Element {
   return (
-    <CompilationUnitParameters
+    <GeometryUnitParameters
       entryFile={params.entryFile}
       cadRef={params.cadRef}
       enableSearch={params.enableSearch}
@@ -412,8 +465,9 @@ function ParametersPanelHeader({
   readonly api: PaneviewPanelApi;
   readonly params: ParametersPanelParams;
 }): React.JSX.Element {
-  const { parameterEntries, setCompilationUnitParameters } = useProject();
+  const { parameterEntries, setGeometryUnitParameters, projectRef, geometryUnits, editorRef } = useProject();
   const entry = parameterEntries.get(params.entryFile);
+  const displayEntry = entry ?? createDefaultEntry();
   const jsonSchema = useSelector(params.cadRef, (state) => state.context.jsonSchema);
 
   const showCollapseToggle = Boolean(jsonSchema && hasJsonSchemaObjectProperties(jsonSchema));
@@ -422,43 +476,130 @@ function ParametersPanelHeader({
     return Object.keys(getActiveGroupValues(entry)).length > 0;
   }, [entry]);
 
+  const isLastGeometryUnit = geometryUnits.size <= 1;
+
   const handleReset = useCallback(() => {
-    setCompilationUnitParameters(params.entryFile, {});
-  }, [setCompilationUnitParameters, params.entryFile]);
+    setGeometryUnitParameters(params.entryFile, {});
+  }, [setGeometryUnitParameters, params.entryFile]);
 
   const handleToggleAllExpanded = useCallback(() => {
     api.updateParameters({ isAllExpanded: !params.isAllExpanded });
   }, [api, params.isAllExpanded]);
 
+  const handleCloseGeometryUnit = useCallback(() => {
+    if (isLastGeometryUnit) {
+      return;
+    }
+    projectRef.send({ type: 'destroyGeometryUnit', entryFile: params.entryFile });
+  }, [projectRef, params.entryFile, isLastGeometryUnit]);
+
+  const handleOpenInViewer = useCallback(() => {
+    projectRef.send({ type: 'openInViewer', entryFile: params.entryFile });
+  }, [projectRef, params.entryFile]);
+
+  const handleOpenInEditor = useCallback(() => {
+    editorRef.send({ type: 'openFile', path: params.entryFile, source: 'user' });
+  }, [editorRef, params.entryFile]);
+
   return (
-    <PaneviewHeader api={api} title={params.entryFile}>
-      {hasModifiedParameters ? (
-        <ModifiedIndicator
-          onReset={handleReset}
-          tooltip='Reset parameters'
-          className='[.dv-pane:hover_&]:**:data-[slot=dot]:opacity-0 [.dv-pane:hover_&]:**:data-[slot=icon]:opacity-100'
-        />
-      ) : null}
-      <PaneviewHeaderControls>
-        {entry ? (
-          <ParameterGroupSelector filePath={params.entryFile} groups={entry.groups} activeGroup={entry.activeGroup} />
-        ) : null}
-        <PaneviewHeaderContentActions>
-          {showCollapseToggle ? (
-            <PaneviewHeaderAction
-              aria-expanded={params.isAllExpanded}
-              aria-label={params.isAllExpanded ? 'Collapse all' : 'Expand all'}
-              tooltip={params.isAllExpanded ? 'Collapse all' : 'Expand all'}
-              onClick={handleToggleAllExpanded}
-            >
-              <ChevronRight
-                className={cn('transition-transform duration-300 ease-in-out', params.isAllExpanded && 'rotate-90')}
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <div className='contents'>
+          <PaneviewHeader api={api} title={params.entryFile}>
+            {hasModifiedParameters ? (
+              <ModifiedIndicator
+                onReset={handleReset}
+                tooltip='Reset parameters'
+                className='[.dv-pane:hover_&]:**:data-[slot=dot]:opacity-0 [.dv-pane:hover_&]:**:data-[slot=icon]:opacity-100'
               />
-            </PaneviewHeaderAction>
-          ) : null}
-        </PaneviewHeaderContentActions>
-      </PaneviewHeaderControls>
-    </PaneviewHeader>
+            ) : null}
+            <PaneviewHeaderControls
+              data-testid='paneview-header-controls'
+              className='opacity-0 transition-opacity duration-150 [&:has([data-state=open])]:opacity-100 [.dv-pane:hover_&]:opacity-100'
+            >
+              <ParameterGroupSelector
+                filePath={params.entryFile}
+                groups={displayEntry.groups}
+                activeGroup={displayEntry.activeGroup}
+              />
+              <PaneviewHeaderContentActions>
+                {showCollapseToggle ? (
+                  <PaneviewHeaderAction
+                    aria-expanded={params.isAllExpanded}
+                    aria-label={params.isAllExpanded ? 'Collapse all' : 'Expand all'}
+                    tooltip={params.isAllExpanded ? 'Collapse all' : 'Expand all'}
+                    onClick={handleToggleAllExpanded}
+                  >
+                    {params.isAllExpanded ? <CopyMinus /> : <CopyPlus />}
+                  </PaneviewHeaderAction>
+                ) : null}
+              </PaneviewHeaderContentActions>
+              <DropdownMenu modal={false}>
+                <DropdownMenuTrigger asChild>
+                  <PaneviewHeaderAction aria-label='Compilation unit actions' tooltip='More actions'>
+                    <MoreHorizontal />
+                  </PaneviewHeaderAction>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align='end' side='bottom'>
+                  <DropdownMenuItem onSelect={handleOpenInViewer}>
+                    <Eye />
+                    <span>Open in viewer</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={handleOpenInEditor}>
+                    <FileCode />
+                    <span>Open in editor</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger>
+                      <Download />
+                      <span>Quick export</span>
+                    </DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent className='p-0'>
+                      <ExportSelector cadActor={params.cadRef} defaultEntryFile={params.entryFile} variant='sub' />
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    variant='destructive'
+                    disabled={isLastGeometryUnit}
+                    onSelect={handleCloseGeometryUnit}
+                  >
+                    <CloseIcon />
+                    <span>Close geometry unit</span>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </PaneviewHeaderControls>
+          </PaneviewHeader>
+        </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem onSelect={handleOpenInViewer}>
+          <Eye />
+          <span>Open in viewer</span>
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={handleOpenInEditor}>
+          <FileCode />
+          <span>Open in editor</span>
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuSub>
+          <ContextMenuSubTrigger>
+            <Download />
+            <span>Quick export</span>
+          </ContextMenuSubTrigger>
+          <ContextMenuSubContent className='p-0'>
+            <ExportSelector cadActor={params.cadRef} defaultEntryFile={params.entryFile} variant='sub' />
+          </ContextMenuSubContent>
+        </ContextMenuSub>
+        <ContextMenuSeparator />
+        <ContextMenuItem variant='destructive' disabled={isLastGeometryUnit} onSelect={handleCloseGeometryUnit}>
+          <CloseIcon />
+          <span>Close geometry unit</span>
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
   );
 }
 
@@ -466,7 +607,7 @@ const paneviewComponents = { parametersPanel: ParametersPanelBody };
 const paneviewHeaderComponents = { parametersHeader: ParametersPanelHeader };
 
 // ---------------------------------------------------------------------------
-// Multi-CU Paneview layout
+// Multi-geometry unit Paneview layout
 // ---------------------------------------------------------------------------
 
 function ParametersPaneview({
@@ -481,7 +622,7 @@ function ParametersPaneview({
   const { savedState, connectApi } = usePaneviewPersistence('parametersPaneview');
   const paneviewApiRef = useRef<PaneviewApi | undefined>(undefined);
 
-  const sortedEntries = useMemo(() => sortCompilationEntries(entries, mainEntryFile), [entries, mainEntryFile]);
+  const sortedEntries = useMemo(() => sortGeometryUnitEntries(entries, mainEntryFile), [entries, mainEntryFile]);
 
   const paneviewKey = useMemo(() => sortedEntries.map(([file]) => file).join('\0'), [sortedEntries]);
 
@@ -534,15 +675,15 @@ function ParametersPaneview({
 }
 
 // ---------------------------------------------------------------------------
-// Parameters content: single vs multi CU
+// Parameters content: single vs multi geometry unit
 // ---------------------------------------------------------------------------
 
 function ParametersContent({ enableSearch }: { readonly enableSearch: boolean }): React.JSX.Element {
-  const { compilationUnits, mainEntryFile } = useProject();
-  const entries = useMemo(() => [...compilationUnits.entries()], [compilationUnits]);
+  const { geometryUnits, mainEntryFile } = useProject();
+  const entries = useMemo(() => [...geometryUnits.entries()], [geometryUnits]);
 
   if (entries.length === 0) {
-    return <p className='p-4 text-center text-xs text-muted-foreground'>No compilation units.</p>;
+    return <p className='p-4 text-center text-xs text-muted-foreground'>No geometry units.</p>;
   }
 
   return <ParametersPaneview entries={entries} mainEntryFile={mainEntryFile} enableSearch={enableSearch} />;

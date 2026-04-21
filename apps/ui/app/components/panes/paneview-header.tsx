@@ -132,17 +132,18 @@ export function PaneviewHeaderTitle({
  * Interactive area within a paneview header that stops event propagation,
  * preventing clicks and key events from toggling the panel.
  *
- * Pushes content to the trailing edge via `ml-auto`.
+ * Pushes content to the trailing edge via `ml-auto`. Accepts arbitrary div
+ * attributes (e.g. `data-testid`) — internal `onClick` / `onKeyDown` handlers
+ * are not overridable since they own the propagation contract.
  */
 export function PaneviewHeaderControls({
   children,
   className,
-}: {
-  readonly children: React.ReactNode;
-  readonly className?: string;
-}): React.JSX.Element {
+  ...rest
+}: Omit<React.ComponentProps<'div'>, 'onClick' | 'onKeyDown'>): React.JSX.Element {
   return (
     <div
+      {...rest}
       className={cn('ml-auto flex items-center gap-1', className)}
       onClick={(event) => {
         event.stopPropagation();

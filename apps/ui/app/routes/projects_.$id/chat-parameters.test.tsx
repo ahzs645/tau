@@ -42,11 +42,13 @@ const mockCadRef2 = {
   })),
 } as unknown as ActorRefFrom<typeof cadMachine>;
 
-let mockCompilationUnits = new Map<string, ActorRefFrom<typeof cadMachine>>();
+let mockGeometryUnits = new Map<string, ActorRefFrom<typeof cadMachine>>();
 const mockMainEntryFile = 'main.ts';
 const mockSetParameters = vi.fn();
-const mockSetCompilationUnitParameters = vi.fn();
+const mockSetGeometryUnitParameters = vi.fn();
 const mockSwitchParameterGroup = vi.fn();
+const mockProjectSend = vi.fn();
+const mockEditorSend = vi.fn();
 let mockParameterEntries = new Map<string, FileParameterEntry>();
 
 vi.mock('#hooks/use-project.js', () => ({
@@ -55,11 +57,18 @@ vi.mock('#hooks/use-project.js', () => ({
       getSnapshot: vi.fn(() => ({ context: { project: null } })),
       subscribe: vi.fn(() => ({ unsubscribe: vi.fn() })),
       on: vi.fn(() => ({ unsubscribe: vi.fn() })),
+      send: mockProjectSend,
     },
-    compilationUnits: mockCompilationUnits,
+    editorRef: {
+      getSnapshot: vi.fn(() => ({ context: {} })),
+      subscribe: vi.fn(() => ({ unsubscribe: vi.fn() })),
+      on: vi.fn(() => ({ unsubscribe: vi.fn() })),
+      send: mockEditorSend,
+    },
+    geometryUnits: mockGeometryUnits,
     mainEntryFile: mockMainEntryFile,
     setParameters: mockSetParameters,
-    setCompilationUnitParameters: mockSetCompilationUnitParameters,
+    setGeometryUnitParameters: mockSetGeometryUnitParameters,
     switchParameterGroup: mockSwitchParameterGroup,
     createParameterGroup: vi.fn(),
     deleteParameterGroup: vi.fn(),
@@ -223,11 +232,99 @@ vi.mock('#routes/projects_.$id/use-chat-interface-state.js', () => ({
   ) => defaults,
 }));
 
+vi.mock('#components/files/export-selector.js', () => ({
+  ExportSelector: () => <div data-testid='export-selector'>ExportSelector</div>,
+}));
+
+vi.mock('#components/ui/context-menu.js', () => ({
+  ContextMenu: ({ children }: { children: React.ReactNode }) => <div data-testid='context-menu'>{children}</div>,
+  ContextMenuTrigger: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
+  ContextMenuContent: ({ children }: { children: React.ReactNode }) => (
+    <div data-testid='context-menu-content'>{children}</div>
+  ),
+  ContextMenuItem: ({
+    children,
+    onSelect,
+    disabled: isDisabled,
+  }: {
+    children: React.ReactNode;
+    onSelect?: () => void;
+    // oxlint-disable-next-line react-js/boolean-prop-naming -- mocking shadcn ContextMenuItem prop API
+    disabled?: boolean;
+  }) => (
+    <button
+      type='button'
+      data-testid='context-menu-item'
+      data-disabled={isDisabled ? 'true' : undefined}
+      disabled={isDisabled}
+      onClick={() => {
+        if (!isDisabled) {
+          onSelect?.();
+        }
+      }}
+    >
+      {children}
+    </button>
+  ),
+  ContextMenuSeparator: () => <hr />,
+  ContextMenuSub: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  ContextMenuSubContent: ({ children }: { children: React.ReactNode }) => (
+    <div data-testid='context-menu-sub-content'>{children}</div>
+  ),
+  ContextMenuSubTrigger: ({ children }: { children: React.ReactNode }) => (
+    <button type='button' data-testid='context-menu-sub-trigger'>
+      {children}
+    </button>
+  ),
+}));
+
+vi.mock('#components/ui/dropdown-menu.js', () => ({
+  DropdownMenu: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
+  DropdownMenuContent: ({ children }: { children: React.ReactNode }) => (
+    <div data-testid='dropdown-menu-content'>{children}</div>
+  ),
+  DropdownMenuItem: ({
+    children,
+    onSelect,
+    disabled: isDisabled,
+  }: {
+    children: React.ReactNode;
+    onSelect?: () => void;
+    // oxlint-disable-next-line react-js/boolean-prop-naming -- mocking shadcn DropdownMenuItem prop API
+    disabled?: boolean;
+  }) => (
+    <button
+      type='button'
+      data-testid='dropdown-menu-item'
+      data-disabled={isDisabled ? 'true' : undefined}
+      disabled={isDisabled}
+      onClick={() => {
+        if (!isDisabled) {
+          onSelect?.();
+        }
+      }}
+    >
+      {children}
+    </button>
+  ),
+  DropdownMenuSeparator: () => <hr />,
+  DropdownMenuSub: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuSubContent: ({ children }: { children: React.ReactNode }) => (
+    <div data-testid='dropdown-menu-sub-content'>{children}</div>
+  ),
+  DropdownMenuSubTrigger: ({ children }: { children: React.ReactNode }) => (
+    <button type='button' data-testid='dropdown-menu-sub-trigger'>
+      {children}
+    </button>
+  ),
+}));
+
 describe('ChatParameters', () => {
   beforeEach(() => {
-    mockCompilationUnits = new Map<string, ActorRefFrom<typeof cadMachine>>();
+    mockGeometryUnits = new Map<string, ActorRefFrom<typeof cadMachine>>();
     mockSetParameters.mockClear();
-    mockSetCompilationUnitParameters.mockClear();
+    mockSetGeometryUnitParameters.mockClear();
     mockSwitchParameterGroup.mockClear();
     mockParameterEntries = new Map<string, FileParameterEntry>([
       [
@@ -240,8 +337,8 @@ describe('ChatParameters', () => {
     ]);
   });
 
-  it('should render single CU inside PaneviewReact', async () => {
-    mockCompilationUnits.set('main.ts', mockCadRef);
+  it('should render single geometry unit inside PaneviewReact', async () => {
+    mockGeometryUnits.set('main.ts', mockCadRef);
 
     const { ChatParameters } = await import('./chat-parameters.js');
     render(<ChatParameters isExpanded setIsExpanded={vi.fn()} />);
@@ -250,9 +347,9 @@ describe('ChatParameters', () => {
     expect(screen.getByTestId('param-pane-main.ts')).toBeInTheDocument();
   });
 
-  it('renders PaneviewReact for multiple CUs', async () => {
-    mockCompilationUnits.set('main.ts', mockCadRef);
-    mockCompilationUnits.set('helper.ts', mockCadRef2);
+  it('renders PaneviewReact for multiple geometry units', async () => {
+    mockGeometryUnits.set('main.ts', mockCadRef);
+    mockGeometryUnits.set('helper.ts', mockCadRef2);
 
     const { ChatParameters } = await import('./chat-parameters.js');
     render(<ChatParameters isExpanded setIsExpanded={vi.fn()} />);
@@ -261,8 +358,8 @@ describe('ChatParameters', () => {
   });
 
   it('places mainFile pane first', async () => {
-    mockCompilationUnits.set('helper.ts', mockCadRef2);
-    mockCompilationUnits.set('main.ts', mockCadRef);
+    mockGeometryUnits.set('helper.ts', mockCadRef2);
+    mockGeometryUnits.set('main.ts', mockCadRef);
 
     const { ChatParameters } = await import('./chat-parameters.js');
     render(<ChatParameters isExpanded setIsExpanded={vi.fn()} />);
@@ -272,8 +369,8 @@ describe('ChatParameters', () => {
   });
 
   it('expands mainFile pane by default', async () => {
-    mockCompilationUnits.set('helper.ts', mockCadRef2);
-    mockCompilationUnits.set('main.ts', mockCadRef);
+    mockGeometryUnits.set('helper.ts', mockCadRef2);
+    mockGeometryUnits.set('main.ts', mockCadRef);
 
     const { ChatParameters } = await import('./chat-parameters.js');
     render(<ChatParameters isExpanded setIsExpanded={vi.fn()} />);
@@ -286,7 +383,7 @@ describe('ChatParameters', () => {
   });
 
   it('reads parameter values from parameterEntries active group', async () => {
-    mockCompilationUnits.set('main.ts', mockCadRef);
+    mockGeometryUnits.set('main.ts', mockCadRef);
 
     const { ChatParameters } = await import('./chat-parameters.js');
     render(<ChatParameters isExpanded setIsExpanded={vi.fn()} />);
@@ -296,26 +393,26 @@ describe('ChatParameters', () => {
     expect(params).toEqual({ width: 15 });
   });
 
-  it('calls setCompilationUnitParameters when parameters change', async () => {
-    mockCompilationUnits.set('main.ts', mockCadRef);
+  it('calls setGeometryUnitParameters when parameters change', async () => {
+    mockGeometryUnits.set('main.ts', mockCadRef);
 
     const { ChatParameters } = await import('./chat-parameters.js');
     render(<ChatParameters isExpanded setIsExpanded={vi.fn()} />);
 
     fireEvent.click(screen.getByTestId('change-params'));
-    expect(mockSetCompilationUnitParameters).toHaveBeenCalledWith('main.ts', { width: 42 });
+    expect(mockSetGeometryUnitParameters).toHaveBeenCalledWith('main.ts', { width: 42 });
   });
 
-  it('shows empty message when no compilation units', async () => {
+  it('shows empty message when no geometry units', async () => {
     const { ChatParameters } = await import('./chat-parameters.js');
     render(<ChatParameters isExpanded setIsExpanded={vi.fn()} />);
 
-    expect(screen.getByText('No compilation units.')).toBeInTheDocument();
+    expect(screen.getByText('No geometry units.')).toBeInTheDocument();
   });
 
   it('returns empty params when entry is missing', async () => {
     mockParameterEntries = new Map();
-    mockCompilationUnits.set('main.ts', mockCadRef);
+    mockGeometryUnits.set('main.ts', mockCadRef);
 
     const { ChatParameters } = await import('./chat-parameters.js');
     render(<ChatParameters isExpanded setIsExpanded={vi.fn()} />);
@@ -328,7 +425,7 @@ describe('ChatParameters', () => {
 
 describe('ParameterGroupSelector', () => {
   beforeEach(() => {
-    mockCompilationUnits = new Map<string, ActorRefFrom<typeof cadMachine>>();
+    mockGeometryUnits = new Map<string, ActorRefFrom<typeof cadMachine>>();
     mockSwitchParameterGroup.mockClear();
     mockParameterEntries = new Map<string, FileParameterEntry>([
       [
@@ -344,9 +441,9 @@ describe('ParameterGroupSelector', () => {
     ]);
   });
 
-  it('renders group selector with multiple groups in multi-CU paneview header', async () => {
-    mockCompilationUnits.set('main.ts', mockCadRef);
-    mockCompilationUnits.set('helper.ts', mockCadRef2);
+  it('renders group selector with multiple groups in multi-geometry-unit paneview header', async () => {
+    mockGeometryUnits.set('main.ts', mockCadRef);
+    mockGeometryUnits.set('helper.ts', mockCadRef2);
     mockParameterEntries = new Map<string, FileParameterEntry>([
       [
         'main.ts',
@@ -372,16 +469,57 @@ describe('ParameterGroupSelector', () => {
 
     expect(screen.getByTestId('paneview')).toBeInTheDocument();
   });
+
+  it('renders the group selector for every geometry unit, even those without a parameter entry', async () => {
+    // Two geometry units, but only main.ts has an entry — helper.ts has none, mirroring the
+    // real-world case where lib/* geometry units have not had parameters set yet.
+    mockGeometryUnits.set('main.ts', mockCadRef);
+    mockGeometryUnits.set('helper.ts', mockCadRef2);
+    mockParameterEntries = new Map<string, FileParameterEntry>([
+      [
+        'main.ts',
+        {
+          activeGroup: 'default',
+          groups: { default: { values: {} } },
+        },
+      ],
+    ]);
+
+    const { ChatParameters } = await import('./chat-parameters.js');
+    render(<ChatParameters isExpanded setIsExpanded={vi.fn()} />);
+
+    // The active group ('default') text appears once per pane via the
+    // selector's trigger — including for the geometry unit with no entry, which
+    // previously rendered nothing. Two panes -> two 'default' triggers.
+    const groupTriggers = screen.getAllByLabelText('Parameter groups');
+    expect(groupTriggers).toHaveLength(2);
+  });
+
+  it('hover-gates the entire controls group on the parent', async () => {
+    mockGeometryUnits.set('main.ts', mockCadRef);
+
+    const { ChatParameters } = await import('./chat-parameters.js');
+    render(<ChatParameters isExpanded setIsExpanded={vi.fn()} />);
+
+    // Animation lives on the PaneviewHeaderControls parent so all action
+    // items (selector, collapse toggle, more-actions button) fade together.
+    const controls = screen.getByTestId('paneview-header-controls');
+    expect(controls.className).toContain('opacity-0');
+    expect(controls.className).toContain('transition-opacity');
+    expect(controls.className).toContain('duration-150');
+    expect(controls.className).toContain('[.dv-pane:hover_&]:opacity-100');
+    expect(controls.className).toContain('[&:has([data-state=open])]:opacity-100');
+  });
 });
 
 describe('ParameterGroupManager — active group name', () => {
   beforeEach(() => {
-    mockCompilationUnits = new Map<string, ActorRefFrom<typeof cadMachine>>();
+    mockGeometryUnits = new Map<string, ActorRefFrom<typeof cadMachine>>();
     mockSwitchParameterGroup.mockClear();
   });
 
   it('displays the active group name dynamically in the header', async () => {
-    mockCompilationUnits.set('main.ts', mockCadRef);
+    mockGeometryUnits.set('main.ts', mockCadRef);
     mockParameterEntries = new Map<string, FileParameterEntry>([
       [
         'main.ts',
@@ -402,7 +540,7 @@ describe('ParameterGroupManager — active group name', () => {
   });
 
   it('updates the displayed group name when activeGroup changes', async () => {
-    mockCompilationUnits.set('main.ts', mockCadRef);
+    mockGeometryUnits.set('main.ts', mockCadRef);
     mockParameterEntries = new Map<string, FileParameterEntry>([
       [
         'main.ts',
@@ -438,6 +576,196 @@ describe('ParameterGroupManager — active group name', () => {
     rerender(<ChatParameters isExpanded setIsExpanded={vi.fn()} />);
 
     expect(screen.getByText('alternate')).toBeInTheDocument();
+  });
+});
+
+describe('ParametersPanelHeader context menu', () => {
+  beforeEach(() => {
+    mockGeometryUnits = new Map<string, ActorRefFrom<typeof cadMachine>>();
+    mockProjectSend.mockClear();
+    mockEditorSend.mockClear();
+    mockParameterEntries = new Map<string, FileParameterEntry>([
+      ['main.ts', { activeGroup: 'default', groups: { default: { values: {} } } }],
+    ]);
+  });
+
+  it('renders Quick Export and Close geometry unit items in dropdown menu', async () => {
+    mockGeometryUnits.set('main.ts', mockCadRef);
+    mockGeometryUnits.set('helper.ts', mockCadRef2);
+
+    const { ChatParameters } = await import('./chat-parameters.js');
+    render(<ChatParameters isExpanded setIsExpanded={vi.fn()} />);
+
+    const dropdownContents = screen.getAllByTestId('dropdown-menu-content');
+    expect(dropdownContents.length).toBeGreaterThan(0);
+
+    const closeItems = screen.getAllByText('Close geometry unit');
+    expect(closeItems.length).toBeGreaterThan(0);
+
+    const quickExportLabels = screen.getAllByText('Quick export');
+    expect(quickExportLabels.length).toBeGreaterThan(0);
+  });
+
+  it('renders the same items in the right-click context menu', async () => {
+    mockGeometryUnits.set('main.ts', mockCadRef);
+    mockGeometryUnits.set('helper.ts', mockCadRef2);
+
+    const { ChatParameters } = await import('./chat-parameters.js');
+    render(<ChatParameters isExpanded setIsExpanded={vi.fn()} />);
+
+    expect(screen.getAllByTestId('context-menu-content').length).toBeGreaterThan(0);
+    expect(screen.getAllByTestId('context-menu-sub-content').length).toBeGreaterThan(0);
+  });
+
+  it('dispatches destroyGeometryUnit when "Close" is selected', async () => {
+    mockGeometryUnits.set('main.ts', mockCadRef);
+    mockGeometryUnits.set('helper.ts', mockCadRef2);
+
+    const { ChatParameters } = await import('./chat-parameters.js');
+    render(<ChatParameters isExpanded setIsExpanded={vi.fn()} />);
+
+    // Use the dropdown-menu close button for the helper pane (second occurrence)
+    const dropdownItems = screen.getAllByTestId('dropdown-menu-item');
+    const helperCloseItem = dropdownItems.find(
+      (node) => String(node.textContent).includes('Close geometry unit') && node.dataset['disabled'] !== 'true',
+    );
+    expect(helperCloseItem).toBeDefined();
+    fireEvent.click(helperCloseItem!);
+
+    expect(mockProjectSend).toHaveBeenCalledWith(expect.objectContaining({ type: 'destroyGeometryUnit' }));
+  });
+
+  it('disables Close geometry unit when only one geometry unit remains', async () => {
+    mockGeometryUnits.set('main.ts', mockCadRef);
+
+    const { ChatParameters } = await import('./chat-parameters.js');
+    render(<ChatParameters isExpanded setIsExpanded={vi.fn()} />);
+
+    const closeItems = screen
+      .getAllByTestId('dropdown-menu-item')
+      .filter((node) => String(node.textContent).includes('Close geometry unit'));
+    expect(closeItems.length).toBeGreaterThan(0);
+    for (const item of closeItems) {
+      expect(item.dataset['disabled']).toBe('true');
+    }
+  });
+
+  it('does not dispatch destroyGeometryUnit when Close is disabled', async () => {
+    mockGeometryUnits.set('main.ts', mockCadRef);
+
+    const { ChatParameters } = await import('./chat-parameters.js');
+    render(<ChatParameters isExpanded setIsExpanded={vi.fn()} />);
+
+    const closeItem = screen
+      .getAllByTestId('dropdown-menu-item')
+      .find((node) => String(node.textContent).includes('Close geometry unit'));
+    expect(closeItem).toBeDefined();
+    fireEvent.click(closeItem!);
+
+    expect(mockProjectSend).not.toHaveBeenCalled();
+  });
+
+  it('renders an "Open in viewer" item in both menus', async () => {
+    mockGeometryUnits.set('main.ts', mockCadRef);
+    mockGeometryUnits.set('helper.ts', mockCadRef2);
+
+    const { ChatParameters } = await import('./chat-parameters.js');
+    render(<ChatParameters isExpanded setIsExpanded={vi.fn()} />);
+
+    const dropdownOpenItems = screen
+      .getAllByTestId('dropdown-menu-item')
+      .filter((node) => String(node.textContent).includes('Open in viewer'));
+    expect(dropdownOpenItems.length).toBeGreaterThan(0);
+
+    const contextOpenItems = screen
+      .getAllByTestId('context-menu-item')
+      .filter((node) => String(node.textContent).includes('Open in viewer'));
+    expect(contextOpenItems.length).toBeGreaterThan(0);
+  });
+
+  it('dispatches openInViewer when "Open in viewer" is selected from the dropdown', async () => {
+    mockGeometryUnits.set('main.ts', mockCadRef);
+    mockGeometryUnits.set('helper.ts', mockCadRef2);
+
+    const { ChatParameters } = await import('./chat-parameters.js');
+    render(<ChatParameters isExpanded setIsExpanded={vi.fn()} />);
+
+    const helperOpenItem = screen.getAllByTestId('dropdown-menu-item').find(
+      (node) =>
+        String(node.textContent).includes('Open in viewer') &&
+        // The dropdown is per-pane, so target the helper pane's instance.
+        // We assume the second occurrence corresponds to helper.ts (paneview
+        // mock preserves panel order).
+        true,
+    );
+    expect(helperOpenItem).toBeDefined();
+    fireEvent.click(helperOpenItem!);
+
+    expect(mockProjectSend).toHaveBeenCalledWith(expect.objectContaining({ type: 'openInViewer' }));
+  });
+
+  it('dispatches openInViewer when "Open in viewer" is selected from the context menu', async () => {
+    mockGeometryUnits.set('main.ts', mockCadRef);
+    mockGeometryUnits.set('helper.ts', mockCadRef2);
+
+    const { ChatParameters } = await import('./chat-parameters.js');
+    render(<ChatParameters isExpanded setIsExpanded={vi.fn()} />);
+
+    const contextOpenItem = screen
+      .getAllByTestId('context-menu-item')
+      .find((node) => String(node.textContent).includes('Open in viewer'));
+    expect(contextOpenItem).toBeDefined();
+    fireEvent.click(contextOpenItem!);
+
+    expect(mockProjectSend).toHaveBeenCalledWith(expect.objectContaining({ type: 'openInViewer' }));
+  });
+
+  it('renders an "Open in editor" item in both menus', async () => {
+    mockGeometryUnits.set('main.ts', mockCadRef);
+    mockGeometryUnits.set('helper.ts', mockCadRef2);
+
+    const { ChatParameters } = await import('./chat-parameters.js');
+    render(<ChatParameters isExpanded setIsExpanded={vi.fn()} />);
+
+    const dropdownEditorItems = screen
+      .getAllByTestId('dropdown-menu-item')
+      .filter((node) => String(node.textContent).includes('Open in editor'));
+    expect(dropdownEditorItems.length).toBeGreaterThan(0);
+
+    const contextEditorItems = screen
+      .getAllByTestId('context-menu-item')
+      .filter((node) => String(node.textContent).includes('Open in editor'));
+    expect(contextEditorItems.length).toBeGreaterThan(0);
+  });
+
+  it('dispatches openFile on editorRef when "Open in editor" is selected from the dropdown', async () => {
+    mockGeometryUnits.set('main.ts', mockCadRef);
+
+    const { ChatParameters } = await import('./chat-parameters.js');
+    render(<ChatParameters isExpanded setIsExpanded={vi.fn()} />);
+
+    const editorItem = screen
+      .getAllByTestId('dropdown-menu-item')
+      .find((node) => String(node.textContent).includes('Open in editor'));
+    expect(editorItem).toBeDefined();
+    fireEvent.click(editorItem!);
+
+    expect(mockEditorSend).toHaveBeenCalledWith({ type: 'openFile', path: 'main.ts', source: 'user' });
+  });
+
+  it('dispatches openFile on editorRef when "Open in editor" is selected from the context menu', async () => {
+    mockGeometryUnits.set('main.ts', mockCadRef);
+
+    const { ChatParameters } = await import('./chat-parameters.js');
+    render(<ChatParameters isExpanded setIsExpanded={vi.fn()} />);
+
+    const editorItem = screen
+      .getAllByTestId('context-menu-item')
+      .find((node) => String(node.textContent).includes('Open in editor'));
+    expect(editorItem).toBeDefined();
+    fireEvent.click(editorItem!);
+
+    expect(mockEditorSend).toHaveBeenCalledWith({ type: 'openFile', path: 'main.ts', source: 'user' });
   });
 });
 
