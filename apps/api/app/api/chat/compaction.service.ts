@@ -3,8 +3,24 @@ import { ConfigService } from '@nestjs/config';
 import type { BaseMessage } from '@langchain/core/messages';
 import { HumanMessage, SystemMessage, AIMessage, ToolMessage } from '@langchain/core/messages';
 import type { Environment } from '#config/environment.config.js';
-import { formatCompactSummary } from '#api/chat/utils/format-compact-summary.js';
+import { formatCompactSummary, parseCompactSummary } from '#api/chat/utils/format-compact-summary.js';
 import { isImageBlock, countImageBlocks } from '#api/chat/utils/image-block.utils.js';
+
+/**
+ * Thrown when Morph returns a response that does not contain all 9 expected
+ * `<summary>` sections. The compaction middleware catches this and falls back
+ * to the truncate-tool-args tier instead of shipping a malformed summary that
+ * would silently strip context (R21).
+ */
+export class CompactSummaryValidationError extends Error {
+  public constructor(
+    message: string,
+    public readonly missingSections: readonly string[],
+  ) {
+    super(message);
+    this.name = 'CompactSummaryValidationError';
+  }
+}
 
 /**
  * Statistics from a compaction operation.
@@ -95,6 +111,21 @@ Use verbatim quotes from the conversation where possible to anchor context.`;
 
     const rawContent = data.choices[0]?.message.content ?? '';
     const compactedContent = formatCompactSummary(rawContent);
+
+    if (compactedContent.length > 0) {
+      const validation = parseCompactSummary(compactedContent);
+      if (!validation.ok) {
+        const missing = validation.missingSections.join(', ');
+        this.logger.warn(
+          `Morph summary missing required sections [${missing}] — middleware will fall back to truncate-tool-args.`,
+        );
+        throw new CompactSummaryValidationError(
+          `Morph compaction summary missing required sections: ${missing}`,
+          validation.missingSections,
+        );
+      }
+    }
+
     const evictedImageCount = countImageBlocks(messages);
     const compactedMessages = this.parseCompactedOutput(compactedContent, evictedImageCount);
     const outputTokenEstimate = this.estimateTokens(

@@ -25,8 +25,9 @@ const webBrowserInputSchema = z.object({
  */
 class WebBrowserTool extends StructuredTool {
   public override name = toolName.webBrowser;
-  public override description =
-    'Extract content from one or more web pages. Accepts an array of URLs (max 5) to batch-extract in a single call. Supports HTML pages, PDF documents, and plain text. Use after web_search to read full page content from promising results.';
+  public override description = `Extract content from one or more web pages. Accepts an array of URLs (max 5) to batch-extract in a single call. Supports HTML pages, PDF documents, and plain text. Use after web_search to read full page content from promising results.
+
+To find URLs in the first place, use \`web_search\`.`;
 
   public override schema = webBrowserInputSchema;
 

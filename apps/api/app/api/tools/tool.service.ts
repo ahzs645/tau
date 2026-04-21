@@ -3,11 +3,12 @@ import { ConfigService } from '@nestjs/config';
 import type { StructuredTool } from '@langchain/core/tools';
 import type { ToolName, ToolMode, ToolSelection } from '@taucad/chat';
 import { toolName, toolMode } from '@taucad/chat/constants';
+import type { KernelProvider } from '@taucad/runtime';
 import type { Environment } from '#config/environment.config.js';
 import { createWebBrowserTool } from '#api/tools/tools/tool-web-browser.js';
 import { editFileTool } from '#api/tools/tools/tool-edit-file.js';
-import { testModelTool } from '#api/tools/tools/tool-test-model.js';
-import { editTestsTool } from '#api/tools/tools/tool-edit-tests.js';
+import { createTestModelTool } from '#api/tools/tools/tool-test-model.js';
+import { createEditTestsTool } from '#api/tools/tools/tool-edit-tests.js';
 import { createWebSearchTool } from '#api/tools/tools/tool-web-search.js';
 import { readFileTool } from '#api/tools/tools/tool-read-file.js';
 import { listDirectoryTool } from '#api/tools/tools/tool-list-directory.js';
@@ -23,24 +24,38 @@ export const toolChoiceFromToolName = {
   tavily_search: toolName.webSearch,
 } as const satisfies Record<string, ToolName>;
 
+type KernelScopedTools = {
+  testModel: StructuredTool;
+  editTests: StructuredTool;
+};
+
 @Injectable()
 export class ToolService {
   private webSearchTool: StructuredTool | undefined;
   private webBrowserTool: StructuredTool | undefined;
+  /**
+   * Per-kernel cache for the kernel-aware tool factories. Building a tool
+   * instantiates a Zod schema closure and is non-trivial; we want to amortise
+   * that across repeated agent creations for the same kernel.
+   */
+  private readonly kernelToolCache = new Map<KernelProvider, KernelScopedTools>();
 
   public constructor(private readonly configService: ConfigService<Environment, true>) {}
 
-  public getTools(selectedToolChoice: ToolSelection): {
+  public getTools(
+    selectedToolChoice: ToolSelection,
+    kernel: KernelProvider,
+  ): {
     tools: Partial<Record<ToolName, StructuredTool>>;
     resolvedToolChoice: string;
   } {
-    // Define the tools for the agent to use
+    const { testModel, editTests } = this.getKernelScopedTools(kernel);
     const toolCategoryToTool = {
       [toolName.webSearch]: this.getWebSearchTool(),
       [toolName.webBrowser]: this.getWebBrowserTool(),
       [toolName.editFile]: editFileTool,
-      [toolName.testModel]: testModelTool,
-      [toolName.editTests]: editTestsTool,
+      [toolName.testModel]: testModel,
+      [toolName.editTests]: editTests,
       [toolName.readFile]: readFileTool,
       [toolName.listDirectory]: listDirectoryTool,
       [toolName.createFile]: createFileTool,
@@ -72,7 +87,6 @@ export class ToolService {
       ...toolMode,
     } as const satisfies Partial<Record<ToolName | ToolMode, string>>;
 
-    // Handle array of specific tools
     if (Array.isArray(selectedToolChoice)) {
       const filteredTools: Partial<Record<ToolName, StructuredTool>> = {};
       for (const toolChoiceItem of selectedToolChoice) {
@@ -87,6 +101,19 @@ export class ToolService {
     const resolvedToolChoice = toolNameFromToolChoice[selectedToolChoice];
 
     return { tools: toolCategoryToTool, resolvedToolChoice };
+  }
+
+  private getKernelScopedTools(kernel: KernelProvider): KernelScopedTools {
+    const cached = this.kernelToolCache.get(kernel);
+    if (cached) {
+      return cached;
+    }
+    const built: KernelScopedTools = {
+      testModel: createTestModelTool(kernel) as StructuredTool,
+      editTests: createEditTestsTool(kernel) as StructuredTool,
+    };
+    this.kernelToolCache.set(kernel, built);
+    return built;
   }
 
   private getTavilyApiKey(): string {

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createSectionRegistry } from '#api/chat/prompts/prompt-section-registry.js';
 
 describe('createSectionRegistry', () => {
@@ -79,5 +79,88 @@ describe('createSectionRegistry', () => {
 
     const { static: staticPrompt } = registry.resolve();
     expect(staticPrompt).toBe('visible');
+  });
+
+  // ===================================================================
+  // R23 — `onSectionResolved` callback for per-section telemetry. The
+  // chat service wires this to `MetricsService.genAiPromptSectionSize`
+  // so we can see how many bytes each section contributes to the
+  // assembled system prompt and which sections break the cache.
+  // ===================================================================
+
+  describe('onSectionResolved telemetry callback', () => {
+    it('should invoke onSectionResolved once per non-empty section with name, cacheBreak and byteSize', () => {
+      const registry = createSectionRegistry();
+      registry.register({ name: 'role', compute: () => 'STATIC_ROLE', cacheBreak: false });
+      registry.register({ name: 'env', compute: () => 'DYN_ENV', cacheBreak: true });
+
+      const onSectionResolved = vi.fn();
+
+      registry.resolve({ onSectionResolved });
+
+      expect(onSectionResolved).toHaveBeenCalledTimes(2);
+      expect(onSectionResolved).toHaveBeenCalledWith({
+        name: 'role',
+        cacheBreak: false,
+        byteSize: Buffer.byteLength('STATIC_ROLE', 'utf8'),
+      });
+      expect(onSectionResolved).toHaveBeenCalledWith({
+        name: 'env',
+        cacheBreak: true,
+        byteSize: Buffer.byteLength('DYN_ENV', 'utf8'),
+      });
+    });
+
+    it('should NOT invoke onSectionResolved for sections whose compute() returns empty', () => {
+      const registry = createSectionRegistry();
+      registry.register({ name: 'empty', compute: () => '', cacheBreak: false });
+      registry.register({ name: 'content', compute: () => 'hi', cacheBreak: false });
+
+      const onSectionResolved = vi.fn();
+
+      registry.resolve({ onSectionResolved });
+
+      expect(onSectionResolved).toHaveBeenCalledTimes(1);
+      expect(onSectionResolved).toHaveBeenCalledWith({
+        name: 'content',
+        cacheBreak: false,
+        byteSize: Buffer.byteLength('hi', 'utf8'),
+      });
+    });
+
+    it('should report byte length (not character length) for multi-byte UTF-8 content', () => {
+      const registry = createSectionRegistry();
+      // "💡" is 4 bytes in UTF-8 but length 2 in JS strings (surrogate pair).
+      const value = 'idea: 💡';
+      registry.register({ name: 'utf8', compute: () => value, cacheBreak: false });
+
+      const onSectionResolved = vi.fn();
+      registry.resolve({ onSectionResolved });
+
+      expect(onSectionResolved).toHaveBeenCalledWith({
+        name: 'utf8',
+        cacheBreak: false,
+        byteSize: Buffer.byteLength(value, 'utf8'),
+      });
+    });
+
+    it('should still invoke onSectionResolved on subsequent resolves (cached value reused, callback re-fires)', () => {
+      const registry = createSectionRegistry();
+      registry.register({ name: 'role', compute: () => 'STATIC', cacheBreak: false });
+
+      const onSectionResolved = vi.fn();
+      registry.resolve({ onSectionResolved });
+      registry.resolve({ onSectionResolved });
+
+      expect(onSectionResolved).toHaveBeenCalledTimes(2);
+    });
+
+    it('should be optional — resolve() works without options', () => {
+      const registry = createSectionRegistry();
+      registry.register({ name: 'role', compute: () => 'X', cacheBreak: false });
+
+      expect(() => registry.resolve()).not.toThrow();
+      expect(registry.resolve().static).toBe('X');
+    });
   });
 });

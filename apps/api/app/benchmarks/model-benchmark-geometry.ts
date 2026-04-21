@@ -17,7 +17,6 @@ export type BenchmarkGeometryExpectation = {
     size?: { x?: number; y?: number; z?: number };
     center?: { x?: number; y?: number; z?: number };
   };
-  meshCount?: number;
   connectedComponents?: number;
   watertight?: boolean;
   tolerance?: number;
@@ -102,16 +101,6 @@ function expectationToRequirements(expectations: BenchmarkGeometryExpectation): 
         tolerance,
       });
     }
-  }
-
-  if (expectations.meshCount !== undefined) {
-    requirements.push({
-      type: 'measurement',
-      id: 'geometry_mesh_count',
-      description: `Mesh count should be ${expectations.meshCount}`,
-      check: 'meshCount',
-      expected: { count: expectations.meshCount },
-    });
   }
 
   if (expectations.connectedComponents !== undefined) {

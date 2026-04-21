@@ -316,6 +316,50 @@ describe('createClientContextMiddleware', () => {
     expect(messages[0]!.content as string).toContain('Memory content');
   });
 
+  // Per docs/research/system-prompt-audit.md R20 — verify the implementation matches
+  // claude-code's `prependUserContext` shape so memory injection survives Anthropic
+  // prompt-cache invalidation: a HumanMessage prepended to the user-message channel
+  // (NOT a SystemMessage edit), wrapped in `<system-reminder>` with the
+  // "may or may not be relevant" caveat, and the static system prompt left untouched.
+  it('should ship the claude-code prependUserContext shape', async () => {
+    const agentsKey = '.tau/AGENTS.md';
+    const memoryBody = 'Use early returns. Prefer composition over inheritance.';
+    const payload: ContextPayload = {
+      memory: { [agentsKey]: memoryBody },
+    };
+    const middleware = createClientContextMiddleware(payload);
+    const wrapModelCall = resolveMiddlewareHook(middleware.wrapModelCall);
+
+    const handler = vi.fn().mockResolvedValue({ content: 'response' });
+    const originalSystem = makeSystemMessage('Static base prompt');
+    const originalUser = new HumanMessage('user question');
+
+    await wrapModelCall({ systemMessage: originalSystem, messages: [originalUser], state: {} }, handler);
+
+    const messages = extractMessages(handler);
+    expect(messages).toHaveLength(2);
+
+    const memoryMessage = messages[0]!;
+    expect(memoryMessage).toBeInstanceOf(HumanMessage);
+
+    const memoryContent = memoryMessage.content as string;
+    expect(memoryContent.startsWith('<system-reminder>')).toBe(true);
+    expect(memoryContent.trimEnd().endsWith('</system-reminder>')).toBe(true);
+    expect(memoryContent).toContain('IMPORTANT');
+    expect(memoryContent).toContain('may or may not be relevant');
+    expect(memoryContent).toContain('<agent_memory>');
+    expect(memoryContent).toContain(agentsKey);
+    expect(memoryContent).toContain(memoryBody);
+    expect(memoryContent).toContain('<memory_guidelines>');
+
+    expect(messages[1]).toBe(originalUser);
+
+    const systemText = extractSystemText(handler);
+    expect(systemText).toBe('Static base prompt');
+    expect(systemText).not.toContain('<agent_memory>');
+    expect(systemText).not.toContain(memoryBody);
+  });
+
   it('should call handler exactly once', async () => {
     const agentsKey = '.tau/AGENTS.md';
     const payload: ContextPayload = {

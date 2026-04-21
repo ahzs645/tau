@@ -19,7 +19,9 @@ Returns:
 - status: 'ready' if compilation succeeded, 'error' if there were errors, 'pending' if still processing
 - kernelIssues: Array of compilation/runtime errors if any occurred
 
-Best Practice: Always call this tool after making file changes to ensure the model renders correctly before proceeding.`,
+Best Practice: Always call this tool after making file changes to ensure the model renders correctly before proceeding.
+
+After compilation succeeds, use \`test_model\` to measure geometry against \`test.json\` requirements.`,
   schema: getKernelResultInputSchema,
 } as const;
 

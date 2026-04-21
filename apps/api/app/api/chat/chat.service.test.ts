@@ -183,7 +183,17 @@ describe('ChatService', () => {
       });
 
       // Assert
-      expect(mockToolService.getTools).toHaveBeenCalledWith('auto');
+      expect(mockToolService.getTools).toHaveBeenCalledWith('auto', 'openscad');
+    });
+
+    it('should pass the active kernel through to ToolService.getTools so kernel-aware tool factories receive it', async () => {
+      await service.createAgent({
+        chatId: 'test-chat-1',
+        modelId: 'model-1',
+        kernel: 'replicad',
+        tools: { choice: 'auto' },
+      });
+      expect(mockToolService.getTools).toHaveBeenCalledWith('auto', 'replicad');
     });
 
     it('should include latex delimiter normalization middleware for checkpointed state', async () => {
@@ -206,6 +216,35 @@ describe('ChatService', () => {
       const latexMiddlewareIndex = middleware?.indexOf(latexDelimiterMiddleware) ?? -1;
       expect(newlineMiddlewareIndex).toBeGreaterThanOrEqual(0);
       expect(latexMiddlewareIndex).toBeGreaterThan(newlineMiddlewareIndex);
+    });
+
+    // Per docs/research/system-prompt-audit.md R22 — the token-usage-context
+    // middleware must run AFTER compaction (so the reported counts reflect the
+    // post-compaction message set) and BEFORE agent-safeguards (so its
+    // <system-reminder> joins the cacheable prefix together with the
+    // safeguard nudges, per the Cache-Safety Contract).
+    it('should run TokenUsageContext after Compaction and before AgentSafeguards', async () => {
+      await service.createAgent({
+        chatId: 'test-chat-token-usage',
+        modelId: 'model-1',
+        kernel: 'openscad',
+        tools: { choice: 'auto' },
+      });
+
+      const createAgentMock = vi.mocked(createAgent);
+      const firstCall = createAgentMock.mock.calls.at(-1)?.[0];
+      const middleware = firstCall?.middleware ?? [];
+
+      const indexByName = (name: string): number =>
+        middleware.findIndex((m) => (m as { name?: string } | undefined)?.name === name);
+
+      const compactionIndex = indexByName('Compaction');
+      const tokenUsageIndex = indexByName('TokenUsageContext');
+      const safeguardsIndex = indexByName('AgentSafeguards');
+
+      expect(compactionIndex).toBeGreaterThanOrEqual(0);
+      expect(tokenUsageIndex).toBeGreaterThan(compactionIndex);
+      expect(safeguardsIndex).toBeGreaterThan(tokenUsageIndex);
     });
   });
 });

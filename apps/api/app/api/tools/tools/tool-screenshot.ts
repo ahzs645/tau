@@ -8,9 +8,9 @@ import type { ChatRpcConfigurable } from '#api/tools/tool.types.js';
 
 export const screenshotToolDefinition = {
   name: toolName.screenshot,
-  description: `Capture a screenshot of a specific compilation unit's 3D model for visual inspection.
+  description: `Capture a screenshot of a specific geometry unit's 3D model for visual inspection.
 
-You MUST pass \`targetFile\` (the source file path of the compilation unit to screenshot, e.g. "main.ts" or "lib/bracket.scad"). There is no implicit fallback — if no viewer panel currently displays \`targetFile\`, the call fails with UNKNOWN_COMPILATION_UNIT.
+You MUST pass \`targetFile\` (the source file path of the geometry unit to screenshot, e.g. "main.ts" or "lib/bracket.scad"). There is no implicit fallback — if no viewer panel currently displays \`targetFile\`, the call fails with UNKNOWN_GEOMETRY_UNIT.
 
 Modes:
 - single: Captures the current camera perspective of the targetFile's viewer (1 image)

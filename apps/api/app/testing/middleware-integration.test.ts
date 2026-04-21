@@ -1,6 +1,7 @@
 // @vitest-environment node
 import process from 'node:process';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import type { RpcGraphicsClient } from '@taucad/chat/rpc';
 import { collectStreamChunks, collectFinalMessage } from '#testing/stream-consumer.js';
 import {
   expectNoErrors,
@@ -213,4 +214,130 @@ describe.skip(`Middleware Integration: ${modelId}`, () => {
     const transcriptExists = await testApp.memFs.exists(transcriptPath);
     expect(transcriptExists, `Expected transcript at ${transcriptPath}`).toBe(true);
   }, 120_000);
+
+  // ===========================================================================
+  // Agent loop safeguards middleware (R5: EVAL integration test)
+  //   Cross-ref: docs/research/agent-loop-safeguards.md, recommendation R5 + C4
+  //
+  // Drives the screenshot prompt against a deterministic broken `fetchGeometry`
+  // RPC handler. The model is forced to repeat `fetch_geometry` -> identical
+  // error, and the safeguards middleware MUST fire AP1 (identical_error) within
+  // a small bounded number of agent iterations.
+  //
+  // Cache-safety invariant CS5 is asserted by reading `cacheReadTokens` from
+  // the usage chunks emitted AFTER the nudge: persisting the reminder via
+  // `beforeModel` (state.messages reducer) keeps the prefix cache-stable so
+  // the post-nudge turn still benefits from the prior turn's cache prefix.
+  // ===========================================================================
+
+  it('should fire AP1 (identical_error) within 8 iterations against a deterministic broken fetch_geometry', async () => {
+    const threadId = `test-safeguard-loop-${Date.now()}`;
+
+    const brokenGraphics: RpcGraphicsClient = {
+      async fetchGeometry() {
+        return {
+          success: false,
+          errorCode: 'IO_ERROR',
+          message: 'Deterministic broken fetch_geometry: geometry unavailable',
+        };
+      },
+      async captureScreenshot() {
+        return {
+          success: false,
+          errorCode: 'IO_ERROR',
+          message: 'Deterministic broken captureScreenshot: graphics surface offline',
+        };
+      },
+      async captureObservations() {
+        return {
+          success: false,
+          errorCode: 'IO_ERROR',
+          message: 'Deterministic broken captureObservations',
+        };
+      },
+    };
+
+    await testApp.app.close();
+    testApp = await createTestApp({ graphicsStub: brokenGraphics });
+
+    await testApp.memFs.writeFile('main.scad', 'cube([10, 10, 10]);');
+
+    const response = await fetch(`${testApp.baseUrl}/v1/chat`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        id: threadId,
+        messages: [
+          {
+            id: 'msg_1',
+            role: 'user',
+            parts: [
+              {
+                type: 'text',
+                text: 'Take a screenshot of main.scad. Keep retrying until you succeed; do not give up.',
+              },
+            ],
+            metadata: { model: modelId, kernel: 'openscad' },
+          },
+        ],
+      }),
+    });
+
+    expect(response.ok, `HTTP ${response.status}: ${response.statusText}`).toBe(true);
+
+    const chunks = await collectStreamChunks(response);
+    expectNoErrors(chunks);
+
+    const transcriptPath = `.tau/transcripts/${threadId}.jsonl`;
+    const transcriptExists = await testApp.memFs.exists(transcriptPath);
+    expect(transcriptExists, `Expected transcript at ${transcriptPath}`).toBe(true);
+
+    const transcriptContent = await testApp.memFs.readFile(transcriptPath);
+    const transcriptText =
+      typeof transcriptContent === 'string' ? transcriptContent : new TextDecoder().decode(transcriptContent);
+    const safeguardLines = transcriptText
+      .split('\n')
+      .filter((line) => line.trim().length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((entry) => entry['role'] === 'safeguard');
+
+    expect(safeguardLines.length, 'Expected at least one safeguard intervention').toBeGreaterThanOrEqual(1);
+    expect(safeguardLines[0]?.['pattern']).toBe('identical_error');
+
+    const usageData = extractUsageData(chunks);
+    expect(usageData.length, 'Expected at least one usage chunk').toBeGreaterThan(0);
+
+    // R5 / R9: bounded iterations. The chat controller emits one usage chunk
+    // per LLM turn; capping at 8 enforces termination well before the LangGraph
+    // recursion limit (2000).
+    expect(usageData.length, `Expected < 8 LLM turns, observed ${usageData.length}`).toBeLessThan(8);
+
+    // R9: token budget per repeated failure pattern. Sum input tokens across
+    // turns and divide by the number of times the same identical_error fired.
+    // The safeguard MUST cap rep-cost at <10k input tokens per pattern.
+    const totalInputTokens = usageData.reduce((sum, u) => sum + (Number(u['inputTokens']) || 0), 0);
+    const tokensPerPattern = totalInputTokens / Math.max(1, safeguardLines.length);
+    expect(
+      tokensPerPattern,
+      `Expected < 10k input tokens per fired pattern, observed ${tokensPerPattern}`,
+    ).toBeLessThan(10_000);
+
+    // CS5: persisted nudges must NOT bust the cache prefix on the very next
+    // turn. We assert the post-nudge turn's cache_read_input_tokens is at
+    // least 80% of the pre-nudge median, demonstrating that injecting the
+    // <system-reminder> via state.messages keeps the prefix cache-warm.
+    const cacheReadByTurn = usageData.map((u) => Number(u['cacheReadTokens']) || 0);
+    if (cacheReadByTurn.length >= 4 && safeguardLines.length > 0) {
+      const preNudge = cacheReadByTurn.slice(0, -1);
+      const postNudge = cacheReadByTurn.at(-1) ?? 0;
+      const sortedPre = [...preNudge].sort((a, b) => a - b);
+      const median = sortedPre[Math.floor(sortedPre.length / 2)] ?? 0;
+      if (median > 0) {
+        expect(
+          postNudge,
+          `CS5: post-nudge cache_read=${postNudge} should be >= 80% of pre-nudge median=${median}`,
+        ).toBeGreaterThanOrEqual(median * 0.8);
+      }
+    }
+  }, 180_000);
 });

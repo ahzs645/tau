@@ -21,7 +21,9 @@ Usage:
 Use this tool when you need to:
 - Find specific code patterns or function calls
 - Locate variable or function definitions
-- Search for text across multiple files`,
+- Search for text across multiple files
+
+For finding files by name pattern, use \`glob\`.`,
   schema: grepInputSchema,
 } as const;
 

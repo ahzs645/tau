@@ -1,5 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import type { KernelProvider } from '@taucad/runtime';
+import { describe, it, expect, vi } from 'vitest';
 import { getCadSystemPrompt } from '#api/chat/prompts/cad-agent.prompt.js';
+import { getKernelConfig } from '#api/chat/prompts/kernel-prompt-configs/kernel.prompt.config.js';
 
 describe('getCadSystemPrompt', () => {
   // ===================================================================
@@ -240,8 +242,12 @@ describe('getCadSystemPrompt', () => {
         '</role>',
         '<workflow>',
         '</workflow>',
+        '<tool_usage_policy>',
+        '</tool_usage_policy>',
         '<constraints>',
         '</constraints>',
+        '<tone>',
+        '</tone>',
         '<test_requirements>',
         '</test_requirements>',
         '<visual_inspection>',
@@ -250,6 +256,10 @@ describe('getCadSystemPrompt', () => {
         '</code_standards>',
         '<error_handling>',
         '</error_handling>',
+        '<system_rules>',
+        '</system_rules>',
+        '<safety>',
+        '</safety>',
         '<canonical_example>',
         '</canonical_example>',
         '<research_capabilities>',
@@ -313,6 +323,292 @@ describe('getCadSystemPrompt', () => {
   });
 
   // ===================================================================
+  // R3 (agent-loop-safeguards): <system-reminder> recognition contract
+  //   Cross-ref: docs/research/agent-loop-safeguards.md, recommendation R3
+  // ===================================================================
+
+  describe('R3 (safeguards): <system-reminder> recognition contract', () => {
+    it('should declare a <system_reminder_contract> inside <error_handling>', async () => {
+      const result = await getCadSystemPrompt('openscad');
+      expect(result.static).toContain('<system_reminder_contract>');
+      expect(result.static).toContain('</system_reminder_contract>');
+
+      const errorBlock = result.static.slice(
+        result.static.indexOf('<error_handling>'),
+        result.static.indexOf('</error_handling>'),
+      );
+      expect(errorBlock).toContain('<system_reminder_contract>');
+    });
+
+    it('should explicitly state that <system-reminder> messages are NOT user input', async () => {
+      const result = await getCadSystemPrompt('openscad');
+      expect(result.static).toMatch(/<system-reminder>[\S\s]*?are not user input/i);
+    });
+
+    it('should instruct the model to stop the offending behaviour and pick one of (a)/(b)/(c)', async () => {
+      const result = await getCadSystemPrompt('openscad');
+      expect(result.static).toMatch(/stop the behaviour/i);
+      expect(result.static).toMatch(/\(a\)/);
+      expect(result.static).toMatch(/\(b\)/);
+      expect(result.static).toMatch(/\(c\)/);
+    });
+
+    it('should instruct the model NOT to echo / quote / apologise for the reminder', async () => {
+      const result = await getCadSystemPrompt('openscad');
+      expect(result.static).toMatch(/never echo, quote, or apologise/i);
+    });
+  });
+
+  // ===================================================================
+  // R9: <tone> static section
+  //   Cross-ref: docs/research/system-prompt-audit.md, recommendation R9
+  // ===================================================================
+
+  describe('R9: tone block', () => {
+    it('should include a <tone> static section', async () => {
+      const result = await getCadSystemPrompt('openscad');
+      expect(result.static).toContain('<tone>');
+      expect(result.static).toContain('</tone>');
+    });
+
+    it('should require objectivity (no flattery / congratulations / apology)', async () => {
+      const result = await getCadSystemPrompt('openscad');
+      const block = result.static.slice(result.static.indexOf('<tone>'), result.static.indexOf('</tone>'));
+      expect(block).toMatch(/Be objective/);
+      expect(block).toMatch(/flatter/i);
+      expect(block).toMatch(/congratulate/i);
+      expect(block).toMatch(/apologise/i);
+    });
+
+    it('should ban completion-time estimates and filler text', async () => {
+      const result = await getCadSystemPrompt('openscad');
+      const block = result.static.slice(result.static.indexOf('<tone>'), result.static.indexOf('</tone>'));
+      expect(block).toMatch(/estimate completion times/i);
+      expect(block).toMatch(/filler/i);
+    });
+
+    it('should ban a colon before a tool call', async () => {
+      const result = await getCadSystemPrompt('openscad');
+      const block = result.static.slice(result.static.indexOf('<tone>'), result.static.indexOf('</tone>'));
+      expect(block).toMatch(/colon before a tool call/i);
+    });
+
+    it('should ban unrequested emojis', async () => {
+      const result = await getCadSystemPrompt('openscad');
+      const block = result.static.slice(result.static.indexOf('<tone>'), result.static.indexOf('</tone>'));
+      expect(block).toMatch(/emoji/i);
+    });
+
+    it('should NOT appear in dynamic section', async () => {
+      const result = await getCadSystemPrompt('openscad');
+      expect(result.dynamic).not.toContain('<tone>');
+    });
+  });
+
+  // ===================================================================
+  // R8: Library-file pitfall warning in <test_requirements>
+  //   Cross-ref: docs/research/system-prompt-audit.md, recommendation R8
+  // ===================================================================
+
+  describe('R8: <test_requirements> top-level-export guidance (per-kernel)', () => {
+    const allKernels: readonly KernelProvider[] = ['openscad', 'replicad', 'jscad', 'manifold', 'opencascadejs', 'zoo'];
+
+    const extractTestRequirementsBlock = (prompt: string): string =>
+      prompt.slice(prompt.indexOf('<test_requirements>'), prompt.indexOf('</test_requirements>'));
+
+    describe.each(allKernels)('%s', (kernel) => {
+      it('should embed the kernel-specific top-level export example from KernelConfig.topLevelExportExample', async () => {
+        const config = getKernelConfig(kernel);
+        const result = await getCadSystemPrompt(kernel, 'agent', true);
+        const block = extractTestRequirementsBlock(result.static);
+        expect(block).toContain(config.topLevelExportExample);
+      });
+
+      it('should NOT instruct the agent to remove files from test.json', async () => {
+        const result = await getCadSystemPrompt(kernel, 'agent', true);
+        const block = extractTestRequirementsBlock(result.static);
+        expect(block).not.toMatch(/remove .* from test\.json/i);
+        expect(block).not.toMatch(/skip(?:ping)? the test/i);
+      });
+
+      it('should NOT bake in OpenSCAD-only "modules / functions" copy on non-OpenSCAD kernels', async () => {
+        if (kernel === 'openscad') {
+          return;
+        }
+        const result = await getCadSystemPrompt(kernel, 'agent', true);
+        const block = extractTestRequirementsBlock(result.static);
+        expect(block).not.toMatch(/modules?\s*\/\s*functions?/i);
+        expect(block).not.toMatch(/lib\/\S*\.scad/i);
+      });
+
+      it('should NOT use "compilation unit" or the "CU" acronym', async () => {
+        const result = await getCadSystemPrompt(kernel, 'agent', true);
+        const block = extractTestRequirementsBlock(result.static);
+        expect(block).not.toMatch(/compilation unit|\bCU\b/);
+      });
+
+      it('should encourage adding more tests rather than removing entries', async () => {
+        const result = await getCadSystemPrompt(kernel, 'agent', true);
+        const block = extractTestRequirementsBlock(result.static);
+        expect(block).toMatch(/add|cover|prefer/i);
+      });
+    });
+
+    it('should not include the top-level-export guidance when testing is disabled', async () => {
+      const result = await getCadSystemPrompt('openscad', 'agent', false);
+      expect(result.static).not.toContain('<test_requirements>');
+    });
+  });
+
+  // ===================================================================
+  // R8 (companion): Multi-shape pattern guidance for Replicad-style kernels
+  //   Cross-ref: docs/research/mesh-continuity-test-semantics.md, R8
+  // ===================================================================
+
+  describe('R8 companion: <multi_shape_pattern> for kernels with a multi-shape return type', () => {
+    const nonReplicadKernels: readonly KernelProvider[] = ['openscad', 'jscad', 'manifold', 'opencascadejs', 'zoo'];
+
+    it('should embed a Multi-shape pattern section in the Replicad prompt showing ShapeConfig[]', async () => {
+      const result = await getCadSystemPrompt('replicad', 'agent', true);
+      expect(result.static).toContain('<multi_shape_pattern>');
+      expect(result.static).toContain('ShapeConfig[]');
+    });
+
+    it('should explicitly note that connectedComponents:1 is appropriate when ShapeConfig parts touch', async () => {
+      const result = await getCadSystemPrompt('replicad', 'agent', true);
+      const block = result.static.slice(
+        result.static.indexOf('<multi_shape_pattern>'),
+        result.static.indexOf('</multi_shape_pattern>'),
+      );
+      expect(block).toContain('connectedComponents');
+      expect(block).toMatch(/touch/i);
+      expect(block).toMatch(/count":\s*1|count: 1/);
+    });
+
+    describe.each(nonReplicadKernels)('%s', (kernel) => {
+      it('should NOT include the Multi-shape pattern section', async () => {
+        const result = await getCadSystemPrompt(kernel, 'agent', true);
+        expect(result.static).not.toContain('<multi_shape_pattern>');
+      });
+    });
+  });
+
+  // ===================================================================
+  // R7: Screenshot frequency cap in <visual_inspection>
+  //   Cross-ref: docs/research/system-prompt-audit.md, recommendation R7
+  // ===================================================================
+
+  describe('R7: screenshot budget cap', () => {
+    it('should cap screenshots at 2 per inspection cycle inside <visual_inspection>', async () => {
+      const result = await getCadSystemPrompt('openscad');
+      const block = result.static.slice(
+        result.static.indexOf('<visual_inspection>'),
+        result.static.indexOf('</visual_inspection>'),
+      );
+      expect(block).toMatch(/at most 2 screenshots/i);
+    });
+
+    it('should warn against chaining a single screenshot after multi_angle', async () => {
+      const result = await getCadSystemPrompt('openscad');
+      const block = result.static.slice(
+        result.static.indexOf('<visual_inspection>'),
+        result.static.indexOf('</visual_inspection>'),
+      );
+      expect(block).toMatch(/multi_angle/);
+      expect(block).toMatch(/six orthographic views/i);
+    });
+  });
+
+  // ===================================================================
+  // R6: <tool_usage_policy> static section
+  //   Cross-ref: docs/research/system-prompt-audit.md, recommendation R6
+  // ===================================================================
+
+  describe('R6: tool usage policy', () => {
+    it('should include a <tool_usage_policy> static section', async () => {
+      const result = await getCadSystemPrompt('openscad');
+      expect(result.static).toContain('<tool_usage_policy>');
+      expect(result.static).toContain('</tool_usage_policy>');
+    });
+
+    it('should instruct to call independent tools in parallel and dependent ones sequentially', async () => {
+      const result = await getCadSystemPrompt('openscad');
+      const block = result.static.slice(
+        result.static.indexOf('<tool_usage_policy>'),
+        result.static.indexOf('</tool_usage_policy>'),
+      );
+      expect(block).toMatch(/parallel/i);
+      expect(block).toMatch(/sequentially/i);
+    });
+
+    it('should forbid placeholder values in tool calls', async () => {
+      const result = await getCadSystemPrompt('openscad');
+      const block = result.static.slice(
+        result.static.indexOf('<tool_usage_policy>'),
+        result.static.indexOf('</tool_usage_policy>'),
+      );
+      expect(block).toMatch(/never use placeholders/i);
+    });
+
+    it('should NOT appear in dynamic section', async () => {
+      const result = await getCadSystemPrompt('openscad');
+      expect(result.dynamic).not.toContain('<tool_usage_policy>');
+    });
+  });
+
+  // ===================================================================
+  // R5: Faithful-reporting bullet in <constraints>
+  //   Cross-ref: docs/research/system-prompt-audit.md, recommendation R5
+  // ===================================================================
+
+  describe('R5: faithful reporting', () => {
+    it('should include a faithful-reporting bullet inside <constraints>', async () => {
+      const result = await getCadSystemPrompt('openscad');
+      const constraintsBlock = result.static.slice(
+        result.static.indexOf('<constraints>'),
+        result.static.indexOf('</constraints>'),
+      );
+      expect(constraintsBlock).toContain('Report outcomes faithfully');
+      expect(constraintsBlock).toContain('"all tests pass"');
+      expect(constraintsBlock).toContain('incomplete work as done');
+      expect(constraintsBlock).toContain('without hedging');
+    });
+  });
+
+  // ===================================================================
+  // R2: Diagnose-before-switching guidance in <error_handling>
+  //   Cross-ref: docs/research/system-prompt-audit.md, recommendation R2
+  //   Source: claude-code repos/claude-code/src/constants/prompts.ts:233
+  // ===================================================================
+
+  describe('R2: diagnose-before-switching tactics', () => {
+    it('should tell the model to diagnose before switching tactics inside <error_handling>', async () => {
+      const result = await getCadSystemPrompt('openscad');
+      const errorBlock = result.static.slice(
+        result.static.indexOf('<error_handling>'),
+        result.static.indexOf('</error_handling>'),
+      );
+      expect(errorBlock).toContain('diagnose');
+      expect(errorBlock).toContain('switching tactics');
+      expect(errorBlock).toContain('identical action');
+    });
+
+    it('should NOT contain the deleted "stop after 1-2 retries" guidance', async () => {
+      const result = await getCadSystemPrompt('openscad');
+      expect(result.static).not.toContain('stop after 1-2 retries');
+    });
+
+    it('should warn against abandoning a viable approach after a single failure', async () => {
+      const result = await getCadSystemPrompt('openscad');
+      const errorBlock = result.static.slice(
+        result.static.indexOf('<error_handling>'),
+        result.static.indexOf('</error_handling>'),
+      );
+      expect(errorBlock).toMatch(/single failure/i);
+    });
+  });
+
+  // ===================================================================
   // Plan mode and testing mode behavior
   // ===================================================================
 
@@ -330,6 +626,214 @@ describe('getCadSystemPrompt', () => {
     it('should omit <test_requirements> when testing disabled', async () => {
       const result = await getCadSystemPrompt('openscad', 'agent', false);
       expect(result.static).not.toContain('<test_requirements>');
+    });
+  });
+
+  // ===================================================================
+  // R17: Destructive-action <safety> static section
+  //   Cross-ref: docs/research/system-prompt-audit.md, recommendation R17
+  // ===================================================================
+
+  describe('R17: <safety> static section', () => {
+    it('should include a <safety> static section', async () => {
+      const result = await getCadSystemPrompt('openscad');
+      expect(result.static).toContain('<safety>');
+      expect(result.static).toContain('</safety>');
+    });
+
+    it('should warn before delete_file removes a referenced file', async () => {
+      const result = await getCadSystemPrompt('openscad');
+      const block = result.static.slice(result.static.indexOf('<safety>'), result.static.indexOf('</safety>'));
+      expect(block).toMatch(/delete_file/);
+      expect(block).toMatch(/referenced/);
+    });
+
+    it('should warn before overwriting a previously-committed export artifact', async () => {
+      const result = await getCadSystemPrompt('openscad');
+      const block = result.static.slice(result.static.indexOf('<safety>'), result.static.indexOf('</safety>'));
+      expect(block).toMatch(/overwrit/i);
+      expect(block).toMatch(/committed/i);
+    });
+
+    it('should warn before mutating a mounted filesystem path', async () => {
+      const result = await getCadSystemPrompt('openscad');
+      const block = result.static.slice(result.static.indexOf('<safety>'), result.static.indexOf('</safety>'));
+      expect(block).toMatch(/mount/);
+    });
+
+    it('should NOT appear in dynamic section', async () => {
+      const result = await getCadSystemPrompt('openscad');
+      expect(result.dynamic).not.toContain('<safety>');
+    });
+  });
+
+  // ===================================================================
+  // R16 + R18: <system_rules> (no-identical-retry on denial, URL guard)
+  //   Cross-ref: docs/research/system-prompt-audit.md, R16 + R18
+  // ===================================================================
+
+  describe('R16 + R18: <system_rules> static section', () => {
+    it('should include a <system_rules> static section', async () => {
+      const result = await getCadSystemPrompt('openscad');
+      expect(result.static).toContain('<system_rules>');
+      expect(result.static).toContain('</system_rules>');
+    });
+
+    it('should forbid re-attempting the identical call after a denial / permission error (R16)', async () => {
+      const result = await getCadSystemPrompt('openscad');
+      const block = result.static.slice(
+        result.static.indexOf('<system_rules>'),
+        result.static.indexOf('</system_rules>'),
+      );
+      expect(block).toMatch(/denial or permission error/i);
+      expect(block).toMatch(/identical call/i);
+    });
+
+    it('should forbid inventing URLs (R18)', async () => {
+      const result = await getCadSystemPrompt('openscad');
+      const block = result.static.slice(
+        result.static.indexOf('<system_rules>'),
+        result.static.indexOf('</system_rules>'),
+      );
+      expect(block).toMatch(/Never invent URLs/);
+      expect(block).toMatch(/web_search/);
+    });
+
+    it('should NOT appear in dynamic section', async () => {
+      const result = await getCadSystemPrompt('openscad');
+      expect(result.dynamic).not.toContain('<system_rules>');
+    });
+  });
+
+  // ===================================================================
+  // R14: Self-grounded verification prepend in <visual_inspection>
+  //   Cross-ref: docs/research/system-prompt-audit.md, recommendation R14
+  // ===================================================================
+
+  describe('R14: self-grounded verification', () => {
+    it('should require predicting expected properties before taking the screenshot', async () => {
+      const result = await getCadSystemPrompt('openscad');
+      const block = result.static.slice(
+        result.static.indexOf('<visual_inspection>'),
+        result.static.indexOf('</visual_inspection>'),
+      );
+      expect(block).toMatch(/predict the expected properties/i);
+      expect(block).toMatch(/vertex-count range/i);
+      expect(block).toMatch(/bounding box/i);
+      expect(block).toMatch(/silhouette/i);
+    });
+
+    it('should require comparing prediction against actual render', async () => {
+      const result = await getCadSystemPrompt('openscad');
+      const block = result.static.slice(
+        result.static.indexOf('<visual_inspection>'),
+        result.static.indexOf('</visual_inspection>'),
+      );
+      expect(block).toMatch(/Compare against the actual render/);
+    });
+  });
+
+  // ===================================================================
+  // R13: Iterative verification loop — universal, no <complex_task> dep
+  //   Cross-ref: docs/research/system-prompt-audit.md, recommendation R13
+  // ===================================================================
+
+  describe('R13: iterative verification loop', () => {
+    it('should require re-render on any defect found in the inspect step (testing enabled)', async () => {
+      const result = await getCadSystemPrompt('openscad', 'agent', true);
+      const workflow = result.static.slice(result.static.indexOf('<workflow>'), result.static.indexOf('</workflow>'));
+      expect(workflow).toMatch(/re-render/i);
+      expect(workflow).toMatch(/Continue iterating until no defects remain/);
+    });
+
+    it('should require re-render on any defect found in the inspect step (testing disabled)', async () => {
+      const result = await getCadSystemPrompt('openscad', 'agent', false);
+      const workflow = result.static.slice(result.static.indexOf('<workflow>'), result.static.indexOf('</workflow>'));
+      expect(workflow).toMatch(/re-render/i);
+      expect(workflow).toMatch(/Continue iterating until no defects remain/);
+    });
+
+    it('should NOT reference the deferred <complex_task> tag or "2 cycles" sub-rule', async () => {
+      const result = await getCadSystemPrompt('openscad', 'agent', true);
+      const workflow = result.static.slice(result.static.indexOf('<workflow>'), result.static.indexOf('</workflow>'));
+      expect(workflow).not.toContain('complex_task');
+      expect(workflow).not.toMatch(/2 cycles/i);
+    });
+  });
+
+  // ===================================================================
+  // R12: Workflow step 0 (decompose) — universal, no <complex_task> dep
+  //   Cross-ref: docs/research/system-prompt-audit.md, recommendation R12
+  // ===================================================================
+
+  describe('R12: workflow step 0 (decompose)', () => {
+    it('should prepend a step 0 (Decompose) to the workflow when testing enabled', async () => {
+      const result = await getCadSystemPrompt('openscad', 'agent', true);
+      const workflow = result.static.slice(result.static.indexOf('<workflow>'), result.static.indexOf('</workflow>'));
+      expect(workflow).toMatch(/0\.\s*\*\*Decompose\*\*/);
+      expect(workflow).toMatch(/multi-component/i);
+    });
+
+    it('should preserve workflow numbering through step 6 when testing enabled', async () => {
+      const result = await getCadSystemPrompt('openscad', 'agent', true);
+      const workflow = result.static.slice(result.static.indexOf('<workflow>'), result.static.indexOf('</workflow>'));
+      for (const stepNumber of [0, 1, 2, 3, 4, 5, 6]) {
+        expect(workflow).toMatch(new RegExp(`${stepNumber}\\.\\s\\*\\*`));
+      }
+    });
+
+    it('should include a "skip when single shape / trivial parameter change" escape hatch', async () => {
+      const result = await getCadSystemPrompt('openscad', 'agent', true);
+      const workflow = result.static.slice(result.static.indexOf('<workflow>'), result.static.indexOf('</workflow>'));
+      expect(workflow).toMatch(/skip when/i);
+      expect(workflow).toMatch(/single shape|trivial parameter/i);
+    });
+
+    it('should NOT reference the deferred <complex_task> tag', async () => {
+      const result = await getCadSystemPrompt('openscad', 'agent', true);
+      const workflow = result.static.slice(result.static.indexOf('<workflow>'), result.static.indexOf('</workflow>'));
+      expect(workflow).not.toContain('<complex_task>');
+      expect(workflow).not.toContain('complex_task');
+    });
+
+    it('should still prepend step 0 when testing is disabled', async () => {
+      const result = await getCadSystemPrompt('openscad', 'agent', false);
+      const workflow = result.static.slice(result.static.indexOf('<workflow>'), result.static.indexOf('</workflow>'));
+      expect(workflow).toMatch(/0\.\s*\*\*Decompose\*\*/);
+    });
+  });
+
+  // ===================================================================
+  // R10: Plan-mode strictness
+  //   Cross-ref: docs/research/system-prompt-audit.md, recommendation R10
+  //   Source: claude-code system-reminder-plan-mode-is-active-iterative.md L12
+  // ===================================================================
+
+  describe('R10: plan-mode strictness', () => {
+    it('should forbid all non-readonly tool calls except .plan.md edit when in plan mode', async () => {
+      const result = await getCadSystemPrompt('openscad', 'plan');
+      const block = result.static.slice(result.static.indexOf('<plan_mode>'), result.static.indexOf('</plan_mode>'));
+      expect(block).toMatch(/MUST NOT make any edits/);
+      expect(block).toMatch(/non-readonly tools/i);
+      expect(block).toMatch(/\.plan\.md/);
+    });
+
+    it('should state that the plan-mode rules supersede other instructions', async () => {
+      const result = await getCadSystemPrompt('openscad', 'plan');
+      const block = result.static.slice(result.static.indexOf('<plan_mode>'), result.static.indexOf('</plan_mode>'));
+      expect(block).toMatch(/supersedes/i);
+    });
+
+    it('should NOT include the plan-mode block when mode is agent', async () => {
+      const result = await getCadSystemPrompt('openscad', 'agent');
+      expect(result.static).not.toContain('<plan_mode>');
+      expect(result.static).not.toContain('MUST NOT make any edits');
+    });
+
+    it('should still tell the model to stop after creating the plan', async () => {
+      const result = await getCadSystemPrompt('openscad', 'plan');
+      const block = result.static.slice(result.static.indexOf('<plan_mode>'), result.static.indexOf('</plan_mode>'));
+      expect(block).toMatch(/Stop after creating the plan/);
     });
   });
 
@@ -359,6 +863,97 @@ describe('getCadSystemPrompt', () => {
       const block = extractTestRequirements(result.static);
       expect(block).toMatch(/per[ -]file|keyed by source file/i);
       expect(block).toMatch(/preserve|never delete|do not delete|keep sibling/i);
+    });
+
+    it('should embed exactly the 3-check vocabulary in the canonical example (no meshCount/vertexCount)', async () => {
+      const result = await getCadSystemPrompt('openscad', 'agent', true);
+      const block = extractTestRequirements(result.static);
+      expect(block).toContain('boundingBox');
+      expect(block).toContain('connectedComponents');
+      expect(block).toContain('watertight');
+      expect(block).not.toContain('meshCount');
+      expect(block).not.toContain('vertexCount');
+    });
+
+    it('should describe the 3 checks with their unique-question framing and the connectedComponents tolerance knob', async () => {
+      const result = await getCadSystemPrompt('openscad', 'agent', true);
+      const block = extractTestRequirements(result.static);
+      expect(block).toMatch(/Available checks/);
+      expect(block).toContain('SIZE / POSITION');
+      expect(block).toContain('SPATIALLY-DISJOINT CHUNKS');
+      expect(block).toContain('CLOSED (manifold / 3D-printable)');
+      expect(block).toContain('tolerance');
+      expect(block).toContain('default 0.1');
+    });
+  });
+
+  // ===================================================================
+  // R7: <error_handling> guidance for connectedComponents failures
+  // ===================================================================
+
+  describe('R7: <error_handling> stops prescribing screenshots for connectedComponents failures', () => {
+    const extractErrorHandling = (prompt: string) =>
+      /<error_handling>([\S\s]*?)<\/error_handling>/.exec(prompt)?.[1] ?? '';
+
+    it('should not tell the agent to use screenshot for connectedComponents failures', async () => {
+      const result = await getCadSystemPrompt('replicad', 'agent', true);
+      const block = extractErrorHandling(result.static);
+      expect(block).not.toMatch(/screenshot[^.]*connectedComponents/);
+      expect(block).not.toMatch(/connectedComponents[^.]*screenshot/);
+    });
+
+    it('should encourage diagnosing whether the requirement still matches the agent intent', async () => {
+      const result = await getCadSystemPrompt('replicad', 'agent', true);
+      const block = extractErrorHandling(result.static);
+      expect(block).toMatch(/intent|tolerance/i);
+    });
+  });
+
+  // ===================================================================
+  // R23: per-section telemetry hook
+  // ===================================================================
+
+  describe('R23: onSectionResolved telemetry callback', () => {
+    it('should invoke onSectionResolved for every non-empty static section (incl. role and workflow)', async () => {
+      const onSectionResolved = vi.fn();
+      await getCadSystemPrompt('openscad', 'agent', true, { onSectionResolved });
+
+      const calls = onSectionResolved.mock.calls.map(([resolved]) => resolved as { name: string; cacheBreak: boolean });
+      const names = new Set(calls.map((c) => c.name));
+
+      expect(names).toContain('role');
+      expect(names).toContain('workflow');
+      expect(names).toContain('constraints');
+      expect(names).toContain('tone');
+    });
+
+    it('should tag dynamic sections with cacheBreak: true and static ones with cacheBreak: false', async () => {
+      const onSectionResolved = vi.fn();
+      await getCadSystemPrompt('openscad', 'agent', true, {
+        onSectionResolved,
+        chatId: 'chat-r23',
+        modelId: 'm-r23',
+        gitStatus: 'M file.ts',
+      });
+
+      const calls = onSectionResolved.mock.calls.map(([resolved]) => resolved as { name: string; cacheBreak: boolean });
+      const role = calls.find((c) => c.name === 'role');
+      const gitStatus = calls.find((c) => c.name === 'git_status');
+      const transcriptPath = calls.find((c) => c.name === 'transcript_path');
+
+      expect(role?.cacheBreak).toBe(false);
+      expect(gitStatus?.cacheBreak).toBe(true);
+      expect(transcriptPath?.cacheBreak).toBe(true);
+    });
+
+    it('should report positive byte sizes for every observation', async () => {
+      const onSectionResolved = vi.fn();
+      await getCadSystemPrompt('openscad', 'agent', true, { onSectionResolved });
+
+      for (const [resolved] of onSectionResolved.mock.calls) {
+        const observation = resolved as { name: string; byteSize: number };
+        expect(observation.byteSize).toBeGreaterThan(0);
+      }
     });
   });
 });

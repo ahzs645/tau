@@ -181,7 +181,7 @@ const smoke: ModelBenchmarkCase[] = [
     category: 'smoke',
     prompt: 'Create a 20mm cube in main.scad using OpenSCAD. Use the create_file tool. Write valid OpenSCAD code.',
     grader: smokeGrader,
-    geometryExpectations: { boundingBox: { size: { x: 20, y: 20, z: 20 } }, meshCount: 1 },
+    geometryExpectations: { boundingBox: { size: { x: 20, y: 20, z: 20 } }, connectedComponents: 1 },
   },
   {
     name: 'cylinder-basic',
@@ -196,7 +196,7 @@ const smoke: ModelBenchmarkCase[] = [
       ];
       return computeGraderResult(checks);
     },
-    geometryExpectations: { boundingBox: { size: { x: 30, y: 30, z: 40 } }, meshCount: 1, tolerance: 2 },
+    geometryExpectations: { boundingBox: { size: { x: 30, y: 30, z: 40 } }, connectedComponents: 1, tolerance: 2 },
   },
   {
     name: 'sphere-simple',
@@ -211,7 +211,7 @@ const smoke: ModelBenchmarkCase[] = [
       ];
       return computeGraderResult(checks);
     },
-    geometryExpectations: { boundingBox: { size: { x: 50, y: 50, z: 50 } }, meshCount: 1, tolerance: 2 },
+    geometryExpectations: { boundingBox: { size: { x: 50, y: 50, z: 50 } }, connectedComponents: 1, tolerance: 2 },
   },
 ];
 
@@ -232,7 +232,7 @@ const toolUse: ModelBenchmarkCase[] = [
       ];
       return computeGraderResult(checks);
     },
-    geometryExpectations: { boundingBox: { size: { x: 30, y: 10, z: 20 } }, meshCount: 1, tolerance: 2 },
+    geometryExpectations: { boundingBox: { size: { x: 30, y: 10, z: 20 } }, connectedComponents: 1, tolerance: 2 },
   },
   {
     name: 'explicit-code',
@@ -252,7 +252,7 @@ const toolUse: ModelBenchmarkCase[] = [
       ];
       return computeGraderResult(checks);
     },
-    geometryExpectations: { boundingBox: { size: { x: 20, y: 20, z: 20 } }, meshCount: 1 },
+    geometryExpectations: { boundingBox: { size: { x: 20, y: 20, z: 20 } }, connectedComponents: 1 },
   },
 ];
 
@@ -271,7 +271,7 @@ const primitives: ModelBenchmarkCase[] = [
       ];
       return computeGraderResult(checks);
     },
-    geometryExpectations: { boundingBox: { size: { x: 30, y: 10, z: 20 } }, meshCount: 1, tolerance: 2 },
+    geometryExpectations: { boundingBox: { size: { x: 30, y: 10, z: 20 } }, connectedComponents: 1, tolerance: 2 },
   },
   {
     name: 'linear-extrude',
@@ -287,7 +287,7 @@ const primitives: ModelBenchmarkCase[] = [
       ];
       return computeGraderResult(checks);
     },
-    geometryExpectations: { meshCount: 1 },
+    geometryExpectations: { connectedComponents: 1 },
   },
   {
     name: 'rotate-extrude',
@@ -303,7 +303,7 @@ const primitives: ModelBenchmarkCase[] = [
       ];
       return computeGraderResult(checks);
     },
-    geometryExpectations: { meshCount: 1 },
+    geometryExpectations: { connectedComponents: 1 },
   },
 ];
 
@@ -322,7 +322,7 @@ const booleans: ModelBenchmarkCase[] = [
       ];
       return computeGraderResult(checks);
     },
-    geometryExpectations: { meshCount: 1, connectedComponents: 1 },
+    geometryExpectations: { connectedComponents: 1 },
   },
   {
     name: 'difference-hole',
@@ -338,7 +338,7 @@ const booleans: ModelBenchmarkCase[] = [
       ];
       return computeGraderResult(checks);
     },
-    geometryExpectations: { meshCount: 1, connectedComponents: 1 },
+    geometryExpectations: { connectedComponents: 1 },
   },
 ];
 

@@ -9,6 +9,7 @@ import { MemorySaver } from '@langchain/langgraph-checkpoint';
 import { fromMemoryFS } from '@taucad/runtime';
 import { createRuntimeFileSystem } from '@taucad/runtime/filesystem';
 import { createRpcDispatcher } from '@taucad/chat/rpc';
+import type { RpcGraphicsClient } from '@taucad/chat/rpc';
 import { getEnvironment } from '#config/environment.config.js';
 import { ChatController } from '#api/chat/chat.controller.js';
 import { ChatService } from '#api/chat/chat.service.js';
@@ -93,6 +94,18 @@ export type TestApp = {
 };
 
 /**
+ * Optional overrides for {@link createTestApp}.
+ *
+ * - `graphicsStub`: replace the default (omitted) graphics client. Used by EVAL
+ *   tests for the agent-loop safeguards middleware that need to inject
+ *   deterministic `fetch_geometry` / `screenshot` failures so the model is
+ *   forced to repeat the same tool call.
+ */
+export type CreateTestAppOptions = {
+  graphicsStub?: RpcGraphicsClient;
+};
+
+/**
  * Create a minimal NestJS test application configured for integration testing.
  *
  * Overrides:
@@ -102,7 +115,7 @@ export type TestApp = {
  *
  * The test app uses real API keys from .env for model calls.
  */
-export async function createTestApp(): Promise<TestApp> {
+export async function createTestApp(options: CreateTestAppOptions = {}): Promise<TestApp> {
   const logger = new Logger('TestApp');
 
   const moduleRef = await Test.createTestingModule({
@@ -133,6 +146,7 @@ export async function createTestApp(): Promise<TestApp> {
   const dispatcher = createRpcDispatcher({
     fileSystem: createHeadlessRpcFileSystem(createRuntimeFileSystem(memFs)),
     kernelClient: createHeadlessRuntimeClient({ createGeometry: async () => ({ success: true, issues: [] }) }),
+    ...(options.graphicsStub ? { graphics: options.graphicsStub } : {}),
   });
   headlessRpc.setDispatcher(dispatcher);
 

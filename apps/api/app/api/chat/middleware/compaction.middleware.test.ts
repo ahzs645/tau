@@ -794,6 +794,58 @@ describe('createCompactionMiddleware', () => {
     );
   });
 
+  // Per docs/research/system-prompt-audit.md R21 — when the compaction service
+  // throws CompactSummaryValidationError (Morph returned a malformed summary
+  // that fails the 9-section schema), the middleware must transparently fall
+  // through to the truncate-tool-args fallback the same way it does for any
+  // other Morph failure. CompactSummaryValidationError extends Error so the
+  // existing catch path picks it up automatically; this test pins the contract.
+  it('should fall through to truncated args when compaction summary validation fails', async () => {
+    const { CompactSummaryValidationError } = await import('#api/chat/compaction.service.js');
+    const middleware = createMiddlewareInstance();
+    const { wrapModelCall } = middleware;
+    if (!wrapModelCall) {
+      throw new Error('wrapModelCall not defined');
+    }
+
+    const longContent = 'A'.repeat(4000);
+    const messages: BaseMessage[] = [
+      new HumanMessage(longContent),
+      new AIMessage(longContent),
+      new HumanMessage('middle question'),
+      new AIMessage('middle answer'),
+      new HumanMessage('recent'),
+      new AIMessage('recent reply'),
+    ];
+
+    compactionService.compact.mockRejectedValue(
+      new CompactSummaryValidationError('Morph compaction summary missing required sections: Pending Tasks', [
+        'Pending Tasks',
+      ]),
+    );
+
+    const handler = vi.fn().mockResolvedValue(undefined);
+
+    await wrapModelCall(
+      {
+        messages,
+        tools: [],
+        systemMessage: '',
+        runtime: { context: createContext(1000), writer },
+      } as unknown as Parameters<typeof wrapModelCall>[0],
+      handler,
+    );
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(writer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'context-compaction',
+        compressionRatio: 1,
+        messagesEvicted: 0,
+      }),
+    );
+  });
+
   // ===================================================================
   // R11: Transcript image markers for evicted blocks
   // ===================================================================

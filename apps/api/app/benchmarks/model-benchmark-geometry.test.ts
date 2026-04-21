@@ -83,7 +83,7 @@ describe('model-benchmark-geometry', () => {
     it('should pass all checks when geometry matches expectations', async () => {
       const expectations: BenchmarkGeometryExpectation = {
         boundingBox: { size: { x: 10, y: 20, z: 30 } },
-        meshCount: 1,
+        connectedComponents: 1,
       };
 
       const { checks } = await gradeGeometry(boxGlb, expectations);
@@ -104,19 +104,6 @@ describe('model-benchmark-geometry', () => {
       expect(bboxCheck).toBeDefined();
       expect(bboxCheck!.passed).toBe(false);
       expect(bboxCheck!.detail).toBeTruthy();
-    });
-
-    it('should fail mesh count check when count differs', async () => {
-      const expectations: BenchmarkGeometryExpectation = {
-        meshCount: 5,
-      };
-
-      const { checks } = await gradeGeometry(boxGlb, expectations);
-
-      const meshCheck = checks.find((c) => c.name === 'geometry_mesh_count');
-      expect(meshCheck).toBeDefined();
-      expect(meshCheck!.passed).toBe(false);
-      expect(meshCheck!.detail).toBeTruthy();
     });
 
     it('should fail connected components check when topology differs', async () => {
@@ -159,7 +146,7 @@ describe('model-benchmark-geometry', () => {
 
   describe('validateGeometry', () => {
     it('should return render failure checks when code cannot compile', async () => {
-      const expectations: BenchmarkGeometryExpectation = { meshCount: 1 };
+      const expectations: BenchmarkGeometryExpectation = { connectedComponents: 1 };
       const result = await validateGeometry({ client, files: { [mainFile]: syntaxErrorCode }, mainFile, expectations });
 
       expect(result.rendered).toBe(true);
@@ -173,7 +160,7 @@ describe('model-benchmark-geometry', () => {
     it('should return geometry checks when rendering succeeds', async () => {
       const expectations: BenchmarkGeometryExpectation = {
         boundingBox: { size: { x: 10, y: 20, z: 30 } },
-        meshCount: 1,
+        connectedComponents: 1,
       };
       const result = await validateGeometry({ client, files: { [mainFile]: boxCode }, mainFile, expectations });
 
@@ -184,7 +171,7 @@ describe('model-benchmark-geometry', () => {
         expect.arrayContaining([
           expect.objectContaining({ name: 'geometry_render', passed: true }),
           expect.objectContaining({ name: 'geometry_bbox', passed: true }),
-          expect.objectContaining({ name: 'geometry_mesh_count', passed: true }),
+          expect.objectContaining({ name: 'geometry_connected_components', passed: true }),
         ]),
       );
     });

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatCompactSummary } from '#api/chat/utils/format-compact-summary.js';
+import { formatCompactSummary, parseCompactSummary } from '#api/chat/utils/format-compact-summary.js';
 
 describe('formatCompactSummary', () => {
   it('should strip <analysis> block and preserve <summary> content', () => {
@@ -77,5 +77,87 @@ The actual summary content here.
     expect(result).not.toContain('Line 1 of analysis');
     expect(result).not.toContain('<tags>');
     expect(result).toContain('The actual summary content here.');
+  });
+});
+
+// =============================================================================
+// parseCompactSummary — per docs/research/system-prompt-audit.md R21
+// =============================================================================
+//
+// The compaction prompt asks Morph for a 9-section summary (Primary Request,
+// Key Technical Concepts, Files and Code Sections, Errors and Fixes, Problem
+// Solving, All User Messages, Pending Tasks, Current Work, Optional Next Step).
+// `parseCompactSummary` is the structural validator — when any of those sections
+// is absent, the compaction service must throw so the middleware falls back to
+// the truncate-tool-args tier instead of shipping a malformed summary.
+
+const wellFormedSummary = `1. Primary Request and Intent: Build a parametric cube.
+2. Key Technical Concepts: OpenSCAD primitives, parameter file overrides.
+3. Files and Code Sections: main.scad — declares the top-level cube.
+4. Errors and Fixes: Initial run failed because of a missing module; fixed by importing lib/units.scad.
+5. Problem Solving: Iterated on dimensions until tests passed.
+6. All User Messages: "make a 100mm cube"
+7. Pending Tasks: None.
+8. Current Work: Cube built and verified.
+9. Optional Next Step: Surface dimensions in the parameter UI.`;
+
+describe('parseCompactSummary', () => {
+  it('returns ok:true when all 9 numbered sections are present', () => {
+    const result = parseCompactSummary(wellFormedSummary);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.sections).toHaveLength(9);
+    }
+  });
+
+  it('returns ok:false and lists missing sections when any are absent', () => {
+    const missingSeven = wellFormedSummary
+      .split('\n')
+      .filter((line) => !line.startsWith('7. '))
+      .join('\n');
+
+    const result = parseCompactSummary(missingSeven);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.missingSections).toContain('Pending Tasks');
+    }
+  });
+
+  it('returns ok:false when the section is renamed (heading mismatch)', () => {
+    const renamed = wellFormedSummary.replace('1. Primary Request and Intent', '1. Main Goal');
+
+    const result = parseCompactSummary(renamed);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.missingSections).toContain('Primary Request and Intent');
+    }
+  });
+
+  it('returns ok:false for empty / whitespace input', () => {
+    expect(parseCompactSummary('').ok).toBe(false);
+    expect(parseCompactSummary('   \n\n  ').ok).toBe(false);
+  });
+
+  it('returns ok:false and lists every missing section when many are absent', () => {
+    const onlyFirstThree = `1. Primary Request and Intent: x
+2. Key Technical Concepts: y
+3. Files and Code Sections: z`;
+
+    const result = parseCompactSummary(onlyFirstThree);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.missingSections).toEqual([
+        'Errors and Fixes',
+        'Problem Solving',
+        'All User Messages',
+        'Pending Tasks',
+        'Current Work',
+        'Optional Next Step',
+      ]);
+    }
   });
 });

@@ -4,7 +4,24 @@ import { Test } from '@nestjs/testing';
 import type { TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { HumanMessage, AIMessage } from '@langchain/core/messages';
-import { CompactionService } from '#api/chat/compaction.service.js';
+import { CompactionService, CompactSummaryValidationError } from '#api/chat/compaction.service.js';
+
+/**
+ * 9-section summary that satisfies `parseCompactSummary` (R21). Existing tests
+ * exercise transport and stats logic, not the summary contract, so they wrap
+ * a short body in this template and assert on substrings inside `body`.
+ */
+function validSummary(body = 'Compacted summary of conversation.'): string {
+  return `1. Primary Request and Intent: ${body}
+2. Key Technical Concepts: stub.
+3. Files and Code Sections: stub.
+4. Errors and Fixes: stub.
+5. Problem Solving: stub.
+6. All User Messages: "stub"
+7. Pending Tasks: stub.
+8. Current Work: stub.
+9. Optional Next Step: stub.`;
+}
 
 describe('CompactionService', () => {
   let service: CompactionService;
@@ -46,7 +63,7 @@ describe('CompactionService', () => {
 
   it('should call Morph API with correct parameters', async () => {
     const mockResponse = {
-      choices: [{ message: { content: 'Compacted summary of conversation.' } }],
+      choices: [{ message: { content: validSummary() } }],
       usage: { prompt_tokens: 500, completion_tokens: 50 },
     };
 
@@ -72,11 +89,11 @@ describe('CompactionService', () => {
   });
 
   it('should parse compacted messages correctly', async () => {
-    const compactedContent = 'The user greeted, the assistant responded warmly.';
+    const body = 'The user greeted, the assistant responded warmly.';
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
-        choices: [{ message: { content: compactedContent } }],
+        choices: [{ message: { content: validSummary(body) } }],
       }),
     });
 
@@ -87,7 +104,7 @@ describe('CompactionService', () => {
 
     expect(compactedMessages).toHaveLength(1);
     expect(compactedMessages[0]).toBeInstanceOf(HumanMessage);
-    expect(compactedMessages[0]!.content).toContain(compactedContent);
+    expect(compactedMessages[0]!.content).toContain(body);
   });
 
   it('should handle API errors gracefully', async () => {
@@ -110,7 +127,7 @@ describe('CompactionService', () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
-        choices: [{ message: { content: 'Short summary.' } }],
+        choices: [{ message: { content: validSummary('Short summary.') } }],
       }),
     });
 
@@ -148,7 +165,7 @@ describe('CompactionService', () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
-        choices: [{ message: { content: 'Summary.' } }],
+        choices: [{ message: { content: validSummary() } }],
       }),
     });
 
@@ -175,7 +192,7 @@ describe('CompactionService', () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
-        choices: [{ message: { content: 'Summary.' } }],
+        choices: [{ message: { content: validSummary() } }],
       }),
     });
 
@@ -196,7 +213,7 @@ describe('CompactionService', () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
-        choices: [{ message: { content: 'Summary.' } }],
+        choices: [{ message: { content: validSummary() } }],
       }),
     });
 
@@ -222,7 +239,7 @@ describe('CompactionService', () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
-        choices: [{ message: { content: 'Summary.' } }],
+        choices: [{ message: { content: validSummary() } }],
       }),
     });
 
@@ -246,7 +263,7 @@ describe('CompactionService', () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
-        choices: [{ message: { content: 'User showed a design and asked for feedback.' } }],
+        choices: [{ message: { content: validSummary('User showed a design and asked for feedback.') } }],
       }),
     });
 
@@ -272,7 +289,7 @@ describe('CompactionService', () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
-        choices: [{ message: { content: 'User discussed text-only topics.' } }],
+        choices: [{ message: { content: validSummary('User discussed text-only topics.') } }],
       }),
     });
 
@@ -291,7 +308,7 @@ describe('CompactionService', () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
-        choices: [{ message: { content: 'User shared multiple images.' } }],
+        choices: [{ message: { content: validSummary('User shared multiple images.') } }],
       }),
     });
 
@@ -320,7 +337,7 @@ describe('CompactionService', () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
-        choices: [{ message: { content: 'Summary.' } }],
+        choices: [{ message: { content: validSummary() } }],
       }),
     });
 
@@ -342,7 +359,7 @@ describe('CompactionService', () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
-        choices: [{ message: { content: 'Summary.' } }],
+        choices: [{ message: { content: validSummary() } }],
       }),
     });
 
@@ -355,5 +372,67 @@ describe('CompactionService', () => {
     const body = JSON.parse(fetchCall[1].body as string) as { messages: Array<{ role: string; content: string }> };
     const lastMessage = body.messages.at(-1)!;
     expect(lastMessage.content).toMatch(/directly in line with.*user.*explicit/i);
+  });
+
+  // ===================================================================
+  // R21: Schema validation — fall through to truncate-tool-args fallback
+  // when the Morph response is missing required sections.
+  // ===================================================================
+
+  it('should throw CompactSummaryValidationError when Morph response omits required sections', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        // Missing sections 4-9 — middleware must fall back to truncated args.
+        choices: [
+          {
+            message: {
+              content: `1. Primary Request and Intent: x
+2. Key Technical Concepts: y
+3. Files and Code Sections: z`,
+            },
+          },
+        ],
+      }),
+    });
+
+    await expect(
+      service.compact({
+        messages: [new HumanMessage('Hello'), new AIMessage('Hi')],
+        query: 'Summary',
+      }),
+    ).rejects.toBeInstanceOf(CompactSummaryValidationError);
+  });
+
+  it('should expose missingSections on the validation error so the middleware can log them', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              content: `1. Primary Request and Intent: x
+2. Key Technical Concepts: y`,
+            },
+          },
+        ],
+      }),
+    });
+
+    let caught: unknown;
+    try {
+      await service.compact({
+        messages: [new HumanMessage('Hello'), new AIMessage('Hi')],
+        query: 'Summary',
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(CompactSummaryValidationError);
+    if (caught instanceof CompactSummaryValidationError) {
+      expect(caught.missingSections).toContain('Optional Next Step');
+      expect(caught.missingSections).toContain('Pending Tasks');
+    }
   });
 });

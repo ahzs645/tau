@@ -18,7 +18,9 @@ Use this tool to:
 Common glob patterns:
 - "**/*.ext" - All files with extension in any directory
 - "dir/**/*" - All files under a specific directory
-- "**/prefix_*" - Files starting with a prefix in any directory`,
+- "**/prefix_*" - Files starting with a prefix in any directory
+
+For searching file contents, use \`grep\`.`,
   schema: globSearchInputSchema,
 } as const;
 

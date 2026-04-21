@@ -27,8 +27,9 @@ const webSearchInputSchema = z.object({
  */
 class WebSearchTool extends StructuredTool {
   public override name = toolName.webSearch;
-  public override description =
-    'A search engine optimized for comprehensive, accurate, and trusted results. Useful for when you need to answer questions about current events. Input should be a search query.';
+  public override description = `A search engine optimized for comprehensive, accurate, and trusted results. Useful for when you need to answer questions about current events. Input should be a search query.
+
+To fetch the full body of a known URL, use \`web_browser\`.`;
 
   public override schema = webSearchInputSchema;
 

@@ -9,10 +9,12 @@ import type { ToolSelection, ContextPayload } from '@taucad/chat';
 import type { ChatMode } from '@taucad/chat/constants';
 import { ModelService } from '#api/models/model.service.js';
 import { createUsageTrackingMiddleware } from '#api/chat/middleware/usage-tracking.middleware.js';
+import { createTokenUsageContextMiddleware } from '#api/chat/middleware/token-usage-context.middleware.js';
 import { createToolMetricsMiddleware } from '#api/chat/middleware/tool-metrics.middleware.js';
 import { createLlmTimingMiddleware } from '#api/chat/middleware/llm-timing.middleware.js';
 import { createAgentIterationsMiddleware } from '#api/chat/middleware/agent-iterations.middleware.js';
 import { MetricsService } from '#telemetry/metrics.js';
+import { AttributeKey } from '@taucad/telemetry';
 import { messageLoggingMiddleware } from '#api/chat/middleware/message-logging.middleware.js';
 import { toolErrorHandlerMiddleware } from '#api/chat/middleware/tool-error-handler.middleware.js';
 import { createCachedSystemMessage } from '#api/chat/utils/create-cached-system-message.js';
@@ -25,6 +27,7 @@ import { promptCachingMiddleware } from '#api/chat/middleware/prompt-caching.mid
 import { messageContentSanitizerMiddleware } from '#api/chat/middleware/message-content-sanitizer.middleware.js';
 import { latexDelimiterMiddleware } from '#api/chat/middleware/latex-delimiter.middleware.js';
 import { newlineTrimmerMiddleware } from '#api/chat/middleware/newline-trimmer.middleware.js';
+import { createAgentSafeguardsMiddleware } from '#api/chat/middleware/agent-safeguards.middleware.js';
 import { createCompactionMiddleware } from '#api/chat/middleware/compaction.middleware.js';
 import { createToolOffloadingMiddleware } from '#api/chat/middleware/tool-offloading.middleware.js';
 import { createTranscriptMiddleware } from '#api/chat/middleware/transcript.middleware.js';
@@ -62,7 +65,7 @@ export class ChatService {
   }): Promise<ReactAgent> {
     const { chatId, modelId, kernel, mode = 'agent', contextPayload } = options;
     const { choice, testingEnabled = true } = options.tools;
-    const { tools } = this.toolService.getTools(choice);
+    const { tools } = this.toolService.getTools(choice, kernel);
 
     const checkpointer = this.checkpointerService.getCheckpointer();
 
@@ -110,6 +113,16 @@ export class ChatService {
       contextWindow,
       knowledgeCutoff,
       gitStatus,
+      // R23: per-section telemetry — record byte size of every non-empty
+      // section so Grafana can show which sections dominate the static
+      // prefix and which dynamic sections invalidate the cache the most.
+      onSectionResolved: ({ name, cacheBreak, byteSize }) => {
+        this.metricsService.genAiPromptSectionSize.record(byteSize, {
+          [AttributeKey.GEN_AI_PROMPT_SECTION_NAME]: name,
+          [AttributeKey.GEN_AI_PROMPT_SECTION_CACHE_BREAK]: cacheBreak ? 'true' : 'false',
+          [AttributeKey.GEN_AI_REQUEST_MODEL]: modelId,
+        });
+      },
     });
     // Global cache scope is currently disabled: enabling it requires the
     // `prompt-caching-scope-2026-01-05` Anthropic beta on the configured API key.
@@ -133,6 +146,20 @@ export class ChatService {
 
         // --- Context compaction ---
         createCompactionMiddleware(this.compactionService, this.rpcBackendFactory, this.chatRpcService),
+
+        // --- Token-usage context (R22) ---
+        // Inserted AFTER compaction so the reported "used" count reflects the
+        // post-compaction message set, and BEFORE agent-safeguards / prompt
+        // caching so the injected <system-reminder> joins the cacheable prefix
+        // (Cache-Safety Contract CS1/CS3 — see token-usage-context.middleware.ts).
+        createTokenUsageContextMiddleware(),
+
+        // --- Agent loop safeguards (doom-loop detection) ---
+        // Inserted AFTER compaction so detectors see the post-compaction message
+        // tail, and BEFORE messageContentSanitizer / promptCaching so that
+        // injected <system-reminder> nudges become part of the cacheable prefix
+        // (see docs/research/agent-loop-safeguards.md, "Cache-Safety Contract").
+        createAgentSafeguardsMiddleware(this.metricsService, this.chatRpcService),
 
         // --- Message processing ---
         messageContentSanitizerMiddleware,
