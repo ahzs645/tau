@@ -77,7 +77,6 @@ type ProjectManagerContextType = {
     projectId: string,
     update: PartialDeep<Project>,
     options?: {
-      ignoreKeys?: string[];
       noUpdatedAt?: boolean;
     },
   ) => Promise<Project | undefined>;
@@ -96,10 +95,17 @@ type ProjectManagerContextType = {
     chatId: string,
     update: PartialDeep<Chat>,
     options?: {
-      ignoreKeys?: string[];
       noUpdatedAt?: boolean;
     },
   ) => Promise<Chat | undefined>;
+  patchChat: <K extends keyof Chat>(chatId: string, key: K, value: Chat[K]) => Promise<Chat | undefined>;
+  setMessageEdit: (
+    chatId: string,
+    messageId: string,
+    draft: NonNullable<Chat['messageEdits']>[string],
+  ) => Promise<Chat | undefined>;
+  clearMessageEdit: (chatId: string, messageId: string) => Promise<Chat | undefined>;
+  softDeleteChat: (chatId: string) => Promise<Chat | undefined>;
   duplicateChat: (chatId: string) => Promise<Chat>;
   getChatsForResource: (resourceId: string, options?: { includeDeleted?: boolean }) => Promise<Chat[]>;
   getChat: (chatId: string) => Promise<Chat | undefined>;
@@ -242,7 +248,6 @@ export function ProjectManagerProvider({ children }: { readonly children: ReactN
       projectId: string,
       update: PartialDeep<Project>,
       options?: {
-        ignoreKeys?: string[];
         noUpdatedAt?: boolean;
       },
     ): Promise<Project | undefined> => {
@@ -310,12 +315,47 @@ export function ProjectManagerProvider({ children }: { readonly children: ReactN
       chatId: string,
       update: PartialDeep<Chat>,
       options?: {
-        ignoreKeys?: string[];
         noUpdatedAt?: boolean;
       },
     ): Promise<Chat | undefined> => {
       const worker = await getReadiedWorker();
       return worker.updateChat(chatId, update, options);
+    },
+    [getReadiedWorker],
+  );
+
+  const patchChat = useCallback(
+    async <K extends keyof Chat>(chatId: string, key: K, value: Chat[K]): Promise<Chat | undefined> => {
+      const worker = await getReadiedWorker();
+      return worker.patchChat(chatId, key, value);
+    },
+    [getReadiedWorker],
+  );
+
+  const setMessageEdit = useCallback(
+    async (
+      chatId: string,
+      messageId: string,
+      draft: NonNullable<Chat['messageEdits']>[string],
+    ): Promise<Chat | undefined> => {
+      const worker = await getReadiedWorker();
+      return worker.setMessageEdit(chatId, messageId, draft);
+    },
+    [getReadiedWorker],
+  );
+
+  const clearMessageEdit = useCallback(
+    async (chatId: string, messageId: string): Promise<Chat | undefined> => {
+      const worker = await getReadiedWorker();
+      return worker.clearMessageEdit(chatId, messageId);
+    },
+    [getReadiedWorker],
+  );
+
+  const softDeleteChat = useCallback(
+    async (chatId: string): Promise<Chat | undefined> => {
+      const worker = await getReadiedWorker();
+      return worker.softDeleteChat(chatId);
     },
     [getReadiedWorker],
   );
@@ -365,6 +405,10 @@ export function ProjectManagerProvider({ children }: { readonly children: ReactN
       deleteProject,
       createChat,
       updateChat,
+      patchChat,
+      setMessageEdit,
+      clearMessageEdit,
+      softDeleteChat,
       duplicateChat,
       getChatsForResource,
       getChat,
@@ -382,6 +426,10 @@ export function ProjectManagerProvider({ children }: { readonly children: ReactN
     deleteProject,
     createChat,
     updateChat,
+    patchChat,
+    setMessageEdit,
+    clearMessageEdit,
+    softDeleteChat,
     duplicateChat,
     getChatsForResource,
     getChat,
