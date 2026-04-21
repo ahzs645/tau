@@ -165,6 +165,34 @@ export const TauMetrics = {
     }),
   }),
 
+  /**
+   * Per-section system-prompt byte budget (R23 — see
+   * `docs/research/system-prompt-audit.md`). Recorded by `chat.service.ts`
+   * via the `onSectionResolved` callback exposed by
+   * [apps/api/app/api/chat/prompts/prompt-section-registry.ts]. One sample
+   * per non-empty section per `getCadSystemPrompt` call, tagged with the
+   * section name and whether the section breaks the prompt cache. Lets us
+   * see which sections dominate the static prefix and which dynamic
+   * sections are the largest cache invalidators.
+   *
+   * Buckets cover one byte through 256 KiB — most individual sections are
+   * 100 B – 16 KiB; the canonical-example section is the largest in the
+   * static bucket. The dynamic environment / git-status / transcript-path
+   * sections are usually under 4 KiB.
+   */
+  genAiPromptSectionSize: defineHistogram({
+    name: 'gen_ai.prompt.section.size',
+    unit: 'By',
+    description: 'System-prompt section byte size by section name and cache class',
+    buckets: [1, 64, 256, 1024, 4096, 16_384, 65_536, 262_144],
+    attributes: z.object({
+      'gen_ai.prompt.section.name': z.string().optional(),
+      'gen_ai.prompt.section.cache_break': z.string().optional(),
+      'gen_ai.request.model': z.string().optional(),
+      'gen_ai.provider.name': z.string().optional(),
+    }),
+  }),
+
   // --- Infrastructure ---
 
   redisConnectionState: defineGauge({

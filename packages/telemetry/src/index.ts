@@ -2,7 +2,15 @@
 export type { InstrumentType, MetricDefinition } from '#define-metric.js';
 export { defineCounter, defineHistogram, defineGauge, defineUpDownCounter } from '#define-metric.js';
 export { TauMetrics } from '#registry.js';
-export { AttributeKey, KernelStatus, GenAiToolStatus, GenAiTokenType, RpcStatus } from '#attributes.js';
+export {
+  AttributeKey,
+  KernelStatus,
+  GenAiToolStatus,
+  GenAiTokenType,
+  GenAiSafeguardAction,
+  GenAiSafeguardHelped,
+  RpcStatus,
+} from '#attributes.js';
 export { IngestEntryName, clientMetricEntrySchema, ingestPayloadSchema } from '#ingest.js';
 export type { ClientMetricEntry, IngestPayload } from '#ingest.js';
 export { toPrometheusName, PrometheusNames, prometheusNameOf } from '#prometheus.js';

@@ -5,12 +5,20 @@ describe('TauMetrics', () => {
   const metrics = Object.values(TauMetrics);
 
   it('should define all canonical metrics', () => {
-    expect(metrics).toHaveLength(22);
+    expect(metrics).toHaveLength(23);
   });
 
   it('should expose the agent-safeguard counter with the canonical OTEL name', () => {
     expect(TauMetrics.genAiAgentSafeguardInterventions.name).toBe('gen_ai.agent.safeguard.interventions');
     expect(TauMetrics.genAiAgentSafeguardInterventions.type).toBe('counter');
+  });
+
+  // Per docs/research/system-prompt-audit.md R23.
+  it('should expose the prompt-section-size histogram with the canonical OTEL name', () => {
+    expect(TauMetrics.genAiPromptSectionSize.name).toBe('gen_ai.prompt.section.size');
+    expect(TauMetrics.genAiPromptSectionSize.type).toBe('histogram');
+    expect(TauMetrics.genAiPromptSectionSize.unit).toBe('By');
+    expect(TauMetrics.genAiPromptSectionSize.buckets.length).toBeGreaterThan(0);
   });
 
   it('should use lowercase dot-delimited names for all metrics', () => {

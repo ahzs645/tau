@@ -29,6 +29,8 @@ export const AttributeKey = {
   GEN_AI_SAFEGUARD_PATTERN: 'gen_ai.agent.safeguard.pattern',
   GEN_AI_SAFEGUARD_ACTION: 'gen_ai.agent.safeguard.action',
   GEN_AI_SAFEGUARD_HELPED: 'gen_ai.agent.safeguard.helped',
+  GEN_AI_PROMPT_SECTION_NAME: 'gen_ai.prompt.section.name',
+  GEN_AI_PROMPT_SECTION_CACHE_BREAK: 'gen_ai.prompt.section.cache_break',
 } as const;
 
 /**

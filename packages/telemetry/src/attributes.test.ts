@@ -72,3 +72,11 @@ describe('GenAiSafeguardHelped', () => {
     expect(GenAiSafeguardHelped.FALSE).toBe('false');
   });
 });
+
+// Per docs/research/system-prompt-audit.md R23.
+describe('prompt-section attribute keys', () => {
+  it('should expose section name and cache-break keys under gen_ai.prompt.section.*', () => {
+    expect(AttributeKey.GEN_AI_PROMPT_SECTION_NAME).toBe('gen_ai.prompt.section.name');
+    expect(AttributeKey.GEN_AI_PROMPT_SECTION_CACHE_BREAK).toBe('gen_ai.prompt.section.cache_break');
+  });
+});
