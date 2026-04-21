@@ -302,6 +302,28 @@ description: `Find files matching a glob pattern. Use for locating files by type
 | Output format       | Priority and decision criteria |
 | Error conditions    | Domain-specific guidance       |
 
+### Negative Guidance Is Selective
+
+Reserve `When NOT to use:` (or any explicit anti-guidance block) for tools where misuse is **costly** — latency, cost, destructive side-effects — AND the alternative is **non-obvious** to a frontier LLM. As a heuristic, target ≤ 20% of the toolbelt; default to positive selection criteria stated in `<workflow>` / `<tool_usage_policy>`. Distinctions like `create_file` vs `edit_file` are obvious from names — adding "NOT for editing existing files" wastes attention.
+
+When you do include negative guidance, prefer **a single positive trailing redirect** over a `When NOT to use:` heading:
+
+```typescript
+// CORRECT: positive redirect for one genuine confusion zone
+description: `Search file contents using regex.
+
+For finding files by name pattern, use \`glob\`.`;
+
+// INCORRECT: defensive over-explanation that duplicates obvious knowledge
+description: `Search file contents using regex.
+
+When NOT to use:
+- NOT for finding files by name pattern — use \`glob\` instead.
+- NOT for reading a file end-to-end — use \`read_file\`.`;
+```
+
+`claude-code` (Apr 2026) reserves explicit "When NOT to use" sections for **2 of 19** tools — those with the highest overuse risk (sub-agent dispatch, todo writes). Tau follows the same ratio.
+
 ---
 
 ## Part 6: Advanced Patterns
@@ -426,22 +448,28 @@ Different models respond differently to the same prompts and tool configurations
 - INCORRECT: Keeping all conversation history indefinitely
 - CORRECT: Sliding windows with summarization for older content
 
+### 7. Universal Negative Guidance
+
+- INCORRECT: Adding `When NOT to use:` to every tool description "for safety"
+- CORRECT: Reserve for high-overuse-risk tools (≤ 20% of the toolbelt); use a single positive redirect for routine confusion zones
+
 ---
 
 ## Part 8: Audit Checklist
 
 When reviewing prompts or tool descriptions:
 
-| Question                        | If Yes                            |
-| ------------------------------- | --------------------------------- |
-| Is this explained elsewhere?    | Consolidate to single location    |
-| Would a senior dev need this?   | Remove if obvious                 |
-| Can this be an example instead? | One example > paragraphs of rules |
-| Is the altitude right?          | Adjust brittle <-> vague balance  |
-| Are there prescriptive lists?   | Compress to sentences             |
-| Is this defensive repetition?   | State once, remove emphasis       |
-| Does this duplicate tool docs?  | Keep in tool description only     |
-| Is this stable across requests? | Move to cached portion            |
+| Question                                | If Yes                                                     |
+| --------------------------------------- | ---------------------------------------------------------- |
+| Is this explained elsewhere?            | Consolidate to single location                             |
+| Would a senior dev need this?           | Remove if obvious                                          |
+| Can this be an example instead?         | One example > paragraphs of rules                          |
+| Is the altitude right?                  | Adjust brittle <-> vague balance                           |
+| Are there prescriptive lists?           | Compress to sentences                                      |
+| Is this defensive repetition?           | State once, remove emphasis                                |
+| Does this duplicate tool docs?          | Keep in tool description only                              |
+| Is this stable across requests?         | Move to cached portion                                     |
+| Does every tool have negative guidance? | Most should not — reserve for high-overuse-risk tools only |
 
 ---
 
