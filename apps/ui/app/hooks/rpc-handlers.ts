@@ -8,7 +8,7 @@
  * adapts browser-specific deps into the abstract RpcDependencies interface.
  */
 import { createActor, waitFor } from 'xstate';
-import type { ActorRefFrom } from 'xstate';
+import type { ActorRefFrom, SnapshotFrom } from 'xstate';
 import type {
   RpcCall,
   GetKernelResultRpcResult,
@@ -31,10 +31,21 @@ import { generatePrefixedId } from '@taucad/utils/id';
 import { screenshotRequestMachine, orthographicViews } from '#machines/screenshot-request.machine.js';
 import type { graphicsMachine } from '#machines/graphics.machine.js';
 import type { projectMachine } from '#machines/project.machine.js';
+import type { cadMachine } from '#machines/cad.machine.js';
 import { decodeTextFile, encodeTextFile } from '#utils/filesystem.utils.js';
 
 /** Source of file write operations */
 type FileWriteSource = 'editor' | 'user' | 'machine';
+
+/**
+ * Resolves the per-viewer-panel graphics actor displaying a given source file.
+ * Returns undefined if no panel currently displays that file.
+ *
+ * Multi-file aware: every agent-facing screenshot/observation flow looks up
+ * the targeted geometry unit explicitly — there is no project-level
+ * `mainEntryFile` fallback.
+ */
+export type ResolveGraphicsForFile = (targetFile: string) => ActorRefFrom<typeof graphicsMachine> | undefined;
 
 /**
  * Dependencies required for RPC execution.
@@ -46,7 +57,11 @@ export type RpcHandlerDependencies = {
     deleteFile: (path: string, options: { source: FileWriteSource }) => Promise<void>;
     stat: (path: string) => Promise<{ type: 'file' | 'dir'; size: number; mtimeMs: number }>;
   };
-  graphicsRef: ActorRefFrom<typeof graphicsMachine> | undefined;
+  /**
+   * Function that maps a source file path to its viewer panel's graphics actor.
+   * Pass `undefined` in headless modes where no view is mounted.
+   */
+  resolveGraphicsForFile: ResolveGraphicsForFile | undefined;
   projectRef: ActorRefFrom<typeof projectMachine>;
   treeService:
     | {
@@ -158,95 +173,157 @@ function createBrowserRpcFileSystem(
   };
 }
 
+/**
+ * Resolves the compilation-unit actor for `targetFile`, bootstrapping it via
+ * `createGeometryUnit` if it does not already exist, then awaits the CAD
+ * actor reaching a settled state (`idle` or `error`).
+ *
+ * Both `getKernelResult` and `fetchGeometry` route through this helper so they
+ * share a single bootstrap contract — the agent never sees a missing-geometry unit error
+ * for a path it just asked the harness to evaluate.
+ */
+type ResolveGeometryUnitResult =
+  | {
+      ok: true;
+      cadUnit: ActorRefFrom<typeof cadMachine>;
+      cadSnapshot: SnapshotFrom<typeof cadMachine>;
+    }
+  | {
+      ok: false;
+      errorCode: 'UNKNOWN';
+      message: string;
+    };
+
+async function resolveOrCreateGeometryUnit(
+  projectRef: ActorRefFrom<typeof projectMachine>,
+  targetFile: string,
+): Promise<ResolveGeometryUnitResult> {
+  try {
+    const projectSnapshot = projectRef.getSnapshot();
+    const { geometryUnits } = projectSnapshot.context;
+    let cadUnit = geometryUnits.get(targetFile);
+
+    if (!cadUnit) {
+      projectRef.send({
+        type: 'createGeometryUnit',
+        entryFile: targetFile,
+      });
+      const refreshed = projectRef.getSnapshot();
+      cadUnit = refreshed.context.geometryUnits.get(targetFile);
+    }
+
+    if (!cadUnit) {
+      return {
+        ok: false,
+        errorCode: 'UNKNOWN',
+        message: `Failed to create geometry unit for ${targetFile}`,
+      };
+    }
+
+    const cadSnapshot = await waitFor(cadUnit, (state) => state.value === 'idle' || state.value === 'error');
+
+    return { ok: true, cadUnit, cadSnapshot };
+  } catch (error) {
+    return {
+      ok: false,
+      errorCode: 'UNKNOWN',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    };
+  }
+}
+
+/**
+ * Heuristic check: does a kernelIssue message look like a "file not found"
+ * diagnostic for the file the agent asked about? Kept permissive on purpose —
+ * different kernels word the failure differently (Node `ENOENT`, OpenSCAD
+ * `does not exist`, generic `not found`). Falls back to UNKNOWN if no signal.
+ */
+function isFileNotFoundMessage(message: string, targetFile: string): boolean {
+  if (!/enoent|not found|does not exist/i.test(message)) {
+    return false;
+  }
+  return message.toLowerCase().includes(targetFile.toLowerCase());
+}
+
 function createBrowserRuntimeClient(projectRef: ActorRefFrom<typeof projectMachine>): RpcRuntimeClient {
   return {
     async getKernelResult(targetFile: string): Promise<GetKernelResultRpcResult> {
-      try {
-        const projectSnapshot = projectRef.getSnapshot();
-        const { compilationUnits } = projectSnapshot.context;
-        let cadUnit = compilationUnits.get(targetFile);
-
-        if (!cadUnit) {
-          projectRef.send({
-            type: 'createCompilationUnit',
-            entryFile: targetFile,
-          });
-          const refreshed = projectRef.getSnapshot();
-          cadUnit = refreshed.context.compilationUnits.get(targetFile);
-        }
-
-        if (!cadUnit) {
-          return {
-            success: false,
-            errorCode: 'UNKNOWN',
-            message: 'Failed to create compilation unit',
-          };
-        }
-
-        const cadSnapshot = await waitFor(cadUnit, (state) => state.value === 'idle' || state.value === 'error');
-
-        const kernelIssues = cadSnapshot.context.kernelIssues.get(targetFile);
-        const hasErrors = kernelIssues?.some((issue) => issue.severity === 'error') ?? false;
-        const status = cadSnapshot.value === 'error' || hasErrors ? 'error' : 'ready';
-
-        return {
-          success: true,
-          status,
-          kernelIssues: kernelIssues ?? [],
-        };
-      } catch (error) {
-        return {
-          success: false,
-          errorCode: 'UNKNOWN',
-          message: error instanceof Error ? error.message : 'Unknown error',
-        };
+      const resolved = await resolveOrCreateGeometryUnit(projectRef, targetFile);
+      if (!resolved.ok) {
+        return { success: false, errorCode: resolved.errorCode, message: resolved.message };
       }
+
+      const { cadSnapshot } = resolved;
+      const kernelIssues = cadSnapshot.context.kernelIssues.get(targetFile);
+      const hasErrors = kernelIssues?.some((issue) => issue.severity === 'error') ?? false;
+      const status = cadSnapshot.value === 'error' || hasErrors ? 'error' : 'ready';
+
+      return {
+        success: true,
+        status,
+        kernelIssues: kernelIssues ?? [],
+      };
     },
   };
 }
 
 function createBrowserGraphicsClient(
-  graphicsRef: ActorRefFrom<typeof graphicsMachine>,
+  resolveGraphicsForFile: ResolveGraphicsForFile,
   projectRef: ActorRefFrom<typeof projectMachine>,
   screenshotQuality: number,
 ): RpcGraphicsClient {
   return {
-    async fetchGeometry(): Promise<FetchGeometryRpcResult> {
-      try {
-        const projectSnapshot = projectRef.getSnapshot();
-        const { compilationUnits, mainEntryFile } = projectSnapshot.context;
-        const mainUnit = compilationUnits.get(mainEntryFile);
+    async fetchGeometry({ targetFile }): Promise<FetchGeometryRpcResult> {
+      const resolved = await resolveOrCreateGeometryUnit(projectRef, targetFile);
+      if (!resolved.ok) {
+        return { success: false, errorCode: resolved.errorCode, message: resolved.message };
+      }
 
-        if (!mainUnit) {
+      const { cadSnapshot } = resolved;
+      const geometry = cadSnapshot.context.geometries.find((g) => g.format === 'gltf');
+
+      if (geometry?.format !== 'gltf') {
+        const issues = cadSnapshot.context.kernelIssues.get(targetFile) ?? [];
+        const fileNotFoundIssue = issues.find(
+          (issue) => issue.severity === 'error' && isFileNotFoundMessage(issue.message, targetFile),
+        );
+
+        if (fileNotFoundIssue) {
           return {
             success: false,
-            errorCode: 'UNKNOWN',
-            message: 'No compilation unit found for main entry file',
+            errorCode: 'FILE_NOT_FOUND',
+            message: `${targetFile} does not exist on disk. Create it with create_file before testing or fix the path.`,
           };
         }
 
-        const cadSnapshot = mainUnit.getSnapshot();
-        const geometry = cadSnapshot.context.geometries.find((g) => g.format === 'gltf');
-
-        if (geometry?.format !== 'gltf') {
+        if (cadSnapshot.value === 'idle') {
           return {
             success: false,
-            errorCode: 'UNKNOWN',
-            message: 'No GLTF geometry available',
+            errorCode: 'NO_TOP_LEVEL_GEOMETRY',
+            message: `${targetFile} compiled but produced no top-level geometry to render.`,
           };
         }
 
-        return { success: true, glb: geometry.content };
-      } catch (error) {
         return {
           success: false,
           errorCode: 'UNKNOWN',
-          message: error instanceof Error ? error.message : 'Unknown error',
+          message: `No GLTF geometry available for ${targetFile}`,
         };
       }
+
+      return { success: true, glb: geometry.content };
     },
 
-    async captureScreenshot(): Promise<CaptureScreenshotRpcResult> {
+    async captureScreenshot({ targetFile }): Promise<CaptureScreenshotRpcResult> {
+      const graphicsRef = resolveGraphicsForFile(targetFile);
+      if (!graphicsRef) {
+        return {
+          success: false,
+          errorCode: 'UNKNOWN_GEOMETRY_UNIT',
+          message: `No viewer panel currently displays ${targetFile}`,
+        };
+      }
+
       try {
         const source = await new Promise<string>((resolve, reject) => {
           const screenshotActor = createActor(screenshotRequestMachine, {
@@ -296,7 +373,16 @@ function createBrowserGraphicsClient(
       }
     },
 
-    async captureObservations(): Promise<CaptureObservationsRpcResult> {
+    async captureObservations({ targetFile }): Promise<CaptureObservationsRpcResult> {
+      const graphicsRef = resolveGraphicsForFile(targetFile);
+      if (!graphicsRef) {
+        return {
+          success: false,
+          errorCode: 'UNKNOWN_GEOMETRY_UNIT',
+          message: `No viewer panel currently displays ${targetFile}`,
+        };
+      }
+
       try {
         const viewAngles = orthographicViews.slice(0, 6);
 
@@ -369,12 +455,14 @@ export type RpcHandlers = {
  * to createRpcDispatcher from @taucad/chat/rpc.
  */
 export function createRpcHandlers(deps: RpcHandlerDependencies): RpcHandlers {
-  const { fileManager, graphicsRef, projectRef, treeService, screenshotQuality } = deps;
+  const { fileManager, resolveGraphicsForFile, projectRef, treeService, screenshotQuality } = deps;
 
   const rpcDeps: RpcDependencies = {
     fileSystem: createBrowserRpcFileSystem(fileManager, treeService),
     kernelClient: createBrowserRuntimeClient(projectRef),
-    graphics: graphicsRef ? createBrowserGraphicsClient(graphicsRef, projectRef, screenshotQuality) : undefined,
+    graphics: resolveGraphicsForFile
+      ? createBrowserGraphicsClient(resolveGraphicsForFile, projectRef, screenshotQuality)
+      : undefined,
   };
 
   const dispatcher = createRpcDispatcher(rpcDeps);
