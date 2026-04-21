@@ -1,9 +1,9 @@
 ---
 title: 'Chat Error Persistence Stale Display'
 description: 'Root cause analysis of chat error banner not clearing after a new successful message is sent'
-status: active
+status: resolved
 created: '2026-04-15'
-updated: '2026-04-15'
+updated: '2026-04-20'
 category: investigation
 related:
   - docs/policy/xstate-policy.md
@@ -77,35 +77,75 @@ The existing test (`apps/ui/app/hooks/chat-persistence.machine.test.ts`, line 27
 
 ## Recommendations
 
-| #   | Action                                                                                                       | Priority | Effort | Impact |
-| --- | ------------------------------------------------------------------------------------------------------------ | -------- | ------ | ------ |
-| R1  | Add `actions: assign({ persistedError: undefined })` to the `clearPersistedError` transition in `idle` state | P0       | Low    | High   |
-| R2  | Add test asserting `persistedError` is cleared immediately (before async actor completes)                    | P0       | Low    | Medium |
+| #   | Action                                                                                                                                      | Priority | Effort | Impact |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------ | ------ |
+| R1  | ~~Add `actions: assign({ persistedError: undefined })` to the `clearPersistedError` transition in `idle` state~~ — superseded by R3         | P0       | Low    | High   |
+| R2  | Add test asserting `persistedError` is cleared immediately (before async actor completes)                                                   | P0       | Low    | Medium |
+| R3  | Centralize the chat request lifecycle inside `chatPersistenceMachine` so every entry point clears `persistedError` synchronously (Option B) | P0       | Med    | High   |
 
-## Code Examples
+## Resolution (Option B): `requestLifecycle` parallel state
 
-### Before (idle state)
+The asymmetric-clear bug was the smoking gun, but the underlying footgun was deeper: every "request starts" call site (`sendMessage`, `regenerate`, `editMessage`, `retryMessage`) had to remember to dispatch a clear before invoking the AI SDK. `editMessage` and `retryMessage` simply did not. Patching just R1 would have fixed the reported regression but left the same trap for the next entry point.
 
-```typescript
-clearPersistedError: {
-  target: 'clearing',
-  guard: 'canPersist',
-},
+We instead pulled the entire request lifecycle into a new `requestLifecycle` parallel state on `chatPersistenceMachine` so the synchronous clear happens once, in the only state machine transition that matters.
+
+### Architecture
+
+```
+ChatProvider                       chatPersistenceMachine
+─────────────                      ──────────────────────
+useChatActions.sendMessage(msg) ─► startRequest event
+                                   ├─ assign({ persistedError: undefined })  (synchronous)
+                                   └─ emit({ type: 'dispatchRequest', request })
+                                                              │
+                ┌──── persistenceActorRef.on('dispatchRequest', listener) ◄──┘
+                │
+                ▼
+            chat.sendMessage(msg)  (AI SDK clears chat.error synchronously)
 ```
 
-### After (idle state, matching persisting state pattern)
+Both layers (`chat.error` and `persistedError`) clear in the same React frame because:
 
-```typescript
-clearPersistedError: {
-  target: 'clearing',
-  guard: 'canPersist',
-  actions: assign({ persistedError: undefined }),
-},
-```
+1. The `assign` runs inside the `startRequest` transition.
+2. The `emit` fires synchronously inside that same transition.
+3. The listener dispatches the AI SDK call before React re-renders.
+
+`requestLifecycle` is `idle | invoking | stopping`, encoding queue-while-streaming, pure stop, and request resumption directly in the machine instead of `pendingMessageRef` / `queueMicrotask` orchestration in React.
+
+| Substate   | On `startRequest`                                                            | On `stopRequest`             | On `requestFinished`                                                                                                  |
+| ---------- | ---------------------------------------------------------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `idle`     | → `invoking`; clear `persistedError`; `dispatchRequest`                      | (ignored)                    | (ignored)                                                                                                             |
+| `invoking` | → `stopping`; clear `persistedError`; queue `pendingRequest`; `dispatchStop` | → `stopping`; `dispatchStop` | → `idle`; preserve `persistedError` only when `isError`; `applyFinishedRequest`                                       |
+| `stopping` | clear `persistedError`; replace `pendingRequest`                             | (already stopping)           | guard pendingRequest: → `invoking` + `applyResumedRequest` + `dispatchRequest`; else → `idle` + `applyStoppedRequest` |
+
+The `applyStoppedRequest` listener finalizes interrupted tool parts and marks the trailing user message as `cancelled` so loading the chat later does not auto-regenerate.
+
+### Side-effect contract
+
+The machine emits five events; `ChatProvider` subscribes via `persistenceActorRef.on(...)` and translates them into AI SDK calls. The listeners read the live chat through a `chatRef` so the effect never re-subscribes.
+
+| Emit                   | Listener side effect                                                                 |
+| ---------------------- | ------------------------------------------------------------------------------------ |
+| `dispatchRequest`      | `chat.sendMessage` / `chat.regenerate` / `setMessages` + `regenerate` (edit/retry)   |
+| `dispatchStop`         | `chat.stop()`                                                                        |
+| `applyFinishedRequest` | `setMessages(finalizeInterruptedToolParts(messages))` + `queuePersist`               |
+| `applyStoppedRequest`  | Sanitize + mark trailing pending user message `cancelled` + `queuePersist`           |
+| `applyResumedRequest`  | Sanitize + `queuePersist` (the resumed request fires via the next `dispatchRequest`) |
+
+### Test coverage
+
+The bug is now anchored at two layers:
+
+- **Machine** (`apps/ui/app/hooks/chat-persistence.machine.test.ts`) — `describe('requestLifecycle')` covers all transitions, the synchronous-clear contract, queue-then-resume, pure-stop cancellation, mid-stream error preservation, and `pendingRequest` replacement semantics. Emits are captured via `actor.on(...)`.
+- **Provider** (`apps/ui/app/hooks/use-chat.test.tsx`) — Drives `ChatProvider` end-to-end with a fake AI SDK chat, asserting that each `useChatActions` call routes to the right `chat.*` method, that `persistedError` is `undefined` in the same React frame as the action call (no flicker) for `sendMessage` / `editMessage` / `retryMessage`, that queue-while-streaming dispatches the queued request after `onFinish({ isAbort: true })`, and that mid-stream errors survive `requestFinished`.
+
+R2 is closed out by the no-flicker tests, which assert `persistedError` synchronously immediately after the `act(...)` block — there is no async window left for the banner to flash.
 
 ## References
 
-- `apps/ui/app/hooks/chat-persistence.machine.ts` — XState machine with `errorPersistence` sub-machine
-- `apps/ui/app/hooks/use-chat.tsx` — `ChatProvider` wiring `onError`/`onFinish`/`sendMessage`
+- `apps/ui/app/hooks/chat-persistence.machine.ts` — XState machine, including the `requestLifecycle` parallel state
+- `apps/ui/app/hooks/chat-persistence.machine.test.ts` — machine-level lifecycle tests with emit capture
+- `apps/ui/app/hooks/use-chat.tsx` — `ChatProvider` lifecycle subscriptions; `useChatActions` thin event forwarders
+- `apps/ui/app/hooks/use-chat.test.tsx` — provider integration tests, including the no-flicker contract
 - `apps/ui/app/routes/projects_.$id/chat-error.tsx` — `ChatError` component with two-layer error selector
 - `node_modules/ai/src/ui/chat.ts` — AI SDK `makeRequest` clears error at line 612
