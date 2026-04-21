@@ -3,7 +3,7 @@ import type { RpcGraphicsClient } from '#rpc/rpc-dependencies.js';
 
 /** @public */
 export async function handleCaptureObservations(
-  _input: CaptureObservationsRpcInput,
+  input: CaptureObservationsRpcInput,
   graphics: RpcGraphicsClient | undefined,
 ): Promise<CaptureObservationsRpcResult> {
   if (!graphics) {
@@ -14,5 +14,5 @@ export async function handleCaptureObservations(
     };
   }
 
-  return graphics.captureObservations();
+  return graphics.captureObservations({ targetFile: input.targetFile });
 }
