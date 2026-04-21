@@ -278,6 +278,34 @@ describe('ChatMessageToolTestModel — multi-file rendering', () => {
     }
   });
 
+  it('should render the failure header as "Tested N requirements" without a "(N failed)" suffix (the trailing indicator carries the failed count)', () => {
+    const part = buildPart({
+      passed: 9,
+      total: 10,
+      passes: Array.from({ length: 9 }, (_, index) => ({
+        id: `p${index + 1}`,
+        requirement: `main pass ${index + 1}`,
+        targetFile: 'main.scad',
+      })),
+      failures: [
+        {
+          id: 'f1',
+          requirement: 'main width = 100mm',
+          reason: 'Width is 80mm',
+          suggestion: 'Increase width',
+          targetFile: 'main.scad',
+        },
+      ],
+      geometryArtifactPaths: {},
+    });
+
+    render(<ChatMessageToolTestModel part={part} />);
+
+    expect(screen.getByText('Tested')).toBeTruthy();
+    expect(screen.getByText(/10 requirements/)).toBeTruthy();
+    expect(screen.queryByText(/failed\)/)).toBeNull();
+  });
+
   it('should singularise the requirement noun when a single requirement passes', () => {
     const part = buildPart({
       passed: 1,

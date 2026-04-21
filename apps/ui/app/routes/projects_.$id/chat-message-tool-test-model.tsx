@@ -229,7 +229,7 @@ export function ChatMessageToolTestModel({
             <ChatToolCardTitle>
               <ChatToolLabel verb='Tested'>
                 <ChatToolDescription>
-                  {totalRequirements} {requirementNoun} ({totalFailed} failed)
+                  {totalRequirements} {requirementNoun}
                 </ChatToolDescription>
               </ChatToolLabel>
             </ChatToolCardTitle>
