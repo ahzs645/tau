@@ -6,9 +6,20 @@ function Collapsible({ ...properties }: React.ComponentProps<typeof CollapsibleP
 }
 
 function CollapsibleTrigger({
+  className,
   ...properties
 }: React.ComponentProps<typeof CollapsiblePrimitive.CollapsibleTrigger>): React.JSX.Element {
-  return <CollapsiblePrimitive.CollapsibleTrigger data-slot='collapsible-trigger' {...properties} />;
+  // Suppress focus rings globally for disclosure widgets — these are passive
+  // toggles where the keyboard ring adds visual noise without signal. The
+  // `focus-visible:ring-0` here also overrides the Button cva's
+  // `focus-visible:ring-3` via tailwind-merge when consumers use `asChild`.
+  return (
+    <CollapsiblePrimitive.CollapsibleTrigger
+      data-slot='collapsible-trigger'
+      className={cn('outline-none focus-visible:outline-none focus-visible:ring-0', className)}
+      {...properties}
+    />
+  );
 }
 
 function CollapsibleContent({
