@@ -1,8 +1,23 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import type { ContextCompactionData } from '@taucad/chat';
 import { ChatMessageContextCompaction } from '#routes/projects_.$id/chat-message-context-compaction.js';
+
+vi.mock('#components/chat/chat-tool-card.js', () => ({
+  ChatToolCard({ children }: { readonly children: React.ReactNode }): React.JSX.Element {
+    return <div data-testid='chat-tool-card'>{children}</div>;
+  },
+  ChatToolCardHeader({ children }: { readonly children: React.ReactNode }): React.JSX.Element {
+    return <div>{children}</div>;
+  },
+  ChatToolCardIcon(): React.JSX.Element {
+    return <span data-testid='chat-tool-card-icon' />;
+  },
+  ChatToolCardTitle({ children }: { readonly children: React.ReactNode }): React.JSX.Element {
+    return <div>{children}</div>;
+  },
+}));
 
 const createCompactionData = (overrides?: Partial<ContextCompactionData>): ContextCompactionData => ({
   type: 'context-compaction',
@@ -16,19 +31,27 @@ const createCompactionData = (overrides?: Partial<ContextCompactionData>): Conte
 });
 
 describe('ChatMessageContextCompaction', () => {
-  it('should render "Chat context summarized." text', () => {
+  it('should render "Summarized chat context" via the standardized ChatToolLabel verb + description', () => {
     render(<ChatMessageContextCompaction data={createCompactionData()} />);
 
-    expect(screen.getByText('Chat context summarized.')).toBeInTheDocument();
+    expect(screen.getByText('Summarized')).toBeInTheDocument();
+    expect(screen.getByText('chat context')).toBeInTheDocument();
+  });
+
+  it('should render through the ChatToolCard primitive for styling consistency with other tool rows', () => {
+    render(<ChatMessageContextCompaction data={createCompactionData()} />);
+
+    expect(screen.getByTestId('chat-tool-card')).toBeInTheDocument();
+    expect(screen.getByTestId('chat-tool-card-icon')).toBeInTheDocument();
   });
 
   it('should show compression details on hover', async () => {
     render(<ChatMessageContextCompaction data={createCompactionData()} />);
 
-    const badge = screen.getByText('Chat context summarized.');
+    const badge = screen.getByText('Summarized');
     await userEvent.hover(badge);
 
-    expect(await screen.findByText('Context Compaction')).toBeInTheDocument();
+    expect(await screen.findByText('Context compaction')).toBeInTheDocument();
     expect(screen.getByText(/90%/)).toBeInTheDocument();
     expect(screen.getByText('15')).toBeInTheDocument();
   });
@@ -40,7 +63,7 @@ describe('ChatMessageContextCompaction', () => {
       />,
     );
 
-    const badge = screen.getByText('Chat context summarized.');
+    const badge = screen.getByText('Summarized');
     await userEvent.hover(badge);
 
     expect(await screen.findByText('.tau/transcripts/test.jsonl')).toBeInTheDocument();
@@ -49,10 +72,10 @@ describe('ChatMessageContextCompaction', () => {
   it('should not show transcript file path when null', async () => {
     render(<ChatMessageContextCompaction data={createCompactionData({ transcriptFilePath: null })} />);
 
-    const badge = screen.getByText('Chat context summarized.');
+    const badge = screen.getByText('Summarized');
     await userEvent.hover(badge);
 
-    await screen.findByText('Context Compaction');
+    await screen.findByText('Context compaction');
     expect(screen.queryByText('Transcript')).not.toBeInTheDocument();
   });
 });

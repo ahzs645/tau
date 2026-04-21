@@ -175,7 +175,7 @@ function ChatToolCardHeader({ children, className }: ChatToolCardHeaderProps): R
           variant='ghost'
           size='xs'
           className={cn(
-            '-ml-2 flex w-full min-w-0 justify-start gap-1.5 overflow-hidden font-medium text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent',
+            'group/chat-tool-trigger -ml-2 flex w-full min-w-0 justify-start gap-1.5 overflow-hidden font-medium text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent',
             className,
           )}
         >
@@ -202,7 +202,7 @@ function ChatToolCardHeader({ children, className }: ChatToolCardHeaderProps): R
   return (
     <CollapsibleTrigger
       className={cn(
-        'group/trigger flex h-7 w-full cursor-pointer flex-row items-center gap-1.5 pr-1 pl-2 text-xs text-muted-foreground transition-colors hover:bg-foreground/5',
+        'group/trigger group/chat-tool-trigger flex h-7 w-full cursor-pointer flex-row items-center gap-1.5 pr-1 pl-2 text-xs text-muted-foreground transition-colors hover:bg-foreground/5',
         className,
       )}
     >
@@ -225,34 +225,46 @@ function ChatToolCardHeader({ children, className }: ChatToolCardHeaderProps): R
 // ChatToolCardIcon
 // ============================================================================
 
+type ChatToolIconTone = 'success' | 'warning' | 'destructive';
+
+const toneClass: Record<ChatToolIconTone, string> = {
+  success: 'text-success',
+  warning: 'text-warning',
+  destructive: 'text-destructive',
+};
+
 type ChatToolCardIconProps = {
   readonly icon: LucideIcon;
   readonly className?: string;
   /**
-   * When true, shows the icon in error state (red tint).
+   * Semantic tone applied to the leading icon only. Header text and the
+   * suffix chevron deliberately stay muted so the icon is the single point
+   * of color in a chat-tool row.
    */
-  readonly isError?: boolean;
+  readonly tone?: ChatToolIconTone;
 };
 
-function ChatToolCardIcon({ icon: Icon, className, isError }: ChatToolCardIconProps): React.JSX.Element {
+function ChatToolCardIcon({ icon: Icon, className, tone }: ChatToolCardIconProps): React.JSX.Element {
   const { status, variant, isCollapsible } = useChatToolCard();
 
   if (status === 'loading') {
     return <LoaderCircle className={cn('size-3 shrink-0 animate-spin', className)} />;
   }
 
+  const toneClassName = tone ? toneClass[tone] : undefined;
+
   // For card variant, this replaces the chevron when not hovering
   if (variant === 'card') {
     // When not collapsible, render static icon without hover effects
     if (!isCollapsible) {
-      return <Icon className={cn('size-3 shrink-0', isError && 'text-destructive', className)} />;
+      return <Icon className={cn('size-3 shrink-0', toneClassName, className)} />;
     }
 
     return (
       <Icon
         className={cn(
           'absolute size-3 shrink-0 transition-opacity duration-150 group-hover/trigger:opacity-0',
-          isError && 'text-destructive',
+          toneClassName,
           className,
         )}
       />
@@ -260,7 +272,7 @@ function ChatToolCardIcon({ icon: Icon, className, isError }: ChatToolCardIconPr
   }
 
   // For minimal variant, icon is inline at the start
-  return <Icon className={cn('size-3 shrink-0', isError && 'text-destructive', className)} />;
+  return <Icon className={cn('size-3 shrink-0', toneClassName, className)} />;
 }
 
 // ============================================================================
@@ -277,13 +289,11 @@ function ChatToolCardTitle({ children, className }: ChatToolCardTitleProps): Rea
 
   if (status === 'loading') {
     return (
-      <AnimatedShinyText className={cn('flex max-w-none min-w-0 items-baseline gap-1', className)}>
-        {children}
-      </AnimatedShinyText>
+      <AnimatedShinyText className={cn('block max-w-none min-w-0 truncate', className)}>{children}</AnimatedShinyText>
     );
   }
 
-  return <span className={cn('flex min-w-0 items-baseline gap-1', className)}>{children}</span>;
+  return <span className={cn('block min-w-0 truncate', className)}>{children}</span>;
 }
 
 // ============================================================================
@@ -456,4 +466,4 @@ export {
   useChatToolCard,
 };
 
-export type { ChatToolCardVariant, ChatToolCardStatus };
+export type { ChatToolCardVariant, ChatToolCardStatus, ChatToolIconTone };

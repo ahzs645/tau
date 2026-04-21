@@ -8,7 +8,8 @@ import {
   ChatToolCardIcon,
   ChatToolCardTitle,
 } from '#components/chat/chat-tool-card.js';
-import { ChatToolAction, ChatToolDescription } from '#components/chat/chat-tool-text.js';
+import { ChatToolDescription } from '#components/chat/chat-tool-text.js';
+import { ChatToolLabel } from '#components/chat/chat-tool-label.js';
 import { ChatToolError } from '#components/chat/chat-tool-error.js';
 
 function formatLineRange(offset?: number, limit?: number): string {
@@ -43,11 +44,12 @@ export function ChatMessageToolReadFile({
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={FileText} />
             <ChatToolCardTitle>
-              <ChatToolAction>Reading</ChatToolAction>
-              <ChatToolDescription>
-                {targetFile}
-                {lineRange}...
-              </ChatToolDescription>
+              <ChatToolLabel verb='Reading'>
+                <ChatToolDescription>
+                  {targetFile}
+                  {lineRange}...
+                </ChatToolDescription>
+              </ChatToolLabel>
             </ChatToolCardTitle>
           </ChatToolCardHeader>
         </ChatToolCard>
@@ -65,15 +67,16 @@ export function ChatMessageToolReadFile({
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={FileText} />
             <ChatToolCardTitle>
-              <ChatToolAction>Read</ChatToolAction>
-              <FileLink
-                path={targetFile}
-                lineNumber={startLine}
-                className='min-w-0 truncate font-normal text-foreground/50'
-              >
-                {targetFile}
-                {lineRange}
-              </FileLink>
+              <ChatToolLabel verb='Read'>
+                <FileLink
+                  path={targetFile}
+                  lineNumber={startLine}
+                  className='min-w-0 truncate font-normal text-foreground/50'
+                >
+                  {targetFile}
+                  {lineRange}
+                </FileLink>
+              </ChatToolLabel>
             </ChatToolCardTitle>
           </ChatToolCardHeader>
         </ChatToolCard>

@@ -6,6 +6,7 @@ import { AnimatedShinyText } from '#components/magicui/animated-shiny-text.js';
 import { useChatSelector } from '#hooks/use-chat.js';
 import { cn } from '#utils/ui.utils.js';
 import { StructuredToolError } from '#components/chat/chat-tool-error.js';
+import { ChatToolLabel } from '#components/chat/chat-tool-label.js';
 
 const snakeToSentenceCase = (string_: string): string =>
   string_.replaceAll('_', ' ').replace(/^\w/, (c) => c.toUpperCase());
@@ -124,7 +125,7 @@ export function ChatMessageToolTransfer({ part }: { readonly part: ToolUIPart })
         {isStreaming ? (
           <LoaderCircle className='size-3 animate-spin' />
         ) : isComplete ? (
-          <Check className='size-3 text-success' />
+          <Check className='size-3 text-muted-foreground' />
         ) : isTransferBack ? (
           <CornerDownLeft className='size-3' />
         ) : (
@@ -132,10 +133,10 @@ export function ChatMessageToolTransfer({ part }: { readonly part: ToolUIPart })
         )}
       </div>
 
-      {/* Action text */}
-      <span className='text-muted-foreground'>{isTransferBack ? 'Returning to' : 'Consulting'}</span>
+      {/* Action text — uses ChatToolLabel for verb-style typography parity with other tool rows. */}
+      <ChatToolLabel verb={isTransferBack ? 'Returning to' : 'Consulting'} />
 
-      {/* Agent badge */}
+      {/* Agent badge — kept as a custom inline element so the agent identity (icon + accent color) survives. */}
       <div className={cn('flex items-center gap-1.5 rounded-sm px-1.5 py-0.5', 'bg-neutral/20', agentAccent)}>
         {getAgentIcon(agentType)}
         {isStreaming ? (

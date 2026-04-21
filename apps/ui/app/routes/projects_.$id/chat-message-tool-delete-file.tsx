@@ -1,17 +1,57 @@
-import { LoaderCircle, X } from 'lucide-react';
+import { Trash2, X } from 'lucide-react';
 import type { ToolInvocation } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
-import { FileExtensionIcon } from '#components/icons/file-extension-icon.js';
-import { AnimatedShinyText } from '#components/magicui/animated-shiny-text.js';
 import { Tooltip, TooltipTrigger, TooltipContent } from '#components/ui/tooltip.js';
 import { ChatToolError } from '#components/chat/chat-tool-error.js';
+import { ChatToolDescription } from '#components/chat/chat-tool-text.js';
+import { ChatToolLabel } from '#components/chat/chat-tool-label.js';
+import {
+  ChatToolCard,
+  ChatToolCardHeader,
+  ChatToolCardIcon,
+  ChatToolCardTitle,
+} from '#components/chat/chat-tool-card.js';
 
-/**
- * Extract the filename from a path.
- */
 function getFilename(path: string): string {
   const parts = path.split('/');
   return parts.at(-1) ?? path;
+}
+
+type DeleteFileHeaderProps = {
+  readonly targetFile: string;
+  readonly isStreaming: boolean;
+};
+
+function DeleteFileHeader({ targetFile, isStreaming }: DeleteFileHeaderProps): React.JSX.Element {
+  const filename = getFilename(targetFile);
+  const hasPath = targetFile !== filename;
+  const verb = isStreaming ? 'Deleting' : 'Deleted';
+
+  return (
+    <ChatToolCard variant='card' status={isStreaming ? 'loading' : 'ready'} isCollapsible={false}>
+      <ChatToolCardHeader>
+        <ChatToolCardIcon icon={Trash2} />
+        <ChatToolCardTitle>
+          <ChatToolLabel verb={verb}>
+            <ChatToolDescription>
+              {hasPath ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className='min-w-0 truncate'>{filename}</span>
+                  </TooltipTrigger>
+                  <TooltipContent side='top' align='start'>
+                    {targetFile}
+                  </TooltipContent>
+                </Tooltip>
+              ) : (
+                <span className='min-w-0 truncate'>{targetFile}</span>
+              )}
+            </ChatToolDescription>
+          </ChatToolLabel>
+        </ChatToolCardTitle>
+      </ChatToolCardHeader>
+    </ChatToolCard>
+  );
 }
 
 export function ChatMessageToolDeleteFile({
@@ -22,62 +62,12 @@ export function ChatMessageToolDeleteFile({
   switch (part.state) {
     case 'input-streaming':
     case 'input-available': {
-      const { input } = part;
-      const targetFile = input?.targetFile ?? 'file';
-      const filename = getFilename(targetFile);
-      const hasPath = targetFile !== filename;
-
-      return (
-        <div className='@container/code overflow-hidden rounded-md border bg-neutral/10'>
-          <div className='flex h-7 w-full flex-row items-center gap-1 pr-2 pl-2 text-xs text-muted-foreground'>
-            <LoaderCircle className='size-3 animate-spin' />
-            {hasPath ? (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className='min-w-0 truncate'>
-                    <AnimatedShinyText>{filename}</AnimatedShinyText>
-                  </span>
-                </TooltipTrigger>
-                <TooltipContent side='top' align='start'>
-                  {targetFile}
-                </TooltipContent>
-              </Tooltip>
-            ) : (
-              <span className='min-w-0 truncate'>
-                <AnimatedShinyText>{targetFile}</AnimatedShinyText>
-              </span>
-            )}
-          </div>
-        </div>
-      );
+      const targetFile = part.input?.targetFile ?? 'file';
+      return <DeleteFileHeader targetFile={targetFile} isStreaming />;
     }
 
     case 'output-available': {
-      const { input } = part;
-      const { targetFile } = input;
-      const filename = getFilename(targetFile);
-      const hasPath = targetFile !== filename;
-
-      return (
-        <div className='@container/code overflow-hidden rounded-md border bg-neutral/10'>
-          <div className='flex h-7 w-full flex-row items-center gap-1 pr-2 pl-2 text-xs text-muted-foreground'>
-            <FileExtensionIcon filename={filename} className='size-3' />
-            {hasPath ? (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <span className='min-w-0 truncate'>{filename}</span>
-                </TooltipTrigger>
-                <TooltipContent side='top' align='start'>
-                  {targetFile}
-                </TooltipContent>
-              </Tooltip>
-            ) : (
-              <span className='min-w-0 truncate'>{filename}</span>
-            )}
-            <span className='shrink-0 text-destructive/80'>Deleted</span>
-          </div>
-        </div>
-      );
+      return <DeleteFileHeader targetFile={part.input.targetFile} isStreaming={false} />;
     }
 
     case 'output-error': {

@@ -1,4 +1,6 @@
 import { AnimatedShinyText } from '#components/magicui/animated-shiny-text.js';
+import { ChatToolLabel } from '#components/chat/chat-tool-label.js';
+import { ChatToolDescription } from '#components/chat/chat-tool-text.js';
 
 type ChatActivitySummaryProps = {
   /** Past-tense verb fragment, e.g. `"Explored"`. Rendered when the header is closed. */
@@ -50,10 +52,13 @@ export function ChatActivitySummary({
     return <AnimatedShinyText className='shrink-0 font-medium'>{`${activeVerb}…`}</AnimatedShinyText>;
   }
 
+  if (verb === '') {
+    return undefined;
+  }
+
   return (
-    <>
-      {verb !== '' && <span className='shrink-0 font-medium text-foreground/60'>{verb}</span>}
-      {detail !== '' && <span className='min-w-0 truncate font-normal text-foreground/50'>{detail}</span>}
-    </>
+    <ChatToolLabel verb={verb}>
+      {detail !== '' ? <ChatToolDescription>{detail}</ChatToolDescription> : undefined}
+    </ChatToolLabel>
   );
 }

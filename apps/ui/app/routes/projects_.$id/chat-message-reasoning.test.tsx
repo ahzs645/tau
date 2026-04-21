@@ -4,25 +4,42 @@ import { act, render, screen } from '@testing-library/react';
 import type { ReasoningUIPart } from 'ai';
 import { ChatMessageReasoning } from '#routes/projects_.$id/chat-message-reasoning.js';
 
-const { mockChatStatus } = vi.hoisted(() => ({
-  mockChatStatus: { current: 'streaming' as 'streaming' | 'idle' },
-}));
-
-vi.mock('#hooks/use-chat.js', () => ({
-  useChatSelector<T>(selector: (state: { status: 'streaming' | 'idle' }) => T): T {
-    return selector({ status: mockChatStatus.current });
-  },
-}));
+// Convenience knob: most tests only care about whether the *trailing* live
+// message is streaming, so they toggle this flag instead of passing
+// `isMessageActive` to every render. `renderReasoning` reads it to default the
+// prop. Tests that need a different value (e.g. simulating an in-flight
+// follow-up turn while inspecting a prior message) pass an explicit override.
+const mockChatStatus: { current: 'streaming' | 'idle' } = { current: 'streaming' };
 
 vi.mock('#components/markdown/markdown-viewer-chat.js', () => ({
-  MarkdownViewerChat({ children }: { readonly children: string }): React.JSX.Element {
-    return <div data-testid='markdown-content'>{children}</div>;
+  MarkdownViewerChat({
+    children,
+    isStreaming,
+  }: {
+    readonly children: string;
+    readonly isStreaming?: boolean;
+  }): React.JSX.Element {
+    return (
+      <div data-testid='markdown-content' data-streaming={isStreaming ? 'true' : 'false'}>
+        {children}
+      </div>
+    );
   },
 }));
 
 vi.mock('#components/chat/chat-tool-card.js', () => ({
-  ChatToolCard({ children }: { readonly children: React.ReactNode }): React.JSX.Element {
-    return <div data-testid='chat-tool-card'>{children}</div>;
+  ChatToolCard({
+    children,
+    status,
+  }: {
+    readonly children: React.ReactNode;
+    readonly status?: string;
+  }): React.JSX.Element {
+    return (
+      <div data-testid='chat-tool-card' data-status={status}>
+        {children}
+      </div>
+    );
   },
   ChatToolCardHeader({ children }: { readonly children: React.ReactNode }): React.JSX.Element {
     return <div>{children}</div>;
@@ -193,6 +210,35 @@ const getElements = (): { scrollContainer: HTMLElement; content: HTMLElement } =
   return { scrollContainer, content };
 };
 
+type ReasoningRenderOptions = {
+  readonly part: ReasoningUIPart;
+  readonly hasContent?: boolean;
+  readonly isMessageActive?: boolean;
+};
+
+const buildElement = ({ part, hasContent = false, isMessageActive }: ReasoningRenderOptions): React.JSX.Element => (
+  <ChatMessageReasoning
+    part={part}
+    hasContent={hasContent}
+    isMessageActive={isMessageActive ?? mockChatStatus.current === 'streaming'}
+  />
+);
+
+const renderReasoning = (
+  options: ReasoningRenderOptions,
+): {
+  readonly rerender: (next: ReasoningRenderOptions) => void;
+  readonly unmount: () => void;
+} => {
+  const result = render(buildElement(options));
+  return {
+    rerender: (next) => {
+      result.rerender(buildElement(next));
+    },
+    unmount: result.unmount,
+  };
+};
+
 const originalResizeObserver = globalThis.ResizeObserver;
 const originalRequestAnimationFrame = globalThis.requestAnimationFrame;
 const originalCancelAnimationFrame = globalThis.cancelAnimationFrame;
@@ -236,7 +282,7 @@ afterEach(() => {
 describe('ChatMessageReasoning', () => {
   describe('preview auto-pin', () => {
     it('should pin scrollTop to scrollHeight on attach during streaming', () => {
-      render(<ChatMessageReasoning part={createReasoningPart()} hasContent={false} />);
+      renderReasoning({ part: createReasoningPart() });
 
       const { scrollContainer } = getElements();
       installScrollMetrics(scrollContainer, { scrollHeight: 500, clientHeight: 192, scrollTop: 0 });
@@ -248,7 +294,7 @@ describe('ChatMessageReasoning', () => {
     });
 
     it('should pin to the new scrollHeight when the ResizeObserver fires while sticky', () => {
-      render(<ChatMessageReasoning part={createReasoningPart()} hasContent={false} />);
+      renderReasoning({ part: createReasoningPart() });
 
       const { scrollContainer } = getElements();
       installScrollMetrics(scrollContainer, { scrollHeight: 500, clientHeight: 192, scrollTop: 308 });
@@ -266,7 +312,7 @@ describe('ChatMessageReasoning', () => {
       // Regression: previously, the scroll event from a programmatic pin could fire
       // AFTER more content arrived, computing a large distance-from-bottom and
       // erroneously releasing stickiness, leaving the user stuck near the top.
-      render(<ChatMessageReasoning part={createReasoningPart()} hasContent={false} />);
+      renderReasoning({ part: createReasoningPart() });
 
       const { scrollContainer } = getElements();
       installScrollMetrics(scrollContainer, { scrollHeight: 300, clientHeight: 192, scrollTop: 0 });
@@ -287,7 +333,7 @@ describe('ChatMessageReasoning', () => {
     });
 
     it('should pause auto-pinning after a user wheel scroll moves away from the bottom', () => {
-      render(<ChatMessageReasoning part={createReasoningPart()} hasContent={false} />);
+      renderReasoning({ part: createReasoningPart() });
 
       const { scrollContainer } = getElements();
       installScrollMetrics(scrollContainer, { scrollHeight: 500, clientHeight: 192, scrollTop: 308 });
@@ -306,7 +352,7 @@ describe('ChatMessageReasoning', () => {
     });
 
     it('should resume auto-pinning when the user scrolls back to the bottom', () => {
-      render(<ChatMessageReasoning part={createReasoningPart()} hasContent={false} />);
+      renderReasoning({ part: createReasoningPart() });
 
       const { scrollContainer } = getElements();
       installScrollMetrics(scrollContainer, { scrollHeight: 500, clientHeight: 192, scrollTop: 308 });
@@ -332,7 +378,7 @@ describe('ChatMessageReasoning', () => {
     });
 
     it('should detect scrollbar drag via pointerdown and release stickiness', () => {
-      render(<ChatMessageReasoning part={createReasoningPart()} hasContent={false} />);
+      renderReasoning({ part: createReasoningPart() });
 
       const { scrollContainer } = getElements();
       installScrollMetrics(scrollContainer, { scrollHeight: 500, clientHeight: 192, scrollTop: 308 });
@@ -350,7 +396,7 @@ describe('ChatMessageReasoning', () => {
     });
 
     it('should treat distance-from-bottom equal to the 8px tolerance as still sticky', () => {
-      render(<ChatMessageReasoning part={createReasoningPart()} hasContent={false} />);
+      renderReasoning({ part: createReasoningPart() });
 
       const { scrollContainer } = getElements();
       installScrollMetrics(scrollContainer, { scrollHeight: 500, clientHeight: 192, scrollTop: 308 });
@@ -368,7 +414,7 @@ describe('ChatMessageReasoning', () => {
     });
 
     it('should release stickiness when distance-from-bottom exceeds the 8px tolerance', () => {
-      render(<ChatMessageReasoning part={createReasoningPart()} hasContent={false} />);
+      renderReasoning({ part: createReasoningPart() });
 
       const { scrollContainer } = getElements();
       installScrollMetrics(scrollContainer, { scrollHeight: 500, clientHeight: 192, scrollTop: 308 });
@@ -390,13 +436,13 @@ describe('ChatMessageReasoning', () => {
     it('should not construct a ResizeObserver when not streaming', () => {
       mockChatStatus.current = 'idle';
 
-      render(<ChatMessageReasoning part={createReasoningPart()} hasContent={false} />);
+      renderReasoning({ part: createReasoningPart() });
 
       expect(harness.constructions).toBe(0);
     });
 
     it('should not construct a ResizeObserver when reasoning is collapsed (hasContent and no toggle)', () => {
-      render(<ChatMessageReasoning part={createReasoningPart()} hasContent />);
+      renderReasoning({ part: createReasoningPart(), hasContent: true });
 
       expect(harness.constructions).toBe(0);
     });
@@ -404,12 +450,12 @@ describe('ChatMessageReasoning', () => {
 
   describe('ref attachment lifecycle', () => {
     it('should attach the observer once reasoning text arrives after an empty initial render', () => {
-      const { rerender } = render(<ChatMessageReasoning part={createReasoningPart('')} hasContent={false} />);
+      const { rerender } = renderReasoning({ part: createReasoningPart('') });
 
       expect(harness.constructions).toBe(0);
       expect(screen.queryByTestId('markdown-content')).toBeNull();
 
-      rerender(<ChatMessageReasoning part={createReasoningPart('first token')} hasContent={false} />);
+      rerender({ part: createReasoningPart('first token') });
 
       expect(harness.constructions).toBe(1);
 
@@ -421,19 +467,17 @@ describe('ChatMessageReasoning', () => {
     });
 
     it('should disconnect and reconstruct the observer when text drops and then returns', () => {
-      const { rerender } = render(
-        <ChatMessageReasoning part={createReasoningPart('initial text')} hasContent={false} />,
-      );
+      const { rerender } = renderReasoning({ part: createReasoningPart('initial text') });
 
       expect(harness.constructions).toBe(1);
       expect(harness.disconnects).toBe(0);
 
-      rerender(<ChatMessageReasoning part={createReasoningPart('')} hasContent={false} />);
+      rerender({ part: createReasoningPart('') });
 
       expect(harness.disconnects).toBe(1);
       expect(screen.queryByTestId('markdown-content')).toBeNull();
 
-      rerender(<ChatMessageReasoning part={createReasoningPart('text again')} hasContent={false} />);
+      rerender({ part: createReasoningPart('text again') });
 
       expect(harness.constructions).toBe(2);
 
@@ -447,7 +491,7 @@ describe('ChatMessageReasoning', () => {
 
   describe('cleanup', () => {
     it('should disconnect the ResizeObserver on unmount', () => {
-      const { unmount } = render(<ChatMessageReasoning part={createReasoningPart()} hasContent={false} />);
+      const { unmount } = renderReasoning({ part: createReasoningPart() });
 
       expect(harness.constructions).toBe(1);
       expect(harness.disconnects).toBe(0);
@@ -458,7 +502,7 @@ describe('ChatMessageReasoning', () => {
     });
 
     it('should remove all interaction listeners on unmount', () => {
-      const { unmount } = render(<ChatMessageReasoning part={createReasoningPart()} hasContent={false} />);
+      const { unmount } = renderReasoning({ part: createReasoningPart() });
 
       const { scrollContainer } = getElements();
       installScrollMetrics(scrollContainer, { scrollHeight: 500, clientHeight: 192, scrollTop: 0 });
@@ -475,7 +519,8 @@ describe('ChatMessageReasoning', () => {
   });
 
   describe('duration label', () => {
-    const mutedClass = 'text-foreground/60';
+    const verbMutedClass = 'text-foreground/60';
+    const detailMutedClass = 'text-foreground/50';
 
     type LabelSpans = {
       readonly button: HTMLButtonElement;
@@ -490,6 +535,11 @@ describe('ChatMessageReasoning', () => {
      * directly. testing-library's `getByText` normalizes whitespace and does
      * not match text spread across child elements, both of which interact
      * badly with the `<verb> <muted suffix>` two-tone structure under test.
+     *
+     * The Brain button now renders the label via the shared `ChatToolLabel`
+     * component (`<span class="inline min-w-0 truncate">`) — the only direct
+     * span child of the button — wrapping a verb span and an optional
+     * `ChatToolDescription` span separated by a literal space text node.
      */
     const readLabelSpans = (): LabelSpans => {
       const buttons = screen.getAllByRole('button');
@@ -497,7 +547,7 @@ describe('ChatMessageReasoning', () => {
       if (!button) {
         throw new Error('could not locate the toggle button');
       }
-      const labelWrapper = button.querySelector(':scope > span.flex');
+      const labelWrapper = button.querySelector(':scope > span');
       if (!labelWrapper) {
         throw new Error('could not locate the label wrapper span');
       }
@@ -517,32 +567,39 @@ describe('ChatMessageReasoning', () => {
       };
     };
 
-    it('should render "Thought process" fallback for done parts with no providerMetadata.common', () => {
+    it('should render "Thought briefly" fallback for done parts with no providerMetadata.common', () => {
       mockChatStatus.current = 'idle';
-      render(<ChatMessageReasoning part={createReasoningPartWithTiming({ state: 'done' })} hasContent={false} />);
+      renderReasoning({ part: createReasoningPartWithTiming({ state: 'done' }) });
 
       const spans = readLabelSpans();
       expect(spans.verbText).toBe('Thought');
-      expect(spans.suffixText?.trim()).toBe('process');
-      // The legacy fallback still uses the two-tone treatment so the suffix
-      // visually recedes consistently with the new states.
-      expect(spans.verbSpan.className).not.toContain(mutedClass);
-      expect(spans.suffixSpan?.className).toContain(mutedClass);
+      expect(spans.suffixText?.trim()).toBe('briefly');
+      // The fallback uses the shared `ChatToolLabel` two-tone treatment: verb
+      // at /60 (medium weight), suffix at /50 via `ChatToolDescription`.
+      expect(spans.verbSpan.className).toContain(verbMutedClass);
+      expect(spans.suffixSpan?.className).toContain(detailMutedClass);
+    });
+
+    it('should declare the shared chat-tool trigger named group on the Brain button so labels lift on hover', () => {
+      mockChatStatus.current = 'idle';
+      renderReasoning({ part: createReasoningPartWithTiming({ state: 'done' }) });
+
+      const spans = readLabelSpans();
+      expect(spans.button.className).toContain('group/chat-tool-trigger');
+      expect(spans.verbSpan.className).toContain('group-hover/chat-tool-trigger:text-foreground');
+      expect(spans.suffixSpan?.className).toContain('group-hover/chat-tool-trigger:text-foreground/80');
     });
 
     it('should render "Thinking…" while streaming with reasoningStartedAtMs but no reasoningEndedAtMs (sub-second)', () => {
       vi.useFakeTimers();
       try {
         vi.setSystemTime(new Date('2026-04-20T00:00:00Z'));
-        render(
-          <ChatMessageReasoning
-            part={createReasoningPartWithTiming({
-              state: 'streaming',
-              reasoningStartedAtMs: Date.now(),
-            })}
-            hasContent={false}
-          />,
-        );
+        renderReasoning({
+          part: createReasoningPartWithTiming({
+            state: 'streaming',
+            reasoningStartedAtMs: Date.now(),
+          }),
+        });
 
         const spans = readLabelSpans();
         expect(spans.verbText).toBe('Thinking…');
@@ -558,12 +615,9 @@ describe('ChatMessageReasoning', () => {
         vi.setSystemTime(new Date('2026-04-20T00:00:00Z'));
         const startedAtMs = Date.now();
 
-        render(
-          <ChatMessageReasoning
-            part={createReasoningPartWithTiming({ state: 'streaming', reasoningStartedAtMs: startedAtMs })}
-            hasContent={false}
-          />,
-        );
+        renderReasoning({
+          part: createReasoningPartWithTiming({ state: 'streaming', reasoningStartedAtMs: startedAtMs }),
+        });
 
         act(() => {
           vi.advanceTimersByTime(3000);
@@ -579,16 +633,13 @@ describe('ChatMessageReasoning', () => {
 
     it('should render "Thought briefly" for state=done with sub-second timing', () => {
       mockChatStatus.current = 'idle';
-      render(
-        <ChatMessageReasoning
-          part={createReasoningPartWithTiming({
-            state: 'done',
-            reasoningStartedAtMs: 1_700_000_000_000,
-            reasoningEndedAtMs: 1_700_000_000_500,
-          })}
-          hasContent={false}
-        />,
-      );
+      renderReasoning({
+        part: createReasoningPartWithTiming({
+          state: 'done',
+          reasoningStartedAtMs: 1_700_000_000_000,
+          reasoningEndedAtMs: 1_700_000_000_500,
+        }),
+      });
 
       const spans = readLabelSpans();
       expect(spans.verbText).toBe('Thought');
@@ -597,16 +648,13 @@ describe('ChatMessageReasoning', () => {
 
     it('should render "Thought for 2s" for state=done with a 2-second elapsed timing', () => {
       mockChatStatus.current = 'idle';
-      render(
-        <ChatMessageReasoning
-          part={createReasoningPartWithTiming({
-            state: 'done',
-            reasoningStartedAtMs: 1_700_000_000_000,
-            reasoningEndedAtMs: 1_700_000_002_000,
-          })}
-          hasContent={false}
-        />,
-      );
+      renderReasoning({
+        part: createReasoningPartWithTiming({
+          state: 'done',
+          reasoningStartedAtMs: 1_700_000_000_000,
+          reasoningEndedAtMs: 1_700_000_002_000,
+        }),
+      });
 
       const spans = readLabelSpans();
       expect(spans.verbText).toBe('Thought');
@@ -615,16 +663,13 @@ describe('ChatMessageReasoning', () => {
 
     it('should render "Thought for 1m 12s" for state=done with a 72-second elapsed timing', () => {
       mockChatStatus.current = 'idle';
-      render(
-        <ChatMessageReasoning
-          part={createReasoningPartWithTiming({
-            state: 'done',
-            reasoningStartedAtMs: 1_700_000_000_000,
-            reasoningEndedAtMs: 1_700_000_072_000,
-          })}
-          hasContent={false}
-        />,
-      );
+      renderReasoning({
+        part: createReasoningPartWithTiming({
+          state: 'done',
+          reasoningStartedAtMs: 1_700_000_000_000,
+          reasoningEndedAtMs: 1_700_000_072_000,
+        }),
+      });
 
       const spans = readLabelSpans();
       expect(spans.verbText).toBe('Thought');
@@ -633,41 +678,37 @@ describe('ChatMessageReasoning', () => {
 
     it('should render the verb in the foreground tone and the suffix in the muted tone', () => {
       mockChatStatus.current = 'idle';
-      render(
-        <ChatMessageReasoning
-          part={createReasoningPartWithTiming({
-            state: 'done',
-            reasoningStartedAtMs: 1_700_000_000_000,
-            reasoningEndedAtMs: 1_700_000_002_000,
-          })}
-          hasContent={false}
-        />,
-      );
+      renderReasoning({
+        part: createReasoningPartWithTiming({
+          state: 'done',
+          reasoningStartedAtMs: 1_700_000_000_000,
+          reasoningEndedAtMs: 1_700_000_002_000,
+        }),
+      });
 
       const spans = readLabelSpans();
-      expect(spans.verbSpan.className).not.toContain(mutedClass);
-      expect(spans.suffixSpan?.className).toContain(mutedClass);
+      expect(spans.verbSpan.className).toContain(verbMutedClass);
+      expect(spans.suffixSpan?.className).toContain(detailMutedClass);
     });
 
     it('should not render an empty muted suffix span for a single-word label like "Thinking…"', () => {
       vi.useFakeTimers();
       try {
         vi.setSystemTime(new Date('2026-04-20T00:00:00Z'));
-        render(
-          <ChatMessageReasoning
-            part={createReasoningPartWithTiming({
-              state: 'streaming',
-              reasoningStartedAtMs: Date.now(),
-            })}
-            hasContent={false}
-          />,
-        );
+        renderReasoning({
+          part: createReasoningPartWithTiming({
+            state: 'streaming',
+            reasoningStartedAtMs: Date.now(),
+          }),
+        });
 
         const spans = readLabelSpans();
         expect(spans.verbText).toBe('Thinking…');
         expect(spans.suffixSpan).toBeUndefined();
-        const mutedSpans = spans.button.querySelectorAll(`span.${mutedClass.replace('/', String.raw`\/`)}`);
-        expect(mutedSpans.length).toBe(0);
+        // No `ChatToolDescription` (detail-tier) span should be emitted when
+        // there is no suffix text — only the verb span itself, which is at /60.
+        const detailSpans = spans.button.querySelectorAll(`span.${detailMutedClass.replace('/', String.raw`\/`)}`);
+        expect(detailSpans.length).toBe(0);
       } finally {
         vi.useRealTimers();
       }
@@ -679,12 +720,9 @@ describe('ChatMessageReasoning', () => {
         vi.setSystemTime(new Date('2026-04-20T00:00:05Z'));
         const startedAtMs = Date.now() - 5000;
 
-        render(
-          <ChatMessageReasoning
-            part={createReasoningPartWithTiming({ state: 'streaming', reasoningStartedAtMs: startedAtMs })}
-            hasContent={false}
-          />,
-        );
+        renderReasoning({
+          part: createReasoningPartWithTiming({ state: 'streaming', reasoningStartedAtMs: startedAtMs }),
+        });
 
         const spans = readLabelSpans();
         expect(spans.verbText).toBe('Thinking');
@@ -692,6 +730,163 @@ describe('ChatMessageReasoning', () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    // Orphan handling — see docs/research/reasoning-duration-display.md § Finding 9.
+    // The AI SDK reducer leaves `parts[i].state === 'streaming'` when the
+    // upstream stream finishes (`finish-step`) without a matching `reasoning-end`.
+    // The component must trust `isMessageActive` instead, otherwise the live
+    // counter ticks forever after the chat completes / aborts / errors
+    // mid-reasoning, and (critically) re-lights on prior messages whenever the
+    // user sends a follow-up turn.
+
+    it('should freeze the live counter and render "Thought briefly" when chat status flips to ready while part.state stays streaming (orphan)', () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date('2026-04-20T00:00:00Z'));
+        const startedAtMs = Date.now();
+        mockChatStatus.current = 'streaming';
+
+        const part = createReasoningPartWithTiming({ state: 'streaming', reasoningStartedAtMs: startedAtMs });
+        const { rerender } = renderReasoning({ part });
+
+        act(() => {
+          vi.advanceTimersByTime(3000);
+        });
+
+        const liveSpans = readLabelSpans();
+        expect(liveSpans.verbText).toBe('Thinking');
+        expect(liveSpans.suffixText?.trim()).toBe('for 3s');
+
+        // Chat-level stream concludes (finish-step arrives) but the orphan
+        // reasoning part still has state: 'streaming' since no reasoning-end fired.
+        mockChatStatus.current = 'idle';
+        rerender({ part });
+
+        act(() => {
+          vi.advanceTimersByTime(5000);
+        });
+
+        const finalSpans = readLabelSpans();
+        expect(finalSpans.verbText).toBe('Thought');
+        expect(finalSpans.suffixText?.trim()).toBe('briefly');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('should render "Thought briefly" for parts loaded from history with state streaming but chat is idle', () => {
+      // Persisted-history orphan: chat status is idle from the first render, so
+      // the gate is false from mount and we never compute Date.now() - persistedStartedAtMs
+      // (which would otherwise show as a multi-day "Thought for ..." nonsense).
+      mockChatStatus.current = 'idle';
+      renderReasoning({
+        part: createReasoningPartWithTiming({
+          state: 'streaming',
+          reasoningStartedAtMs: 1_700_000_000_000,
+        }),
+      });
+
+      const spans = readLabelSpans();
+      expect(spans.verbText).toBe('Thought');
+      expect(spans.suffixText?.trim()).toBe('briefly');
+    });
+
+    it('should clear the stopwatch interval when chat-level streaming flips off mid-reasoning', () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date('2026-04-20T00:00:00Z'));
+        const startedAtMs = Date.now();
+        mockChatStatus.current = 'streaming';
+
+        const part = createReasoningPartWithTiming({ state: 'streaming', reasoningStartedAtMs: startedAtMs });
+        const { rerender } = renderReasoning({ part });
+
+        // Confirm the interval is active by advancing 2 ticks.
+        act(() => {
+          vi.advanceTimersByTime(2000);
+        });
+        expect(readLabelSpans().suffixText?.trim()).toBe('for 2s');
+
+        mockChatStatus.current = 'idle';
+        rerender({ part });
+
+        // After the gate flips, the label is the orphan fallback. Further
+        // timer advances must not reawaken the live counter or change the label.
+        act(() => {
+          vi.advanceTimersByTime(60_000);
+        });
+
+        const spans = readLabelSpans();
+        expect(spans.verbText).toBe('Thought');
+        expect(spans.suffixText?.trim()).toBe('briefly');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    // Trailing-message gating — the chat status alone is not enough; only the
+    // live, trailing message should display present-tense affordances. Prior
+    // messages must remain past-tense even while the chat keeps streaming.
+
+    it('should render past-tense fallback on a prior reasoning part while a follow-up turn streams (isMessageActive=false, chat=streaming)', () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date('2026-04-20T00:00:00Z'));
+        // Prior message's reasoning was never closed by `reasoning-end`, so
+        // `finalReasoningDurationMs === undefined`. With the chat-wide flag we
+        // would re-light the stopwatch on this prior message; the per-message
+        // gate must keep it past-tense.
+        mockChatStatus.current = 'streaming';
+        renderReasoning({
+          part: createReasoningPartWithTiming({
+            state: 'streaming',
+            reasoningStartedAtMs: 1_700_000_000_000,
+          }),
+          isMessageActive: false,
+        });
+
+        act(() => {
+          vi.advanceTimersByTime(10_000);
+        });
+
+        const spans = readLabelSpans();
+        expect(spans.verbText).toBe('Thought');
+        expect(spans.suffixText?.trim()).toBe('briefly');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('should render the no-text card without shimmer on a prior reasoning part while a follow-up turn streams', () => {
+      // No-text branch: an empty reasoning part on a prior message should not
+      // shimmer just because the chat is streaming a different message.
+      mockChatStatus.current = 'streaming';
+      renderReasoning({ part: createReasoningPart(''), isMessageActive: false });
+
+      const card = screen.getByTestId('chat-tool-card');
+      expect(card.dataset['status']).toBe('ready');
+      expect(card.textContent).toContain('Thought briefly');
+    });
+
+    it('should render the no-text card with the loading shimmer when isMessageActive=true', () => {
+      mockChatStatus.current = 'streaming';
+      renderReasoning({ part: createReasoningPart('') });
+
+      const card = screen.getByTestId('chat-tool-card');
+      expect(card.dataset['status']).toBe('loading');
+      expect(card.textContent).toContain('Thinking...');
+    });
+
+    it('should pass isStreaming=false to MarkdownViewerChat when the message is not active', () => {
+      mockChatStatus.current = 'streaming';
+      renderReasoning({
+        part: createReasoningPart('some prior reasoning text'),
+        isMessageActive: false,
+      });
+
+      const markdown = screen.getByTestId('markdown-content');
+      expect(markdown.dataset['streaming']).toBe('false');
     });
   });
 });

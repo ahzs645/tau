@@ -1,11 +1,20 @@
+import { Archive } from 'lucide-react';
 import type { ContextCompactionData } from '@taucad/chat';
 import { FileLink } from '#components/files/file-link.js';
-import { Badge } from '#components/ui/badge.js';
+import {
+  ChatToolCard,
+  ChatToolCardHeader,
+  ChatToolCardIcon,
+  ChatToolCardTitle,
+} from '#components/chat/chat-tool-card.js';
+import { ChatToolDescription } from '#components/chat/chat-tool-text.js';
+import { ChatToolLabel } from '#components/chat/chat-tool-label.js';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '#components/ui/hover-card.js';
 import { formatNumberAbbreviation } from '#utils/number.utils.js';
 
 /**
- * Renders a "Chat context summarized." badge inline in the message stream.
+ * Renders a "Chat context summarized." line inline in the message stream,
+ * styled consistently with other tool rows (see chat-message-tool-read-file).
  * Shows compression details on hover via HoverCard.
  */
 export function ChatMessageContextCompaction({ data }: { readonly data: ContextCompactionData }): React.JSX.Element {
@@ -14,16 +23,22 @@ export function ChatMessageContextCompaction({ data }: { readonly data: ContextC
   return (
     <HoverCard openDelay={100} closeDelay={100}>
       <HoverCardTrigger asChild>
-        <Badge
-          variant='outline'
-          className='border-emerald-500/40 text-emerald-600 hover:bg-emerald-500/10 dark:text-emerald-400 my-1 cursor-help'
-        >
-          Chat context summarized.
-        </Badge>
+        <div className='cursor-help'>
+          <ChatToolCard variant='minimal' status='ready' isCollapsible={false}>
+            <ChatToolCardHeader>
+              <ChatToolCardIcon icon={Archive} />
+              <ChatToolCardTitle>
+                <ChatToolLabel verb='Summarized'>
+                  <ChatToolDescription>chat context</ChatToolDescription>
+                </ChatToolLabel>
+              </ChatToolCardTitle>
+            </ChatToolCardHeader>
+          </ChatToolCard>
+        </div>
       </HoverCardTrigger>
       <HoverCardContent className='w-auto p-3'>
         <div className='flex flex-col gap-1.5 text-xs'>
-          <p className='font-medium'>Context Compaction</p>
+          <p className='font-medium'>Context compaction</p>
           <div className='grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5'>
             <span className='text-muted-foreground'>Before</span>
             <span className='font-mono'>{formatNumberAbbreviation(data.tokensBeforeCompaction)} tokens</span>

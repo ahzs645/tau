@@ -137,6 +137,20 @@ describe('ChatActivityGroup', () => {
       expect(detailSpan).toHaveClass('text-foreground/50');
     });
 
+    it('should declare the shared chat-tool trigger named group on the trigger button so labels lift on hover', () => {
+      render(
+        <ChatActivityGroup summaryVerbPast='Explored' summaryVerbActive='Exploring' summaryDetail='3 files, 1 search'>
+          <div data-testid='child'>hidden</div>
+        </ChatActivityGroup>,
+      );
+
+      const trigger = screen.getByRole('button');
+      expect(trigger).toHaveClass('group/chat-tool-trigger');
+
+      expect(screen.getByText('Explored')).toHaveClass('group-hover/chat-tool-trigger:text-foreground');
+      expect(screen.getByText('3 files, 1 search')).toHaveClass('group-hover/chat-tool-trigger:text-foreground/80');
+    });
+
     it('should keep past tense regardless of open/closed when isActive=false', async () => {
       render(
         <ChatActivityGroup summaryVerbPast='Explored' summaryVerbActive='Exploring' summaryDetail='3 files, 1 search'>

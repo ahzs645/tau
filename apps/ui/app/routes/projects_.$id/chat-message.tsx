@@ -148,6 +148,7 @@ type PartRenderContext = {
   readonly lastMeaningfulIndex: number;
   readonly isLastGroup: boolean;
   readonly isActiveGroup: boolean;
+  readonly isMessageActive: boolean;
 };
 
 // oxlint-disable-next-line complexity -- Part type dispatch requires many branches
@@ -156,7 +157,7 @@ function renderAssistantPart(
   index: number,
   context: PartRenderContext,
 ): React.JSX.Element | undefined {
-  const { messageId, lastMeaningfulIndex } = context;
+  const { messageId, lastMeaningfulIndex, isMessageActive } = context;
 
   switch (part.type) {
     case 'text': {
@@ -169,6 +170,7 @@ function renderAssistantPart(
           key={`${messageId}-message-part-${index}`}
           part={part}
           hasContent={index < lastMeaningfulIndex}
+          isMessageActive={isMessageActive}
         />
       );
     }
@@ -326,7 +328,9 @@ function AssistantParts({
   const runs = useMemo(() => partitionActivityRuns(groups), [groups]);
   const lastMeaningfulIndex = useMemo(() => findLastMeaningfulPartIndex(parts), [parts]);
   const lastGroupIndex = groups.length - 1;
-  const isStreaming = useChatSelector((state) => state.status === 'streaming');
+  const isMessageActive = useChatSelector(
+    (state) => state.messageOrder.at(-1) === messageId && state.status === 'streaming',
+  );
 
   const renderContextForGroup = useCallback(
     (absoluteIndex: number): PartRenderContext => {
@@ -335,10 +339,11 @@ function AssistantParts({
         messageId,
         lastMeaningfulIndex,
         isLastGroup,
-        isActiveGroup: isLastGroup && isStreaming,
+        isActiveGroup: isLastGroup && isMessageActive,
+        isMessageActive,
       };
     },
-    [messageId, lastMeaningfulIndex, lastGroupIndex, isStreaming],
+    [messageId, lastMeaningfulIndex, lastGroupIndex, isMessageActive],
   );
 
   return (
@@ -370,7 +375,7 @@ function AssistantParts({
             summaryDetail={summary.detail}
             hasDownstreamText={!isLastRun}
             isLast={isLastRun}
-            isActive={isLastRun && isStreaming}
+            isActive={isLastRun && isMessageActive}
           >
             {run.groups.map((group, j) => {
               const absoluteIndex = run.startIndex + j;
@@ -559,7 +564,7 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
             )}
           </div>
         </When>
-        <ChatMessagePlanning messageId={messageId} />
+        <ChatMessagePlanning messageId={messageId} className='-my-1' />
         <When shouldRender={!isUser}>
           <div className='mt-1 flex flex-row items-start justify-start text-muted-foreground'>
             <CopyButton

@@ -1,15 +1,19 @@
 import { Sparkles } from 'lucide-react';
 import { messageRole } from '@taucad/chat/constants';
 import { useChatSelector } from '#hooks/use-chat.js';
+import { cn } from '#utils/ui.utils.js';
 import {
   ChatToolCard,
   ChatToolCardHeader,
   ChatToolCardIcon,
   ChatToolCardTitle,
 } from '#components/chat/chat-tool-card.js';
+import { ChatToolLabel } from '#components/chat/chat-tool-label.js';
+import { ChatToolDescription } from '#components/chat/chat-tool-text.js';
 
 type ChatMessagePlanningProperties = {
   readonly messageId: string;
+  readonly className?: string;
 };
 
 /** Part type for areAllPartsConcluded - only needs to check state property */
@@ -50,7 +54,10 @@ export function areAllPartsConcluded(parts: readonly PartWithOptionalState[]): b
  * Displays a "Planning next moves..." indicator when the AI is processing.
  * Shows after a user message or when an assistant message has all tool parts concluded.
  */
-export function ChatMessagePlanning({ messageId }: ChatMessagePlanningProperties): React.JSX.Element | undefined {
+export function ChatMessagePlanning({
+  messageId,
+  className,
+}: ChatMessagePlanningProperties): React.JSX.Element | undefined {
   const isStreamingOrSubmitted = useChatSelector((state) => ['submitted', 'streaming'].includes(state.status));
 
   const message = useChatSelector((state) => state.messagesById.get(messageId));
@@ -89,11 +96,15 @@ export function ChatMessagePlanning({ messageId }: ChatMessagePlanningProperties
   // This ensures the planning indicator aligns with tools that appear in assistant messages
   // The parent's space-y-2 provides consistent vertical spacing for both cases
   return (
-    <div className={isUser ? 'ml-2' : undefined}>
+    <div className={cn(isUser ? 'ml-2' : undefined, className)}>
       <ChatToolCard variant='minimal' status='loading' isCollapsible={false}>
         <ChatToolCardHeader>
           <ChatToolCardIcon icon={Sparkles} />
-          <ChatToolCardTitle>Planning next moves...</ChatToolCardTitle>
+          <ChatToolCardTitle>
+            <ChatToolLabel verb='Planning'>
+              <ChatToolDescription>next moves...</ChatToolDescription>
+            </ChatToolLabel>
+          </ChatToolCardTitle>
         </ChatToolCardHeader>
       </ChatToolCard>
     </div>

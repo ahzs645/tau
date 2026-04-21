@@ -25,6 +25,25 @@ describe('ChatActivitySection', () => {
     expect(detailSpan).toHaveClass('text-foreground/50');
   });
 
+  it('should declare the shared chat-tool trigger named group on the trigger button so labels lift on hover', () => {
+    render(
+      <ChatActivitySection
+        summaryVerbPast='Explored'
+        summaryVerbActive='Exploring'
+        summaryDetail='12 searches, 2 fetches'
+        hasDownstreamText
+      >
+        <div>activity content</div>
+      </ChatActivitySection>,
+    );
+
+    const trigger = screen.getByRole('button');
+    expect(trigger).toHaveClass('group/chat-tool-trigger');
+
+    expect(screen.getByText('Explored')).toHaveClass('group-hover/chat-tool-trigger:text-foreground');
+    expect(screen.getByText('12 searches, 2 fetches')).toHaveClass('group-hover/chat-tool-trigger:text-foreground/80');
+  });
+
   it('should render only the present-participle verb with an ellipsis when isActive', () => {
     render(
       <ChatActivitySection

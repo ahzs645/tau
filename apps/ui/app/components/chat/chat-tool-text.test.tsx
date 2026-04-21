@@ -1,0 +1,55 @@
+import { describe, it, expect } from 'vitest';
+import { render, screen } from '@testing-library/react';
+import { ChatToolAction, ChatToolDescription } from '#components/chat/chat-tool-text.js';
+
+describe('ChatToolAction', () => {
+  it('should render the verb in muted /60 with medium weight', () => {
+    render(<ChatToolAction>Read</ChatToolAction>);
+
+    const verb = screen.getByText('Read');
+    expect(verb).toHaveClass('font-medium');
+    expect(verb).toHaveClass('text-foreground/60');
+  });
+
+  it('should lift to full foreground when nested inside a chat-tool trigger group on hover', () => {
+    render(<ChatToolAction>Read</ChatToolAction>);
+
+    const verb = screen.getByText('Read');
+    expect(verb).toHaveClass('transition-colors');
+    expect(verb).toHaveClass('group-hover/chat-tool-trigger:text-foreground');
+  });
+
+  it('should accept and merge a custom className', () => {
+    render(<ChatToolAction className='font-mono'>Read</ChatToolAction>);
+
+    const verb = screen.getByText('Read');
+    expect(verb).toHaveClass('font-mono');
+    expect(verb).toHaveClass('font-medium');
+  });
+});
+
+describe('ChatToolDescription', () => {
+  it('should render the muted /50 description with normal weight', () => {
+    render(<ChatToolDescription>main.kcl</ChatToolDescription>);
+
+    const desc = screen.getByText('main.kcl');
+    expect(desc).toHaveClass('font-normal');
+    expect(desc).toHaveClass('text-foreground/50');
+  });
+
+  it('should lift to /80 when nested inside a chat-tool trigger group on hover (one tier behind the verb)', () => {
+    render(<ChatToolDescription>main.kcl</ChatToolDescription>);
+
+    const desc = screen.getByText('main.kcl');
+    expect(desc).toHaveClass('transition-colors');
+    expect(desc).toHaveClass('group-hover/chat-tool-trigger:text-foreground/80');
+  });
+
+  it('should accept and merge a custom className', () => {
+    render(<ChatToolDescription className='font-mono'>main.kcl</ChatToolDescription>);
+
+    const desc = screen.getByText('main.kcl');
+    expect(desc).toHaveClass('font-mono');
+    expect(desc).toHaveClass('truncate');
+  });
+});

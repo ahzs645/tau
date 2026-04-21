@@ -24,7 +24,14 @@ export function ChatMessageToolCreateFile({
         return <ChatMessagePlanCard targetFile={targetFile} content={content} status='loading' />;
       }
 
-      return <CollapsibleFileOperation targetFile={targetFile} toolStatus={part.state} content={content} />;
+      return (
+        <CollapsibleFileOperation
+          targetFile={targetFile}
+          toolStatus={part.state}
+          content={content}
+          pendingLabel='Creating file...'
+        />
+      );
     }
 
     case 'output-available': {

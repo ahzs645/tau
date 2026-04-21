@@ -11,7 +11,8 @@ import {
   ChatToolCardList,
   ChatToolCardListItem,
 } from '#components/chat/chat-tool-card.js';
-import { ChatToolAction, ChatToolDescription } from '#components/chat/chat-tool-text.js';
+import { ChatToolDescription } from '#components/chat/chat-tool-text.js';
+import { ChatToolLabel } from '#components/chat/chat-tool-label.js';
 import { ChatToolError } from '#components/chat/chat-tool-error.js';
 
 export function ChatMessageToolGlobSearch({
@@ -28,9 +29,13 @@ export function ChatMessageToolGlobSearch({
       return (
         <ChatToolCard variant='minimal' status='loading' isDefaultOpen={false}>
           <ChatToolCardHeader>
+            <ChatToolCardIcon icon={Files} />
             <ChatToolCardTitle>
-              <ChatToolAction>Finding files matching</ChatToolAction>
-              <ChatToolDescription>&quot;{pattern}&quot;...</ChatToolDescription>
+              <ChatToolLabel verb='Searching for'>
+                <ChatToolDescription>
+                  <span className='font-mono'>{pattern}</span>...
+                </ChatToolDescription>
+              </ChatToolLabel>
             </ChatToolCardTitle>
           </ChatToolCardHeader>
         </ChatToolCard>
@@ -47,12 +52,11 @@ export function ChatMessageToolGlobSearch({
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={Files} />
             <ChatToolCardTitle>
-              <ChatToolAction className='min-w-0 shrink truncate'>
-                <span className='font-mono'>{pattern}</span>
-              </ChatToolAction>
-              <ChatToolDescription className='shrink-0'>
-                ({totalFiles} file{totalFiles === 1 ? '' : 's'})
-              </ChatToolDescription>
+              <ChatToolLabel verb='Searched'>
+                <ChatToolDescription>
+                  <span className='font-mono'>{pattern}</span> ({totalFiles} file{totalFiles === 1 ? '' : 's'})
+                </ChatToolDescription>
+              </ChatToolLabel>
             </ChatToolCardTitle>
           </ChatToolCardHeader>
           <ChatToolCardContent>
@@ -80,7 +84,7 @@ export function ChatMessageToolGlobSearch({
     }
 
     case 'output-error': {
-      return <ChatToolError errorText={part.errorText} fallbackIcon={Files} fallbackTitle='File search failed' />;
+      return <ChatToolError errorText={part.errorText} fallbackIcon={Files} fallbackTitle='Failed to search files' />;
     }
 
     case 'approval-requested':

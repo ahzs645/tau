@@ -49,14 +49,14 @@ export function ChatContextActions({
   className,
   ...properties
 }: ChatContextActionsProperties): React.JSX.Element {
-  const { compilationUnits, mainEntryFile, viewGraphics, editorRef } = useProject();
+  const { geometryUnits, mainEntryFile, viewGraphics, editorRef } = useProject();
   const mainGraphicsRef = useMainGraphics();
-  const cadActor = compilationUnits.get(mainEntryFile);
+  const cadActor = geometryUnits.get(mainEntryFile);
 
   const isScreenshotReady = useSelector(mainGraphicsRef, (state) => state?.context.isScreenshotReady ?? false);
   const viewSettings = useSelector(editorRef, (state) => state.context.viewSettings);
 
-  // Get the kernel error for the main entry file from its compilation unit
+  // Get the kernel error for the main entry file from its geometry unit
   const kernelIssue = useSelector(cadActor, (state) => {
     if (!state || !mainEntryFile) {
       return undefined;

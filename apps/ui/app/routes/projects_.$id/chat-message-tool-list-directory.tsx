@@ -11,7 +11,8 @@ import {
   ChatToolCardList,
   ChatToolCardListItem,
 } from '#components/chat/chat-tool-card.js';
-import { ChatToolAction, ChatToolDescription } from '#components/chat/chat-tool-text.js';
+import { ChatToolDescription } from '#components/chat/chat-tool-text.js';
+import { ChatToolLabel } from '#components/chat/chat-tool-label.js';
 import { ChatToolError } from '#components/chat/chat-tool-error.js';
 
 export function ChatMessageToolListDirectory({
@@ -29,8 +30,9 @@ export function ChatMessageToolListDirectory({
         <ChatToolCard variant='minimal' status='loading' isDefaultOpen={false}>
           <ChatToolCardHeader>
             <ChatToolCardTitle>
-              <ChatToolAction>Listing</ChatToolAction>
-              <ChatToolDescription>{path}...</ChatToolDescription>
+              <ChatToolLabel verb='Listing'>
+                <ChatToolDescription>{path}...</ChatToolDescription>
+              </ChatToolLabel>
             </ChatToolCardTitle>
           </ChatToolCardHeader>
         </ChatToolCard>
@@ -55,10 +57,11 @@ export function ChatMessageToolListDirectory({
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={FolderOpen} />
             <ChatToolCardTitle>
-              <ChatToolAction>Listed</ChatToolAction>
-              <ChatToolDescription>
-                {path || '/'} ({entries.length} items)
-              </ChatToolDescription>
+              <ChatToolLabel verb='Listed'>
+                <ChatToolDescription>
+                  {path || '/'} ({entries.length} items)
+                </ChatToolDescription>
+              </ChatToolLabel>
             </ChatToolCardTitle>
           </ChatToolCardHeader>
           <ChatToolCardContent>
@@ -69,11 +72,7 @@ export function ChatMessageToolListDirectory({
                 </ChatToolCardListItem>
               ) : (
                 sortedEntries.map((entry) => (
-                  <ChatToolCardListItem
-                    key={entry.name}
-                    icon={entry.type === 'dir' ? Folder : File}
-                    className={entry.type === 'dir' ? '[&_svg]:text-warning' : ''}
-                  >
+                  <ChatToolCardListItem key={entry.name} icon={entry.type === 'dir' ? Folder : File}>
                     {entry.name}
                   </ChatToolCardListItem>
                 ))

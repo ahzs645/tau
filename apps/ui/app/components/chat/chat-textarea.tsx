@@ -83,10 +83,10 @@ export const ChatTextarea = memo(function ({
     [logic.focusInput],
   );
 
-  const compilationUnits = projectContext?.compilationUnits;
+  const geometryUnits = projectContext?.geometryUnits;
   const mainEntryFile = projectContext?.mainEntryFile;
   const screenshotActionItems = useMemo((): ContextSuggestionItem[] => {
-    if (!compilationUnits) {
+    if (!geometryUnits) {
       return [];
     }
 
@@ -109,7 +109,7 @@ export const ChatTextarea = memo(function ({
       },
     ];
 
-    for (const [entryFile] of compilationUnits) {
+    for (const [entryFile] of geometryUnits) {
       if (entryFile === mainEntryFile) {
         continue;
       }
@@ -125,7 +125,7 @@ export const ChatTextarea = memo(function ({
     }
 
     return items;
-  }, [compilationUnits, mainEntryFile]);
+  }, [geometryUnits, mainEntryFile]);
 
   const { quality: screenshotQuality } = useImageQuality();
 

@@ -8,27 +8,45 @@ import {
   ChatToolCardTitle,
   ChatToolCardContent,
 } from '#components/chat/chat-tool-card.js';
-import { ChatToolAction, ChatToolDescription } from '#components/chat/chat-tool-text.js';
+import { ChatToolDescription } from '#components/chat/chat-tool-text.js';
+import { ChatToolLabel } from '#components/chat/chat-tool-label.js';
 import { ChatToolError } from '#components/chat/chat-tool-error.js';
+import { ViewerLink } from '#components/files/viewer-link.js';
+
+function FilenameLink({ targetFile }: { readonly targetFile: string }): React.JSX.Element {
+  return <ViewerLink path={targetFile}>{targetFile}</ViewerLink>;
+}
 
 export function ChatMessageToolScreenshot({
   part,
 }: {
   readonly part: ToolInvocation<typeof toolName.screenshot>;
 }): React.JSX.Element {
+  const targetFile = part.input?.targetFile;
+
   switch (part.state) {
     case 'input-streaming':
     case 'input-available': {
       const mode = part.input?.mode;
+      const subjectNoun = mode === 'multi_angle' ? 'orthographic views' : 'screenshot';
+
       return (
         <ChatToolCard variant='minimal' status='loading' isDefaultOpen={false}>
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={Camera} />
             <ChatToolCardTitle>
-              <ChatToolAction>Capturing</ChatToolAction>
-              <ChatToolDescription>
-                {mode === 'multi_angle' ? 'orthographic views...' : 'screenshot...'}
-              </ChatToolDescription>
+              <ChatToolLabel verb='Capturing'>
+                <ChatToolDescription>
+                  {targetFile ? (
+                    <>
+                      {subjectNoun} of <FilenameLink targetFile={targetFile} />
+                      ...
+                    </>
+                  ) : (
+                    `${subjectNoun}...`
+                  )}
+                </ChatToolDescription>
+              </ChatToolLabel>
             </ChatToolCardTitle>
           </ChatToolCardHeader>
         </ChatToolCard>
@@ -40,15 +58,25 @@ export function ChatMessageToolScreenshot({
       const allImages = output.images;
       const renderableImages = allImages.filter((img) => img.dataUrl.startsWith('data:'));
       const isComposite = allImages.length === 1 && allImages[0]?.view === 'composite';
+      const count = isComposite ? 6 : allImages.length;
+      const noun = count === 1 ? 'screenshot' : 'screenshots';
 
       return (
         <ChatToolCard variant='minimal' status='ready' isDefaultOpen={false}>
-          <ChatToolCardHeader className='text-success'>
+          <ChatToolCardHeader>
             <ChatToolCardIcon icon={Camera} />
             <ChatToolCardTitle>
-              {isComposite
-                ? 'Captured 6 screenshots'
-                : `Captured ${allImages.length} ${allImages.length === 1 ? 'screenshot' : 'screenshots'}`}
+              <ChatToolLabel verb='Captured'>
+                <ChatToolDescription>
+                  {targetFile ? (
+                    <>
+                      {count} {noun} of <FilenameLink targetFile={targetFile} />
+                    </>
+                  ) : (
+                    `${count} ${noun}`
+                  )}
+                </ChatToolDescription>
+              </ChatToolLabel>
             </ChatToolCardTitle>
           </ChatToolCardHeader>
           {renderableImages.length > 0 ? (

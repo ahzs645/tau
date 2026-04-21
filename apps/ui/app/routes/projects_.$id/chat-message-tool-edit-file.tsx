@@ -16,7 +16,14 @@ export function ChatMessageToolFileEdit({
       const { input } = part;
       const { targetFile = '', codeEdit = '' } = input ?? {};
 
-      return <CollapsibleFileOperation targetFile={targetFile} toolStatus={part.state} content={codeEdit} />;
+      return (
+        <CollapsibleFileOperation
+          targetFile={targetFile}
+          toolStatus={part.state}
+          content={codeEdit}
+          pendingLabel='Editing file...'
+        />
+      );
     }
 
     case 'output-available': {
@@ -46,7 +53,7 @@ export function ChatMessageToolFileEdit({
     }
 
     case 'output-error': {
-      return <ChatToolError errorText={part.errorText} fallbackIcon={Pencil} fallbackTitle='File edit failed' />;
+      return <ChatToolError errorText={part.errorText} fallbackIcon={Pencil} fallbackTitle='Failed to edit file' />;
     }
 
     case 'approval-requested':

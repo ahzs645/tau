@@ -9,7 +9,8 @@ import {
   ChatToolCardTitle,
   ChatToolCardContent,
 } from '#components/chat/chat-tool-card.js';
-import { ChatToolAction } from '#components/chat/chat-tool-text.js';
+import { ChatToolDescription } from '#components/chat/chat-tool-text.js';
+import { ChatToolLabel } from '#components/chat/chat-tool-label.js';
 import { ChatToolError } from '#components/chat/chat-tool-error.js';
 import { ExternalLink } from '#components/external-link.js';
 
@@ -47,14 +48,9 @@ export function ChatMessageToolWebBrowser({
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={Globe} />
             <ChatToolCardTitle>
-              {domains.length > 0 ? (
-                <>
-                  <ChatToolAction>Visiting</ChatToolAction>
-                  <span className='min-w-0 truncate text-muted-foreground'>{domains.join(', ')}...</span>
-                </>
-              ) : (
-                'Visiting pages...'
-              )}
+              <ChatToolLabel verb='Visiting pages'>
+                {domains.length > 0 ? <ChatToolDescription>{domains.join(', ')}</ChatToolDescription> : undefined}
+              </ChatToolLabel>
             </ChatToolCardTitle>
           </ChatToolCardHeader>
         </ChatToolCard>
@@ -74,16 +70,17 @@ export function ChatMessageToolWebBrowser({
           <ChatToolCardHeader>
             <img src={faviconUrl} alt={firstDomain} className='size-3 shrink-0 rounded-sm' />
             <ChatToolCardTitle>
-              <ChatToolAction>Visited</ChatToolAction>
-              <span className='min-w-0 truncate text-muted-foreground'>
-                {firstDomain}
-                {remainingCount > 0 && (
-                  <>
-                    {' '}
-                    and {remainingCount} other {remainingCount === 1 ? 'page' : 'pages'}
-                  </>
-                )}
-              </span>
+              <ChatToolLabel verb='Visited'>
+                <ChatToolDescription>
+                  {firstDomain}
+                  {remainingCount > 0 && (
+                    <>
+                      {' '}
+                      and {remainingCount} other {remainingCount === 1 ? 'page' : 'pages'}
+                    </>
+                  )}
+                </ChatToolDescription>
+              </ChatToolLabel>
             </ChatToolCardTitle>
           </ChatToolCardHeader>
           {urls.length > 0 && (
@@ -102,7 +99,7 @@ export function ChatMessageToolWebBrowser({
     }
 
     case 'output-error': {
-      return <ChatToolError errorText={part.errorText} fallbackIcon={Globe} fallbackTitle='Web browser failed' />;
+      return <ChatToolError errorText={part.errorText} fallbackIcon={Globe} fallbackTitle='Failed to browse the web' />;
     }
 
     case 'approval-requested':

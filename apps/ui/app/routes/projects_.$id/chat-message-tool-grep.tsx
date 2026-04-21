@@ -11,7 +11,8 @@ import {
   ChatToolCardList,
   ChatToolCardListItem,
 } from '#components/chat/chat-tool-card.js';
-import { ChatToolAction, ChatToolDescription } from '#components/chat/chat-tool-text.js';
+import { ChatToolDescription } from '#components/chat/chat-tool-text.js';
+import { ChatToolLabel } from '#components/chat/chat-tool-label.js';
 import { ChatToolError } from '#components/chat/chat-tool-error.js';
 
 export function ChatMessageToolGrep({ part }: { readonly part: ToolInvocation<typeof toolName.grep> }): ReactNode {
@@ -25,8 +26,9 @@ export function ChatMessageToolGrep({ part }: { readonly part: ToolInvocation<ty
         <ChatToolCard variant='minimal' status='loading' isDefaultOpen={false}>
           <ChatToolCardHeader>
             <ChatToolCardTitle>
-              <ChatToolAction>Searching for</ChatToolAction>
-              <ChatToolDescription>&quot;{pattern}&quot;...</ChatToolDescription>
+              <ChatToolLabel verb='Searching for'>
+                <ChatToolDescription>&quot;{pattern}&quot;...</ChatToolDescription>
+              </ChatToolLabel>
             </ChatToolCardTitle>
           </ChatToolCardHeader>
         </ChatToolCard>
@@ -53,13 +55,13 @@ export function ChatMessageToolGrep({ part }: { readonly part: ToolInvocation<ty
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={Search} />
             <ChatToolCardTitle>
-              <ChatToolAction className='min-w-0 shrink truncate'>
-                <span className='font-mono'>/{pattern}/</span>
-              </ChatToolAction>
-              <ChatToolDescription className='shrink-0'>
-                ({totalMatches} match{totalMatches === 1 ? '' : 'es'}
-                {truncated ? ', truncated' : ''})
-              </ChatToolDescription>
+              <ChatToolLabel verb='Searched'>
+                <ChatToolDescription>
+                  <span className='font-mono'>/{pattern}/</span> ({totalMatches} match
+                  {totalMatches === 1 ? '' : 'es'}
+                  {truncated ? ', truncated' : ''})
+                </ChatToolDescription>
+              </ChatToolLabel>
             </ChatToolCardTitle>
           </ChatToolCardHeader>
           <ChatToolCardContent>
@@ -101,7 +103,7 @@ export function ChatMessageToolGrep({ part }: { readonly part: ToolInvocation<ty
     }
 
     case 'output-error': {
-      return <ChatToolError errorText={part.errorText} fallbackIcon={Search} fallbackTitle='Search failed' />;
+      return <ChatToolError errorText={part.errorText} fallbackIcon={Search} fallbackTitle='Failed to search files' />;
     }
 
     case 'approval-requested':

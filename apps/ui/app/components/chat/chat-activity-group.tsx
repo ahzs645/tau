@@ -79,9 +79,9 @@ export function ChatActivityGroup({
         <Button
           variant='ghost'
           size='xs'
-          className='-ml-2 flex w-full min-w-0 items-center justify-start gap-1.5 overflow-hidden hover:bg-transparent dark:hover:bg-transparent'
+          className='group/chat-tool-trigger -ml-2 flex w-full min-w-0 items-center justify-start gap-1.5 overflow-hidden hover:bg-transparent dark:hover:bg-transparent'
         >
-          <ChevronRight className='size-3 shrink-0 text-muted-foreground transition-transform duration-200 [[data-state=open]>&]:rotate-90' />
+          <ChevronRight className='size-3 shrink-0 text-foreground/60 transition duration-200 group-hover/chat-tool-trigger:text-foreground [[data-state=open]>&]:rotate-90' />
           <ChatActivitySummary
             verb={summaryVerbPast}
             verbActive={summaryVerbActive}

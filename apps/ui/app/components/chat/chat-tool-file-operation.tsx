@@ -95,6 +95,10 @@ type CollapsibleFileOperationTriggerProps = {
    * Diff statistics for displaying change indicator.
    */
   readonly diffStats?: DiffStatsWithContent;
+  /**
+   * Label to show while `targetFile` is empty during streaming (e.g. "Creating file...").
+   */
+  readonly pendingLabel?: string;
 };
 
 export function CollapsibleFileOperationTrigger({
@@ -103,6 +107,7 @@ export function CollapsibleFileOperationTrigger({
   isOpen,
   enableFileLink = false,
   diffStats,
+  pendingLabel = 'file',
 }: CollapsibleFileOperationTriggerProps): React.JSX.Element {
   const isStreaming = ['input-streaming', 'input-available'].includes(toolStatus);
   const filename = getFilename(targetFile);
@@ -110,7 +115,7 @@ export function CollapsibleFileOperationTrigger({
 
   // Render the filename content
   const filenameContent = isStreaming ? (
-    <AnimatedShinyText>{filename || 'file'}</AnimatedShinyText>
+    <AnimatedShinyText>{filename || pendingLabel}</AnimatedShinyText>
   ) : (
     <span>{filename}</span>
   );
@@ -215,6 +220,10 @@ type CollapsibleFileOperationProps = {
    * Diff statistics for displaying change indicator.
    */
   readonly diffStats?: DiffStatsWithContent;
+  /**
+   * Label to show while `targetFile` is empty during streaming (e.g. "Creating file...").
+   */
+  readonly pendingLabel?: string;
 };
 
 export function CollapsibleFileOperation({
@@ -227,6 +236,7 @@ export function CollapsibleFileOperation({
   isDefaultOpen = false,
   enableFileLink = false,
   diffStats,
+  pendingLabel = 'file',
 }: CollapsibleFileOperationProps): React.JSX.Element {
   const isStreaming = ['input-streaming', 'input-available'].includes(toolStatus);
   const [showCodePreview] = useCookie(cookieName.chatToolCodePreview, true);
@@ -266,7 +276,7 @@ export function CollapsibleFileOperation({
             <Tooltip>
               <TooltipTrigger asChild>
                 <span className='min-w-0 truncate'>
-                  <AnimatedShinyText>{filename || 'file'}</AnimatedShinyText>
+                  <AnimatedShinyText>{filename || pendingLabel}</AnimatedShinyText>
                 </span>
               </TooltipTrigger>
               <TooltipContent side='top' align='start'>
@@ -275,7 +285,7 @@ export function CollapsibleFileOperation({
             </Tooltip>
           ) : (
             <span className='min-w-0 truncate'>
-              <AnimatedShinyText>{targetFile || 'file'}</AnimatedShinyText>
+              <AnimatedShinyText>{targetFile || pendingLabel}</AnimatedShinyText>
             </span>
           )}
         </div>
@@ -326,6 +336,7 @@ export function CollapsibleFileOperation({
             isOpen={isOpen}
             enableFileLink={enableFileLink}
             diffStats={diffStats}
+            pendingLabel={pendingLabel}
           />
           {actions ? (
             <div

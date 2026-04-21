@@ -6,7 +6,8 @@ import {
   ChatToolCardTitle,
   ChatToolCardContent,
 } from '#components/chat/chat-tool-card.js';
-import { ChatToolAction, ChatToolDescription } from '#components/chat/chat-tool-text.js';
+import { ChatToolDescription } from '#components/chat/chat-tool-text.js';
+import { ChatToolLabel } from '#components/chat/chat-tool-label.js';
 import { FileLink } from '#components/files/file-link.js';
 import { MarkdownViewer } from '#components/markdown/markdown-viewer.js';
 
@@ -65,7 +66,9 @@ export function ChatMessagePlanCard({ targetFile, content, status }: ChatMessage
         <ChatToolCardHeader>
           <ChatToolCardIcon icon={FileText} />
           <ChatToolCardTitle>
-            <ChatToolAction>Creating</ChatToolAction> <ChatToolDescription>plan...</ChatToolDescription>
+            <ChatToolLabel verb='Creating'>
+              <ChatToolDescription>plan...</ChatToolDescription>
+            </ChatToolLabel>
           </ChatToolCardTitle>
         </ChatToolCardHeader>
       </ChatToolCard>

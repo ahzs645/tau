@@ -8,8 +8,9 @@ import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { Brain, ChevronRight } from 'lucide-react';
 import { getReasoningStartedAtMs, getReasoningDurationMs } from '@taucad/chat';
 import { MarkdownViewerChat } from '#components/markdown/markdown-viewer-chat.js';
-import { useChatSelector } from '#hooks/use-chat.js';
 import { ChatToolCard, ChatToolCardHeader, ChatToolCardTitle } from '#components/chat/chat-tool-card.js';
+import { ChatToolLabel } from '#components/chat/chat-tool-label.js';
+import { ChatToolDescription } from '#components/chat/chat-tool-text.js';
 import { Button } from '#components/ui/button.js';
 import { cn } from '#utils/ui.utils.js';
 import { formatReasoningDuration } from '#utils/format-reasoning-duration.js';
@@ -37,10 +38,23 @@ type ChatMessageReasoningProperties = {
    * When true, reasoning auto-collapses to keep focus on the response.
    */
   readonly hasContent: boolean;
+  /**
+   * Whether this reasoning part belongs to the trailing message AND the chat is
+   * currently streaming. Drives every "live" affordance: the present-tense
+   * "Thinking for Ns" stopwatch, the auto-pin scroll effect, the streamdown
+   * incomplete-token mode, and the no-text shimmer card. Callers must derive
+   * this from `messageOrder.at(-1) === messageId && status === 'streaming'`;
+   * a chat-wide streaming flag would re-light prior messages whenever the user
+   * sends a follow-up.
+   */
+  readonly isMessageActive: boolean;
 };
 
-export function ChatMessageReasoning({ part, hasContent }: ChatMessageReasoningProperties): React.JSX.Element {
-  const isStreaming = useChatSelector((state) => state.status === 'streaming');
+export function ChatMessageReasoning({
+  part,
+  hasContent,
+  isMessageActive,
+}: ChatMessageReasoningProperties): React.JSX.Element {
   const [userToggleState, setUserToggleState] = useState<'expanded' | 'collapsed' | undefined>(undefined);
   const [scrollContainer, setScrollContainerState] = useState<HTMLDivElement | undefined>(undefined);
   const [content, setContentState] = useState<HTMLDivElement | undefined>(undefined);
@@ -88,7 +102,7 @@ export function ChatMessageReasoning({ part, hasContent }: ChatMessageReasoningP
   }, [trimmedText, isExpanded, isContentVisible]);
 
   useEffect(() => {
-    if (!isStreaming || !isContentVisible || isExpanded) {
+    if (!isMessageActive || !isContentVisible || isExpanded) {
       return;
     }
 
@@ -173,7 +187,7 @@ export function ChatMessageReasoning({ part, hasContent }: ChatMessageReasoningP
       scrollContainer.removeEventListener('pointerdown', markUserInteraction);
       scrollContainer.removeEventListener('scroll', handleScroll);
     };
-  }, [isStreaming, isContentVisible, isExpanded, scrollContainer, content]);
+  }, [isMessageActive, isContentVisible, isExpanded, scrollContainer, content]);
 
   const handleToggle = useCallback((): void => {
     setUserToggleState((previous) => {
@@ -186,32 +200,45 @@ export function ChatMessageReasoning({ part, hasContent }: ChatMessageReasoningP
   }, []);
 
   // Three-state header label (see docs/research/reasoning-duration-display.md):
-  //   1. Streaming with a server-stamped startedAtMs → live "Thinking for Ns".
-  //   2. Done with both endpoints stamped → "Thought for Ns" / "Thought briefly".
-  //   3. No common timing metadata → legacy "Thought process" fallback so
-  //      pre-instrumentation persisted messages still render cleanly.
+  //   1. Live      — this is the trailing message, the chat is still streaming,
+  //                  and we have not yet observed a server-derived final
+  //                  duration → "Thinking for Ns" ticks.
+  //   2. Final     — server stamped both endpoints → "Thought for Ns".
+  //   3. Fallback  — orphaned (chat ended without `reasoning-end`) or legacy /
+  //                  uninstrumented part → "Thought briefly".
+  //
+  // We deliberately ignore `part.state` for the live gate. The AI SDK reducer
+  // (`processUIMessageStream`) only flips `parts[i].state` to `'done'` inside
+  // the `case "reasoning-end"` branch; on `case "finish-step"` it merely clears
+  // the `activeReasoningParts` lookup map, leaving any unmatched part stuck at
+  // `'streaming'` for the lifetime of the message. Trusting `isMessageActive`
+  // instead is the canonical "is *this* message still arriving?" signal and
+  // stops the live counter the instant the stream closes — and never relights
+  // it on prior messages when a follow-up turn begins (Finding 9).
   const reasoningStartedAtMs = getReasoningStartedAtMs(part);
   const finalReasoningDurationMs = getReasoningDurationMs(part);
-  const isReasoningStreaming = part.state === 'streaming';
+  const isReasoningStreaming = isMessageActive && finalReasoningDurationMs === undefined;
   const liveReasoningElapsedMs = useReasoningStopwatch(reasoningStartedAtMs, isReasoningStreaming);
 
   const reasoningLabel = isReasoningStreaming
     ? formatReasoningDuration(liveReasoningElapsedMs, { verb: 'Thinking' })
     : finalReasoningDurationMs === undefined
-      ? 'Thought process'
+      ? 'Thought briefly'
       : formatReasoningDuration(finalReasoningDurationMs);
 
   // Two-tone presentation: leading verb ("Thought" / "Thinking") in the
   // foreground, the trailing duration suffix in muted color so the most
-  // important word reads first while the suffix recedes.
-  const [reasoningLabelVerb, ...reasoningLabelRest] = reasoningLabel.split(' ');
-  const reasoningLabelSuffix = reasoningLabelRest.length > 0 ? ` ${reasoningLabelRest.join(' ')}` : '';
+  // important word reads first while the suffix recedes. Spacing between the
+  // verb and suffix is owned by `ChatToolLabel` (literal inline space), so the
+  // suffix string here is the raw remainder with no leading-space padding.
+  const [reasoningLabelVerb = reasoningLabel, ...reasoningLabelRest] = reasoningLabel.split(' ');
+  const reasoningLabelSuffix = reasoningLabelRest.join(' ');
 
   if (!hasReasoningText) {
     return (
-      <ChatToolCard variant='minimal' status='loading' isDefaultOpen={false}>
+      <ChatToolCard variant='minimal' status={isMessageActive ? 'loading' : 'ready'} isDefaultOpen={false}>
         <ChatToolCardHeader>
-          <ChatToolCardTitle>Thinking...</ChatToolCardTitle>
+          <ChatToolCardTitle>{isMessageActive ? 'Thinking...' : 'Thought briefly'}</ChatToolCardTitle>
         </ChatToolCardHeader>
       </ChatToolCard>
     );
@@ -222,14 +249,13 @@ export function ChatMessageReasoning({ part, hasContent }: ChatMessageReasoningP
       <Button
         variant='ghost'
         size='xs'
-        className='-ml-2 flex h-4 w-full min-w-0 justify-start gap-1.5 overflow-hidden font-medium text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent'
+        className='group/chat-tool-trigger -ml-2 flex h-6 w-full min-w-0 justify-start gap-1.5 overflow-hidden font-medium text-muted-foreground hover:bg-transparent hover:text-foreground dark:hover:bg-transparent'
         onClick={handleToggle}
       >
         <Brain className='size-3 shrink-0' />
-        <span className='flex min-w-0 items-baseline gap-1'>
-          <span>{reasoningLabelVerb}</span>
-          {reasoningLabelSuffix && <span className='text-foreground/60'>{reasoningLabelSuffix}</span>}
-        </span>
+        <ChatToolLabel verb={reasoningLabelVerb}>
+          {reasoningLabelSuffix && <ChatToolDescription>{reasoningLabelSuffix}</ChatToolDescription>}
+        </ChatToolLabel>
         <ChevronRight
           className={cn('size-3 shrink-0 transition-transform duration-200', isContentVisible && 'rotate-90')}
         />
@@ -245,7 +271,7 @@ export function ChatMessageReasoning({ part, hasContent }: ChatMessageReasoningP
             )}
           >
             <div ref={setContent}>
-              <MarkdownViewerChat className='text-muted-foreground' isStreaming={isStreaming}>
+              <MarkdownViewerChat className='text-muted-foreground' isStreaming={isMessageActive}>
                 {displayText}
               </MarkdownViewerChat>
             </div>

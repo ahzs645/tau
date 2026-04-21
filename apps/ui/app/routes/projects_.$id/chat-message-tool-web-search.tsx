@@ -9,7 +9,8 @@ import {
   ChatToolCardTitle,
   ChatToolCardContent,
 } from '#components/chat/chat-tool-card.js';
-import { ChatToolAction, ChatToolDescription } from '#components/chat/chat-tool-text.js';
+import { ChatToolDescription } from '#components/chat/chat-tool-text.js';
+import { ChatToolLabel } from '#components/chat/chat-tool-label.js';
 import { ExternalLink } from '#components/external-link.js';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '#components/ui/collapsible.js';
 import { extractDomainFromUrl, createFaviconUrl } from '#utils/url.utils.js';
@@ -106,16 +107,13 @@ export function ChatMessageToolWebSearch({
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={Globe} />
             <ChatToolCardTitle>
-              {query ? (
-                <>
-                  <ChatToolAction>Searching web</ChatToolAction>
+              <ChatToolLabel verb='Searching web'>
+                {query ? (
                   <ChatToolDescription>
                     <span className='italic'>{query}</span>
                   </ChatToolDescription>
-                </>
-              ) : (
-                'Searching the web...'
-              )}
+                ) : undefined}
+              </ChatToolLabel>
             </ChatToolCardTitle>
           </ChatToolCardHeader>
         </ChatToolCard>
@@ -123,7 +121,7 @@ export function ChatMessageToolWebSearch({
     }
 
     case 'output-error': {
-      return <ChatToolError errorText={part.errorText} fallbackIcon={Globe} fallbackTitle='Web search failed' />;
+      return <ChatToolError errorText={part.errorText} fallbackIcon={Globe} fallbackTitle='Failed to search the web' />;
     }
 
     case 'output-available': {
@@ -135,7 +133,11 @@ export function ChatMessageToolWebSearch({
           <ChatToolCard variant='minimal' status='ready' isCollapsible={false}>
             <ChatToolCardHeader>
               <ChatToolCardIcon icon={Globe} />
-              <ChatToolCardTitle>No sources found</ChatToolCardTitle>
+              <ChatToolCardTitle>
+                <ChatToolLabel verb='Found'>
+                  <ChatToolDescription>no sources</ChatToolDescription>
+                </ChatToolLabel>
+              </ChatToolCardTitle>
             </ChatToolCardHeader>
           </ChatToolCard>
         );
@@ -146,10 +148,11 @@ export function ChatMessageToolWebSearch({
           <ChatToolCardHeader>
             <ChatToolCardIcon icon={Globe} />
             <ChatToolCardTitle>
-              <ChatToolAction>Searched</ChatToolAction>
-              <ChatToolDescription>
-                <span className='italic'>{query}</span>
-              </ChatToolDescription>
+              <ChatToolLabel verb='Searched'>
+                <ChatToolDescription>
+                  <span className='italic'>{query}</span>
+                </ChatToolDescription>
+              </ChatToolLabel>
             </ChatToolCardTitle>
           </ChatToolCardHeader>
           <ChatToolCardContent className='border-l-0'>
