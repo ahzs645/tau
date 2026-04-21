@@ -69,6 +69,7 @@ export const MarkdownViewerChat = memo(function ({
   return (
     <MarkdownViewer
       className={className}
+      streamdownClassName='space-y-2'
       isStreaming={isStreaming}
       components={memoizedComponents}
       controls={chatMarkdownControls}

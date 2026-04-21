@@ -18,6 +18,12 @@ type MarkdownViewerProps = {
    * Additional className for the container.
    */
   readonly className?: string;
+  /**
+   * Additional className forwarded to the underlying Streamdown root,
+   * which carries the `space-y-*` and `whitespace-*` defaults.
+   * Use this to override Streamdown's hardcoded spacing.
+   */
+  readonly streamdownClassName?: string;
 } & StreamdownProps;
 
 export const defaultMarkdownComponents = {
@@ -46,6 +52,7 @@ export const MarkdownViewer = memo(function ({
   components,
   rehypePlugins: additionalRehypePlugins,
   className,
+  streamdownClassName,
 }: MarkdownViewerProps): React.JSX.Element {
   const memoizedComponents = useMemo(
     () => ({
@@ -76,6 +83,7 @@ export const MarkdownViewer = memo(function ({
         remarkPlugins={tauRemarkPlugins}
         rehypePlugins={mergedRehypePlugins}
         shikiTheme={['github-light', 'github-dark']}
+        className={streamdownClassName}
       >
         {children}
       </Streamdown>
