@@ -1,9 +1,10 @@
 import { memo, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useSelector } from '@xstate/react';
 import type { DockviewApi, DockviewPanelApi, IDockviewPanelHeaderProps } from 'dockview-react';
-import { FileX, FolderOpen } from 'lucide-react';
+import { FileX, FolderOpen, PlayCircle } from 'lucide-react';
 import { CadViewer } from '#components/geometry/cad/cad-viewer.js';
 import { FileSelector } from '#components/files/file-selector.js';
+import { Button } from '#components/ui/button.js';
 import { useProject } from '#hooks/use-project.js';
 import { useFileTreeMap } from '#hooks/use-file-tree.js';
 import { useFileContent } from '#hooks/use-file-content.js';
@@ -219,11 +220,20 @@ const ViewerContent = memo(function ({
   readonly panelApi: DockviewPanelApi;
   readonly containerApi: DockviewApi;
 }): React.JSX.Element {
-  const { editorRef } = useProject();
+  const { editorRef, projectRef } = useProject();
   const cadRef = useCad();
   const geometries = useCadSelector((state) => state.context.geometries, []);
   const units = useCadSelector((state) => state.context.units, undefined);
   const kernelClient = useCadSelector((state) => state.context.kernelClient, undefined);
+
+  // The compilation unit can be closed via the parameters panel context menu.
+  // When that happens cadRef goes undefined, geometries clear, but the panel
+  // stays open. Surface a "Reopen renderer" overlay so the user can re-spawn
+  // the cad actor without having to re-add the panel.
+  const isCompilationUnitClosed = !cadRef;
+  const handleReopenRenderer = useCallback(() => {
+    projectRef.send({ type: 'createCompilationUnit', entryFile });
+  }, [projectRef, entryFile]);
 
   // Bridge geometry data from the headless CadMachine to the per-view GraphicsMachine
   const graphicsActor = useGraphics();
@@ -311,6 +321,22 @@ const ViewerContent = memo(function ({
           gizmoContainer={`#viewport-gizmo-container-${viewId}`}
         />
       </div>
+
+      {/* Reopen-renderer overlay — shown when the compilation unit was closed */}
+      {isCompilationUnitClosed && (
+        <div className='pointer-events-none absolute inset-0 z-20 flex items-center justify-center'>
+          <Button
+            type='button'
+            variant='outline'
+            size='sm'
+            className='shadow-lg pointer-events-auto'
+            onClick={handleReopenRenderer}
+          >
+            <PlayCircle />
+            Reopen renderer
+          </Button>
+        </div>
+      )}
 
       {/* AR button — mobile iOS only, positioned bottom-right above controls */}
       <ChatArButton geometries={geometries} kernelClient={kernelClient} className='absolute right-3 bottom-14 z-10' />
