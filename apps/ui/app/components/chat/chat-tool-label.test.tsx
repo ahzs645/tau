@@ -72,7 +72,7 @@ describe('ChatToolLabel', () => {
     expect(container.textContent).toBe('Explored 12 searches, 2 fetches');
   });
 
-  it('should apply the inline layout primitives to the outer wrapper', () => {
+  it('should NOT carry truncate/min-width on the inline wrapper (truncation is owned by an ancestor block container)', () => {
     render(
       <ChatToolLabel verb='Listed'>
         <ChatToolDescription>app/utils</ChatToolDescription>
@@ -82,9 +82,14 @@ describe('ChatToolLabel', () => {
     const verbSpan = screen.getByText('Listed');
     const wrapper = verbSpan.parentElement;
     expect(wrapper).not.toBeNull();
-    expect(wrapper).toHaveClass('inline');
-    expect(wrapper).toHaveClass('min-w-0');
-    expect(wrapper).toHaveClass('truncate');
+    // The wrapper must stay a plain inline <span> so the verb + detail flow
+    // as one text run that the ancestor's block-level truncate can ellipsify
+    // character-by-character. Inline `truncate`/`min-w-0` here would be a
+    // no-op (overflow:hidden is ignored on display:inline) and would mislead
+    // future readers into thinking this owns the truncation.
+    expect(wrapper).not.toHaveClass('truncate');
+    expect(wrapper).not.toHaveClass('min-w-0');
+    expect(wrapper).not.toHaveClass('inline');
   });
 
   it('should accept and merge a custom className on the wrapper', () => {
@@ -92,6 +97,5 @@ describe('ChatToolLabel', () => {
 
     const wrapper = screen.getByText('Read').parentElement;
     expect(wrapper).toHaveClass('font-mono');
-    expect(wrapper).toHaveClass('inline');
   });
 });

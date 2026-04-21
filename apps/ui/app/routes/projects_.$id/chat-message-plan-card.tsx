@@ -89,9 +89,14 @@ export function ChatMessagePlanCard({ targetFile, content, status }: ChatMessage
             <ul className='flex flex-col gap-1'>
               {todos.map((todo, index) => (
                 // oxlint-disable-next-line react/no-array-index-key -- Stable content
-                <li key={index} className='flex items-start gap-2 text-xs text-muted-foreground'>
-                  <input type='checkbox' checked={todo.checked} readOnly className='mt-0.5 size-3.5 rounded-sm' />
-                  <span>{todo.text}</span>
+                <li key={index} className='flex min-w-0 items-start gap-2 text-xs text-muted-foreground'>
+                  <input
+                    type='checkbox'
+                    checked={todo.checked}
+                    readOnly
+                    className='mt-0.5 size-3.5 shrink-0 rounded-sm'
+                  />
+                  <span className='min-w-0 flex-1 wrap-break-word'>{todo.text}</span>
                 </li>
               ))}
             </ul>

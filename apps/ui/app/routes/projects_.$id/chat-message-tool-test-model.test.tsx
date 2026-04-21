@@ -19,8 +19,8 @@ vi.mock('#components/chat/chat-tool-card.js', () => ({
   ChatToolCardHeader({ children }: { readonly children: React.ReactNode }): React.JSX.Element {
     return <div>{children}</div>;
   },
-  ChatToolCardIcon(): React.JSX.Element {
-    return <span data-testid='chat-tool-card-icon' />;
+  ChatToolCardIcon({ tone }: { readonly tone?: string }): React.JSX.Element {
+    return <span data-testid='chat-tool-card-icon' data-tone={tone ?? ''} />;
   },
   ChatToolCardTitle({ children }: { readonly children: React.ReactNode }): React.JSX.Element {
     return <div>{children}</div>;
@@ -62,9 +62,17 @@ vi.mock('#components/chat/chat-tool-error.js', () => ({
 }));
 
 vi.mock('#components/files/file-link.js', () => ({
-  FileLink({ children, path }: { readonly children: React.ReactNode; readonly path: string }): React.JSX.Element {
+  FileLink({
+    children,
+    path,
+    className,
+  }: {
+    readonly children: React.ReactNode;
+    readonly path: string;
+    readonly className?: string;
+  }): React.JSX.Element {
     return (
-      <a data-testid='file-link' data-path={path} href={`#${path}`}>
+      <a data-testid='file-link' data-path={path} href={`#${path}`} className={className}>
         {children}
       </a>
     );
@@ -72,9 +80,17 @@ vi.mock('#components/files/file-link.js', () => ({
 }));
 
 vi.mock('#components/files/viewer-link.js', () => ({
-  ViewerLink({ children, path }: { readonly children: React.ReactNode; readonly path: string }): React.JSX.Element {
+  ViewerLink({
+    children,
+    path,
+    className,
+  }: {
+    readonly children: React.ReactNode;
+    readonly path: string;
+    readonly className?: string;
+  }): React.JSX.Element {
     return (
-      <a data-testid='viewer-link' data-path={path} href={`#${path}`}>
+      <a data-testid='viewer-link' data-path={path} href={`#${path}`} className={className}>
         {children}
       </a>
     );
@@ -278,7 +294,7 @@ describe('ChatMessageToolTestModel — multi-file rendering', () => {
     }
   });
 
-  it('should render the failure header as "Tested N requirements" without a "(N failed)" suffix (the trailing indicator carries the failed count)', () => {
+  it('should render the failure header in the same minimal shape as the success header — `Tested N requirements` only, no header-level indicator chip, with the leading icon flipped to the destructive tone so failures are still flagged at a glance', () => {
     const part = buildPart({
       passed: 9,
       total: 10,
@@ -304,6 +320,41 @@ describe('ChatMessageToolTestModel — multi-file rendering', () => {
     expect(screen.getByText('Tested')).toBeTruthy();
     expect(screen.getByText(/10 requirements/)).toBeTruthy();
     expect(screen.queryByText(/failed\)/)).toBeNull();
+
+    // No aggregate header indicator: every requirement-indicator must live
+    // inside a per-file FileGroupSection (mirrors the success-header
+    // invariant). Drops the prior trailing `RequirementIndicator` chip so
+    // success and failure share one render path.
+    const indicators = screen.queryAllByTestId('requirement-indicator');
+    expect(indicators.length).toBeGreaterThan(0);
+    for (const indicator of indicators) {
+      expect(indicator.closest('[data-target-file]')).not.toBeNull();
+    }
+
+    // Leading FlaskConical icon carries the destructive tone whenever there
+    // are failures — the "only red icons indicate failure" convention is the
+    // single visual cue that distinguishes failure from success now that the
+    // header chrome is identical in both branches.
+    const icon = screen.getByTestId('chat-tool-card-icon');
+    expect(icon.dataset.tone).toBe('destructive');
+  });
+
+  it('should NOT apply the destructive icon tone when every requirement passes', () => {
+    const part = buildPart({
+      passed: 2,
+      total: 2,
+      passes: [
+        { id: 'p1', requirement: 'main pass 1', targetFile: 'main.scad' },
+        { id: 'p2', requirement: 'main pass 2', targetFile: 'main.scad' },
+      ],
+      failures: [],
+      geometryArtifactPaths: {},
+    });
+
+    render(<ChatMessageToolTestModel part={part} />);
+
+    const icon = screen.getByTestId('chat-tool-card-icon');
+    expect(icon.dataset.tone).toBe('');
   });
 
   it('should singularise the requirement noun when a single requirement passes', () => {
@@ -318,6 +369,76 @@ describe('ChatMessageToolTestModel — multi-file rendering', () => {
     render(<ChatMessageToolTestModel part={part} />);
 
     expect(screen.getByText(/1 requirement(?!s)/)).toBeTruthy();
+  });
+
+  it('keeps the FileGroupSection truncation chain intact when targetFile and artifactPath are extremely long (regressing the missing min-w-0 smoking gun)', () => {
+    // Pin the per-row truncation chain end-to-end. Tailwind's `truncate` is a
+    // no-op when any flex/grid ancestor still has `min-width: auto` (the flex
+    // default). Every wrapper in the FileGroupSection header chain must
+    // therefore declare `min-w-0`, and the FileLink itself must render the
+    // canonical `min-w-0 truncate` className via `asChild`.
+    const longTargetFile =
+      'apps/ui/app/routes/projects_.$id/very/deeply/nested/folder/structure/with-an-intentionally-long-filename-to-prove-truncation.scad';
+    const longArtifactPath =
+      '.tau/artifacts/tooluu_01ARC_thisIsAnIntentionallyLongFilenameToProveTruncation__main.scad.glb';
+    const part = buildPart({
+      passed: 0,
+      total: 1,
+      passes: [],
+      failures: [
+        {
+          id: 'f1',
+          requirement: 'long-path coverage',
+          reason: 'r',
+          suggestion: 's',
+          targetFile: longTargetFile,
+        },
+      ],
+      geometryArtifactPaths: { [longTargetFile]: longArtifactPath },
+    });
+
+    const { container } = render(<ChatMessageToolTestModel part={part} />);
+
+    const groupWrapper = container.querySelector(`[data-target-file="${longTargetFile}"]`);
+    expect(groupWrapper).toBeTruthy();
+    expect(groupWrapper).toHaveClass('min-w-0');
+
+    const headerRow = groupWrapper!.firstElementChild;
+    expect(headerRow).toBeTruthy();
+    expect(headerRow).toHaveClass('flex');
+    expect(headerRow).toHaveClass('min-w-0');
+
+    const leftColumn = headerRow!.firstElementChild;
+    expect(leftColumn).toBeTruthy();
+    expect(leftColumn).toHaveClass('flex');
+    expect(leftColumn).toHaveClass('min-w-0');
+    expect(leftColumn).toHaveClass('flex-1');
+
+    const fileLink = within(groupWrapper as HTMLElement).getByTestId('file-link');
+    expect(fileLink.className).toContain('min-w-0');
+    expect(fileLink.className).toContain('truncate');
+
+    const viewerLink = within(groupWrapper as HTMLElement).getByTestId('viewer-link');
+    const chip = viewerLink.firstElementChild;
+    expect(chip).toBeTruthy();
+    expect(chip).toHaveClass('flex');
+    expect(chip).toHaveClass('min-w-0');
+    expect(chip).toHaveClass('max-w-full');
+    const pathSpan = chip!.querySelector('span');
+    expect(pathSpan).toBeTruthy();
+    expect(pathSpan).toHaveClass('min-w-0');
+    expect(pathSpan).toHaveClass('truncate');
+
+    // Dedupe contract: the GeometryArtifactBadge JSX must NOT render its own
+    // <Box /> — the cube lives exclusively inside ViewerLink and is auto-
+    // injected via SlotPrimitive.Slottable. ViewerLink is mocked out in this
+    // test, so the auto-injection does not run; what we can pin here is the
+    // CONSUMER side: the chip should contain only the path span (no leftover
+    // icon-shaped elements from the badge JSX). The end-to-end "exactly one
+    // cube" contract is pinned against the real ViewerLink in
+    // title-row-truncation-contract.test.tsx.
+    expect(chip!.children.length).toBe(1);
+    expect(chip!.querySelectorAll('svg').length).toBe(0);
   });
 
   it('should attribute each failure to its own file group (no cross-file leakage)', () => {

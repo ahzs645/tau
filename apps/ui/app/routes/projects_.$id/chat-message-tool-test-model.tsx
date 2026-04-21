@@ -1,4 +1,4 @@
-import { FlaskConical, X, Lightbulb, Check, Box } from 'lucide-react';
+import { FlaskConical, X, Lightbulb, Check } from 'lucide-react';
 import type { ToolInvocation } from '@taucad/chat';
 import type { TestFailure, TestPass } from '@taucad/testing';
 import { toolName } from '@taucad/chat/constants';
@@ -20,11 +20,11 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.
 
 function TestPassItem({ pass, index }: { readonly pass: TestPass; readonly index: number }): React.JSX.Element {
   return (
-    <div className='flex items-start gap-2 text-xs'>
+    <div className='flex min-w-0 items-start gap-2 text-xs'>
       <div className='mt-0.5 shrink-0'>
         <Check className='size-3.5 text-muted-foreground' />
       </div>
-      <div className='text-muted-foreground'>
+      <div className='min-w-0 flex-1 wrap-break-word text-muted-foreground'>
         {index + 1}. {pass.requirement}
       </div>
     </div>
@@ -39,19 +39,19 @@ function TestFailureItem({
   readonly index: number;
 }): React.JSX.Element {
   return (
-    <div className='flex items-start gap-2 text-xs'>
+    <div className='flex min-w-0 items-start gap-2 text-xs'>
       <div className='mt-0.5 shrink-0'>
         <X className='size-3.5 text-destructive' />
       </div>
-      <div className='flex-1'>
-        <div className='text-foreground'>
+      <div className='min-w-0 flex-1'>
+        <div className='wrap-break-word text-foreground'>
           {index + 1}. {failure.requirement}
         </div>
         <div className='mt-1 space-y-1.5'>
-          <div className='text-muted-foreground'>{failure.reason}</div>
-          <div className='text-warning-foreground flex items-start gap-1.5 rounded-md bg-warning/10 p-2'>
+          <div className='wrap-break-word text-muted-foreground'>{failure.reason}</div>
+          <div className='text-warning-foreground flex min-w-0 items-start gap-1.5 rounded-md bg-warning/10 p-2'>
             <Lightbulb className='mt-0.5 size-3 shrink-0 text-warning' />
-            <span className='text-[11px] leading-relaxed'>{failure.suggestion}</span>
+            <span className='min-w-0 flex-1 text-[11px] leading-relaxed wrap-break-word'>{failure.suggestion}</span>
           </div>
         </div>
       </div>
@@ -59,14 +59,13 @@ function TestFailureItem({
   );
 }
 
-function GeometryArtifactBadge({ artifactPath }: { readonly artifactPath: string }): React.JSX.Element {
+export function GeometryArtifactBadge({ artifactPath }: { readonly artifactPath: string }): React.JSX.Element {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <ViewerLink asChild path={artifactPath}>
-          <div className='flex cursor-pointer items-center gap-1.5 rounded-md border border-border/50 bg-muted/30 px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:border-border hover:bg-muted/50 hover:text-foreground'>
-            <Box className='size-3 shrink-0' />
-            <span className='truncate'>{artifactPath}</span>
+          <div className='flex max-w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-md border border-border/50 bg-muted/30 px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:border-border hover:bg-muted/50 hover:text-foreground'>
+            <span className='min-w-0 truncate'>{artifactPath}</span>
           </div>
         </ViewerLink>
       </TooltipTrigger>
@@ -131,11 +130,11 @@ function FileGroupSection({ group }: { readonly group: FileGroup }): React.JSX.E
   const hasFailures = failures.length > 0;
 
   return (
-    <div data-target-file={targetFile} className='space-y-2 rounded-md border border-border/40 p-2'>
-      <div className='flex items-center justify-between gap-2'>
-        <div className='flex items-center gap-1.5 text-[11px] font-medium text-foreground'>
-          <FileLink path={targetFile}>
-            <span className='truncate'>{targetFile}</span>
+    <div data-target-file={targetFile} className='min-w-0 space-y-2 rounded-md border border-border/40 p-2'>
+      <div className='flex min-w-0 items-center justify-between gap-2'>
+        <div className='flex min-w-0 flex-1 items-center gap-1.5 text-[11px] font-medium text-foreground'>
+          <FileLink asChild path={targetFile} className='min-w-0 truncate hover:text-foreground'>
+            <span>{targetFile}</span>
           </FileLink>
         </div>
         <RequirementIndicator failedCount={failures.length} passedCount={passes.length} />
@@ -190,42 +189,20 @@ export function ChatMessageToolTestModel({
     case 'output-available': {
       const { output: result } = part;
       const { failures = [], passes = [], geometryArtifactPaths } = result;
-      const totalPassed = passes.length;
-      const totalFailed = failures.length;
       const groups = groupByTargetFile(passes, failures, geometryArtifactPaths);
-      const allPassed = totalFailed === 0;
-
-      if (allPassed) {
-        const requirementNoun = totalPassed === 1 ? 'requirement' : 'requirements';
-        return (
-          <ChatToolCard key='output' variant='minimal' status={isLoading ? 'loading' : 'ready'} isDefaultOpen={false}>
-            <ChatToolCardHeader>
-              <ChatToolCardIcon icon={FlaskConical} />
-              <ChatToolCardTitle>
-                <ChatToolLabel verb='Tested'>
-                  <ChatToolDescription>
-                    {totalPassed} {requirementNoun}
-                  </ChatToolDescription>
-                </ChatToolLabel>
-              </ChatToolCardTitle>
-            </ChatToolCardHeader>
-            <ChatToolCardContent forceMount>
-              <div className='space-y-2 border-l border-foreground/20 py-1 pl-2'>
-                {groups.map((group) => (
-                  <FileGroupSection key={group.targetFile} group={group} />
-                ))}
-              </div>
-            </ChatToolCardContent>
-          </ChatToolCard>
-        );
-      }
-
-      const totalRequirements = totalPassed + totalFailed;
+      const totalRequirements = passes.length + failures.length;
       const requirementNoun = totalRequirements === 1 ? 'requirement' : 'requirements';
+      const hasFailures = failures.length > 0;
+
       return (
-        <ChatToolCard key='output' variant='card' status={isLoading ? 'loading' : 'ready'}>
+        <ChatToolCard
+          key='output'
+          variant='minimal'
+          status={isLoading ? 'loading' : 'ready'}
+          isDefaultOpen={hasFailures}
+        >
           <ChatToolCardHeader>
-            <ChatToolCardIcon icon={FlaskConical} />
+            <ChatToolCardIcon icon={FlaskConical} tone={hasFailures ? 'destructive' : undefined} />
             <ChatToolCardTitle>
               <ChatToolLabel verb='Tested'>
                 <ChatToolDescription>
@@ -233,10 +210,9 @@ export function ChatMessageToolTestModel({
                 </ChatToolDescription>
               </ChatToolLabel>
             </ChatToolCardTitle>
-            <RequirementIndicator failedCount={totalFailed} passedCount={totalPassed} />
           </ChatToolCardHeader>
           <ChatToolCardContent forceMount>
-            <div className='space-y-2 p-2'>
+            <div className='space-y-2 border-l border-foreground/20 py-1 pl-2'>
               {groups.map((group) => (
                 <FileGroupSection key={group.targetFile} group={group} />
               ))}

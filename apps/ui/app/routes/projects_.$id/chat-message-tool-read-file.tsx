@@ -68,14 +68,12 @@ export function ChatMessageToolReadFile({
             <ChatToolCardIcon icon={FileText} />
             <ChatToolCardTitle>
               <ChatToolLabel verb='Read'>
-                <FileLink
-                  path={targetFile}
-                  lineNumber={startLine}
-                  className='min-w-0 truncate font-normal text-foreground/50'
-                >
-                  {targetFile}
-                  {lineRange}
-                </FileLink>
+                <ChatToolDescription>
+                  <FileLink path={targetFile} lineNumber={startLine}>
+                    {targetFile}
+                    {lineRange}
+                  </FileLink>
+                </ChatToolDescription>
               </ChatToolLabel>
             </ChatToolCardTitle>
           </ChatToolCardHeader>

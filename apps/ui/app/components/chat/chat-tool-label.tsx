@@ -31,6 +31,14 @@ type ChatToolLabelProps = {
  * adjusting the verb colour, weight, or spacing only ever requires touching
  * this file.
  *
+ * **Truncation contract:** the wrapper is a plain inline `<span>` with **no**
+ * truncate/min-width classes. Truncation is owned exclusively by an ancestor
+ * block container (e.g. `ChatToolCardTitle`'s `block min-w-0 truncate`) so the
+ * entire verb + detail phrase ellipsifies as a single inline text run. Any
+ * inline `truncate` on this wrapper would be a no-op (overflow:hidden is
+ * ignored on `display: inline`) and would falsely imply this is the truncate
+ * owner — so it is deliberately omitted.
+ *
  * **Hover affordance:** when the label lives inside a parent that declares the
  * `group/chat-tool-trigger` Tailwind named group (every clickable chat-tool
  * header — activity section/group, tool-card header, reasoning Brain button),
@@ -62,7 +70,7 @@ export function ChatToolLabel({ verb, children, className }: ChatToolLabelProps)
   const hasDetail = children !== undefined && children !== null && children !== false && children !== '';
 
   return (
-    <span className={cn('inline min-w-0 truncate', className)}>
+    <span className={cn(className)}>
       <span className='font-medium text-foreground/60 transition-colors group-hover/chat-tool-trigger:text-foreground'>
         {verb}
       </span>

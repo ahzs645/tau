@@ -60,6 +60,13 @@ type ChatToolDescriptionProps = {
  * verb-vs-description tonal hierarchy on hover (verb climbs to `/100`,
  * description to `/80`).
  *
+ * **Truncation contract:** plain inline `<span>` with no truncate/min-width
+ * classes. Truncation is owned exclusively by an ancestor block container
+ * (e.g. `ChatToolCardTitle`'s `block min-w-0 truncate`) so the verb + this
+ * description ellipsify as a single inline text run. An inline `truncate`
+ * here would be a no-op (overflow:hidden is ignored on `display: inline`)
+ * and would falsely imply this is the truncate owner.
+ *
  * @example <caption>composed inside ChatToolLabel</caption>
  * ```tsx
  * <ChatToolLabel verb='Read'>
@@ -71,7 +78,7 @@ export function ChatToolDescription({ children, className }: ChatToolDescription
   return (
     <span
       className={cn(
-        'min-w-0 truncate font-normal text-foreground/50 transition-colors group-hover/chat-tool-trigger:text-foreground/80',
+        'font-normal text-foreground/50 transition-colors group-hover/chat-tool-trigger:text-foreground/80',
         className,
       )}
     >

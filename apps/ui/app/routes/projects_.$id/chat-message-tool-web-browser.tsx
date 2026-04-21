@@ -22,7 +22,7 @@ function BrowseSourceItem({ url }: { readonly url: string }): React.JSX.Element 
     <ExternalLink
       href={url}
       arrowSize='xs'
-      className='flex items-center gap-2 py-0.5 text-xs text-muted-foreground no-underline hover:text-foreground hover:underline'
+      className='flex w-full min-w-0 items-center gap-2 py-0.5 text-xs text-muted-foreground no-underline hover:text-foreground hover:underline'
     >
       <img src={faviconUrl} alt={domain} className='size-3.5 shrink-0 rounded-sm' />
       <span className='min-w-0 truncate font-medium'>{domain}</span>

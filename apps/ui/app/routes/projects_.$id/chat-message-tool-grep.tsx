@@ -72,15 +72,15 @@ export function ChatMessageToolGrep({ part }: { readonly part: ToolInvocation<ty
                 </ChatToolCardListItem>
               ) : (
                 [...matchesByFile.entries()].slice(0, 5).map(([file, fileMatches]) => (
-                  <div key={file} className='py-1'>
-                    <div className='text-xs font-medium text-foreground/80'>{file}</div>
+                  <div key={file} className='min-w-0 py-1'>
+                    <div className='min-w-0 truncate text-xs font-medium text-foreground/80'>{file}</div>
                     {fileMatches.slice(0, 3).map((match) => (
                       <div
                         key={`${match.file}:${match.line}`}
-                        className='flex gap-2 pl-2 text-xs text-muted-foreground'
+                        className='flex min-w-0 gap-2 pl-2 text-xs text-muted-foreground'
                       >
                         <span className='shrink-0 font-mono opacity-60'>{match.line}:</span>
-                        <span className='truncate font-mono'>{match.content.trim()}</span>
+                        <span className='min-w-0 flex-1 truncate font-mono'>{match.content.trim()}</span>
                       </div>
                     ))}
                     {fileMatches.length > 3 ? (

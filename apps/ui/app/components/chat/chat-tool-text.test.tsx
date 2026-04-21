@@ -50,6 +50,18 @@ describe('ChatToolDescription', () => {
 
     const desc = screen.getByText('main.kcl');
     expect(desc).toHaveClass('font-mono');
-    expect(desc).toHaveClass('truncate');
+    expect(desc).toHaveClass('font-normal');
+  });
+
+  it('should NOT carry truncate/min-width (ancestor block container owns title-row truncation)', () => {
+    render(<ChatToolDescription>main.kcl</ChatToolDescription>);
+
+    const desc = screen.getByText('main.kcl');
+    // ChatToolDescription is an inline span — overflow:hidden is ignored on
+    // inline elements, so a `truncate` class here would be a no-op and would
+    // also block character-level ellipsification by the outer block parent
+    // (e.g. ChatToolCardTitle). Truncation is owned exclusively upstream.
+    expect(desc).not.toHaveClass('truncate');
+    expect(desc).not.toHaveClass('min-w-0');
   });
 });

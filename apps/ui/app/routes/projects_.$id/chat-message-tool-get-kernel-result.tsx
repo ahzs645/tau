@@ -223,18 +223,21 @@ export function ChatMessageToolGetKernelResult({
 
                   return (
                     <ChatToolCardListItem key={key} icon={issueIcon} iconClassName={issueIconClass}>
-                      <span className='flex flex-1 flex-col items-start gap-0.5 @xs:flex-row @xs:gap-1'>
+                      <span className='flex min-w-0 flex-1 flex-col items-start gap-0.5 @xs:flex-row @xs:gap-1'>
                         {location ? (
                           <FileLink
+                            asChild
                             path={location.fileName}
                             lineNumber={location.startLineNumber}
                             column={location.startColumn}
-                            className='shrink-0 font-mono text-xs text-muted-foreground/70 hover:text-foreground'
+                            className='min-w-0 truncate font-mono text-xs text-muted-foreground/70 hover:text-foreground'
                           >
-                            {location.fileName}:{location.startLineNumber}:{location.startColumn}
+                            <span>
+                              {location.fileName}:{location.startLineNumber}:{location.startColumn}
+                            </span>
                           </FileLink>
                         ) : undefined}
-                        <MarkdownViewer className='inline w-auto font-mono text-xs text-inherit'>
+                        <MarkdownViewer className='inline w-auto min-w-0 font-mono text-xs wrap-break-word text-inherit'>
                           {issue.message}
                         </MarkdownViewer>
                       </span>
