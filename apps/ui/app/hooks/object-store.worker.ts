@@ -160,7 +160,6 @@ const objectStoreWorker = {
     projectId: string,
     update: PartialDeep<Project>,
     options?: {
-      ignoreKeys?: string[];
       noUpdatedAt?: boolean;
     },
   ): Promise<Project | undefined> {
@@ -201,9 +200,29 @@ const objectStoreWorker = {
   async updateChat(
     chatId: string,
     update: PartialDeep<Chat>,
-    options?: { ignoreKeys?: string[]; noUpdatedAt?: boolean },
+    options?: { noUpdatedAt?: boolean },
   ): Promise<Chat | undefined> {
     return storage.updateChat(chatId, update, options);
+  },
+
+  async patchChat<K extends keyof Chat>(chatId: string, key: K, value: Chat[K]): Promise<Chat | undefined> {
+    return storage.patchChat(chatId, key, value);
+  },
+
+  async setMessageEdit(
+    chatId: string,
+    messageId: string,
+    draft: NonNullable<Chat['messageEdits']>[string],
+  ): Promise<Chat | undefined> {
+    return storage.setMessageEdit(chatId, messageId, draft);
+  },
+
+  async clearMessageEdit(chatId: string, messageId: string): Promise<Chat | undefined> {
+    return storage.clearMessageEdit(chatId, messageId);
+  },
+
+  async softDeleteChat(chatId: string): Promise<Chat | undefined> {
+    return storage.softDeleteChat(chatId);
   },
 
   async getChat(chatId: string): Promise<Chat | undefined> {

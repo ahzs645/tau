@@ -7,8 +7,16 @@ import { generatePrefixedId } from '@taucad/utils/id';
 import type { StorageProvider } from '#types/storage.types.js';
 import type { EditorState, EditorStateInput } from '#types/editor.types.js';
 import { metaConfig } from '#constants/meta.constants.js';
+import { KeyedMutex } from '#db/keyed-mutex.js';
 
 export class IndexedDbStorageProvider implements StorageProvider {
+  /**
+   * Per-key serialiser for every mutating operation against a single chat or
+   * project row. Defence-in-depth on top of the atomic single-transaction
+   * `get → put` writes (see {@link IndexedDbStorageProvider.updateChat}). See
+   * `docs/policy/storage-policy.md` for the contract.
+   */
+  private readonly mutex = new KeyedMutex<string>();
   private get dbName(): string {
     return `${metaConfig.databasePrefix}db`;
   }
@@ -67,7 +75,6 @@ export class IndexedDbStorageProvider implements StorageProvider {
     projectId: string,
     update: PartialDeep<Project>,
     options?: {
-      ignoreKeys?: string[];
       /**
        * If true, the updatedAt timestamp will not be updated.
        *
@@ -77,62 +84,7 @@ export class IndexedDbStorageProvider implements StorageProvider {
       noUpdatedAt?: boolean;
     },
   ): Promise<Project | undefined> {
-    const db = await this.getDb();
-    const existingProject = await this.getProject(projectId);
-
-    if (!existingProject) {
-      return undefined;
-    }
-
-    // If update contains an 'id' field matching projectId, treat it as a full project replacement
-    // This is the new pattern from the parallel state machine refactor
-    const isProject = 'id' in update && update.id === projectId;
-
-    let updatedProject: Project;
-
-    if (isProject) {
-      // Full project replacement - no merging needed
-      updatedProject = update as Project;
-    } else {
-      // Partial update - use deepmerge for backward compatibility
-      const mergeIgnoreKeys = new Set(options?.ignoreKeys ?? []);
-      const optionalParameters = options?.noUpdatedAt ? {} : { updatedAt: Date.now() };
-
-      updatedProject = deepmerge(
-        existingProject,
-        { ...update, ...optionalParameters },
-        {
-          customMerge(key) {
-            if (mergeIgnoreKeys.has(key)) {
-              return (_source: unknown, target: unknown) => target;
-            }
-
-            return undefined;
-          },
-        },
-      ) as Project;
-    }
-
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(this.projectsStoreName, 'readwrite');
-      const store = transaction.objectStore(this.projectsStoreName);
-
-      const request = store.put(updatedProject);
-
-      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
-      request.onerror = () => {
-        // oxlint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
-        reject(request.error);
-      };
-
-      request.onsuccess = () => {
-        resolve(updatedProject);
-      };
-
-      transaction.oncomplete = () => {
-        db.close();
-      };
-    });
+    return this.mutex.run(projectId, async () => this.updateProjectAtomic(projectId, update, options));
   }
 
   public async getProjects(options?: { includeDeleted?: boolean }): Promise<Project[]> {
@@ -243,65 +195,72 @@ export class IndexedDbStorageProvider implements StorageProvider {
     chatId: string,
     update: PartialDeep<Chat>,
     options?: {
-      ignoreKeys?: string[];
       noUpdatedAt?: boolean;
     },
   ): Promise<Chat | undefined> {
-    const db = await this.getDb();
-    const existingChat = await this.getChat(chatId);
+    return this.mutex.run(chatId, async () => this.updateChatAtomic(chatId, update, options));
+  }
 
-    if (!existingChat) {
-      return undefined;
-    }
+  /**
+   * Atomic field-scoped patch for a single top-level chat field. Performs
+   * `get → mutate → put` inside one readwrite transaction, gated by the
+   * per-chatId mutex so concurrent callers cannot lose writes. See
+   * `docs/policy/storage-policy.md`.
+   */
+  public async patchChat<K extends keyof Chat>(chatId: string, key: K, value: Chat[K]): Promise<Chat | undefined> {
+    return this.mutex.run(chatId, async () =>
+      this.atomicChatMutation(chatId, (chat) => {
+        chat[key] = value;
+        return true;
+      }),
+    );
+  }
 
-    // If update contains an 'id' field matching chatId, treat it as a full chat replacement
-    const isFullChat = 'id' in update && update.id === chatId;
+  /**
+   * Set a single message-edit draft entry on a chat. Creates the
+   * `messageEdits` map if missing. Atomic per-chatId.
+   */
+  public async setMessageEdit(
+    chatId: string,
+    messageId: string,
+    draft: NonNullable<Chat['messageEdits']>[string],
+  ): Promise<Chat | undefined> {
+    return this.mutex.run(chatId, async () =>
+      this.atomicChatMutation(chatId, (chat) => {
+        chat.messageEdits ??= {};
+        chat.messageEdits[messageId] = draft;
+        return true;
+      }),
+    );
+  }
 
-    let updatedChat: Chat;
+  /**
+   * Remove a single message-edit draft entry from a chat. No-op (no
+   * `updatedAt` bump) if the entry does not exist. Atomic per-chatId.
+   */
+  public async clearMessageEdit(chatId: string, messageId: string): Promise<Chat | undefined> {
+    return this.mutex.run(chatId, async () =>
+      this.atomicChatMutation(chatId, (chat) => {
+        if (!chat.messageEdits || !(messageId in chat.messageEdits)) {
+          return false;
+        }
+        // oxlint-disable-next-line @typescript-eslint/no-dynamic-delete -- messageId is a runtime key
+        delete chat.messageEdits[messageId];
+        return true;
+      }),
+    );
+  }
 
-    if (isFullChat) {
-      // Full chat replacement - no merging needed
-      updatedChat = update as Chat;
-    } else {
-      // Partial update - use deepmerge
-      const mergeIgnoreKeys = new Set(options?.ignoreKeys ?? []);
-      const optionalParameters = options?.noUpdatedAt ? {} : { updatedAt: Date.now() };
-
-      updatedChat = deepmerge(
-        existingChat,
-        { ...update, ...optionalParameters },
-        {
-          customMerge(key) {
-            if (mergeIgnoreKeys.has(key)) {
-              return (_source: unknown, target: unknown) => target;
-            }
-
-            return undefined;
-          },
-        },
-      ) as Chat;
-    }
-
-    return new Promise((resolve, reject) => {
-      const transaction = db.transaction(this.chatsStoreName, 'readwrite');
-      const store = transaction.objectStore(this.chatsStoreName);
-
-      const request = store.put(updatedChat);
-
-      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
-      request.onerror = () => {
-        // oxlint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
-        reject(request.error);
-      };
-
-      request.onsuccess = () => {
-        resolve(updatedChat);
-      };
-
-      transaction.oncomplete = () => {
-        db.close();
-      };
-    });
+  /**
+   * Soft-delete a chat by setting `deletedAt`. Atomic per-chatId.
+   */
+  public async softDeleteChat(chatId: string): Promise<Chat | undefined> {
+    return this.mutex.run(chatId, async () =>
+      this.atomicChatMutation(chatId, (chat) => {
+        chat.deletedAt = Date.now();
+        return true;
+      }),
+    );
   }
 
   public async getChat(chatId: string): Promise<Chat | undefined> {
@@ -357,14 +316,7 @@ export class IndexedDbStorageProvider implements StorageProvider {
   }
 
   public async deleteChat(chatId: string): Promise<void> {
-    // Get the chat to make sure it exists
-    const chat = await this.getChat(chatId);
-    if (!chat) {
-      return;
-    }
-
-    // Perform soft delete by updating deletedAt timestamp
-    await this.updateChat(chatId, { deletedAt: Date.now() });
+    await this.softDeleteChat(chatId);
   }
 
   public async duplicateChat(chatId: string): Promise<Chat> {
@@ -475,6 +427,193 @@ export class IndexedDbStorageProvider implements StorageProvider {
 
       transaction.oncomplete = () => {
         db.close();
+      };
+    });
+  }
+
+  // ============================================================================
+  // Private atomic mutators
+  // ============================================================================
+
+  private async updateProjectAtomic(
+    projectId: string,
+    update: PartialDeep<Project>,
+    options?: { noUpdatedAt?: boolean },
+  ): Promise<Project | undefined> {
+    const db = await this.getDb();
+
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(this.projectsStoreName, 'readwrite');
+      const store = transaction.objectStore(this.projectsStoreName);
+
+      let resolved: Project | undefined;
+
+      const getRequest = store.get(projectId);
+
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
+      getRequest.onerror = () => {
+        // oxlint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
+        reject(getRequest.error);
+      };
+
+      getRequest.onsuccess = () => {
+        const existingProject = getRequest.result as Project | undefined;
+        if (!existingProject) {
+          return;
+        }
+
+        const isProject = 'id' in update && update.id === projectId;
+
+        let updatedProject: Project;
+        if (isProject) {
+          updatedProject = update as Project;
+        } else {
+          const optionalParameters = options?.noUpdatedAt ? {} : { updatedAt: Date.now() };
+          updatedProject = deepmerge(existingProject, { ...update, ...optionalParameters }) as Project;
+        }
+
+        const putRequest = store.put(updatedProject);
+        // oxlint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
+        putRequest.onerror = () => {
+          // oxlint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
+          reject(putRequest.error);
+        };
+        putRequest.onsuccess = () => {
+          resolved = updatedProject;
+        };
+      };
+
+      transaction.oncomplete = () => {
+        db.close();
+        resolve(resolved);
+      };
+
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
+      transaction.onerror = () => {
+        // oxlint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
+        reject(transaction.error);
+      };
+    });
+  }
+
+  private async updateChatAtomic(
+    chatId: string,
+    update: PartialDeep<Chat>,
+    options?: { noUpdatedAt?: boolean },
+  ): Promise<Chat | undefined> {
+    const db = await this.getDb();
+
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(this.chatsStoreName, 'readwrite');
+      const store = transaction.objectStore(this.chatsStoreName);
+
+      let resolved: Chat | undefined;
+
+      const getRequest = store.get(chatId);
+
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
+      getRequest.onerror = () => {
+        // oxlint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
+        reject(getRequest.error);
+      };
+
+      getRequest.onsuccess = () => {
+        const existingChat = getRequest.result as Chat | undefined;
+        if (!existingChat) {
+          return;
+        }
+
+        const isFullChat = 'id' in update && update.id === chatId;
+
+        let updatedChat: Chat;
+        if (isFullChat) {
+          updatedChat = update as Chat;
+        } else {
+          const optionalParameters = options?.noUpdatedAt ? {} : { updatedAt: Date.now() };
+          updatedChat = deepmerge(existingChat, { ...update, ...optionalParameters }) as Chat;
+        }
+
+        const putRequest = store.put(updatedChat);
+        // oxlint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
+        putRequest.onerror = () => {
+          // oxlint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
+          reject(putRequest.error);
+        };
+        putRequest.onsuccess = () => {
+          resolved = updatedChat;
+        };
+      };
+
+      transaction.oncomplete = () => {
+        db.close();
+        resolve(resolved);
+      };
+
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
+      transaction.onerror = () => {
+        // oxlint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
+        reject(transaction.error);
+      };
+    });
+  }
+
+  /**
+   * Internal: read the chat, hand it to `mutate` for in-place modification,
+   * then `put` it back inside a single readwrite transaction. Bumps
+   * `updatedAt` only when the mutator returns `true` (i.e. an actual change
+   * was made), so no-op clears do not pollute timestamps.
+   *
+   * Resolves the outer promise from `transaction.oncomplete` (not from
+   * `request.onsuccess`) so callers never observe a pre-durability value.
+   */
+  private async atomicChatMutation(chatId: string, mutate: (chat: Chat) => boolean): Promise<Chat | undefined> {
+    const db = await this.getDb();
+
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(this.chatsStoreName, 'readwrite');
+      const store = transaction.objectStore(this.chatsStoreName);
+
+      let resolved: Chat | undefined;
+
+      const getRequest = store.get(chatId);
+
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
+      getRequest.onerror = () => {
+        // oxlint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
+        reject(getRequest.error);
+      };
+
+      getRequest.onsuccess = () => {
+        const existingChat = getRequest.result as Chat | undefined;
+        if (!existingChat) {
+          return;
+        }
+
+        const changed = mutate(existingChat);
+        if (changed) {
+          existingChat.updatedAt = Date.now();
+        }
+
+        const putRequest = store.put(existingChat);
+        // oxlint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
+        putRequest.onerror = () => {
+          // oxlint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
+          reject(putRequest.error);
+        };
+        putRequest.onsuccess = () => {
+          resolved = existingChat;
+        };
+      };
+
+      transaction.oncomplete = () => {
+        db.close();
+        resolve(resolved);
+      };
+
+      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- this is the preferred API for indexedDB
+      transaction.onerror = () => {
+        // oxlint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- we want to let the actual error be thrown
+        reject(transaction.error);
       };
     });
   }
