@@ -8,11 +8,6 @@
     "#*": "./src/*"
   },
   "exports": {
-    "./cross-origin-isolation": {
-      "types": "./src/cross-origin-isolation.vite-plugin.ts",
-      "import": "./src/cross-origin-isolation.vite-plugin.ts",
-      "default": "./src/cross-origin-isolation.vite-plugin.ts"
-    },
     "./ts-module-url": {
       "types": "./src/ts-module-url.vite-plugin.ts",
       "import": "./src/ts-module-url.vite-plugin.ts",

@@ -53,7 +53,10 @@
     "./middleware/parameter-cache": "./src/middleware/parameter-cache.middleware.ts",
     "./middleware/geometry-cache": "./src/middleware/geometry-cache.middleware.ts",
     "./middleware/gltf-coordinate-transform": "./src/middleware/gltf-coordinate-transform.middleware.ts",
-    "./middleware/gltf-edge-detection": "./src/middleware/gltf-edge-detection.middleware.ts"
+    "./middleware/gltf-edge-detection": "./src/middleware/gltf-edge-detection.middleware.ts",
+    "./cross-origin-isolation": "./src/cross-origin-isolation/index.ts",
+    "./react-router": "./src/react-router/index.ts",
+    "./vite": "./src/vite/index.ts"
   },
   "publishConfig": {
     "access": "public",
@@ -317,6 +320,36 @@
           "types": "./dist/esm/testing/index.d.ts",
           "default": "./dist/esm/testing/index.js"
         }
+      },
+      "./cross-origin-isolation": {
+        "require": {
+          "types": "./dist/cjs/cross-origin-isolation/index.d.cts",
+          "default": "./dist/cjs/cross-origin-isolation/index.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/cross-origin-isolation/index.d.ts",
+          "default": "./dist/esm/cross-origin-isolation/index.js"
+        }
+      },
+      "./react-router": {
+        "require": {
+          "types": "./dist/cjs/react-router/index.d.cts",
+          "default": "./dist/cjs/react-router/index.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/react-router/index.d.ts",
+          "default": "./dist/esm/react-router/index.js"
+        }
+      },
+      "./vite": {
+        "require": {
+          "types": "./dist/cjs/vite/index.d.cts",
+          "default": "./dist/cjs/vite/index.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/vite/index.d.ts",
+          "default": "./dist/esm/vite/index.js"
+        }
       }
     }
   },
@@ -355,9 +388,13 @@
     "zod": "catalog:"
   },
   "peerDependencies": {
+    "vite": ">=7.0.0",
     "vitest": ">=2.0.0"
   },
   "peerDependenciesMeta": {
+    "vite": {
+      "optional": true
+    },
     "vitest": {
       "optional": true
     }

@@ -41,6 +41,9 @@ import type {
 } from '#plugins/plugin-types.js';
 import { SharedPool } from '@taucad/memory';
 import type { SharedPoolOptions } from '@taucad/memory';
+import { inspectCrossOriginIsolation } from '#cross-origin-isolation/index.js';
+import { idPrefix } from '@taucad/types/constants';
+import { generatePrefixedId } from '@taucad/utils/id';
 
 // =============================================================================
 // RenderInput Types
@@ -501,6 +504,7 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
   let poolsInitialized = false;
   let _capabilities: CapabilitiesManifest | undefined;
   let _activeKernelId: string | undefined;
+  let isolationInspected = false;
 
   const handlers: EventHandlers = {
     log: new Set(),
@@ -518,10 +522,34 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
     return new URL('../framework/kernel-runtime-worker.js', import.meta.url).href;
   }
 
+  function emitIsolationWarningOnce(): void {
+    if (isolationInspected) {
+      return;
+    }
+    isolationInspected = true;
+    const status = inspectCrossOriginIsolation();
+    if (status.crossOriginIsolated) {
+      return;
+    }
+    const entry: LogEntry = {
+      id: generatePrefixedId(idPrefix.log),
+      timestamp: Date.now(),
+      level: 'warn',
+      message: `RuntimeClient: cross-origin isolation is not active (reason: ${status.reason}). SharedArrayBuffer-backed pools and multi-threaded WASM are unavailable; see @taucad/runtime/cross-origin-isolation for setup guidance.`,
+      origin: { component: 'RuntimeClient', operation: 'connect' },
+      data: status,
+    };
+    for (const handler of handlers.log) {
+      handler(entry);
+    }
+  }
+
   async function ensureConnected(connectOptions?: ConnectOptions): Promise<RuntimeWorkerClient> {
     if (workerClient && connected) {
       return workerClient;
     }
+
+    emitIsolationWarningOnce();
 
     const resolvedOptions = connectOptions ?? (options.fileSystem ? { fileSystem: options.fileSystem } : undefined);
 

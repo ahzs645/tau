@@ -12,7 +12,7 @@ import svgSpriteWrapper from 'vite-svg-sprite-wrapper';
 import { defineConfig } from 'vite';
 // oxlint-disable-next-line no-restricted-imports, import/extensions -- allowed for Fumadocs; .js for ESM
 import * as MdxConfig from './app/lib/fumadocs/source.config.js';
-import { crossOriginIsolation } from '@taucad/vite/cross-origin-isolation';
+import { crossOriginIsolation } from '@taucad/runtime/vite';
 import { tsModuleUrlPlugin } from '@taucad/vite/ts-module-url';
 import { base64Loader } from '@taucad/vite/base64-loader';
 import { largeDepRegexFix } from '@taucad/vite/large-dep-regex-fix';
