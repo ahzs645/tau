@@ -112,7 +112,7 @@ Multiple bundlers can be registered simultaneously. Each bundler declares the fi
 
 ### Memory Impact
 
-With the single-worker-per-CU architecture, only the WASM runtime for the selected kernel is loaded:
+With the single-worker-per-geometry-unit architecture, only the WASM runtime for the selected kernel is loaded:
 
 - replicad file: ~55-66 MB (OpenCASCADE WASM)
 - manifold file: ~14 MB (Manifold WASM)
@@ -197,7 +197,7 @@ type RuntimeTransport = {
    │
 2. FileManager writes file → emits fileWritten event
    │
-3. use-project.tsx iterates all compilationUnits with changed path (absolute)
+3. use-project.tsx iterates all geometryUnits with changed path (absolute)
    │
 4. Each CadMachine receives setFile event
    │  ├─ Different file → immediate render

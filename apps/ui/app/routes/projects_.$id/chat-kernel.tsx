@@ -17,13 +17,13 @@ import { cn } from '#utils/ui.utils.js';
 import { PaneviewHeader, PaneviewHeaderControls, paneviewStyleOverrides } from '#components/panes/paneview-header.js';
 import { useProject } from '#hooks/use-project.js';
 import type { cadMachine } from '#machines/cad.machine.js';
-import { sortCompilationEntries } from '#routes/projects_.$id/compilation-unit.utils.js';
-import { CompilationUnitTiming, CompilationUnitSummary } from '#routes/projects_.$id/chat-kernel-timing.js';
-import { CompilationUnitLogs } from '#routes/projects_.$id/chat-kernel-logs.js';
+import { sortGeometryUnitEntries } from '#routes/projects_.$id/geometry-unit.utils.js';
+import { GeometryUnitTiming, GeometryUnitSummary } from '#routes/projects_.$id/chat-kernel-timing.js';
+import { GeometryUnitLogs } from '#routes/projects_.$id/chat-kernel-logs.js';
 import { usePaneviewPersistence, getInitialPanelOptions } from '#routes/projects_.$id/use-chat-interface-state.js';
 
 // ---------------------------------------------------------------------------
-// Paneview panel body: timing + logs for a single CU
+// Paneview panel body: timing + logs for a single geometry unit
 // ---------------------------------------------------------------------------
 
 type KernelPanelParams = {
@@ -34,9 +34,9 @@ type KernelPanelParams = {
 function KernelPanelBody({ params }: { readonly params: KernelPanelParams }): React.JSX.Element {
   return (
     <div>
-      <CompilationUnitTiming cadRef={params.cadRef} />
+      <GeometryUnitTiming cadRef={params.cadRef} />
       <div className='mx-2 border-t border-border/20' />
-      <CompilationUnitLogs entryFile={params.entryFile} />
+      <GeometryUnitLogs entryFile={params.entryFile} />
     </div>
   );
 }
@@ -55,7 +55,7 @@ function KernelPanelHeader({
   return (
     <PaneviewHeader api={api} title={params.entryFile}>
       <PaneviewHeaderControls>
-        <CompilationUnitSummary cadRef={params.cadRef} />
+        <GeometryUnitSummary cadRef={params.cadRef} />
       </PaneviewHeaderControls>
     </PaneviewHeader>
   );
@@ -65,7 +65,7 @@ const paneviewComponents = { kernelPanel: KernelPanelBody };
 const paneviewHeaderComponents = { kernelHeader: KernelPanelHeader };
 
 // ---------------------------------------------------------------------------
-// Multi-CU Paneview layout
+// Multi-geometry unit Paneview layout
 // ---------------------------------------------------------------------------
 
 function KernelPaneview({
@@ -77,7 +77,7 @@ function KernelPaneview({
 }): React.JSX.Element {
   const { savedState, connectApi } = usePaneviewPersistence('kernelPaneview');
 
-  const sortedEntries = useMemo(() => sortCompilationEntries(entries, mainEntryFile), [entries, mainEntryFile]);
+  const sortedEntries = useMemo(() => sortGeometryUnitEntries(entries, mainEntryFile), [entries, mainEntryFile]);
 
   const paneviewKey = useMemo(() => sortedEntries.map(([file]) => file).join('\0'), [sortedEntries]);
 
@@ -123,11 +123,11 @@ function KernelPaneview({
 // ---------------------------------------------------------------------------
 
 function KernelContent(): React.JSX.Element {
-  const { compilationUnits, mainEntryFile } = useProject();
-  const entries = useMemo(() => [...compilationUnits.entries()], [compilationUnits]);
+  const { geometryUnits, mainEntryFile } = useProject();
+  const entries = useMemo(() => [...geometryUnits.entries()], [geometryUnits]);
 
   if (entries.length === 0) {
-    return <p className='p-4 text-center text-xs text-muted-foreground'>No compilation units.</p>;
+    return <p className='p-4 text-center text-xs text-muted-foreground'>No geometry units.</p>;
   }
 
   return <KernelPaneview entries={entries} mainEntryFile={mainEntryFile} />;

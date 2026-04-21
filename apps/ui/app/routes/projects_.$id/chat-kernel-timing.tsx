@@ -21,10 +21,10 @@ import {
 } from '#routes/projects_.$id/chat-kernel-traces.js';
 
 // ---------------------------------------------------------------------------
-// CompilationUnitTiming (orchestrator)
+// GeometryUnitTiming (orchestrator)
 // ---------------------------------------------------------------------------
 
-export const CompilationUnitTiming = memo(function CompilationUnitTiming({
+export const GeometryUnitTiming = memo(function GeometryUnitTiming({
   cadRef,
 }: {
   readonly cadRef: ActorRefFrom<typeof cadMachine>;
@@ -201,10 +201,10 @@ export const CompilationUnitTiming = memo(function CompilationUnitTiming({
 });
 
 // ---------------------------------------------------------------------------
-// CompilationUnitSummary (collapsed header badge)
+// GeometryUnitSummary (collapsed header badge)
 // ---------------------------------------------------------------------------
 
-export const CompilationUnitSummary = memo(function CompilationUnitSummary({
+export const GeometryUnitSummary = memo(function GeometryUnitSummary({
   cadRef,
 }: {
   readonly cadRef: ActorRefFrom<typeof cadMachine>;

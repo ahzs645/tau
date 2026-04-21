@@ -35,8 +35,8 @@ type ProjectContextType = {
   gitRef: ActorRefFrom<typeof gitMachine>;
   /** Per-viewer-panel graphics machines, keyed by Dockview panel ID */
   viewGraphics: Map<string, ActorRefFrom<typeof graphicsMachine>>;
-  /** Dynamic compilation units keyed by entry file path. Each is a headless CadMachine+KernelMachine. */
-  compilationUnits: Map<string, ActorRefFrom<typeof cadMachine>>;
+  /** Dynamic geometry units keyed by entry file path. Each is a headless CadMachine+KernelMachine. */
+  geometryUnits: Map<string, ActorRefFrom<typeof cadMachine>>;
   /** The main entry file path from project.assets.mechanical.main. */
   mainEntryFile: string;
   logRef: ActorRefFrom<typeof logMachine>;
@@ -45,7 +45,7 @@ type ProjectContextType = {
     parameters: Record<string, unknown>,
   ) => void;
   setParameters: (parameters: Record<string, unknown>) => void;
-  setCompilationUnitParameters: (filePath: string, parameters: Record<string, unknown>) => void;
+  setGeometryUnitParameters: (filePath: string, parameters: Record<string, unknown>) => void;
   switchParameterGroup: (filePath: string, groupName: string) => void;
   createParameterGroup: (filePath: string, groupName: string, values?: Record<string, unknown>) => void;
   deleteParameterGroup: (filePath: string, groupName: string) => void;
@@ -204,7 +204,7 @@ export function ProjectProvider({
   // Select state from the machine
   const gitRef = useSelector(actorRef, (state) => state.context.gitRef);
   const viewGraphics = useSelector(actorRef, (state) => state.context.viewGraphics);
-  const compilationUnits = useSelector(actorRef, (state) => state.context.compilationUnits);
+  const geometryUnits = useSelector(actorRef, (state) => state.context.geometryUnits);
   const mainEntryFile = useSelector(
     actorRef,
 
@@ -243,7 +243,7 @@ export function ProjectProvider({
     };
   }, [actorRef, queryClient]);
 
-  // Subscribe to external parameter file changes (per-CU files under the parameters directory)
+  // Subscribe to external parameter file changes (per-geometry-unit files under the parameters directory)
   useEffect(() => {
     const { contentService } = fileManager;
     if (!contentService) {
@@ -283,9 +283,9 @@ export function ProjectProvider({
     [actorRef],
   );
 
-  const setCompilationUnitParameters = useCallback(
+  const setGeometryUnitParameters = useCallback(
     (filePath: string, parameters: Record<string, unknown>) => {
-      actorRef.send({ type: 'setCompilationUnitParameters', filePath, parameters });
+      actorRef.send({ type: 'setGeometryUnitParameters', filePath, parameters });
     },
     [actorRef],
   );
@@ -370,13 +370,13 @@ export function ProjectProvider({
       editorRef,
       gitRef,
       viewGraphics,
-      compilationUnits,
+      geometryUnits,
       mainEntryFile,
       logRef,
       parameterEntries,
       setCodeParameters,
       setParameters,
-      setCompilationUnitParameters,
+      setGeometryUnitParameters,
       switchParameterGroup,
       createParameterGroup,
       deleteParameterGroup,
@@ -394,13 +394,13 @@ export function ProjectProvider({
     editorRef,
     gitRef,
     viewGraphics,
-    compilationUnits,
+    geometryUnits,
     mainEntryFile,
     logRef,
     parameterEntries,
     setCodeParameters,
     setParameters,
-    setCompilationUnitParameters,
+    setGeometryUnitParameters,
     switchParameterGroup,
     createParameterGroup,
     deleteParameterGroup,
@@ -447,6 +447,38 @@ export function useMainGraphics(): ActorRefFrom<typeof graphicsMachine> | undefi
   }
 
   return undefined;
+}
+
+/**
+ * Returns a resolver that maps a source file path to the graphics actor of the
+ * viewer panel currently displaying that file.
+ *
+ * The resolver reads live snapshots on each call so it always reflects the
+ * latest viewer panel layout. Returns `undefined` when no panel displays the
+ * requested file — agent-tool callers translate this into an
+ * `UNKNOWN_GEOMETRY_UNIT` RPC error rather than silently falling back to
+ * the project's `mainEntryFile`.
+ */
+export function useResolveGraphicsForFile(): (targetFile: string) => ActorRefFrom<typeof graphicsMachine> | undefined {
+  const context = useContext(ProjectContext);
+  if (!context) {
+    throw new Error('useResolveGraphicsForFile must be used within a ProjectProvider');
+  }
+
+  const { viewGraphics, editorRef } = context;
+
+  return useCallback(
+    (targetFile: string) => {
+      const viewSettings = editorRef.getSnapshot().context.viewSettings;
+      for (const [viewId, graphicsRef] of viewGraphics) {
+        if (viewSettings[viewId]?.entryFile === targetFile) {
+          return graphicsRef;
+        }
+      }
+      return undefined;
+    },
+    [viewGraphics, editorRef],
+  );
 }
 
 export function useProject<T extends ProjectContextType = ProjectContextType>(options?: {

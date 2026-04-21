@@ -39,12 +39,12 @@ export const ChatViewer = memo(function ({
   panelApi,
   containerApi,
 }: ChatViewerProps): React.JSX.Element {
-  const { projectRef, editorRef, viewGraphics, compilationUnits } = useProject();
+  const { projectRef, editorRef, viewGraphics, geometryUnits } = useProject();
   // Get the per-view graphics machine
   const graphicsActor = viewGraphics.get(viewId);
 
-  // Get the compilation unit for this view's entry file
-  const cadActor = entryFile ? compilationUnits.get(entryFile) : undefined;
+  // Get the geometry unit for this view's entry file
+  const cadActor = entryFile ? geometryUnits.get(entryFile) : undefined;
 
   // Lazy tree snapshot for isDirectory checks (prefix / loaded dir entry)
   const fileTree = useFileTreeMap();
@@ -84,9 +84,9 @@ export const ChatViewer = memo(function ({
   // Handle file selection in the viewport FileSelector
   const handleFileSelect = useCallback(
     (path: string) => {
-      // Ensure compilation unit exists for the selected file
-      if (!compilationUnits.has(path)) {
-        projectRef.send({ type: 'createCompilationUnit', entryFile: path });
+      // Ensure geometry unit exists for the selected file
+      if (!geometryUnits.has(path)) {
+        projectRef.send({ type: 'createGeometryUnit', entryFile: path });
       }
 
       // Preserve existing view settings (FOV, visibility, environment preset, etc.)
@@ -113,7 +113,7 @@ export const ChatViewer = memo(function ({
       const fileName = path.split('/').pop() ?? path;
       panelApi.setTitle(fileName);
     },
-    [projectRef, editorRef, compilationUnits, viewId, panelApi, viewSettings],
+    [projectRef, editorRef, geometryUnits, viewId, panelApi, viewSettings],
   );
 
   // If no graphics actor yet, render a placeholder
@@ -226,13 +226,13 @@ const ViewerContent = memo(function ({
   const units = useCadSelector((state) => state.context.units, undefined);
   const kernelClient = useCadSelector((state) => state.context.kernelClient, undefined);
 
-  // The compilation unit can be closed via the parameters panel context menu.
+  // The geometry unit can be closed via the parameters panel context menu.
   // When that happens cadRef goes undefined, geometries clear, but the panel
   // stays open. Surface a "Reopen renderer" overlay so the user can re-spawn
   // the cad actor without having to re-add the panel.
-  const isCompilationUnitClosed = !cadRef;
+  const isGeometryUnitClosed = !cadRef;
   const handleReopenRenderer = useCallback(() => {
-    projectRef.send({ type: 'createCompilationUnit', entryFile });
+    projectRef.send({ type: 'createGeometryUnit', entryFile });
   }, [projectRef, entryFile]);
 
   // Bridge geometry data from the headless CadMachine to the per-view GraphicsMachine
@@ -322,8 +322,8 @@ const ViewerContent = memo(function ({
         />
       </div>
 
-      {/* Reopen-renderer overlay — shown when the compilation unit was closed */}
-      {isCompilationUnitClosed && (
+      {/* Reopen-renderer overlay — shown when the geometry unit was closed */}
+      {isGeometryUnitClosed && (
         <div className='pointer-events-none absolute inset-0 z-20 flex items-center justify-center'>
           <Button
             type='button'

@@ -77,7 +77,7 @@ function ViewerWatermark({ containerApi, group }: IWatermarkPanelProps): React.J
         },
       });
 
-      projectRef.send({ type: 'createCompilationUnit', entryFile: path });
+      projectRef.send({ type: 'createGeometryUnit', entryFile: path });
     },
     [containerApi, projectRef, editorRef],
   );
@@ -273,7 +273,7 @@ export const ViewerDockview = memo(function (): React.JSX.Element {
   // onReady fires while the project machine is still 'loading', so
   // createViewGraphics events sent there are silently dropped. This effect
   // waits for the project to be ready and then ensures every panel has its
-  // graphics actor and compilation unit. Both actions are idempotent.
+  // graphics actor and geometry unit. Both actions are idempotent.
   //
   // It also assigns `mainEntryFile` to any panel that was seeded without an
   // entryFile (happens when onReady fires before the project loads and the
@@ -323,7 +323,7 @@ export const ViewerDockview = memo(function (): React.JSX.Element {
 
       if (panelEntryFile) {
         projectRef.send({
-          type: 'createCompilationUnit',
+          type: 'createGeometryUnit',
           entryFile: panelEntryFile,
         });
       }
@@ -468,7 +468,7 @@ export const ViewerDockview = memo(function (): React.JSX.Element {
             });
 
             projectRef.send({
-              type: 'createCompilationUnit',
+              type: 'createGeometryUnit',
               entryFile: droppedFile,
             });
           }
@@ -532,7 +532,7 @@ export const ViewerDockview = memo(function (): React.JSX.Element {
         },
       });
 
-      projectRef.send({ type: 'createCompilationUnit', entryFile: filePath });
+      projectRef.send({ type: 'createGeometryUnit', entryFile: filePath });
     },
     [projectRef, editorRef, getInheritedSettings],
   );
@@ -564,7 +564,7 @@ export const ViewerDockview = memo(function (): React.JSX.Element {
         },
       });
 
-      projectRef.send({ type: 'createCompilationUnit', entryFile: path });
+      projectRef.send({ type: 'createGeometryUnit', entryFile: path });
     },
     [projectRef, editorRef, getInheritedSettings],
   );

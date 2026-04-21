@@ -285,12 +285,12 @@ describe('projectMachine', () => {
       actor.stop();
     });
 
-    it('should initialize with empty compilationUnits when shouldLoadModelOnStart is false', async () => {
+    it('should initialize with empty geometryUnits when shouldLoadModelOnStart is false', async () => {
       const actor = await startAndLoad({
         loadResult: stubProjectWithMechanical,
         shouldLoadModelOnStart: false,
       });
-      expect(actor.getSnapshot().context.compilationUnits.size).toBe(0);
+      expect(actor.getSnapshot().context.geometryUnits.size).toBe(0);
       actor.stop();
     });
 
@@ -300,7 +300,7 @@ describe('projectMachine', () => {
         shouldLoadModelOnStart: true,
       });
       expect(actor.getSnapshot().context.mainEntryFile).toBe('main.ts');
-      expect(actor.getSnapshot().context.compilationUnits.has('main.ts')).toBe(true);
+      expect(actor.getSnapshot().context.geometryUnits.has('main.ts')).toBe(true);
       actor.stop();
     });
   });
@@ -381,75 +381,75 @@ describe('projectMachine', () => {
   });
 
   // =========================================================================
-  // State: ready – compilation units
+  // State: ready – geometry units
   // =========================================================================
-  describe('ready – compilation units', () => {
-    it('should create a compilation unit', async () => {
+  describe('ready – geometry units', () => {
+    it('should create a geometry unit', async () => {
       const actor = await startAndLoad();
-      actor.send({ type: 'createCompilationUnit', entryFile: 'main.ts' });
-      expect(actor.getSnapshot().context.compilationUnits.has('main.ts')).toBe(true);
+      actor.send({ type: 'createGeometryUnit', entryFile: 'main.ts' });
+      expect(actor.getSnapshot().context.geometryUnits.has('main.ts')).toBe(true);
       actor.stop();
     });
 
     it('should set mainEntryFile when it is currently empty', async () => {
       const actor = await startAndLoad();
       expect(actor.getSnapshot().context.mainEntryFile).toBe('');
-      actor.send({ type: 'createCompilationUnit', entryFile: 'main.ts' });
+      actor.send({ type: 'createGeometryUnit', entryFile: 'main.ts' });
       expect(actor.getSnapshot().context.mainEntryFile).toBe('main.ts');
       actor.stop();
     });
 
     it('should NOT override mainEntryFile when it is already set', async () => {
       const actor = await startAndLoad();
-      actor.send({ type: 'createCompilationUnit', entryFile: 'first.ts' });
-      actor.send({ type: 'createCompilationUnit', entryFile: 'second.ts' });
+      actor.send({ type: 'createGeometryUnit', entryFile: 'first.ts' });
+      actor.send({ type: 'createGeometryUnit', entryFile: 'second.ts' });
       expect(actor.getSnapshot().context.mainEntryFile).toBe('first.ts');
-      expect(actor.getSnapshot().context.compilationUnits.has('second.ts')).toBe(true);
+      expect(actor.getSnapshot().context.geometryUnits.has('second.ts')).toBe(true);
       actor.stop();
     });
 
-    it('should no-op when creating a compilation unit that already exists', async () => {
+    it('should no-op when creating a geometry unit that already exists', async () => {
       const actor = await startAndLoad();
-      actor.send({ type: 'createCompilationUnit', entryFile: 'main.ts' });
-      const unitBefore = actor.getSnapshot().context.compilationUnits.get('main.ts');
-      actor.send({ type: 'createCompilationUnit', entryFile: 'main.ts' });
-      const unitAfter = actor.getSnapshot().context.compilationUnits.get('main.ts');
+      actor.send({ type: 'createGeometryUnit', entryFile: 'main.ts' });
+      const unitBefore = actor.getSnapshot().context.geometryUnits.get('main.ts');
+      actor.send({ type: 'createGeometryUnit', entryFile: 'main.ts' });
+      const unitAfter = actor.getSnapshot().context.geometryUnits.get('main.ts');
       expect(unitAfter).toBe(unitBefore);
       actor.stop();
     });
 
-    it('should destroy a compilation unit', async () => {
+    it('should destroy a geometry unit', async () => {
       const actor = await startAndLoad();
-      actor.send({ type: 'createCompilationUnit', entryFile: 'main.ts' });
-      expect(actor.getSnapshot().context.compilationUnits.has('main.ts')).toBe(true);
-      actor.send({ type: 'destroyCompilationUnit', entryFile: 'main.ts' });
-      expect(actor.getSnapshot().context.compilationUnits.has('main.ts')).toBe(false);
+      actor.send({ type: 'createGeometryUnit', entryFile: 'main.ts' });
+      expect(actor.getSnapshot().context.geometryUnits.has('main.ts')).toBe(true);
+      actor.send({ type: 'destroyGeometryUnit', entryFile: 'main.ts' });
+      expect(actor.getSnapshot().context.geometryUnits.has('main.ts')).toBe(false);
       actor.stop();
     });
 
-    it('should clear mainEntryFile when destroying the main compilation unit', async () => {
+    it('should clear mainEntryFile when destroying the main geometry unit', async () => {
       const actor = await startAndLoad();
-      actor.send({ type: 'createCompilationUnit', entryFile: 'main.ts' });
+      actor.send({ type: 'createGeometryUnit', entryFile: 'main.ts' });
       expect(actor.getSnapshot().context.mainEntryFile).toBe('main.ts');
-      actor.send({ type: 'destroyCompilationUnit', entryFile: 'main.ts' });
+      actor.send({ type: 'destroyGeometryUnit', entryFile: 'main.ts' });
       expect(actor.getSnapshot().context.mainEntryFile).toBe('');
       actor.stop();
     });
 
-    it('should NOT clear mainEntryFile when destroying a non-main compilation unit', async () => {
+    it('should NOT clear mainEntryFile when destroying a non-main geometry unit', async () => {
       const actor = await startAndLoad();
-      actor.send({ type: 'createCompilationUnit', entryFile: 'main.ts' });
-      actor.send({ type: 'createCompilationUnit', entryFile: 'other.ts' });
+      actor.send({ type: 'createGeometryUnit', entryFile: 'main.ts' });
+      actor.send({ type: 'createGeometryUnit', entryFile: 'other.ts' });
       expect(actor.getSnapshot().context.mainEntryFile).toBe('main.ts');
-      actor.send({ type: 'destroyCompilationUnit', entryFile: 'other.ts' });
+      actor.send({ type: 'destroyGeometryUnit', entryFile: 'other.ts' });
       expect(actor.getSnapshot().context.mainEntryFile).toBe('main.ts');
       actor.stop();
     });
 
-    it('should no-op when destroying a non-existent compilation unit', async () => {
+    it('should no-op when destroying a non-existent geometry unit', async () => {
       const actor = await startAndLoad();
-      actor.send({ type: 'destroyCompilationUnit', entryFile: 'nonexistent.ts' });
-      expect(actor.getSnapshot().context.compilationUnits.size).toBe(0);
+      actor.send({ type: 'destroyGeometryUnit', entryFile: 'nonexistent.ts' });
+      expect(actor.getSnapshot().context.geometryUnits.size).toBe(0);
       actor.stop();
     });
 
@@ -459,7 +459,7 @@ describe('projectMachine', () => {
       actor.on('viewerFileRequested', (event) => emitted.push(event));
 
       actor.send({ type: 'openInViewer', entryFile: 'viewer.ts' });
-      expect(actor.getSnapshot().context.compilationUnits.has('viewer.ts')).toBe(true);
+      expect(actor.getSnapshot().context.geometryUnits.has('viewer.ts')).toBe(true);
       expect(emitted).toHaveLength(1);
       expect(emitted[0]).toMatchObject({ entryFile: 'viewer.ts' });
       actor.stop();
@@ -540,14 +540,14 @@ describe('projectMachine', () => {
       actor.stop();
     });
 
-    it('should update parameters and forward to main compilation unit', async () => {
+    it('should update parameters and forward to main geometry unit', async () => {
       const entries = new Map<string, FileParameterEntry>([['main.ts', createDefaultEntry()]]);
       const actor = await startAndLoad({
         loadResult: stubProjectWithMechanical,
         shouldLoadModelOnStart: true,
         parameterEntries: entries,
       });
-      const mainUnit = actor.getSnapshot().context.compilationUnits.get('main.ts');
+      const mainUnit = actor.getSnapshot().context.geometryUnits.get('main.ts');
       expect(mainUnit).toBeDefined();
 
       actor.send({ type: 'setParameters', parameters: { depth: 5 } });
@@ -569,11 +569,11 @@ describe('projectMachine', () => {
   // State: ready – loadModel
   // =========================================================================
   describe('ready – loadModel', () => {
-    it('should create compilation unit for main file when none exists', async () => {
+    it('should create geometry unit for main file when none exists', async () => {
       const actor = await startAndLoad({ loadResult: stubProjectWithMechanical });
-      expect(actor.getSnapshot().context.compilationUnits.has('main.ts')).toBe(false);
+      expect(actor.getSnapshot().context.geometryUnits.has('main.ts')).toBe(false);
       actor.send({ type: 'loadModel' });
-      expect(actor.getSnapshot().context.compilationUnits.has('main.ts')).toBe(true);
+      expect(actor.getSnapshot().context.geometryUnits.has('main.ts')).toBe(true);
       expect(actor.getSnapshot().context.mainEntryFile).toBe('main.ts');
       actor.stop();
     });
@@ -581,7 +581,7 @@ describe('projectMachine', () => {
     it('should no-op loadModel when no mechanical asset', async () => {
       const actor = await startAndLoad();
       actor.send({ type: 'loadModel' });
-      expect(actor.getSnapshot().context.compilationUnits.size).toBe(0);
+      expect(actor.getSnapshot().context.geometryUnits.size).toBe(0);
       actor.stop();
     });
   });
@@ -741,16 +741,16 @@ describe('projectMachine', () => {
     it('should stop and respawn actors when projectId changes', async () => {
       const actor = await startAndLoad();
 
-      actor.send({ type: 'createCompilationUnit', entryFile: 'old.ts' });
+      actor.send({ type: 'createGeometryUnit', entryFile: 'old.ts' });
       actor.send({ type: 'createViewGraphics', viewId: 'old-view' });
-      expect(actor.getSnapshot().context.compilationUnits.size).toBe(1);
+      expect(actor.getSnapshot().context.geometryUnits.size).toBe(1);
       expect(actor.getSnapshot().context.viewGraphics.size).toBe(1);
 
       actor.send({ type: 'loadProject', projectId: 'new-project' });
       await waitFor(actor, (s) => s.matches({ ready: {} }));
 
       expect(actor.getSnapshot().context.projectId).toBe('new-project');
-      expect(actor.getSnapshot().context.compilationUnits.size).toBe(0);
+      expect(actor.getSnapshot().context.geometryUnits.size).toBe(0);
       expect(actor.getSnapshot().context.viewGraphics.size).toBe(0);
       expect(actor.getSnapshot().context.mainEntryFile).toBe('');
       actor.stop();
@@ -812,7 +812,7 @@ describe('projectMachine', () => {
       expect(context.error).toBeUndefined();
       expect(context.isLoading).toBe(true);
       expect(context.mainEntryFile).toBe('');
-      expect(context.compilationUnits.size).toBe(0);
+      expect(context.geometryUnits.size).toBe(0);
       expect(context.viewGraphics.size).toBe(0);
       actor.stop();
     });
@@ -941,7 +941,7 @@ describe('projectMachine', () => {
       actor.stop();
     });
 
-    it('should write the correct CU file path, not mainEntryFile', async () => {
+    it('should write the correct geometry unit file path, not mainEntryFile', async () => {
       const writtenPaths: string[] = [];
       const entries = new Map<string, FileParameterEntry>([
         ['main.ts', createDefaultEntry()],
@@ -956,14 +956,14 @@ describe('projectMachine', () => {
         },
       });
 
-      actor.send({ type: 'setCompilationUnitParameters', filePath: 'other.ts', parameters: { radius: 5 } });
+      actor.send({ type: 'setGeometryUnitParameters', filePath: 'other.ts', parameters: { radius: 5 } });
       await waitFor(actor, (s) => s.matches({ ready: { parameterStoring: 'idle' } }));
 
       expect(writtenPaths).toEqual(['other.ts']);
       actor.stop();
     });
 
-    it('should drain dirty set and write both CUs when two different CUs change rapidly', async () => {
+    it('should drain dirty set and write both geometry units when two different geometry units change rapidly', async () => {
       const writtenPaths: string[] = [];
       const entries = new Map<string, FileParameterEntry>([
         ['main.ts', createDefaultEntry()],
@@ -978,8 +978,8 @@ describe('projectMachine', () => {
         },
       });
 
-      actor.send({ type: 'setCompilationUnitParameters', filePath: 'main.ts', parameters: { width: 1 } });
-      actor.send({ type: 'setCompilationUnitParameters', filePath: 'other.ts', parameters: { radius: 2 } });
+      actor.send({ type: 'setGeometryUnitParameters', filePath: 'main.ts', parameters: { width: 1 } });
+      actor.send({ type: 'setGeometryUnitParameters', filePath: 'other.ts', parameters: { radius: 2 } });
 
       await waitFor(actor, (s) => s.matches({ ready: { parameterStoring: 'idle' } }));
 
@@ -988,7 +988,7 @@ describe('projectMachine', () => {
       actor.stop();
     });
 
-    it('should deduplicate same-CU rapid fire in dirty set', async () => {
+    it('should deduplicate same-geometry-unit rapid fire in dirty set', async () => {
       const writtenPaths: string[] = [];
       const entries = new Map<string, FileParameterEntry>([['main.ts', createDefaultEntry()]]);
       const actor = await startAndLoad({
@@ -1000,9 +1000,9 @@ describe('projectMachine', () => {
         },
       });
 
-      actor.send({ type: 'setCompilationUnitParameters', filePath: 'main.ts', parameters: { width: 1 } });
-      actor.send({ type: 'setCompilationUnitParameters', filePath: 'main.ts', parameters: { width: 2 } });
-      actor.send({ type: 'setCompilationUnitParameters', filePath: 'main.ts', parameters: { width: 3 } });
+      actor.send({ type: 'setGeometryUnitParameters', filePath: 'main.ts', parameters: { width: 1 } });
+      actor.send({ type: 'setGeometryUnitParameters', filePath: 'main.ts', parameters: { width: 2 } });
+      actor.send({ type: 'setGeometryUnitParameters', filePath: 'main.ts', parameters: { width: 3 } });
 
       await waitFor(actor, (s) => s.matches({ ready: { parameterStoring: 'idle' } }));
 
@@ -1026,8 +1026,8 @@ describe('projectMachine', () => {
         },
       });
 
-      actor.send({ type: 'setCompilationUnitParameters', filePath: 'main.ts', parameters: { width: 1 } });
-      actor.send({ type: 'setCompilationUnitParameters', filePath: 'other.ts', parameters: { radius: 2 } });
+      actor.send({ type: 'setGeometryUnitParameters', filePath: 'main.ts', parameters: { width: 1 } });
+      actor.send({ type: 'setGeometryUnitParameters', filePath: 'other.ts', parameters: { radius: 2 } });
 
       await waitFor(actor, (s) => s.matches({ ready: { parameterStoring: 'idle' } }));
 
@@ -1035,7 +1035,7 @@ describe('projectMachine', () => {
       actor.stop();
     });
 
-    it('should lazily create a default entry for a non-main CU on setCompilationUnitParameters', async () => {
+    it('should lazily create a default entry for a non-main geometry unit on setGeometryUnitParameters', async () => {
       const entries = new Map<string, FileParameterEntry>([['main.ts', createDefaultEntry()]]);
       const writtenInputs: WriteParameterInput[] = [];
       const actor = await startAndLoad({
@@ -1049,7 +1049,7 @@ describe('projectMachine', () => {
 
       expect(actor.getSnapshot().context.parameterEntries.has('other.ts')).toBe(false);
 
-      actor.send({ type: 'setCompilationUnitParameters', filePath: 'other.ts', parameters: { radius: 5 } });
+      actor.send({ type: 'setGeometryUnitParameters', filePath: 'other.ts', parameters: { radius: 5 } });
       await waitFor(actor, (s) => s.matches({ ready: { parameterStoring: 'idle' } }));
 
       const { parameterEntries } = actor.getSnapshot().context;
@@ -1062,7 +1062,7 @@ describe('projectMachine', () => {
       actor.stop();
     });
 
-    it('should lazily init and write valid entry for a non-main CU without throwing', async () => {
+    it('should lazily init and write valid entry for a non-main geometry unit without throwing', async () => {
       const entries = new Map<string, FileParameterEntry>([['main.ts', createDefaultEntry()]]);
       let writeError: Error | undefined;
       const actor = await startAndLoad({
@@ -1077,7 +1077,7 @@ describe('projectMachine', () => {
         },
       });
 
-      actor.send({ type: 'setCompilationUnitParameters', filePath: 'new-cu.ts', parameters: { height: 10 } });
+      actor.send({ type: 'setGeometryUnitParameters', filePath: 'new-cu.ts', parameters: { height: 10 } });
       await waitFor(actor, (s) => s.matches({ ready: { parameterStoring: 'idle' } }));
 
       expect(writeError).toBeUndefined();
@@ -1085,7 +1085,7 @@ describe('projectMachine', () => {
       actor.stop();
     });
 
-    it('should handle rapid parameter changes for a CU that starts without an entry', async () => {
+    it('should handle rapid parameter changes for a geometry unit that starts without an entry', async () => {
       const entries = new Map<string, FileParameterEntry>([['main.ts', createDefaultEntry()]]);
       const writtenInputs: WriteParameterInput[] = [];
       const actor = await startAndLoad({
@@ -1097,9 +1097,9 @@ describe('projectMachine', () => {
         },
       });
 
-      actor.send({ type: 'setCompilationUnitParameters', filePath: 'new-cu.ts', parameters: { x: 1 } });
-      actor.send({ type: 'setCompilationUnitParameters', filePath: 'new-cu.ts', parameters: { x: 2 } });
-      actor.send({ type: 'setCompilationUnitParameters', filePath: 'new-cu.ts', parameters: { x: 3 } });
+      actor.send({ type: 'setGeometryUnitParameters', filePath: 'new-cu.ts', parameters: { x: 1 } });
+      actor.send({ type: 'setGeometryUnitParameters', filePath: 'new-cu.ts', parameters: { x: 2 } });
+      actor.send({ type: 'setGeometryUnitParameters', filePath: 'new-cu.ts', parameters: { x: 3 } });
 
       await waitFor(actor, (s) => s.matches({ ready: { parameterStoring: 'idle' } }));
 
@@ -1112,7 +1112,7 @@ describe('projectMachine', () => {
       actor.stop();
     });
 
-    it('should load multi-CU parameter entries from loadProjectActor and make all accessible', async () => {
+    it('should load multi-geometry-unit parameter entries from loadProjectActor and make all accessible', async () => {
       const secondaryEntry: FileParameterEntry = {
         activeGroup: 'preset-a',
         groups: { 'preset-a': { values: { radius: 42, height: 100 } } },
@@ -1138,7 +1138,7 @@ describe('projectMachine', () => {
       actor.stop();
     });
 
-    it('should merge with pre-loaded non-main CU entry on setCompilationUnitParameters', async () => {
+    it('should merge with pre-loaded non-main geometry unit entry on setGeometryUnitParameters', async () => {
       const secondaryEntry: FileParameterEntry = {
         activeGroup: 'default',
         groups: { default: { values: { radius: 42, depth: 10 } } },
@@ -1157,7 +1157,7 @@ describe('projectMachine', () => {
         },
       });
 
-      actor.send({ type: 'setCompilationUnitParameters', filePath: 'other.ts', parameters: { radius: 99 } });
+      actor.send({ type: 'setGeometryUnitParameters', filePath: 'other.ts', parameters: { radius: 99 } });
       await waitFor(actor, (s) => s.matches({ ready: { parameterStoring: 'idle' } }));
 
       const { parameterEntries } = actor.getSnapshot().context;
@@ -1165,7 +1165,7 @@ describe('projectMachine', () => {
       actor.stop();
     });
 
-    it('should write pre-loaded non-main CU entry content via writeParameterFileActor', async () => {
+    it('should write pre-loaded non-main geometry unit entry content via writeParameterFileActor', async () => {
       const secondaryEntry: FileParameterEntry = {
         activeGroup: 'default',
         groups: { default: { values: { radius: 42 } } },
@@ -1185,7 +1185,7 @@ describe('projectMachine', () => {
         },
       });
 
-      actor.send({ type: 'setCompilationUnitParameters', filePath: 'other.ts', parameters: { radius: 99 } });
+      actor.send({ type: 'setGeometryUnitParameters', filePath: 'other.ts', parameters: { radius: 99 } });
       await waitFor(actor, (s) => s.matches({ ready: { parameterStoring: 'idle' } }));
 
       const otherWrite = writtenInputs.find((w) => w.filePath === 'other.ts');

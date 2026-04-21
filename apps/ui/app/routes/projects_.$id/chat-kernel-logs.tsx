@@ -48,7 +48,7 @@ function VirtualizedLogList({
   );
 }
 
-export const CompilationUnitLogs = memo(function CompilationUnitLogs({
+export const GeometryUnitLogs = memo(function GeometryUnitLogs({
   entryFile,
 }: {
   readonly entryFile: string;

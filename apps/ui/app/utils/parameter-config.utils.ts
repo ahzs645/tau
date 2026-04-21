@@ -3,7 +3,7 @@ import type { FileParameterEntry } from '@taucad/types';
 const defaultParameterGroupName = 'default';
 
 /**
- * Canonical project-relative directory where per-CU parameter files are stored.
+ * Canonical project-relative directory where per-geometry-unit parameter files are stored.
  * All parameter file paths in the UI app must derive from this constant so that
  * the middleware, watchers, and persistence layers stay in sync.
  */

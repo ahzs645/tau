@@ -99,7 +99,7 @@ describe('parameterFileResolverMiddleware', () => {
     expect(handler).toHaveBeenCalledWith(input);
   });
 
-  it('should register watch path for per-CU parameter file', async () => {
+  it('should register watch path for per-geometry-unit parameter file', async () => {
     const { input, handler, runtime } = createTestContext({
       readFileResult: makeEntry({ activeGroup: 'default', groups: {} }),
     });
@@ -205,7 +205,7 @@ describe('parameterFileResolverMiddleware', () => {
   });
 
   describe('getDependencies', () => {
-    it('should return the per-CU parameter file path', () => {
+    it('should return the per-geometry-unit parameter file path', () => {
       const result = parameterFileResolverMiddleware.getDependencies!(
         { filePath: '/projects/test/main.ts', basePath: '/projects/test' },
         { parametersDir: parametersDirectory, watchDebounceMs: 200 },

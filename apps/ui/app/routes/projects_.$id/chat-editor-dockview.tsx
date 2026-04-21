@@ -84,8 +84,8 @@ export const FileEditor = memo(function ({
   readonly panelApi: IDockviewPanelProps['api'];
 }): React.JSX.Element {
   const monaco = useMonaco();
-  const { editorRef, compilationUnits, mainEntryFile } = useProject();
-  const cadActor = compilationUnits.get(mainEntryFile);
+  const { editorRef, geometryUnits, mainEntryFile } = useProject();
+  const cadActor = geometryUnits.get(mainEntryFile);
   const fileManager = useFileManager();
   const { contentService } = fileManager;
   const { modelService, markerService } = useMonacoServices();

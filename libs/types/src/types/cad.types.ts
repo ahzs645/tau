@@ -145,7 +145,7 @@ export type ParsedCadModule = {
 /**
  * Parameter configuration for a single source file.
  * Tracks which parameter group is active and all available groups.
- * Stored as a per-CU file at `.tau/parameters/<entryFile>.json`.
+ * Stored as a per-geometry-unit file at `.tau/parameters/<entryFile>.json`.
  */
 export type FileParameterEntry = {
   activeGroup: string;

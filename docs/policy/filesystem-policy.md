@@ -320,7 +320,7 @@ For render reactivity, use this path only:
 
 INCORRECT:
 
-- `use-project.tsx` relaying `fileWritten` to all compilation units
+- `use-project.tsx` relaying `fileWritten` to all geometry units
 - Sending `changedPaths` on each render command as the primary invalidation mechanism
 - A separate `fileChanged` command from main thread to worker for every edit
 

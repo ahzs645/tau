@@ -35,14 +35,14 @@ export type ProjectContext = {
   gitRef: ActorRefFrom<typeof gitMachine>;
   /** Per-viewer-panel graphics machines, keyed by Dockview panel ID */
   viewGraphics: Map<string, ActorRefFrom<typeof graphicsMachine>>;
-  /** Dynamic compilation units keyed by entry file path. Each is a headless CadMachine+KernelMachine. */
-  compilationUnits: Map<string, ActorRefFrom<typeof cadMachine>>;
+  /** Dynamic geometry units keyed by entry file path. Each is a headless CadMachine+KernelMachine. */
+  geometryUnits: Map<string, ActorRefFrom<typeof cadMachine>>;
   /** The main entry file path from project.assets.mechanical.main. Set after project loads. */
   mainEntryFile: string;
   logRef: ActorRefFrom<typeof logMachine>;
-  /** Per-CU parameter entries, keyed by entry file path. */
+  /** Per-geometry unit parameter entries, keyed by entry file path. */
   parameterEntries: Map<string, FileParameterEntry>;
-  /** CU file paths whose parameter entries need writing to disk. */
+  /** Geometry unit file paths whose parameter entries need writing to disk. */
   dirtyParameterPaths: Set<string>;
 };
 
@@ -111,7 +111,7 @@ type ProjectEventInternal =
       parameters: Record<string, unknown>;
     }
   | { type: 'setParameters'; parameters: Record<string, unknown> }
-  | { type: 'setCompilationUnitParameters'; filePath: string; parameters: Record<string, unknown> }
+  | { type: 'setGeometryUnitParameters'; filePath: string; parameters: Record<string, unknown> }
   | { type: 'parameterFileChanged'; filePath: string; entry: FileParameterEntry }
   | { type: 'switchParameterGroup'; filePath: string; groupName: string }
   | { type: 'createParameterGroup'; filePath: string; groupName: string; values?: Record<string, unknown> }
@@ -119,9 +119,9 @@ type ProjectEventInternal =
   | { type: 'renameParameterGroup'; filePath: string; oldName: string; newName: string }
   | { type: 'loadModel' }
   | { type: 'setMainFile'; path: string }
-  | { type: 'createCompilationUnit'; entryFile: string }
+  | { type: 'createGeometryUnit'; entryFile: string }
   | { type: 'openInViewer'; entryFile: string }
-  | { type: 'destroyCompilationUnit'; entryFile: string }
+  | { type: 'destroyGeometryUnit'; entryFile: string }
   | {
       type: 'createViewGraphics';
       viewId: string;
@@ -283,8 +283,8 @@ export const projectMachine = setup({
       newEntries.set(filePath, updated);
       return { parameterEntries: newEntries };
     }),
-    setCompilationUnitParametersInContext: assign(({ context, event }) => {
-      assertEvent(event, 'setCompilationUnitParameters');
+    setGeometryUnitParametersInContext: assign(({ context, event }) => {
+      assertEvent(event, 'setGeometryUnitParameters');
       const entry = context.parameterEntries.get(event.filePath) ?? createDefaultEntry();
       const { activeGroup } = entry;
       const updated = updateGroupValues(entry, { groupName: activeGroup, values: event.parameters });
@@ -343,8 +343,8 @@ export const projectMachine = setup({
       // Stop the old stateful actors (they'll be garbage collected)
       enqueue.stopChild(context.gitRef);
 
-      // Stop all compilation units
-      for (const unit of context.compilationUnits.values()) {
+      // Stop all geometry units
+      for (const unit of context.geometryUnits.values()) {
         enqueue.stopChild(unit);
       }
 
@@ -363,8 +363,8 @@ export const projectMachine = setup({
           },
         });
       },
-      // Reset compilation units - the primary one will be created during initializeKernelIfNeeded after project load
-      compilationUnits: () => new Map(),
+      // Reset geometry units - the primary one will be created during initializeKernelIfNeeded after project load
+      geometryUnits: () => new Map(),
       mainEntryFile: () => '',
       // Reset view graphics - they'll be created by Dockview viewer panels
       viewGraphics: () => new Map(),
@@ -381,9 +381,9 @@ export const projectMachine = setup({
 
       const mainFile = mechanicalAsset.main;
 
-      if (context.compilationUnits.has(mainFile)) {
+      if (context.geometryUnits.has(mainFile)) {
         enqueue.assign({ mainEntryFile: mainFile });
-        const existingUnit = context.compilationUnits.get(mainFile)!;
+        const existingUnit = context.geometryUnits.get(mainFile)!;
         enqueue.sendTo(existingUnit, {
           type: 'initializeModel',
           file: {
@@ -411,9 +411,9 @@ export const projectMachine = setup({
             },
           });
 
-          const newUnits = new Map(context.compilationUnits);
+          const newUnits = new Map(context.geometryUnits);
           newUnits.set(mainFile, cadUnit as ActorRefFrom<typeof cadMachine>);
-          return { compilationUnits: newUnits, mainEntryFile: mainFile };
+          return { geometryUnits: newUnits, mainEntryFile: mainFile };
         });
       }
     }),
@@ -425,7 +425,7 @@ export const projectMachine = setup({
 
       const mainFile = mechanicalAsset.main;
 
-      const mainUnit = context.compilationUnits.get(mainFile);
+      const mainUnit = context.geometryUnits.get(mainFile);
       if (mainUnit) {
         enqueue.sendTo(mainUnit, {
           type: 'initializeModel',
@@ -454,17 +454,17 @@ export const projectMachine = setup({
             },
           });
 
-          const newUnits = new Map(context.compilationUnits);
+          const newUnits = new Map(context.geometryUnits);
           newUnits.set(mainFile, cadUnit as ActorRefFrom<typeof cadMachine>);
-          return { compilationUnits: newUnits, mainEntryFile: mainFile };
+          return { geometryUnits: newUnits, mainEntryFile: mainFile };
         });
       }
     }),
-    createCompilationUnit: enqueueActions(({ enqueue, context, event }) => {
-      assertEvent(event, 'createCompilationUnit');
+    createGeometryUnit: enqueueActions(({ enqueue, context, event }) => {
+      assertEvent(event, 'createGeometryUnit');
 
-      // No-op if a compilation unit already exists for this entry file
-      if (context.compilationUnits.has(event.entryFile)) {
+      // No-op if a geometry unit already exists for this entry file
+      if (context.geometryUnits.has(event.entryFile)) {
         return;
       }
 
@@ -488,10 +488,10 @@ export const projectMachine = setup({
           },
         });
 
-        const newUnits = new Map(context.compilationUnits);
+        const newUnits = new Map(context.geometryUnits);
         newUnits.set(event.entryFile, cadUnit as ActorRefFrom<typeof cadMachine>);
         return {
-          compilationUnits: newUnits,
+          geometryUnits: newUnits,
           ...(context.mainEntryFile === '' ? { mainEntryFile: event.entryFile } : {}),
         };
       });
@@ -499,25 +499,25 @@ export const projectMachine = setup({
     openInViewer: enqueueActions(({ enqueue, event }) => {
       assertEvent(event, 'openInViewer');
       enqueue.raise({
-        type: 'createCompilationUnit',
+        type: 'createGeometryUnit',
         entryFile: event.entryFile,
       });
       enqueue.emit({ type: 'viewerFileRequested', entryFile: event.entryFile });
     }),
-    destroyCompilationUnit: enqueueActions(({ enqueue, context, event }) => {
-      assertEvent(event, 'destroyCompilationUnit');
+    destroyGeometryUnit: enqueueActions(({ enqueue, context, event }) => {
+      assertEvent(event, 'destroyGeometryUnit');
 
-      const unit = context.compilationUnits.get(event.entryFile);
+      const unit = context.geometryUnits.get(event.entryFile);
       if (!unit) {
         return;
       }
 
       enqueue.stopChild(unit);
       enqueue.assign(({ context }) => {
-        const newUnits = new Map(context.compilationUnits);
+        const newUnits = new Map(context.geometryUnits);
         newUnits.delete(event.entryFile);
         return {
-          compilationUnits: newUnits,
+          geometryUnits: newUnits,
           ...(context.mainEntryFile === event.entryFile ? { mainEntryFile: '' } : {}),
         };
       });
@@ -634,8 +634,8 @@ export const projectMachine = setup({
     });
 
     // Compilation units are created dynamically after project loads (when we know the main file).
-    // The primary compilation unit is created by initializeKernelIfNeeded.
-    const compilationUnits = new Map<string, ActorRefFrom<typeof cadMachine>>();
+    // The primary geometry unit is created by initializeKernelIfNeeded.
+    const geometryUnits = new Map<string, ActorRefFrom<typeof cadMachine>>();
 
     // View graphics are created dynamically by Dockview viewer panels.
     const viewGraphics = new Map<string, ActorRefFrom<typeof graphicsMachine>>();
@@ -650,7 +650,7 @@ export const projectMachine = setup({
       fileManagerRef,
       gitRef,
       viewGraphics,
-      compilationUnits,
+      geometryUnits,
       mainEntryFile: '',
       logRef,
       parameterEntries: new Map(),
@@ -763,8 +763,8 @@ export const projectMachine = setup({
             setParameters: {
               actions: ['setParametersInContext'],
             },
-            setCompilationUnitParameters: {
-              actions: ['setCompilationUnitParametersInContext'],
+            setGeometryUnitParameters: {
+              actions: ['setGeometryUnitParametersInContext'],
             },
             parameterFileChanged: {
               actions: ['handleParameterFileChanged'],
@@ -787,14 +787,14 @@ export const projectMachine = setup({
             setMainFile: {
               actions: 'setMainFileInContext',
             },
-            createCompilationUnit: {
-              actions: 'createCompilationUnit',
+            createGeometryUnit: {
+              actions: 'createGeometryUnit',
             },
             openInViewer: {
               actions: 'openInViewer',
             },
-            destroyCompilationUnit: {
-              actions: 'destroyCompilationUnit',
+            destroyGeometryUnit: {
+              actions: 'destroyGeometryUnit',
             },
             createViewGraphics: {
               actions: 'createViewGraphics',
@@ -905,7 +905,7 @@ export const projectMachine = setup({
             idle: {
               on: {
                 setParameters: { guard: 'hasParameterEntries', target: 'writing', actions: ['addDirtyParameterPath'] },
-                setCompilationUnitParameters: {
+                setGeometryUnitParameters: {
                   guard: 'hasParameterEntries',
                   target: 'writing',
                   actions: ['addDirtyParameterPath'],
@@ -943,7 +943,7 @@ export const projectMachine = setup({
                   reenter: true,
                   actions: ['addDirtyParameterPath'],
                 },
-                setCompilationUnitParameters: {
+                setGeometryUnitParameters: {
                   guard: 'hasParameterEntries',
                   target: 'pending',
                   reenter: true,
@@ -1005,7 +1005,7 @@ export const projectMachine = setup({
               },
               on: {
                 setParameters: { guard: 'hasParameterEntries', target: 'pending', actions: ['addDirtyParameterPath'] },
-                setCompilationUnitParameters: {
+                setGeometryUnitParameters: {
                   guard: 'hasParameterEntries',
                   target: 'pending',
                   actions: ['addDirtyParameterPath'],

@@ -78,8 +78,8 @@ const mockCadRef = {
   })),
 } as unknown as ActorRefFrom<typeof cadMachine>;
 
-const mockCompilationUnits = new Map<string, ActorRefFrom<typeof cadMachine>>();
-mockCompilationUnits.set('main.ts', mockCadRef);
+const mockGeometryUnits = new Map<string, ActorRefFrom<typeof cadMachine>>();
+mockGeometryUnits.set('main.ts', mockCadRef);
 
 vi.mock('#hooks/use-project.js', () => ({
   useProject: () => ({
@@ -88,7 +88,7 @@ vi.mock('#hooks/use-project.js', () => ({
       subscribe: vi.fn(() => ({ unsubscribe: vi.fn() })),
       on: vi.fn(() => ({ unsubscribe: vi.fn() })),
     },
-    compilationUnits: mockCompilationUnits,
+    geometryUnits: mockGeometryUnits,
     mainEntryFile: 'main.ts',
   }),
 }));

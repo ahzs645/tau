@@ -13,9 +13,9 @@ import { useFileManager } from '#hooks/use-file-manager.js';
 import { useFileTreeMap } from '#hooks/use-file-tree.js';
 
 export function ProjectCommandPaletteItems({ match }: { readonly match: UIMatch }): undefined {
-  const { compilationUnits, mainEntryFile, updateThumbnail, projectRef, editorRef } = useProject();
+  const { geometryUnits, mainEntryFile, updateThumbnail, projectRef, editorRef } = useProject();
   const mainGraphicsRef = useMainGraphics();
-  const cadActor = compilationUnits.get(mainEntryFile);
+  const cadActor = geometryUnits.get(mainEntryFile);
   const fileManager = useFileManager();
   const fileTree = useFileTreeMap();
   const geometries = useSelector(cadActor, (state) => state?.context.geometries ?? []);

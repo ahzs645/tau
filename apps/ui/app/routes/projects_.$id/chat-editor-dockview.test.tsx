@@ -23,7 +23,7 @@ vi.mock('#hooks/use-file-manager.js', () => ({
 vi.mock('#hooks/use-project.js', () => ({
   useProject: () => ({
     editorRef: { send: vi.fn() },
-    compilationUnits: new Map(),
+    geometryUnits: new Map(),
     mainEntryFile: 'main.ts',
   }),
 }));

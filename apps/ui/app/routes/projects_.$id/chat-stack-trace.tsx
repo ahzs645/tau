@@ -451,7 +451,7 @@ export function ChatStackTrace({ entryFile, className, side, ...props }: ChatSta
   const cadRef = useCad();
   const isCadActorStale = cadRef ? !cadRef.id.includes(projectId) : true;
 
-  // Get all kernel issues for this viewer's compilation unit via CadProvider context
+  // Get all kernel issues for this viewer's geometry unit via CadProvider context
   const rawErrors = useCadSelector((state) => state.context.kernelIssues.get(entryFile), undefined);
   const errors = isCadActorStale ? undefined : rawErrors;
 

@@ -5,8 +5,8 @@ import { Button } from '#components/ui/button.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 
 export function ProjectExportAction(): React.JSX.Element {
-  const { compilationUnits, mainEntryFile, editorRef } = useProject();
-  const cadActor = compilationUnits.get(mainEntryFile);
+  const { geometryUnits, mainEntryFile, editorRef } = useProject();
+  const cadActor = geometryUnits.get(mainEntryFile);
   const hasGeometry = useSelector(cadActor, (state) => (state?.context.geometries?.length ?? 0) > 0);
 
   const handleClick = (): void => {

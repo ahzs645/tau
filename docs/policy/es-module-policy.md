@@ -213,7 +213,7 @@ V8's caching layers handle compilation efficiently:
 
 ### Future: cross-project worker pooling (low priority)
 
-When switching between projects that use the same kernel type, the worker could be kept alive instead of terminated. The project machine would detach and reattach compilation units rather than destroying them.
+When switching between projects that use the same kernel type, the worker could be kept alive instead of terminated. The project machine would detach and reattach geometry units rather than destroying them.
 
 **Emscripten constraint**: C++ global constructors only run once per instance. OpenCASCADE's global state is initialized during these constructors and cannot be re-run. State cleanup must happen at the application level (e.g., deleting shapes), not by re-creating the Emscripten instance.
 

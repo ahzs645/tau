@@ -40,11 +40,11 @@ describe('handleCaptureScreenshot', () => {
     });
   });
 
-  it('should propagate UNKNOWN_COMPILATION_UNIT errors from the graphics layer unchanged', async () => {
+  it('should propagate UNKNOWN_GEOMETRY_UNIT errors from the graphics layer unchanged', async () => {
     const graphics = mock<RpcGraphicsClient>();
     graphics.captureScreenshot.mockResolvedValue({
       success: false,
-      errorCode: 'UNKNOWN_COMPILATION_UNIT',
+      errorCode: 'UNKNOWN_GEOMETRY_UNIT',
       message: 'No viewer panel currently displays unmounted.ts',
     });
 
@@ -52,7 +52,7 @@ describe('handleCaptureScreenshot', () => {
 
     expect(result).toEqual({
       success: false,
-      errorCode: 'UNKNOWN_COMPILATION_UNIT',
+      errorCode: 'UNKNOWN_GEOMETRY_UNIT',
       message: 'No viewer panel currently displays unmounted.ts',
     });
   });

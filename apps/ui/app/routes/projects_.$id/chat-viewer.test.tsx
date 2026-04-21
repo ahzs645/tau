@@ -25,7 +25,7 @@ vi.mock('@xstate/react', () => ({
 
 const mockProjectSend = vi.fn();
 const mockEditorSend = vi.fn();
-let mockCompilationUnits = new Map<string, ActorRefFrom<typeof cadMachine>>();
+let mockGeometryUnits = new Map<string, ActorRefFrom<typeof cadMachine>>();
 
 const mockGraphicsActor = {
   getSnapshot: vi.fn(() => ({
@@ -66,7 +66,7 @@ vi.mock('#hooks/use-project.js', () => ({
       send: mockEditorSend,
     },
     viewGraphics: mockViewGraphics,
-    compilationUnits: mockCompilationUnits,
+    geometryUnits: mockGeometryUnits,
     mainEntryFile: 'main.scad',
   }),
 }));
@@ -165,12 +165,12 @@ describe('ChatViewer reopen-renderer overlay', () => {
   beforeEach(() => {
     mockProjectSend.mockClear();
     mockEditorSend.mockClear();
-    mockCompilationUnits = new Map();
+    mockGeometryUnits = new Map();
     mockViewGraphics.set('view-1', mockGraphicsActor);
   });
 
-  it('renders the Reopen renderer button when the compilation unit is closed', () => {
-    // `entryFile` is set, the file exists, but compilationUnits.get(entryFile) === undefined
+  it('renders the Reopen renderer button when the geometry unit is closed', () => {
+    // `entryFile` is set, the file exists, but geometryUnits.get(entryFile) === undefined
     render(
       <ChatViewer viewId='view-1' entryFile='helper.scad' panelApi={mockPanelApi} containerApi={mockContainerApi} />,
     );
@@ -178,7 +178,7 @@ describe('ChatViewer reopen-renderer overlay', () => {
     expect(screen.getByRole('button', { name: /reopen renderer/i })).toBeInTheDocument();
   });
 
-  it('dispatches createCompilationUnit when Reopen renderer is clicked', () => {
+  it('dispatches createGeometryUnit when Reopen renderer is clicked', () => {
     render(
       <ChatViewer viewId='view-1' entryFile='helper.scad' panelApi={mockPanelApi} containerApi={mockContainerApi} />,
     );
@@ -187,12 +187,12 @@ describe('ChatViewer reopen-renderer overlay', () => {
 
     expect(mockProjectSend).toHaveBeenCalledTimes(1);
     expect(mockProjectSend).toHaveBeenCalledWith({
-      type: 'createCompilationUnit',
+      type: 'createGeometryUnit',
       entryFile: 'helper.scad',
     });
   });
 
-  it('does not render the overlay when a compilation unit exists for the entry file', () => {
+  it('does not render the overlay when a geometry unit exists for the entry file', () => {
     const cadActor = {
       getSnapshot: vi.fn(() => ({
         context: {
@@ -207,7 +207,7 @@ describe('ChatViewer reopen-renderer overlay', () => {
       on: vi.fn(() => ({ unsubscribe: vi.fn() })),
       id: 'cad-test-helper-scad',
     } as unknown as ActorRefFrom<typeof cadMachine>;
-    mockCompilationUnits.set('helper.scad', cadActor);
+    mockGeometryUnits.set('helper.scad', cadActor);
 
     render(
       <ChatViewer viewId='view-1' entryFile='helper.scad' panelApi={mockPanelApi} containerApi={mockContainerApi} />,

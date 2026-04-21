@@ -2,8 +2,6 @@ import { XIcon, Download, Info, Check, ChevronDown, ChevronRight, Settings2 } fr
 import { useCallback, memo, useState, useMemo, useEffect, useRef } from 'react';
 import { useSelector } from '@xstate/react';
 import type { ActorRefFrom } from 'xstate';
-import type { ExportRoute } from '@taucad/runtime';
-import type { AppRuntimeClient } from '#types/runtime-client.alias.js';
 import type { JSONSchema7 } from '@taucad/json-schema';
 import type { FileExtension } from '@taucad/types';
 import { asBuffer, downloadBlob } from '@taucad/utils/file';
@@ -37,14 +35,16 @@ import { cn } from '#utils/ui.utils.js';
 import { toTitleCase } from '#utils/string.utils.js';
 import { FileExtensionIcon } from '#components/icons/file-extension-icon.js';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '#components/ui/tooltip.js';
-import { formatConfigurations } from '@taucad/types/constants';
 import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
-import { sortCompilationEntries } from '#routes/projects_.$id/compilation-unit.utils.js';
+import { sortGeometryUnitEntries } from '#routes/projects_.$id/geometry-unit.utils.js';
+import type { FormatEntry } from '#routes/projects_.$id/export-formats.utils.js';
+import { deriveAvailableFormats, getFormatInfo } from '#routes/projects_.$id/export-formats.utils.js';
 import type { cadMachine } from '#machines/cad.machine.js';
 import { widgets, templates as rjsfTemplates } from '#components/geometry/parameters/rjsf-theme.js';
 import { rjsfIdPrefix, rjsfIdSeparator } from '#components/geometry/parameters/rjsf-utils.js';
 import { deleteValueAtPath, extractModifiedProperties } from '#utils/object.utils.js';
 import JSZip from 'jszip';
+import type { AppRuntimeClient } from '#types/runtime-client.alias.js';
 
 const toggleConverterKeyCombination = {
   key: 'd',
@@ -78,15 +78,9 @@ export const ChatConverterTrigger = memo(function ({
 // Types
 // =============================================================================
 
-type CompilationUnitEntry = {
+type GeometryUnitEntry = {
   entryFile: string;
   actor: ActorRefFrom<typeof cadMachine>;
-};
-
-type FormatEntry = {
-  format: ExportRoute['targetFormat'];
-  fidelity: ExportRoute['fidelity'];
-  direct: boolean;
 };
 
 type ExportPreferences = {
@@ -108,42 +102,6 @@ const defaultPreferences: ExportPreferences = {
 };
 
 // =============================================================================
-// Format discovery (R8: route selection encapsulated in RuntimeClient helpers)
-// =============================================================================
-
-type ChatConverterClient = Pick<AppRuntimeClient, 'routesFor' | 'bestRouteFor' | 'export' | 'capabilities'>;
-
-function deriveAvailableFormats(
-  client: ChatConverterClient | undefined,
-  activeKernelId: string | undefined,
-): FormatEntry[] {
-  const manifest = client?.capabilities;
-  if (!client || !manifest || !activeKernelId) {
-    return [];
-  }
-
-  const targetFormats = new Set<FileExtension>();
-  for (const route of manifest.routes) {
-    targetFormats.add(route.targetFormat);
-  }
-
-  const formats: FormatEntry[] = [];
-  for (const format of targetFormats) {
-    const route = client.bestRouteFor(format, activeKernelId);
-    if (!route || route.kernelId !== activeKernelId) {
-      continue;
-    }
-    formats.push({
-      format: route.targetFormat,
-      fidelity: route.fidelity,
-      direct: route.transcoderId === undefined,
-    });
-  }
-
-  return formats.sort((a, b) => a.format.localeCompare(b.format));
-}
-
-// =============================================================================
 // Schema resolution
 // =============================================================================
 
@@ -154,7 +112,7 @@ type ResolvedSchema = {
 
 function resolveFormatSchema(
   format: FileExtension,
-  client: ChatConverterClient | undefined,
+  client: AppRuntimeClient | undefined,
   activeKernelId: string | undefined,
 ): ResolvedSchema | undefined {
   if (!client || !activeKernelId) {
@@ -177,12 +135,9 @@ function resolveFormatSchema(
 // Sub-components
 // =============================================================================
 
-const cuGroupedItemsCache = new WeakMap<
-  CompilationUnitEntry[],
-  Array<{ name: string; items: CompilationUnitEntry[] }>
->();
+const cuGroupedItemsCache = new WeakMap<GeometryUnitEntry[], Array<{ name: string; items: GeometryUnitEntry[] }>>();
 
-function getCuGroupedItems(entries: CompilationUnitEntry[]): Array<{ name: string; items: CompilationUnitEntry[] }> {
+function getCuGroupedItems(entries: GeometryUnitEntry[]): Array<{ name: string; items: GeometryUnitEntry[] }> {
   let cached = cuGroupedItemsCache.get(entries);
   if (!cached) {
     cached = [{ name: '', items: entries }];
@@ -191,20 +146,20 @@ function getCuGroupedItems(entries: CompilationUnitEntry[]): Array<{ name: strin
   return cached;
 }
 
-const getCuValue = (entry: CompilationUnitEntry): string => entry.entryFile;
+const getCuValue = (entry: GeometryUnitEntry): string => entry.entryFile;
 
-function CompilationUnitSelector({
+function GeometryUnitSelector({
   entries,
   selectedEntryFile,
   mainEntryFile,
   onSelect,
 }: {
-  readonly entries: CompilationUnitEntry[];
+  readonly entries: GeometryUnitEntry[];
   readonly selectedEntryFile: string;
   readonly mainEntryFile: string;
   readonly onSelect: (entryFile: string) => void;
 }) {
-  // Hidden when a single CU — no need for a selector
+  // Hidden when a single geometry unit — no need for a selector
   if (entries.length <= 1) {
     return null;
   }
@@ -213,7 +168,7 @@ function CompilationUnitSelector({
   const defaultValue = entries.find((entry) => entry.entryFile === selectedEntryFile);
 
   const renderLabel = useCallback(
-    (item: CompilationUnitEntry, selectedItem: CompilationUnitEntry | undefined) => (
+    (item: GeometryUnitEntry, selectedItem: GeometryUnitEntry | undefined) => (
       <span className='flex w-full items-center justify-between gap-2'>
         <span className='flex min-w-0 items-center gap-2'>
           <FileExtensionIcon filename={item.entryFile} className='size-3.5 shrink-0' />
@@ -231,7 +186,7 @@ function CompilationUnitSelector({
   return (
     <div>
       <p className='mb-1.5 text-sm font-medium text-muted-foreground'>Select file to export</p>
-      <ComboBoxResponsive<CompilationUnitEntry>
+      <ComboBoxResponsive<GeometryUnitEntry>
         key={mainEntryFile}
         groupedItems={groupedItems}
         renderLabel={renderLabel}
@@ -239,7 +194,7 @@ function CompilationUnitSelector({
         defaultValue={defaultValue}
         placeholder='Select file'
         searchPlaceHolder='Filter files...'
-        title='Select compilation unit'
+        title='Select geometry unit'
         description='Choose which file to export geometry from.'
         isSearchEnabled={entries.length > 5}
         popoverProperties={{ className: 'w-[min(100vw-2rem,280px)]' }}
@@ -255,13 +210,6 @@ function CompilationUnitSelector({
       </ComboBoxResponsive>
     </div>
   );
-}
-
-function getFormatInfo(format: FileExtension) {
-  if (format in formatConfigurations) {
-    return formatConfigurations[format];
-  }
-  return undefined;
 }
 
 function FormatButton({
@@ -494,7 +442,7 @@ function ExportSettings({
   onOptionsChange,
 }: {
   readonly selectedFormats: FileExtension[];
-  readonly client: ChatConverterClient | undefined;
+  readonly client: AppRuntimeClient | undefined;
   readonly activeKernelId: string | undefined;
   readonly formatOptions: Partial<Record<FileExtension, Record<string, unknown>>>;
   readonly onOptionsChange: (format: FileExtension, options: Record<string, unknown>) => void;
@@ -621,14 +569,14 @@ export const ChatConverter = memo(function (properties: {
   readonly setIsExpanded?: (value: boolean | ((current: boolean) => boolean)) => void;
 }) {
   const { className, isExpanded = true, setIsExpanded } = properties;
-  const { compilationUnits, mainEntryFile, projectRef } = useProject();
+  const { geometryUnits, mainEntryFile, projectRef } = useProject();
   const fileManager = useFileManager();
   const projectName = useSelector(projectRef, (state) => state.context.project?.name) ?? 'model';
 
-  const cuEntries = useMemo<CompilationUnitEntry[]>(() => {
-    const sorted = sortCompilationEntries([...compilationUnits.entries()], mainEntryFile);
+  const cuEntries = useMemo<GeometryUnitEntry[]>(() => {
+    const sorted = sortGeometryUnitEntries([...geometryUnits.entries()], mainEntryFile);
     return sorted.map(([entryFile, actor]) => ({ entryFile, actor }));
-  }, [compilationUnits, mainEntryFile]);
+  }, [geometryUnits, mainEntryFile]);
 
   const [selectedEntryFile, setSelectedEntryFile] = useState(mainEntryFile);
 
@@ -637,12 +585,12 @@ export const ChatConverter = memo(function (properties: {
   }, [mainEntryFile]);
 
   useEffect(() => {
-    if (!compilationUnits.has(selectedEntryFile)) {
+    if (!geometryUnits.has(selectedEntryFile)) {
       setSelectedEntryFile(mainEntryFile);
     }
-  }, [compilationUnits, selectedEntryFile, mainEntryFile]);
+  }, [geometryUnits, selectedEntryFile, mainEntryFile]);
 
-  const selectedActor = compilationUnits.get(selectedEntryFile) ?? compilationUnits.get(mainEntryFile);
+  const selectedActor = geometryUnits.get(selectedEntryFile) ?? geometryUnits.get(mainEntryFile);
 
   const geometries = useSelector(selectedActor, (state) => state?.context.geometries ?? []);
   const capabilities = useSelector(selectedActor, (state) => state?.context.capabilities);
@@ -829,7 +777,7 @@ export const ChatConverter = memo(function (properties: {
             </EmptyItems>
           ) : (
             <div className='flex flex-col gap-3 px-1'>
-              <CompilationUnitSelector
+              <GeometryUnitSelector
                 entries={cuEntries}
                 selectedEntryFile={selectedEntryFile}
                 mainEntryFile={mainEntryFile}

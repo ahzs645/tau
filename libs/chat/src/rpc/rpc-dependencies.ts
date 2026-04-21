@@ -59,7 +59,7 @@ export type RpcRuntimeClient = {
  * Only available in browser environments with a mounted 3D view.
  *
  * Every method takes an explicit `targetFile` so the agent must name the
- * compilation unit it is acting on; there is no project-level fallback.
+ * geometry unit it is acting on; there is no project-level fallback.
  * @public
  */
 export type RpcGraphicsClient = {

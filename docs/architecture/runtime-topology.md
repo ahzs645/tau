@@ -14,7 +14,7 @@ The current kernel render pipeline uses a command-driven, main-thread-orchestrat
 Editor writes file
   → FileService.writeFile() [File Manager Worker]
   → fileManagerRef.send({ fileWritten }) [Main Thread]
-  → use-project.tsx fanout to ALL compilation units [Main Thread]
+  → use-project.tsx fanout to ALL geometry units [Main Thread]
   → cadMachine debounce (500ms) [Main Thread]
   → kernelMachine.createGeometry [Main Thread]
   → RuntimeClient.render({ changedPaths }) [Main Thread]
@@ -24,7 +24,7 @@ Editor writes file
 
 Issues with this topology:
 
-1. **Blind fanout**: Every file write triggers re-renders for ALL compilation units, regardless of whether the file is in that unit's dependency tree.
+1. **Blind fanout**: Every file write triggers re-renders for ALL geometry units, regardless of whether the file is in that unit's dependency tree.
 2. **changedPaths threading**: Changed file paths are manually threaded through 6 layers just to call `Map.delete()` on caches that live in the worker.
 3. **Main thread orchestration overhead**: The main thread decides when to render, but has no information about dependency graphs or cache state -- that knowledge lives in the worker.
 4. **Round-trip latency**: Watch event → main thread → render command → worker adds unnecessary latency to the hot path.
@@ -454,7 +454,7 @@ The current kernelMachine exists because the old protocol required orchestrating
 
 ### use-project.tsx
 
-**Before:** Lines 148-167 subscribe to `fileWritten` and fan out `setFile` to every compilation unit.
+**Before:** Lines 148-167 subscribe to `fileWritten` and fan out `setFile` to every geometry unit.
 
 **After:** Entire relay deleted. Nothing replaces it -- the worker watches its own dependencies.
 

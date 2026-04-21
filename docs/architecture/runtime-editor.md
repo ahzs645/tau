@@ -17,7 +17,7 @@ Three runtime contexts collaborate to turn user code into 3D geometry:
 │  Parameters UI   ─── setParams ──▶│
 │  Three.js viewport ◀── geometry   │
 │  cadMachine (display state)        │
-│  projectMachine (compilation units)  │
+│  projectMachine (geometry units)  │
 └──────────┬──────────┬──────────────┘
            │          │
    MessagePort   MessagePort
@@ -34,7 +34,7 @@ Three runtime contexts collaborate to turn user code into 3D geometry:
 
 **File Manager Worker**: single instance hosting `FileService`, `ProviderRegistry`, `WriteCoordinator`, `DirectoryTreeCache`, and `ChangeEventBus`. Owns all ZenFS access. Serves both the main thread and kernel workers via the bridge protocol.
 
-**Kernel Worker**: one per compilation unit. Runs bundler (esbuild), executes user code, computes geometry, tessellates, and pushes results. Watches its dependency graph via the filesystem bridge.
+**Kernel Worker**: one per geometry unit. Runs bundler (esbuild), executes user code, computes geometry, tessellates, and pushes results. Watches its dependency graph via the filesystem bridge.
 
 **Main Thread**: display and user input only. No render orchestration, no dependency tracking, no cache management.
 
@@ -178,7 +178,7 @@ No mutation-triggered full recursive tree scans.
 
 ## Compilation Unit Lifecycle
 
-A compilation unit is a single `cadMachine` actor managing one runtime worker for one entry file:
+A geometry unit is a single `cadMachine` actor managing one runtime worker for one entry file:
 
 ```
 projectMachine spawns cadMachine(entryFile, kernelType)

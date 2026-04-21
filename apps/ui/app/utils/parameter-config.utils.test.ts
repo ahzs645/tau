@@ -344,7 +344,7 @@ describe('parameter-config.utils', () => {
   });
 
   describe('parameterEntryPath', () => {
-    it('should return the per-CU parameter file path', () => {
+    it('should return the per-geometry-unit parameter file path', () => {
       expect(parameterEntryPath('main.ts')).toBe(`${parametersDirectory}/main.ts.json`);
     });
 

@@ -10,9 +10,7 @@ export const screenshotInputSchema = z.object({
     .describe('single: current camera perspective. multi_angle: all 6 orthographic views'),
   targetFile: z
     .string()
-    .describe(
-      'Source file path of the compilation unit to screenshot (e.g. "main.ts", "lib/bracket.scad"). Required — there is no implicit fallback to a project-level main entry file.',
-    ),
+    .describe('Source file path of the geometry unit to screenshot (e.g. "main.ts", "lib/bracket.scad").'),
 });
 /** @public */
 export type ScreenshotInput = z.infer<typeof screenshotInputSchema>;

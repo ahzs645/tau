@@ -27,11 +27,12 @@ import { observationSchema } from '#schemas/tools/test-model.tool.schema.js';
  */
 export const rpcClientErrorCodeSchema = zod.enum([
   'FILE_NOT_FOUND',
+  'NO_TOP_LEVEL_GEOMETRY',
   'PERMISSION_DENIED',
   'IO_ERROR',
   'PARSE_ERROR',
   'UNKNOWN',
-  'UNKNOWN_COMPILATION_UNIT',
+  'UNKNOWN_GEOMETRY_UNIT',
 ]);
 
 /**

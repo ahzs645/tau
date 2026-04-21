@@ -8,10 +8,10 @@ type CadActorRef = ActorRefFrom<typeof cadMachine>;
 const CadContext = createContext<CadActorRef | undefined>(undefined);
 
 /**
- * Provider that makes the per-view compilation unit (cad machine) available to all descendants.
+ * Provider that makes the per-view geometry unit (cad machine) available to all descendants.
  * Placed in ChatViewer alongside GraphicsProvider.
  *
- * Unlike GraphicsProvider, the value may be `undefined` when the compilation unit
+ * Unlike GraphicsProvider, the value may be `undefined` when the geometry unit
  * has not yet been created for the current entry file.
  */
 export function CadProvider({
@@ -26,7 +26,7 @@ export function CadProvider({
 
 /**
  * Returns the per-view cad actor ref from the nearest CadProvider.
- * May return `undefined` if no compilation unit exists yet.
+ * May return `undefined` if no geometry unit exists yet.
  * Use for `.send()` calls to dispatch events to the cad machine.
  */
 export function useCad(): CadActorRef | undefined {

@@ -29,12 +29,12 @@ const mockCadRef2 = {
   on: vi.fn(() => ({ unsubscribe: vi.fn() })),
 } as unknown as ActorRefFrom<typeof cadMachine>;
 
-let mockCompilationUnits = new Map<string, ActorRefFrom<typeof cadMachine>>();
+let mockGeometryUnits = new Map<string, ActorRefFrom<typeof cadMachine>>();
 const mockMainEntryFile = 'main.ts';
 
 vi.mock('#hooks/use-project.js', () => ({
   useProject: () => ({
-    compilationUnits: mockCompilationUnits,
+    geometryUnits: mockGeometryUnits,
     mainEntryFile: mockMainEntryFile,
     logRef: {
       getSnapshot: vi.fn(() => ({
@@ -93,12 +93,12 @@ vi.mock('#components/ui/floating-panel.js', () => ({
 }));
 
 vi.mock('#routes/projects_.$id/chat-kernel-timing.js', () => ({
-  CompilationUnitTiming: () => <div data-testid='cu-timing'>Timing</div>,
-  CompilationUnitSummary: () => <span data-testid='cu-summary'>Summary</span>,
+  GeometryUnitTiming: () => <div data-testid='cu-timing'>Timing</div>,
+  GeometryUnitSummary: () => <span data-testid='cu-summary'>Summary</span>,
 }));
 
 vi.mock('#routes/projects_.$id/chat-kernel-logs.js', () => ({
-  CompilationUnitLogs: ({ entryFile }: { entryFile: string }) => <div data-testid='cu-logs'>{entryFile}</div>,
+  GeometryUnitLogs: ({ entryFile }: { entryFile: string }) => <div data-testid='cu-logs'>{entryFile}</div>,
 }));
 
 vi.mock('#routes/projects_.$id/use-chat-interface-state.js', () => ({
@@ -115,11 +115,11 @@ vi.mock('#routes/projects_.$id/use-chat-interface-state.js', () => ({
 
 describe('ChatKernel', () => {
   beforeEach(() => {
-    mockCompilationUnits = new Map<string, ActorRefFrom<typeof cadMachine>>();
+    mockGeometryUnits = new Map<string, ActorRefFrom<typeof cadMachine>>();
   });
 
-  it('should render single CU inside PaneviewReact', async () => {
-    mockCompilationUnits.set('main.ts', mockCadRef);
+  it('should render single geometry unit inside PaneviewReact', async () => {
+    mockGeometryUnits.set('main.ts', mockCadRef);
 
     const { ChatKernel } = await import('./chat-kernel.js');
     render(<ChatKernel isExpanded setIsExpanded={vi.fn()} />);
@@ -128,9 +128,9 @@ describe('ChatKernel', () => {
     expect(screen.getByTestId('pane-main.ts')).toBeInTheDocument();
   });
 
-  it('renders PaneviewReact for multiple CUs', async () => {
-    mockCompilationUnits.set('main.ts', mockCadRef);
-    mockCompilationUnits.set('helper.ts', mockCadRef2);
+  it('renders PaneviewReact for multiple geometry units', async () => {
+    mockGeometryUnits.set('main.ts', mockCadRef);
+    mockGeometryUnits.set('helper.ts', mockCadRef2);
 
     const { ChatKernel } = await import('./chat-kernel.js');
     render(<ChatKernel isExpanded setIsExpanded={vi.fn()} />);
@@ -139,8 +139,8 @@ describe('ChatKernel', () => {
   });
 
   it('places mainFile first when using PaneviewReact', async () => {
-    mockCompilationUnits.set('helper.ts', mockCadRef2);
-    mockCompilationUnits.set('main.ts', mockCadRef);
+    mockGeometryUnits.set('helper.ts', mockCadRef2);
+    mockGeometryUnits.set('main.ts', mockCadRef);
 
     const { ChatKernel } = await import('./chat-kernel.js');
     render(<ChatKernel isExpanded setIsExpanded={vi.fn()} />);
@@ -150,8 +150,8 @@ describe('ChatKernel', () => {
   });
 
   it('expands mainFile pane by default', async () => {
-    mockCompilationUnits.set('helper.ts', mockCadRef2);
-    mockCompilationUnits.set('main.ts', mockCadRef);
+    mockGeometryUnits.set('helper.ts', mockCadRef2);
+    mockGeometryUnits.set('main.ts', mockCadRef);
 
     const { ChatKernel } = await import('./chat-kernel.js');
     render(<ChatKernel isExpanded setIsExpanded={vi.fn()} />);
@@ -163,11 +163,11 @@ describe('ChatKernel', () => {
     expect(helperPane.dataset['expanded']).toBe('false');
   });
 
-  it('shows empty message when no compilation units', async () => {
+  it('shows empty message when no geometry units', async () => {
     const { ChatKernel } = await import('./chat-kernel.js');
     render(<ChatKernel isExpanded setIsExpanded={vi.fn()} />);
 
-    expect(screen.getByText('No compilation units.')).toBeInTheDocument();
+    expect(screen.getByText('No geometry units.')).toBeInTheDocument();
   });
 });
 
