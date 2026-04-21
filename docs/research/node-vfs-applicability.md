@@ -167,7 +167,7 @@ test('kernel reads source file', (t) => {
     prefix: '/project',
     files: {
       '/main.ts': 'cube([10, 10, 10])',
-      '/test.json': '{ "requirements": [] }',
+      '/test.json': '{ "main.ts": { "requirements": [] } }',
     },
   });
   // kernel code uses standard fs.readFileSync — no mocks needed
