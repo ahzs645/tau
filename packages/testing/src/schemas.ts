@@ -24,14 +24,29 @@ export type BoundingBoxExpected = z.infer<typeof boundingBoxExpectedSchema>;
 
 /**
  * Measurement test requirement -- verified by deterministic geometry analysis.
- * Supports: boundingBox, meshCount, vertexCount, connectedComponents, watertight.
+ *
+ * The agent-facing check vocabulary is intentionally narrow. Each of the
+ * three checks answers a question none of the others can:
+ *  - `boundingBox`   — overall extents and centre (mm)
+ *  - `connectedComponents` — number of spatially-disjoint chunks (clustered
+ *    via per-primitive AABB overlap with a tunable `tolerance`)
+ *  - `watertight`    — the part is a closed manifold (3D-printable)
+ *
+ * Raw mesh statistics (`meshCount`, `vertexCount`) remain available to
+ * kernel authors via the in-package Vitest harness but are not exposed
+ * to the LLM (see `docs/research/mesh-continuity-test-semantics.md`).
  * @public
  */
 export const measurementTestRequirementSchema = baseTestRequirementSchema.extend({
   type: z.literal('measurement'),
-  check: z.enum(['boundingBox', 'meshCount', 'vertexCount', 'connectedComponents', 'watertight']),
+  check: z.enum(['boundingBox', 'connectedComponents', 'watertight']),
   expected: z.record(z.string(), z.unknown()).optional().describe('Expected values for the measurement'),
-  tolerance: z.number().optional().describe('Acceptable tolerance for the measurement (default: 0.1)'),
+  tolerance: z
+    .number()
+    .optional()
+    .describe(
+      'Tolerance for the check. For boundingBox: per-axis dimensional slack in mm (default 0.1). For connectedComponents: maximum AABB gap in mm that still counts as connected — raise this when intentional small gaps between touching parts must collapse into one cluster (default 0.1). Ignored for watertight.',
+    ),
 });
 /** @public */
 export type MeasurementTestRequirement = z.infer<typeof measurementTestRequirementSchema>;

@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/naming-convention -- file-path keys (e.g. 'main.ts') aren't camelCase */
 import { describe, expect, it } from 'vitest';
 import {
+  measurementTestRequirementSchema,
   testFailureSchema,
   testFileEntrySchema,
   testFileSchema,
@@ -66,11 +67,38 @@ describe('testFileSchema', () => {
           id: 'flat',
           description: 'Flat-shape requirement',
           type: 'measurement',
-          check: 'meshCount',
+          check: 'connectedComponents',
         },
       ],
     });
     expect(result.success).toBe(false);
+  });
+
+  it('should reject the deprecated meshCount check (consolidated away from the agent surface)', () => {
+    const result = measurementTestRequirementSchema.safeParse({
+      id: 'req_legacy',
+      description: 'legacy mesh count',
+      type: 'measurement',
+      check: 'meshCount',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('should reject the deprecated vertexCount check (consolidated away from the agent surface)', () => {
+    const result = measurementTestRequirementSchema.safeParse({
+      id: 'req_legacy_vertex',
+      description: 'legacy vertex count',
+      type: 'measurement',
+      check: 'vertexCount',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('should expose exactly the consolidated 3-check enum on the agent-facing surface', () => {
+    // Snapshot the surviving check vocabulary so any drift here forces an
+    // intentional update across prompt + tool descriptions + research doc.
+    const checkSchema = measurementTestRequirementSchema.shape.check;
+    expect(checkSchema.options).toEqual(['boundingBox', 'connectedComponents', 'watertight']);
   });
 
   it('should reject a file entry missing requirements', () => {

@@ -3,11 +3,12 @@ title: 'Testing Policy'
 description: 'Writing high-quality tests across the Tau monorepo. Assert observable behavior, error assertions, resource cleanup, mock factories, and async patterns. Covers Vitest, kernel tests, and API tests.'
 status: active
 created: '2026-03-09'
-updated: '2026-03-10'
+updated: '2026-04-21'
 related:
   - docs/policy/react-testing-policy.md
   - docs/policy/typescript-policy.md
   - docs/research/typescript-overloads.md
+  - docs/research/mesh-continuity-test-semantics.md
 ---
 
 # Testing Policy
@@ -319,6 +320,15 @@ INCORRECT:
 const client = {} as unknown as RuntimeClient;
 const options = {} as unknown as RuntimeClientOptions;
 ```
+
+## 12. Geometry-Test Surface
+
+The agent-facing geometry-test surface (`test.json` requirements consumed by `test_model`) is a **deliberately consolidated 3-check vocabulary**: `boundingBox`, `connectedComponents`, and `watertight`. Treat this list as closed.
+
+1. **The 3-check rule.** Every agent-facing check must answer a question none of the other two can. `boundingBox` answers size/position; `connectedComponents` answers spatial-chunk count; `watertight` answers per-geometry-unit closed-manifold. Adding a new check requires demonstrating, in writing in the proposal, that no existing check (with reasonable parameter tuning) can answer the new question.
+2. **`watertight` is the canonical "single fused solid" assertion.** Assert `watertight` per geometry unit (e.g. `lib/<part>.ts`) — the boolean fuse welded iff the surface is closed-manifold. Do **not** use `connectedComponents: 1` for that intent: `connectedComponents` answers "how many spatial chunks," not "did the boolean fuse weld."
+3. **Pure-GLB only.** All agent-facing geometry checks must operate purely on the GLB output. No kernel `extras`, no per-kernel metadata propagation, no scene-level cooperation. Future kernels emit valid glTF and the checks work; if a check needs more than the GLB tells it, redesign the algorithm (see [`mesh-continuity-test-semantics.md`](../research/mesh-continuity-test-semantics.md) for the AABB-clustering rewrite of `connectedComponents`).
+4. **Kernel-author surface stays separate.** Raw mesh-count / vertex-count assertions remain available to kernel authors via `expectMeshCount` / `expectVertexCount` in `@taucad/runtime/testing` for Vitest-based kernel tests. The two surfaces intentionally do not share a vocabulary; do not mirror low-level helpers back into the agent surface.
 
 ## Summary Checklist
 

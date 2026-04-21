@@ -4,6 +4,14 @@ import type { GeometryStats, CheckResult } from '#geometry/types.js';
 
 const defaultTolerance = 0.1;
 
+/**
+ * Default AABB-overlap tolerance (mm) for the `connectedComponents` check.
+ * Mirrors the schema description so the prompt copy and the runtime stay in
+ * lockstep when the default ever changes.
+ * @public
+ */
+export const defaultConnectedToleranceMm = 0.1;
+
 const checkBoundingBox = (
   requirement: MeasurementTestRequirement,
   stats: GeometryStats,
@@ -100,54 +108,27 @@ export const evaluateRequirement = (requirement: MeasurementTestRequirement, sta
       return checkBoundingBox(requirement, stats, tolerance);
     }
 
-    case 'meshCount': {
-      const expected = (requirement.expected as { count?: number } | undefined)?.count;
-      if (expected === undefined) {
-        return { passed: false, reason: 'Missing expected.count', suggestion: 'Add expected: { count: N }' };
-      }
-
-      if (stats.meshCount !== expected) {
-        return {
-          passed: false,
-          reason: `Mesh count: expected ${expected}, got ${stats.meshCount}`,
-          suggestion: `Adjust the model to produce ${expected} mesh(es).`,
-        };
-      }
-
-      return { passed: true, reason: '', suggestion: '' };
-    }
-
     case 'connectedComponents': {
       const expected = (requirement.expected as { count?: number } | undefined)?.count;
       if (expected === undefined) {
         return { passed: false, reason: 'Missing expected.count', suggestion: 'Add expected: { count: N }' };
       }
 
-      if (stats.connectedComponents !== expected) {
+      const ccTolerance = requirement.tolerance ?? defaultConnectedToleranceMm;
+      const actual = stats.connectedComponents(ccTolerance);
+      if (actual !== expected) {
+        const raisedTolerance = Math.max(ccTolerance * 10, 1);
         return {
           passed: false,
-          reason: `Connected components: expected ${expected}, got ${stats.connectedComponents}`,
+          reason: `Connected components: expected ${expected}, got ${actual} (tolerance: ${ccTolerance}mm)`,
           suggestion:
-            stats.connectedComponents > expected
-              ? `Model has ${stats.connectedComponents} disconnected pieces — ensure all parts are fused into ${expected} solid(s).`
-              : `Model has fewer connected pieces than expected.`,
-        };
-      }
-
-      return { passed: true, reason: '', suggestion: '' };
-    }
-
-    case 'vertexCount': {
-      const expected = (requirement.expected as { count?: number } | undefined)?.count;
-      if (expected === undefined) {
-        return { passed: false, reason: 'Missing expected.count', suggestion: 'Add expected: { count: N }' };
-      }
-
-      if (Math.abs(stats.vertexCount - expected) > tolerance) {
-        return {
-          passed: false,
-          reason: `Vertex count: expected ${expected} (±${tolerance}), got ${stats.vertexCount}`,
-          suggestion: `Model has ${stats.vertexCount} vertices, expected ~${expected}.`,
+            actual > expected
+              ? `Got ${actual} disjoint chunks at ${ccTolerance}mm tolerance. If parts visibly touch, ` +
+                `raise tolerance (e.g. tolerance: ${raisedTolerance}). If parts are ` +
+                `intentionally separate, raise expected.count to ${actual}. If you want them welded ` +
+                `into one solid, fuse them in the kernel and assert watertight on the resulting CU.`
+              : `Got ${actual} disjoint chunks (fewer than expected). Either lower expected.count to ` +
+                `${actual} or split the model so it returns ${expected} top-level shapes.`,
         };
       }
 
@@ -159,7 +140,11 @@ export const evaluateRequirement = (requirement: MeasurementTestRequirement, sta
         return {
           passed: false,
           reason: 'Mesh is not watertight (has boundary edges)',
-          suggestion: 'Ensure all faces form a closed manifold with no gaps or holes.',
+          suggestion:
+            'The surface has gaps. If you are asserting on an assembled main.ts that returns ' +
+            'multiple ShapeConfigs, move this requirement into each lib/<part>.ts entry instead — ' +
+            'multi-part assemblies are watertight per CU, not as one mesh. Otherwise check for ' +
+            'failed boolean ops (use screenshot to inspect) or replace Compound with proper fuse.',
         };
       }
       return { passed: true, reason: '', suggestion: '' };
@@ -170,7 +155,7 @@ export const evaluateRequirement = (requirement: MeasurementTestRequirement, sta
       return {
         passed: false,
         reason: `Unknown check type: ${String(_exhaustive)}`,
-        suggestion: 'Use one of: boundingBox, meshCount, connectedComponents, vertexCount, watertight',
+        suggestion: 'Use one of: boundingBox, connectedComponents, watertight',
       };
     }
   }

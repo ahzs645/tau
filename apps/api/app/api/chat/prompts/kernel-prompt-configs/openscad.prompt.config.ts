@@ -12,4 +12,6 @@ export const openscadConfig: KernelConfig = {
 
   fileLayoutMode: 'full-nesting',
   canonicalExample,
+
+  topLevelExportExample: 'myModule();',
 };

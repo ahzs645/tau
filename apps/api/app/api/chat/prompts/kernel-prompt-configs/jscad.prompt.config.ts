@@ -18,4 +18,6 @@ ${jscadModelingTypes}
 
   fileLayoutMode: 'full-nesting',
   canonicalExample,
+
+  topLevelExportExample: 'export default function main(p = defaultParams): Geom3 { return makePart(p); }',
 };

@@ -16,4 +16,6 @@ ${kclStdlibReference}
 
   fileLayoutMode: 'assembly-only',
   canonicalExample,
+
+  topLevelExportExample: 'part = startSketchOn(XY) |> ... |> extrude(length = 10)',
 };

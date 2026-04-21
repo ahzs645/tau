@@ -12,4 +12,6 @@ export const opencascadejsConfig: KernelConfig = {
 
   fileLayoutMode: 'full-nesting',
   canonicalExample,
+
+  topLevelExportExample: 'export default function main(p = defaultParams): TopoDS_Shape { return makePart(p); }',
 };

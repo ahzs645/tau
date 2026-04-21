@@ -139,57 +139,11 @@ describe('evaluateRequirement', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // Mesh count
-  // ---------------------------------------------------------------------------
-
-  describe('meshCount', () => {
-    it('should pass for correct count', () => {
-      const requirement: MeasurementTestRequirement = {
-        id: 'mc1',
-        description: 'single mesh',
-        type: 'measurement',
-        check: 'meshCount',
-        expected: { count: 1 },
-      };
-
-      expect(evaluateRequirement(requirement, boxStats).passed).toBe(true);
-    });
-
-    it('should fail for wrong count', () => {
-      const requirement: MeasurementTestRequirement = {
-        id: 'mc1',
-        description: 'wrong count',
-        type: 'measurement',
-        check: 'meshCount',
-        expected: { count: 5 },
-      };
-
-      const result = evaluateRequirement(requirement, boxStats);
-      expect(result.passed).toBe(false);
-      expect(result.reason).toContain('Mesh count');
-    });
-
-    it('should fail when expected.count is missing', () => {
-      const requirement: MeasurementTestRequirement = {
-        id: 'mc1',
-        description: 'missing count',
-        type: 'measurement',
-        check: 'meshCount',
-        expected: {},
-      };
-
-      const result = evaluateRequirement(requirement, boxStats);
-      expect(result.passed).toBe(false);
-      expect(result.reason).toContain('Missing expected.count');
-    });
-  });
-
-  // ---------------------------------------------------------------------------
   // Connected components
   // ---------------------------------------------------------------------------
 
   describe('connectedComponents', () => {
-    it('should pass for correct count', () => {
+    it('should pass for correct count using the default tolerance', () => {
       const requirement: MeasurementTestRequirement = {
         id: 'cc1',
         description: 'single solid',
@@ -201,18 +155,88 @@ describe('evaluateRequirement', () => {
       expect(evaluateRequirement(requirement, boxStats).passed).toBe(true);
     });
 
-    it('should fail for wrong count', () => {
+    it('should call the connectedComponents getter with the default tolerance (0.1mm) when omitted', () => {
+      const calls: number[] = [];
+      const stubStats: GeometryStats = {
+        ...boxStats,
+        connectedComponents: (toleranceMm) => {
+          calls.push(toleranceMm);
+          return 1;
+        },
+      };
       const requirement: MeasurementTestRequirement = {
-        id: 'cc1',
-        description: 'wrong count',
+        id: 'cc_default',
+        description: 'default tolerance',
         type: 'measurement',
         check: 'connectedComponents',
-        expected: { count: 5 },
+        expected: { count: 1 },
       };
 
-      const result = evaluateRequirement(requirement, boxStats);
+      evaluateRequirement(requirement, stubStats);
+      expect(calls).toEqual([0.1]);
+    });
+
+    it('should forward a custom tolerance through to the connectedComponents getter', () => {
+      const calls: number[] = [];
+      const stubStats: GeometryStats = {
+        ...boxStats,
+        connectedComponents: (toleranceMm) => {
+          calls.push(toleranceMm);
+          return 1;
+        },
+      };
+      const requirement: MeasurementTestRequirement = {
+        id: 'cc_custom',
+        description: 'custom tolerance',
+        type: 'measurement',
+        check: 'connectedComponents',
+        expected: { count: 1 },
+        tolerance: 50,
+      };
+
+      evaluateRequirement(requirement, stubStats);
+      expect(calls).toEqual([50]);
+    });
+
+    it('should produce the rich failure suggestion when actual exceeds expected', () => {
+      const stubStats: GeometryStats = {
+        ...boxStats,
+        connectedComponents: () => 3,
+      };
+      const requirement: MeasurementTestRequirement = {
+        id: 'cc_fail',
+        description: 'should be fused',
+        type: 'measurement',
+        check: 'connectedComponents',
+        expected: { count: 1 },
+      };
+
+      const result = evaluateRequirement(requirement, stubStats);
       expect(result.passed).toBe(false);
-      expect(result.reason).toContain('Connected components');
+      expect(result.reason).toContain('expected 1, got 3 (tolerance: 0.1mm)');
+      expect(result.suggestion).toContain('disjoint chunks at 0.1mm tolerance');
+      expect(result.suggestion).toContain('raise tolerance');
+      expect(result.suggestion).toContain('raise expected.count to 3');
+      expect(result.suggestion).toContain('fuse them in the kernel and assert watertight');
+    });
+
+    it('should produce the lower-than-expected failure suggestion when actual is below expected', () => {
+      const stubStats: GeometryStats = {
+        ...boxStats,
+        connectedComponents: () => 1,
+      };
+      const requirement: MeasurementTestRequirement = {
+        id: 'cc_low',
+        description: 'expected too many parts',
+        type: 'measurement',
+        check: 'connectedComponents',
+        expected: { count: 4 },
+      };
+
+      const result = evaluateRequirement(requirement, stubStats);
+      expect(result.passed).toBe(false);
+      expect(result.suggestion).toContain('lower expected.count to 1');
+      expect(result.suggestion).toContain('split the model so it returns 4 top-level shapes');
     });
 
     it('should fail when expected.count is missing', () => {
@@ -221,52 +245,6 @@ describe('evaluateRequirement', () => {
         description: 'missing count',
         type: 'measurement',
         check: 'connectedComponents',
-        expected: {},
-      };
-
-      const result = evaluateRequirement(requirement, boxStats);
-      expect(result.passed).toBe(false);
-      expect(result.reason).toContain('Missing expected.count');
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // Vertex count
-  // ---------------------------------------------------------------------------
-
-  describe('vertexCount', () => {
-    it('should pass when within tolerance', () => {
-      const requirement: MeasurementTestRequirement = {
-        id: 'vc1',
-        description: 'approx count',
-        type: 'measurement',
-        check: 'vertexCount',
-        expected: { count: boxStats.vertexCount },
-      };
-
-      expect(evaluateRequirement(requirement, boxStats).passed).toBe(true);
-    });
-
-    it('should fail when outside tolerance', () => {
-      const requirement: MeasurementTestRequirement = {
-        id: 'vc1',
-        description: 'wrong count',
-        type: 'measurement',
-        check: 'vertexCount',
-        expected: { count: 999_999 },
-      };
-
-      const result = evaluateRequirement(requirement, boxStats);
-      expect(result.passed).toBe(false);
-      expect(result.reason).toContain('Vertex count');
-    });
-
-    it('should fail when expected.count is missing', () => {
-      const requirement: MeasurementTestRequirement = {
-        id: 'vc1',
-        description: 'missing count',
-        type: 'measurement',
-        check: 'vertexCount',
         expected: {},
       };
 
@@ -292,7 +270,7 @@ describe('evaluateRequirement', () => {
       expect(evaluateRequirement(requirement, boxStats).passed).toBe(true);
     });
 
-    it('should fail for non-watertight mesh', () => {
+    it('should fail for non-watertight mesh and surface the per-CU lib/<part>.ts hint', () => {
       const openStats: GeometryStats = { ...boxStats, watertight: false };
       const requirement: MeasurementTestRequirement = {
         id: 'wt1',
@@ -304,6 +282,9 @@ describe('evaluateRequirement', () => {
       const result = evaluateRequirement(requirement, openStats);
       expect(result.passed).toBe(false);
       expect(result.reason).toContain('not watertight');
+      expect(result.suggestion).toContain('lib/<part>.ts');
+      expect(result.suggestion).toContain('multi-part assemblies are watertight per CU');
+      expect(result.suggestion).toContain('failed boolean ops');
     });
   });
 
@@ -312,17 +293,18 @@ describe('evaluateRequirement', () => {
   // ---------------------------------------------------------------------------
 
   describe('unknown check type', () => {
-    it('should report failure for unrecognised check', () => {
+    it('should report failure for unrecognised check and list only the surviving 3-check vocabulary', () => {
       const requirement = {
         id: 'u1',
         description: 'unknown',
         type: 'measurement',
-        check: 'nonExistent' as 'meshCount',
+        check: 'nonExistent' as 'boundingBox',
       } as const;
 
       const result = evaluateRequirement(requirement, boxStats);
       expect(result.passed).toBe(false);
       expect(result.reason).toContain('Unknown check type');
+      expect(result.suggestion).toBe('Use one of: boundingBox, connectedComponents, watertight');
     });
   });
 });

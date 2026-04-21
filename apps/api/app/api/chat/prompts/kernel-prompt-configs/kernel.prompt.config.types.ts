@@ -27,4 +27,30 @@ export type KernelConfig = {
 
   /** Comprehensive canonical example demonstrating the full API surface */
   canonicalExample: string;
+
+  /**
+   * Single-line snippet demonstrating the minimal top-level construct that
+   * makes a file render standalone (e.g. a default `main` export, an OpenSCAD
+   * top-level invocation, a KCL `extrude` pipeline). Consumed by the
+   * `test_model` tool description, its `FILE_NOT_FOUND`/`NO_TOP_LEVEL_GEOMETRY`
+   * error messages, and the `<test_requirements>` system-prompt block.
+   *
+   * Snippets must carry the kernel's return-type vocabulary inline (e.g.
+   * `: Shape3D`, `: Manifold`) so the agent receives the type contract from
+   * the example alone, without a parallel prose noun phrase.
+   */
+  topLevelExportExample: string;
+
+  /**
+   * Optional multi-shape companion example. Used by kernels whose `main()` may
+   * return an array of named/coloured parts (e.g. Replicad's `ShapeConfig[]`)
+   * to teach the LLM that touching parts cluster into a single
+   * `connectedComponents` group at the default tolerance, while per-geometry-unit
+   * `watertight` remains the canonical "did the boolean fuse weld" guardrail.
+   *
+   * Wired into a `<multi_shape_pattern>` section in the system prompt only when
+   * the field is non-empty; kernels without a multi-shape return type leave it
+   * undefined and the section is omitted entirely.
+   */
+  multiShapeExample?: string;
 };

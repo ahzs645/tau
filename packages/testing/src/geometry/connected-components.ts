@@ -1,129 +1,112 @@
 import type { Document } from '@gltf-transform/core';
 
-/** Epsilon for merging coincident vertices (in glTF meter-scale units). */
-const spatialEpsilon = 0.001;
+type Aabb = { min: [number, number, number]; max: [number, number, number] };
+
+const computePrimitiveAabb = (positions: Float32Array): Aabb | undefined => {
+  if (positions.length < 3) {
+    return undefined;
+  }
+  const min: [number, number, number] = [Infinity, Infinity, Infinity];
+  const max: [number, number, number] = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < positions.length; i += 3) {
+    for (let axis = 0; axis < 3; axis++) {
+      const v = positions[i + axis]!;
+      if (v < min[axis]!) {
+        min[axis] = v;
+      }
+      if (v > max[axis]!) {
+        max[axis] = v;
+      }
+    }
+  }
+  return { min, max };
+};
+
+const aabbsOverlapWithin = (a: Aabb, b: Aabb, toleranceMeters: number): boolean => {
+  for (let axis = 0; axis < 3; axis++) {
+    if (a.max[axis]! + toleranceMeters < b.min[axis]!) {
+      return false;
+    }
+    if (b.max[axis]! + toleranceMeters < a.min[axis]!) {
+      return false;
+    }
+  }
+  return true;
+};
 
 /**
- * Counts topologically disconnected pieces across all TRIANGLES primitives.
- * Uses spatial hashing to merge coincident vertices, then Union-Find to
- * determine how many connected components the triangle mesh contains.
+ * Counts spatially-disjoint chunks across all TRIANGLES primitives by
+ * clustering primitives whose axis-aligned bounding boxes overlap (within the
+ * provided `toleranceMm`). Operates purely on glTF positions — no kernel
+ * `extras`, no scene metadata, no per-kernel cooperation. Future kernels
+ * emit valid glTF and the check works.
  *
- * @param document - A glTF-Transform Document
- * @returns The number of connected components
+ * @param document - A glTF-Transform Document (positions are in glTF meter units)
+ * @param toleranceMm - Maximum gap (mm) between two primitive AABBs that
+ *   still counts as connected. Use a tight value (e.g. 0.1) to detect
+ *   visibly-disjoint chunks; raise it (e.g. 50) when intentional small gaps
+ *   between touching parts must collapse into one cluster.
+ * @returns The number of distinct spatial clusters
  * @public
  */
-export const countConnectedComponents = (document: Document): number => {
-  const root = document.getRoot();
-  const meshes = root.listMeshes();
+export const countConnectedComponents = (document: Document, toleranceMm: number): number => {
+  const toleranceMeters = toleranceMm / 1000;
+  const aabbs: Aabb[] = [];
 
-  const allPositions: Array<[number, number, number]> = [];
-  const allTriangles: Array<[number, number, number]> = [];
-  let vertexOffset = 0;
-
-  for (const mesh of meshes) {
+  for (const mesh of document.getRoot().listMeshes()) {
     for (const primitive of mesh.listPrimitives()) {
       if (primitive.getMode() !== 4) {
-        continue; // TRIANGLES only
-      }
-
-      const posAccessor = primitive.getAttribute('POSITION');
-      const indexAccessor = primitive.getIndices();
-      if (!posAccessor || !indexAccessor) {
         continue;
       }
-
-      const vCount = posAccessor.getCount();
-      const indexCount = indexAccessor.getCount();
-
-      for (let i = 0; i < vCount; i++) {
-        allPositions.push(posAccessor.getElement(i, [0, 0, 0]));
+      const pos = primitive.getAttribute('POSITION');
+      if (!pos) {
+        continue;
       }
-
-      for (let i = 0; i < indexCount; i += 3) {
-        allTriangles.push([
-          indexAccessor.getScalar(i) + vertexOffset,
-          indexAccessor.getScalar(i + 1) + vertexOffset,
-          indexAccessor.getScalar(i + 2) + vertexOffset,
-        ]);
+      const positions = pos.getArray();
+      if (!positions) {
+        continue;
       }
-
-      vertexOffset += vCount;
+      const aabb = computePrimitiveAabb(positions as Float32Array);
+      if (aabb) {
+        aabbs.push(aabb);
+      }
     }
   }
 
-  if (allTriangles.length === 0) {
+  if (aabbs.length === 0) {
     return 0;
   }
 
-  const gridSize = spatialEpsilon * 2;
-  const positionToCanonical = new Map<string, number>();
-  const vertexMap = new Int32Array(allPositions.length);
-
-  for (const [i, position] of allPositions.entries()) {
-    const [x, y, z] = position;
-    const key = `${Math.round(x / gridSize)},${Math.round(y / gridSize)},${Math.round(z / gridSize)}`;
-
-    const existing = positionToCanonical.get(key);
-    if (existing === undefined) {
-      positionToCanonical.set(key, i);
-      vertexMap[i] = i;
-    } else {
-      vertexMap[i] = existing;
+  // Union-Find over primitives. O(N^2) overlap test is acceptable for the
+  // primitive counts we see in practice (< low hundreds); switch to a
+  // sweep-line / R-tree only if profiling demands it.
+  const parent = aabbs.map((_, i) => i);
+  const find = (i: number): number => {
+    while (parent[i]! !== i) {
+      parent[i] = parent[parent[i]!]!;
+      i = parent[i]!;
     }
-  }
-
-  const parent = new Int32Array(allTriangles.length);
-  const rank = new Int32Array(allTriangles.length);
-  for (let i = 0; i < allTriangles.length; i++) {
-    parent[i] = i;
-  }
-
-  const find = (x: number): number => {
-    while (parent[x] !== x) {
-      parent[x] = parent[parent[x]!]!;
-      x = parent[x]!;
-    }
-    return x;
+    return i;
   };
-
   const union = (a: number, b: number): void => {
-    a = find(a);
-    b = find(b);
-    if (a === b) {
-      return;
-    }
-    if (rank[a]! < rank[b]!) {
-      [a, b] = [b, a];
-    }
-    parent[b] = a;
-    if (rank[a] === rank[b]) {
-      rank[a]!++;
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) {
+      parent[ra] = rb;
     }
   };
 
-  const vertexToTriangles = new Map<number, number[]>();
-  for (const [t, triangle] of allTriangles.entries()) {
-    for (let j = 0; j < 3; j++) {
-      const cv = vertexMap[triangle[j]!]!;
-      let tris = vertexToTriangles.get(cv);
-      if (!tris) {
-        tris = [];
-        vertexToTriangles.set(cv, tris);
+  for (let i = 0; i < aabbs.length; i++) {
+    for (let j = i + 1; j < aabbs.length; j++) {
+      if (aabbsOverlapWithin(aabbs[i]!, aabbs[j]!, toleranceMeters)) {
+        union(i, j);
       }
-      tris.push(t);
-    }
-  }
-
-  for (const tris of vertexToTriangles.values()) {
-    for (let i = 1; i < tris.length; i++) {
-      union(tris[0]!, tris[i]!);
     }
   }
 
   const roots = new Set<number>();
-  for (let i = 0; i < allTriangles.length; i++) {
+  for (let i = 0; i < aabbs.length; i++) {
     roots.add(find(i));
   }
-
   return roots.size;
 };

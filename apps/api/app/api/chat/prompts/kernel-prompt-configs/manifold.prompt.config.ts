@@ -12,4 +12,6 @@ export const manifoldConfig: KernelConfig = {
 
   fileLayoutMode: 'full-nesting',
   canonicalExample,
+
+  topLevelExportExample: 'export default function main(p = defaultParams): Manifold { return makePart(p); }',
 };

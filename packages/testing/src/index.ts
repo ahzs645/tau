@@ -8,3 +8,4 @@
  */
 export * from '#schemas.js';
 export * from '#geometry/index.js';
+export * from '#prompt-examples.js';

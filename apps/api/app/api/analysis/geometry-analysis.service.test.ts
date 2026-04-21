@@ -61,22 +61,14 @@ function boundingBoxRequirement(options: {
   return { type: 'measurement', check: 'boundingBox', ...options };
 }
 
-function meshCountRequirement(id: string, description: string, count: number): MeasurementTestRequirement {
-  return { id, description, type: 'measurement', check: 'meshCount', expected: { count } };
-}
-
-function connectedComponentsRequirement(id: string, description: string, count: number): MeasurementTestRequirement {
-  return { id, description, type: 'measurement', check: 'connectedComponents', expected: { count } };
-}
-
-function vertexCountRequirement(options: {
+function connectedComponentsRequirement(options: {
   id: string;
   description: string;
   count: number;
   tolerance?: number;
 }): MeasurementTestRequirement {
   const { count, ...rest } = options;
-  return { ...rest, type: 'measurement', check: 'vertexCount', expected: { count } };
+  return { ...rest, type: 'measurement', check: 'connectedComponents', expected: { count } };
 }
 
 // =============================================================================
@@ -90,13 +82,10 @@ const boxCode = `
   }
 `;
 
-const sphereCode = `
-  import { makeSphere } from 'replicad';
-  export default function main() {
-    return makeSphere(15);
-  }
-`;
-
+// Two ShapeConfig parts whose AABBs are far apart (sphere lifted 50mm above
+// the box). Each ShapeConfig becomes a distinct glTF primitive, so the
+// per-primitive AABB clustering reports 2 disjoint chunks at default
+// tolerance.
 const multiShapeCode = `
   import { makeBaseBox, makeSphere } from 'replicad';
   export default function main() {
@@ -106,12 +95,27 @@ const multiShapeCode = `
   }
 `;
 
-const compoundCode = `
+// Two ShapeConfig boxes 40mm apart (gap between AABBs = 40mm). Two distinct
+// glTF primitives → 2 components at default tolerance, 1 at tolerance: 50.
+const farApartMultiShapeCode = `
   import { makeBaseBox } from 'replicad';
   export default function main() {
     const box1 = makeBaseBox(10, 10, 10);
     const box2 = makeBaseBox(10, 10, 10).translate(50, 0, 0);
-    return box1.fuse(box2);
+    return [{ shape: box1, name: 'A' }, { shape: box2, name: 'B' }];
+  }
+`;
+
+// Helicopter regression repro from docs/research/mesh-continuity-test-semantics.md
+// §Problem Statement: two ShapeConfig boxes that share a face (touching at
+// x=5mm). Two glTF primitives whose AABBs touch at the boundary →
+// connectedComponents → 1 at the default tolerance.
+const touchingMultiShapeCode = `
+  import { makeBaseBox } from 'replicad';
+  export default function main() {
+    const a = makeBaseBox(10, 10, 10);
+    const b = makeBaseBox(10, 10, 10).translateX(10);
+    return [{ shape: a, name: 'A' }, { shape: b, name: 'B' }];
   }
 `;
 
@@ -134,9 +138,9 @@ describe('GeometryAnalysisService', () => {
 
   // Pre-render GLBs once for all tests (expensive WASM init)
   let boxGlb: Uint8Array<ArrayBuffer>;
-  let sphereGlb: Uint8Array<ArrayBuffer>;
   let multiShapeGlb: Uint8Array<ArrayBuffer>;
-  let compoundGlb: Uint8Array<ArrayBuffer>;
+  let farApartMultiShapeGlb: Uint8Array<ArrayBuffer>;
+  let touchingMultiShapeGlb: Uint8Array<ArrayBuffer>;
   let fusedGlb: Uint8Array<ArrayBuffer>;
 
   // Test wrapper: defaults targetFile to 'test.ts' so existing assertions stay focused
@@ -156,11 +160,11 @@ describe('GeometryAnalysisService', () => {
     module = moduleRef;
 
     // Render all GLBs in parallel
-    [boxGlb, sphereGlb, multiShapeGlb, compoundGlb, fusedGlb] = await Promise.all([
+    [boxGlb, multiShapeGlb, farApartMultiShapeGlb, touchingMultiShapeGlb, fusedGlb] = await Promise.all([
       renderGlb('box.ts', boxCode),
-      renderGlb('sphere.ts', sphereCode),
       renderGlb('multi.ts', multiShapeCode),
-      renderGlb('compound.ts', compoundCode),
+      renderGlb('far-apart.ts', farApartMultiShapeCode),
+      renderGlb('touching.ts', touchingMultiShapeCode),
       renderGlb('fused.ts', fusedCode),
     ]);
   }, 120_000);
@@ -175,7 +179,9 @@ describe('GeometryAnalysisService', () => {
 
   describe('buffer alignment', () => {
     it('should handle GLB with byteOffset === 0', async () => {
-      const result = await runTests(boxGlb, [meshCountRequirement('m1', 'has mesh', 1)]);
+      const result = await runTests(boxGlb, [
+        connectedComponentsRequirement({ id: 'm1', description: 'single solid', count: 1 }),
+      ]);
 
       expect(result.passed).toBe(1);
       expect(result.failures).toHaveLength(0);
@@ -188,7 +194,9 @@ describe('GeometryAnalysisService', () => {
       const misaligned = new Uint8Array(padded, 3); // ByteOffset = 3 (not divisible by 4)
       misaligned.set(boxGlb);
 
-      const result = await runTests(misaligned, [meshCountRequirement('m1', 'has mesh', 1)]);
+      const result = await runTests(misaligned, [
+        connectedComponentsRequirement({ id: 'm1', description: 'single solid', count: 1 }),
+      ]);
 
       expect(result.passed).toBe(1);
       expect(result.failures).toHaveLength(0);
@@ -332,82 +340,79 @@ describe('GeometryAnalysisService', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // Mesh count checks
-  // ---------------------------------------------------------------------------
-
-  describe('mesh count', () => {
-    it('should pass for single-shape result with meshCount 1', async () => {
-      const result = await runTests(boxGlb, [meshCountRequirement('mc1', 'single mesh', 1)]);
-
-      expect(result.passed).toBe(1);
-    });
-
-    it('should pass for multi-shape result', async () => {
-      const result = await runTests(multiShapeGlb, [meshCountRequirement('mc1', 'two meshes', 2)]);
-
-      expect(result.passed).toBe(1);
-    });
-
-    it('should fail when mesh count does not match', async () => {
-      const result = await runTests(boxGlb, [meshCountRequirement('mc1', 'wrong count', 5)]);
-
-      expect(result.passed).toBe(0);
-      expect(result.failures[0]!.reason).toContain('Mesh count');
-    });
-
-    it('should fail when expected.count is missing', async () => {
-      const requirement: MeasurementTestRequirement = {
-        id: 'mc1',
-        description: 'missing count',
-        type: 'measurement',
-        check: 'meshCount',
-        expected: {},
-      };
-
-      const result = await runTests(boxGlb, [requirement]);
-
-      expect(result.passed).toBe(0);
-      expect(result.failures[0]!.reason).toContain('Missing expected.count');
-    });
-  });
-
-  // ---------------------------------------------------------------------------
   // Connected components checks
   // ---------------------------------------------------------------------------
 
   describe('connected components', () => {
     it('should report 1 component for a single solid box', async () => {
-      const result = await runTests(boxGlb, [connectedComponentsRequirement('cc1', 'single solid', 1)]);
+      const result = await runTests(boxGlb, [
+        connectedComponentsRequirement({ id: 'cc1', description: 'single solid', count: 1 }),
+      ]);
 
       expect(result.passed).toBe(1);
       expect(result.failures).toHaveLength(0);
     });
 
-    it('should report 2 components for a compound of non-overlapping boxes', async () => {
-      const result = await runTests(compoundGlb, [connectedComponentsRequirement('cc1', 'two disconnected pieces', 2)]);
+    it('should report 2 components for two far-apart ShapeConfig boxes at default tolerance', async () => {
+      const result = await runTests(farApartMultiShapeGlb, [
+        connectedComponentsRequirement({ id: 'cc1', description: 'two disjoint chunks', count: 2 }),
+      ]);
 
       expect(result.passed).toBe(1);
     });
 
-    it('should fail when expecting 1 component but compound has 2', async () => {
-      const result = await runTests(compoundGlb, [connectedComponentsRequirement('cc1', 'single solid', 1)]);
+    it('should collapse two far-apart boxes into 1 component when tolerance covers the gap', async () => {
+      const result = await runTests(farApartMultiShapeGlb, [
+        connectedComponentsRequirement({
+          id: 'cc1',
+          description: 'tolerance covers the gap',
+          count: 1,
+          tolerance: 50,
+        }),
+      ]);
+
+      expect(result.passed).toBe(1);
+    });
+
+    it('should pass connectedComponents:1 for the helicopter ShapeConfig regression repro (touching parts)', async () => {
+      // SMOKING GUN — research §Problem Statement F1+F8:
+      // multi-ShapeConfig with touching faces previously reported 2 (vertex
+      // welding never happened across primitives). Under AABB clustering
+      // their AABBs touch → 1 at default tolerance.
+      const result = await runTests(touchingMultiShapeGlb, [
+        connectedComponentsRequirement({ id: 'cc1', description: 'touching parts collapse to one chunk', count: 1 }),
+      ]);
+
+      expect(result.passed).toBe(1);
+      expect(result.failures).toHaveLength(0);
+    });
+
+    it('should produce the rich tolerance-aware failure suggestion when actual exceeds expected', async () => {
+      const result = await runTests(farApartMultiShapeGlb, [
+        connectedComponentsRequirement({ id: 'cc1', description: 'should be one solid', count: 1 }),
+      ]);
 
       expect(result.passed).toBe(0);
       expect(result.failures[0]!.reason).toContain('Connected components');
-      expect(result.failures[0]!.reason).toContain('expected 1');
-      expect(result.failures[0]!.reason).toContain('got 2');
-      expect(result.failures[0]!.suggestion).toContain('disconnected pieces');
+      expect(result.failures[0]!.reason).toContain('expected 1, got 2 (tolerance: 0.1mm)');
+      expect(result.failures[0]!.suggestion).toContain('raise tolerance');
+      expect(result.failures[0]!.suggestion).toContain('raise expected.count to 2');
+      expect(result.failures[0]!.suggestion).toContain('fuse them in the kernel and assert watertight');
     });
 
     it('should report 1 component for overlapping fused shapes', async () => {
-      const result = await runTests(fusedGlb, [connectedComponentsRequirement('cc1', 'fused solid', 1)]);
+      const result = await runTests(fusedGlb, [
+        connectedComponentsRequirement({ id: 'cc1', description: 'fused solid', count: 1 }),
+      ]);
 
       expect(result.passed).toBe(1);
     });
 
     it('should count components across multiple meshes', async () => {
       // MultiShapeGlb has 2 separate shapes (box + sphere) as 2 meshes, each is 1 component
-      const result = await runTests(multiShapeGlb, [connectedComponentsRequirement('cc1', 'two separate shapes', 2)]);
+      const result = await runTests(multiShapeGlb, [
+        connectedComponentsRequirement({ id: 'cc1', description: 'two separate shapes', count: 2 }),
+      ]);
 
       expect(result.passed).toBe(1);
     });
@@ -429,66 +434,14 @@ describe('GeometryAnalysisService', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // Vertex count checks
-  // ---------------------------------------------------------------------------
-
-  describe('vertex count', () => {
-    it('should pass when vertex count is within tolerance', async () => {
-      const probe = await runTests(boxGlb, [
-        vertexCountRequirement({ id: 'vc1', description: 'probe', count: 0, tolerance: 999_999 }),
-      ]);
-
-      expect(probe.passed).toBe(1);
-    });
-
-    it('should fail when vertex count is outside tolerance', async () => {
-      const result = await runTests(boxGlb, [
-        vertexCountRequirement({ id: 'vc1', description: 'wrong count', count: 999_999 }),
-      ]);
-
-      expect(result.passed).toBe(0);
-      expect(result.failures[0]!.reason).toContain('Vertex count');
-    });
-
-    it('should fail when expected.count is missing', async () => {
-      const requirement: MeasurementTestRequirement = {
-        id: 'vc1',
-        description: 'missing count',
-        type: 'measurement',
-        check: 'vertexCount',
-        expected: {},
-      };
-
-      const result = await runTests(boxGlb, [requirement]);
-
-      expect(result.passed).toBe(0);
-      expect(result.failures[0]!.reason).toContain('Missing expected.count');
-    });
-
-    it('should produce more vertices for a sphere than a box', async () => {
-      const probe = vertexCountRequirement({ id: 'vc1', description: 'probe', count: 0, tolerance: 0 });
-
-      const boxResult = await runTests(boxGlb, [probe]);
-      const sphereResult = await runTests(sphereGlb, [probe]);
-
-      const extractVertexCount = (reason: string): number => Number(/got (\d+)/.exec(reason)?.[1]);
-
-      const boxVertices = extractVertexCount(boxResult.failures[0]!.reason);
-      const sphereVertices = extractVertexCount(sphereResult.failures[0]!.reason);
-
-      expect(sphereVertices).toBeGreaterThan(boxVertices);
-    });
-  });
-
-  // ---------------------------------------------------------------------------
   // Multiple requirements
   // ---------------------------------------------------------------------------
 
   describe('multiple requirements', () => {
     it('should evaluate all requirements and report mixed results', async () => {
       const result = await runTests(boxGlb, [
-        meshCountRequirement('pass1', 'correct mesh count', 1),
-        meshCountRequirement('fail1', 'wrong mesh count', 99),
+        connectedComponentsRequirement({ id: 'pass1', description: 'single solid', count: 1 }),
+        connectedComponentsRequirement({ id: 'fail1', description: 'wrong component count', count: 99 }),
         boundingBoxRequirement({
           id: 'pass2',
           description: 'approx size',
@@ -513,7 +466,7 @@ describe('GeometryAnalysisService', () => {
       const garbage = new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7]);
 
       const result = await runTests(garbage, [
-        meshCountRequirement('m1', 'mesh', 1),
+        connectedComponentsRequirement({ id: 'cc1', description: 'single solid', count: 1 }),
         boundingBoxRequirement({ id: 'bb1', description: 'box', expected: { size: { x: 1, y: 1, z: 1 } } }),
       ]);
 
@@ -524,7 +477,9 @@ describe('GeometryAnalysisService', () => {
     });
 
     it('should return failures for empty Uint8Array', async () => {
-      const result = await runTests(new Uint8Array(0), [meshCountRequirement('m1', 'mesh', 1)]);
+      const result = await runTests(new Uint8Array(0), [
+        connectedComponentsRequirement({ id: 'cc1', description: 'single solid', count: 1 }),
+      ]);
 
       expect(result.passed).toBe(0);
       expect(result.failures[0]!.reason).toContain('GLB analysis failed');
@@ -541,7 +496,7 @@ describe('GeometryAnalysisService', () => {
         id: 'u1',
         description: 'unknown',
         type: 'measurement',
-        check: 'nonExistent' as 'meshCount',
+        check: 'nonExistent' as 'boundingBox',
         expected: {},
       } as const;
 

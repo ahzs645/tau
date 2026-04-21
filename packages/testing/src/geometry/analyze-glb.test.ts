@@ -47,9 +47,21 @@ describe('analyzeGlb', () => {
 
     expect(stats.vertexCount).toBeGreaterThan(0);
     expect(stats.meshCount).toBe(1);
-    expect(stats.connectedComponents).toBe(1);
+    expect(typeof stats.connectedComponents).toBe('function');
+    expect(stats.connectedComponents(0.1)).toBe(1);
     expect(stats.watertight).toBe(true);
     expect(stats.boundingBox).toBeDefined();
+  });
+
+  it('should expose connectedComponents as a memoised getter parameterised on tolerance', async () => {
+    const stats = await analyzeGlb(boxGlb);
+
+    // Same tolerance returns the same answer; distinct tolerances are valid
+    // independent calls. A single primitive collapses to 1 across all
+    // tolerances we'd care about for a 30mm-tall box.
+    expect(stats.connectedComponents(0.1)).toBe(1);
+    expect(stats.connectedComponents(0.1)).toBe(1);
+    expect(stats.connectedComponents(50)).toBe(1);
   });
 
   it('should handle misaligned buffer (Socket.IO simulation)', async () => {

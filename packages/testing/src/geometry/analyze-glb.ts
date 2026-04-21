@@ -49,7 +49,19 @@ export const analyzeGlb = async (glb: Uint8Array<ArrayBuffer>): Promise<Geometry
     }
   }
 
-  const connectedComponents = countConnectedComponents(document);
+  // Memoise per-tolerance lookups so repeated `evaluateRequirement` calls
+  // against the same stats object don't re-traverse primitives. The check
+  // table is small (callers typically supply 0–2 distinct tolerances per GLB).
+  const cache = new Map<number, number>();
+  const connectedComponents = (toleranceMm: number): number => {
+    const cached = cache.get(toleranceMm);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const value = countConnectedComponents(document, toleranceMm);
+    cache.set(toleranceMm, value);
+    return value;
+  };
   const watertight = isWatertight(document);
 
   return { vertexCount, meshCount, connectedComponents, watertight, boundingBox };
