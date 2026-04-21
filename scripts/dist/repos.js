@@ -2654,6 +2654,14 @@ function fetchRepoDescription(upstream) {
     return;
   }
 }
+function buildCloneArgs(options) {
+  const { cloneUrl, directory, branch, shallow } = options;
+  const args = ['git', 'clone'];
+  if (shallow) args.push('--depth', '1');
+  if (branch) args.push('--branch', branch);
+  args.push(cloneUrl, directory);
+  return args;
+}
 function cloneRepo(context) {
   const { name, repo, manifest, root } = context;
   const directory = repoPath(context);
@@ -2669,10 +2677,15 @@ function cloneRepo(context) {
       writeManifest(manifest, root);
     }
   }
-  const args = ['git', 'clone', repo.fork ? repoUrl(repo.fork) : repoUrl(repo.upstream), directory];
-  if (repo.shallow && !repo.commit) args.splice(1, 0, '--depth', '1');
-  if (repo.branch) args.splice(1, 0, '--branch', repo.branch);
-  execSync(args.join(' '), { stdio: 'inherit' });
+  execSync(
+    buildCloneArgs({
+      cloneUrl: repo.fork ? repoUrl(repo.fork) : repoUrl(repo.upstream),
+      directory,
+      branch: repo.branch,
+      shallow: repo.shallow && !repo.commit,
+    }).join(' '),
+    { stdio: 'inherit' },
+  );
   if (repo.fork) execSync(`git -C ${directory} remote add upstream ${repoUrl(repo.upstream)}`, { stdio: 'inherit' });
   if (repo.commit) execSync(`git -C ${directory} checkout ${repo.commit}`, { stdio: 'inherit' });
   return {

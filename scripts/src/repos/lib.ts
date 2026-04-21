@@ -270,6 +270,26 @@ export function fetchRepoDescription(upstream: string): string | undefined {
 
 // ── Clone ───────────────────────────────────────────────────────
 
+export type BuildCloneArgsOptions = {
+  cloneUrl: string;
+  directory: string;
+  branch?: string;
+  shallow?: boolean;
+};
+
+export function buildCloneArgs(options: BuildCloneArgsOptions): string[] {
+  const { cloneUrl, directory, branch, shallow } = options;
+  const args = ['git', 'clone'];
+  if (shallow) {
+    args.push('--depth', '1');
+  }
+  if (branch) {
+    args.push('--branch', branch);
+  }
+  args.push(cloneUrl, directory);
+  return args;
+}
+
 export function cloneRepo(context: RepoContext): { action: 'cloned' | 'skipped'; message: string } {
   const { name, repo, manifest, root } = context;
   const directory = repoPath(context);
@@ -286,14 +306,7 @@ export function cloneRepo(context: RepoContext): { action: 'cloned' | 'skipped';
   }
 
   const cloneUrl = repo.fork ? repoUrl(repo.fork) : repoUrl(repo.upstream);
-  const args = ['git', 'clone', cloneUrl, directory];
-  if (repo.shallow && !repo.commit) {
-    args.splice(1, 0, '--depth', '1');
-  }
-
-  if (repo.branch) {
-    args.splice(1, 0, '--branch', repo.branch);
-  }
+  const args = buildCloneArgs({ cloneUrl, directory, branch: repo.branch, shallow: repo.shallow && !repo.commit });
 
   execSync(args.join(' '), { stdio: 'inherit' });
 
