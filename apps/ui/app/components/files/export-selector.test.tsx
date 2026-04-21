@@ -89,17 +89,6 @@ const mockCadRef2 = {
   })),
 } as unknown as ActorRefFrom<typeof cadMachine>;
 
-vi.mock('#hooks/use-project.js', () => ({
-  useProject: () => ({
-    projectRef: {
-      getSnapshot: vi.fn(() => ({ context: { project: { name: 'test-project' } } })),
-      subscribe: vi.fn(() => ({ unsubscribe: vi.fn() })),
-      on: vi.fn(() => ({ unsubscribe: vi.fn() })),
-    },
-    mainEntryFile: 'main.ts',
-  }),
-}));
-
 const mockDownloadBlob = vi.fn();
 vi.mock('@taucad/utils/file', async () => {
   const actual = await vi.importActual<typeof FileUtilsModuleType>('@taucad/utils/file');
@@ -202,32 +191,39 @@ describe('ExportSelector', () => {
     mockActiveKernelId = 'replicad';
   });
 
-  it('renders the format grid for a single cad actor', () => {
-    render(<ExportSelector cadActor={mockCadRef} variant='inline' />);
+  it('should render the format grid for a single cad actor', () => {
+    render(<ExportSelector cadActor={mockCadRef} filenameBase='test-project' variant='inline' />);
 
     expect(screen.getByRole('button', { name: /glb/i })).toBeDefined();
     expect(screen.getByRole('button', { name: /stl/i })).toBeDefined();
     expect(screen.getByRole('button', { name: /step/i })).toBeDefined();
   });
 
-  it('hides the geometry unit picker in single-geometry-unit mode', () => {
-    render(<ExportSelector cadActor={mockCadRef} variant='inline' />);
+  it('should hide the geometry unit picker in single-geometry-unit mode', () => {
+    render(<ExportSelector cadActor={mockCadRef} filenameBase='test-project' variant='inline' />);
 
     expect(screen.queryByTestId('cu-picker')).toBeNull();
   });
 
-  it('shows the geometry unit picker in multi-geometry-unit mode with more than one entry', () => {
+  it('should show the geometry unit picker in multi-geometry-unit mode with more than one entry', () => {
     const geometryUnits = new Map<string, ActorRefFrom<typeof cadMachine>>();
     geometryUnits.set('main.ts', mockCadRef);
     geometryUnits.set('helper.ts', mockCadRef2);
 
-    render(<ExportSelector geometryUnits={geometryUnits} mainEntryFile='main.ts' variant='inline' />);
+    render(
+      <ExportSelector
+        geometryUnits={geometryUnits}
+        filenameBase='test-project'
+        mainEntryFile='main.ts'
+        variant='inline'
+      />,
+    );
 
     expect(screen.getByTestId('cu-picker')).toBeDefined();
   });
 
-  it('triggers export and downloads on format click using route defaults', async () => {
-    render(<ExportSelector cadActor={mockCadRef} variant='inline' />);
+  it('should trigger export and download on format click using route defaults', async () => {
+    render(<ExportSelector cadActor={mockCadRef} filenameBase='test-project' variant='inline' />);
 
     fireEvent.click(screen.getByRole('button', { name: /stl/i }));
 
@@ -243,13 +239,13 @@ describe('ExportSelector', () => {
     expect(mockToastSuccess).toHaveBeenCalledWith('Exported STL');
   });
 
-  it('shows an error toast when the export fails', async () => {
+  it('should show an error toast when the export fails', async () => {
     mockExport.mockResolvedValueOnce({
       success: false,
       issues: [{ message: 'kernel exploded' }],
     });
 
-    render(<ExportSelector cadActor={mockCadRef} variant='inline' />);
+    render(<ExportSelector cadActor={mockCadRef} filenameBase='test-project' variant='inline' />);
 
     fireEvent.click(screen.getByRole('button', { name: /glb/i }));
 
@@ -259,9 +255,17 @@ describe('ExportSelector', () => {
     expect(mockDownloadBlob).not.toHaveBeenCalled();
   });
 
-  it('calls onExport callback after a successful export', async () => {
+  it('should call onExport callback after a successful export', async () => {
     const onExport = vi.fn();
-    render(<ExportSelector cadActor={mockCadRef} variant='inline' defaultEntryFile='main.ts' onExport={onExport} />);
+    render(
+      <ExportSelector
+        cadActor={mockCadRef}
+        filenameBase='test-project'
+        variant='inline'
+        defaultEntryFile='main.ts'
+        onExport={onExport}
+      />,
+    );
 
     fireEvent.click(screen.getByRole('button', { name: /glb/i }));
 
@@ -270,21 +274,27 @@ describe('ExportSelector', () => {
     });
   });
 
-  it('shows a placeholder message when no export formats are available', () => {
+  it('should show a placeholder message when no export formats are available', () => {
     mockCapabilities = createCapabilities({ routes: [] });
-    render(<ExportSelector cadActor={mockCadRef} variant='inline' />);
+    render(<ExportSelector cadActor={mockCadRef} filenameBase='test-project' variant='inline' />);
 
     expect(screen.getByText(/No export formats available/)).toBeDefined();
   });
 
-  it('switches the active geometry unit when the picker selects a different file', async () => {
+  it('should switch the active geometry unit when the picker selects a different file', async () => {
     const geometryUnits = new Map<string, ActorRefFrom<typeof cadMachine>>();
     geometryUnits.set('main.ts', mockCadRef);
     geometryUnits.set('helper.ts', mockCadRef2);
 
     const onExport = vi.fn();
     render(
-      <ExportSelector geometryUnits={geometryUnits} mainEntryFile='main.ts' variant='inline' onExport={onExport} />,
+      <ExportSelector
+        geometryUnits={geometryUnits}
+        filenameBase='test-project'
+        mainEntryFile='main.ts'
+        variant='inline'
+        onExport={onExport}
+      />,
     );
 
     fireEvent.click(screen.getByTestId('pick-helper'));
@@ -293,5 +303,14 @@ describe('ExportSelector', () => {
     await vi.waitFor(() => {
       expect(onExport).toHaveBeenCalledWith('helper.ts', 'glb');
     });
+  });
+
+  it('should render without throwing when no project context is available', () => {
+    // Simulates the preview route, which lacks `useProject()` entirely. The refactored
+    // component is prop-driven and must not depend on any project-context hook.
+    expect(() => {
+      render(<ExportSelector cadActor={mockCadRef} filenameBase='preview-name' variant='inline' />);
+    }).not.toThrow();
+    expect(screen.getByRole('button', { name: /glb/i })).toBeDefined();
   });
 });

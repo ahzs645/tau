@@ -17,7 +17,6 @@ import { cn } from '#utils/ui.utils.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import { useProjectManager } from '#hooks/use-project-manager.js';
 import { useCadPreview } from '#hooks/use-cad-preview.js';
-import { useCadExport } from '#hooks/use-cad-export.js';
 import { CadPreviewViewer, CadPreviewStatus } from '#components/cad-preview.js';
 import { usePreviewProject } from '#routes/projects_.$id_.preview/preview-project-context.js';
 import { usePreviewState } from '#routes/projects_.$id_.preview/use-preview-state.js';
@@ -30,8 +29,7 @@ import { usePreviewFileList } from '#routes/projects_.$id_.preview/use-preview-f
 export const PreviewMobile = memo(function (): React.JSX.Element {
   const navigate = useNavigate();
   const { project, isStaticProject, staticProjectFiles } = usePreviewProject();
-  const { geometries } = useCadPreview();
-  const { exportGeometry } = useCadExport(project?.name ?? 'file');
+  const { geometries, cadRef } = useCadPreview();
   const fileManager = useFileManager();
   const projectManager = useProjectManager();
   const files = usePreviewFileList();
@@ -202,7 +200,7 @@ export const PreviewMobile = memo(function (): React.JSX.Element {
             </TabsContent>
             <TabsContent enableAnimation={false} value='model' className='flex h-full flex-col' />
             <TabsContent enableAnimation={false} value='details' className='flex h-full flex-col overflow-y-auto'>
-              <PreviewDetails project={project} geometriesCount={geometries.length} onExport={exportGeometry} />
+              <PreviewDetails project={project} geometriesCount={geometries.length} cadRef={cadRef} />
             </TabsContent>
           </Tabs>
         </DrawerContent>

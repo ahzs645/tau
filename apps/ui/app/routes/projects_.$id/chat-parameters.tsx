@@ -469,6 +469,7 @@ function ParametersPanelHeader({
   const entry = parameterEntries.get(params.entryFile);
   const displayEntry = entry ?? createDefaultEntry();
   const jsonSchema = useSelector(params.cadRef, (state) => state.context.jsonSchema);
+  const projectName = useSelector(projectRef, (state) => state.context.project?.name) ?? 'model';
 
   const showCollapseToggle = Boolean(jsonSchema && hasJsonSchemaObjectProperties(jsonSchema));
 
@@ -556,7 +557,12 @@ function ParametersPanelHeader({
                       <span>Quick export</span>
                     </DropdownMenuSubTrigger>
                     <DropdownMenuSubContent className='p-0'>
-                      <ExportSelector cadActor={params.cadRef} defaultEntryFile={params.entryFile} variant='sub' />
+                      <ExportSelector
+                        cadActor={params.cadRef}
+                        filenameBase={projectName}
+                        defaultEntryFile={params.entryFile}
+                        variant='sub'
+                      />
                     </DropdownMenuSubContent>
                   </DropdownMenuSub>
                   <DropdownMenuSeparator />
@@ -590,7 +596,12 @@ function ParametersPanelHeader({
             <span>Quick export</span>
           </ContextMenuSubTrigger>
           <ContextMenuSubContent className='p-0'>
-            <ExportSelector cadActor={params.cadRef} defaultEntryFile={params.entryFile} variant='sub' />
+            <ExportSelector
+              cadActor={params.cadRef}
+              filenameBase={projectName}
+              defaultEntryFile={params.entryFile}
+              variant='sub'
+            />
           </ContextMenuSubContent>
         </ContextMenuSub>
         <ContextMenuSeparator />

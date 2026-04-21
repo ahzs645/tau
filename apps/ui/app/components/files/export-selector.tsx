@@ -4,17 +4,14 @@ import { Check, ChevronDown } from 'lucide-react';
 import { useSelector } from '@xstate/react';
 import type { ActorRefFrom } from 'xstate';
 import type { FileExtension } from '@taucad/types';
-import { asBuffer, downloadBlob } from '@taucad/utils/file';
 import { Button } from '#components/ui/button.js';
 import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
 import { FileExtensionIcon } from '#components/icons/file-extension-icon.js';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '#components/ui/tooltip.js';
 import { Popover, PopoverContent, PopoverTrigger } from '#components/ui/popover.js';
-import { toast } from '#components/ui/sonner.js';
 import { cn } from '#utils/ui.utils.js';
-import { useProject } from '#hooks/use-project.js';
-import type { FormatEntry } from '#routes/projects_.$id/export-formats.utils.js';
-import { deriveAvailableFormats, getFormatInfo } from '#routes/projects_.$id/export-formats.utils.js';
+import { ExportFormatGrid } from '#components/files/export-format-grid.js';
+import { useExportToDisk } from '#components/files/use-export-to-disk.js';
+import { deriveAvailableFormats } from '#routes/projects_.$id/export-formats.utils.js';
 import { sortGeometryUnitEntries } from '#routes/projects_.$id/geometry-unit.utils.js';
 import type { cadMachine } from '#machines/cad.machine.js';
 
@@ -36,6 +33,16 @@ export type ExportSelectorProps = {
    * picker plus a per-geometry-unit format grid.
    */
   readonly geometryUnits?: Map<string, ActorRefFrom<typeof cadMachine>>;
+  /**
+   * Base filename used when downloading the exported blob. The file extension is appended
+   * automatically (`${filenameBase}.${format}`). Required so the component stays decoupled
+   * from any project context.
+   */
+  readonly filenameBase: string;
+  /**
+   * Optional main entry file. Used in multi-geometry mode to mark the "Main" badge in the
+   * picker and to seed the initial selection. Ignored in single-geometry mode.
+   */
   readonly mainEntryFile?: string;
   readonly defaultEntryFile?: string;
   /**
@@ -80,7 +87,7 @@ function GeometryUnitPicker({
 }: {
   readonly entries: GeometryUnitEntry[];
   readonly selectedEntryFile: string;
-  readonly mainEntryFile: string;
+  readonly mainEntryFile: string | undefined;
   readonly onSelect: (entryFile: string) => void;
 }) {
   if (entries.length <= 1) {
@@ -136,109 +143,6 @@ function GeometryUnitPicker({
 }
 
 // =============================================================================
-// Format buttons (single-click immediate export)
-// =============================================================================
-
-function ExportFormatButton({
-  format,
-  isDirect,
-  isExporting,
-  onClick,
-}: {
-  readonly format: FileExtension;
-  readonly isDirect: boolean;
-  readonly isExporting: boolean;
-  readonly onClick: (format: FileExtension) => void;
-}) {
-  const info = getFormatInfo(format);
-  const handleClick = useCallback(() => {
-    onClick(format);
-  }, [format, onClick]);
-
-  const button = (
-    <Button
-      variant='outline'
-      size='xs'
-      disabled={isExporting}
-      className='justify-start uppercase hover:border-primary/50'
-      onClick={handleClick}
-    >
-      <FileExtensionIcon filename={`file.${format}`} className='size-3.5 shrink-0' />
-      <span className='flex-1 text-left'>{format}</span>
-    </Button>
-  );
-
-  if (!info) {
-    return button;
-  }
-
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>{button}</TooltipTrigger>
-      <TooltipContent side='right' className='max-w-56'>
-        <p className='font-semibold'>{info.name}</p>
-        <p className='mt-0.5 text-[10px] leading-snug text-white/70'>{info.description}</p>
-        {!isDirect && <p className='mt-1 text-[10px] text-white/50 italic'>Transcoded</p>}
-      </TooltipContent>
-    </Tooltip>
-  );
-}
-
-const formatGridCols = 'grid grid-cols-1 gap-1.5 @[10rem]:grid-cols-2 @[16rem]:grid-cols-3';
-
-function ExportFormatGrid({
-  formats,
-  isExporting,
-  onExportFormat,
-}: {
-  readonly formats: FormatEntry[];
-  readonly isExporting: boolean;
-  readonly onExportFormat: (format: FileExtension) => void;
-}) {
-  const meshFormats = formats.filter((f) => f.fidelity === 'mesh');
-  const brepFormats = formats.filter((f) => f.fidelity === 'brep');
-
-  return (
-    <TooltipProvider>
-      <div className='@container flex flex-col gap-3'>
-        {meshFormats.length > 0 && (
-          <div>
-            <p className='mb-1.5 text-[10px] font-semibold tracking-wider text-muted-foreground uppercase'>Mesh</p>
-            <div className={formatGridCols}>
-              {meshFormats.map(({ format, direct }) => (
-                <ExportFormatButton
-                  key={format}
-                  format={format}
-                  isDirect={direct}
-                  isExporting={isExporting}
-                  onClick={onExportFormat}
-                />
-              ))}
-            </div>
-          </div>
-        )}
-        {brepFormats.length > 0 && (
-          <div>
-            <p className='mb-1.5 text-[10px] font-semibold tracking-wider text-muted-foreground uppercase'>BREP</p>
-            <div className={formatGridCols}>
-              {brepFormats.map(({ format, direct }) => (
-                <ExportFormatButton
-                  key={format}
-                  format={format}
-                  isDirect={direct}
-                  isExporting={isExporting}
-                  onClick={onExportFormat}
-                />
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-    </TooltipProvider>
-  );
-}
-
-// =============================================================================
 // Body — selectable geometry unit + format grid + export action
 // =============================================================================
 
@@ -248,15 +152,15 @@ function ExportSelectorBody({
   mainEntryFile,
   onEntryFileChange,
   selectedActor,
-  projectName,
+  filenameBase,
   onExport,
 }: {
   readonly entries: GeometryUnitEntry[];
   readonly selectedEntryFile: string;
-  readonly mainEntryFile: string;
+  readonly mainEntryFile: string | undefined;
   readonly onEntryFileChange: (entryFile: string) => void;
   readonly selectedActor: ActorRefFrom<typeof cadMachine> | undefined;
-  readonly projectName: string;
+  readonly filenameBase: string;
   readonly onExport?: (entryFile: string, format: FileExtension) => void;
 }): React.JSX.Element {
   const capabilities = useSelector(selectedActor, (state) => state?.context.capabilities);
@@ -268,39 +172,17 @@ function ExportSelectorBody({
     [kernelClient, activeKernelId, capabilities],
   );
 
-  const [isExporting, setIsExporting] = useState(false);
+  const { exportToDisk, isExporting } = useExportToDisk(filenameBase);
 
-  const handleExportFormat = useCallback(
+  const handleSelectFormat = useCallback(
     async (format: FileExtension) => {
-      if (!kernelClient || !activeKernelId) {
+      if (!selectedActor) {
         return;
       }
-
-      setIsExporting(true);
-      try {
-        const route = kernelClient.bestRouteFor(format, activeKernelId);
-        const options = route?.defaults ?? {};
-        const result = await kernelClient.export(format, options);
-
-        if (!result.success) {
-          const message = result.issues[0]?.message ?? 'Export failed';
-          toast.error(message);
-          return;
-        }
-
-        const { data } = result;
-        const blob = new Blob([asBuffer(data.bytes)]);
-        downloadBlob(blob, `${projectName}.${format}`);
-        toast.success(`Exported ${format.toUpperCase()}`);
-        onExport?.(selectedEntryFile, format);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Export failed';
-        toast.error(message);
-      } finally {
-        setIsExporting(false);
-      }
+      await exportToDisk(selectedActor, format);
+      onExport?.(selectedEntryFile, format);
     },
-    [kernelClient, activeKernelId, projectName, selectedEntryFile, onExport],
+    [selectedActor, exportToDisk, onExport, selectedEntryFile],
   );
 
   return (
@@ -312,7 +194,7 @@ function ExportSelectorBody({
         onSelect={onEntryFileChange}
       />
       {availableFormats.length > 0 ? (
-        <ExportFormatGrid formats={availableFormats} isExporting={isExporting} onExportFormat={handleExportFormat} />
+        <ExportFormatGrid formats={availableFormats} isExporting={isExporting} onSelectFormat={handleSelectFormat} />
       ) : (
         <p className='text-xs text-muted-foreground'>No export formats available. The kernel is still initializing.</p>
       )}
@@ -339,34 +221,29 @@ function ExportSelectorBody({
 export function ExportSelector({
   cadActor,
   geometryUnits,
-  mainEntryFile: mainEntryFileProperty,
+  filenameBase,
+  mainEntryFile,
   defaultEntryFile,
   variant = 'inline',
   onExport,
   children,
   className,
 }: ExportSelectorProps): React.JSX.Element {
-  const project = useProject();
-  const projectName = useSelector(project.projectRef, (state) => state.context.project?.name) ?? 'model';
-  const fallbackMainEntryFile = project.mainEntryFile;
-
-  const mainEntryFile = mainEntryFileProperty ?? fallbackMainEntryFile;
-
   const entries = useMemo<GeometryUnitEntry[]>(() => {
     if (cadActor) {
       // Single-geometry unit mode — derive a synthetic entry from the actor. The picker
       // will be hidden because length === 1.
-      const entryFile = defaultEntryFile ?? mainEntryFile;
+      const entryFile = defaultEntryFile ?? mainEntryFile ?? filenameBase;
       return [{ entryFile, actor: cadActor }];
     }
     if (geometryUnits) {
-      const sorted = sortGeometryUnitEntries([...geometryUnits.entries()], mainEntryFile);
+      const sorted = sortGeometryUnitEntries([...geometryUnits.entries()], mainEntryFile ?? '');
       return sorted.map(([entryFile, actor]) => ({ entryFile, actor }));
     }
     return [];
-  }, [cadActor, geometryUnits, defaultEntryFile, mainEntryFile]);
+  }, [cadActor, geometryUnits, defaultEntryFile, mainEntryFile, filenameBase]);
 
-  const initialEntryFile = defaultEntryFile ?? mainEntryFile;
+  const initialEntryFile = defaultEntryFile ?? mainEntryFile ?? entries[0]?.entryFile ?? '';
   const [selectedEntryFile, setSelectedEntryFile] = useState(initialEntryFile);
 
   useEffect(() => {
@@ -384,7 +261,7 @@ export function ExportSelector({
       mainEntryFile={mainEntryFile}
       onEntryFileChange={setSelectedEntryFile}
       selectedActor={selectedActor}
-      projectName={projectName}
+      filenameBase={filenameBase}
       onExport={onExport}
     />
   );

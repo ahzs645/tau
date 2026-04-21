@@ -19,7 +19,6 @@ import { cn } from '#utils/ui.utils.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import { useProjectManager } from '#hooks/use-project-manager.js';
 import { useCadPreview } from '#hooks/use-cad-preview.js';
-import { useCadExport } from '#hooks/use-cad-export.js';
 import { CadPreviewViewer, CadPreviewStatus } from '#components/cad-preview.js';
 import { usePreviewProject } from '#routes/projects_.$id_.preview/preview-project-context.js';
 import { PreviewDetails } from '#routes/projects_.$id_.preview/preview-details.js';
@@ -31,8 +30,7 @@ export const PreviewDesktop = memo(function (): React.JSX.Element {
   const navigate = useNavigate();
   const { id } = useParams();
   const { project, isStaticProject, staticProjectFiles } = usePreviewProject();
-  const { geometries, jsonSchema } = useCadPreview();
-  const { exportGeometry } = useCadExport(project?.name ?? 'file');
+  const { geometries, jsonSchema, cadRef } = useCadPreview();
   const fileManager = useFileManager();
   const projectManager = useProjectManager();
   const files = usePreviewFileList();
@@ -213,7 +211,7 @@ export const PreviewDesktop = memo(function (): React.JSX.Element {
 
             {/* Sidebar - About Section */}
             <div className='w-80 border-l bg-sidebar'>
-              <PreviewDetails project={project} geometriesCount={geometries.length} onExport={exportGeometry} />
+              <PreviewDetails project={project} geometriesCount={geometries.length} cadRef={cadRef} />
               <Separator />
               <div className='hidden p-6'>
                 <h3 className='mb-3 text-sm font-semibold'>Version Control</h3>
