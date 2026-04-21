@@ -92,7 +92,7 @@ Special thanks to [OpenSCAD Playground](https://github.com/openscad/openscad-pla
 
 ## License
 
-Tau is **[MIT-licensed](license)**. The Tau source code is, and remains, MIT.
+Tau is **[MIT-licensed](license)**.
 
 One optional bundled component — the OpenSCAD kernel, published as the standalone **[`@taucad/openscad`](./kernels/openscad)** package — pulls in [`openscad-wasm-prebuilt`](https://www.npmjs.com/package/openscad-wasm-prebuilt), which is **[GPL-2.0-or-later](https://www.gnu.org/licenses/gpl-2.0.html)**. `@taucad/openscad` is itself published under GPL-2.0-or-later for license clarity. When you build, install, or deploy a Tau distribution that includes `@taucad/openscad`, the resulting **combined distribution** must satisfy the GPL-2.0-or-later terms (notably, source availability — already satisfied by this public repository — and shipping the GPL license text alongside the OpenSCAD WASM).
 
