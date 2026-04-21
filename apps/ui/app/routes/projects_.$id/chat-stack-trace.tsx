@@ -19,7 +19,6 @@ import { cn } from '#utils/ui.utils.js';
 import { createMessage } from '#utils/chat.utils.js';
 import { decodeTextFile } from '#utils/filesystem.utils.js';
 import { useModels } from '#hooks/use-models.js';
-import { defaultChatModel } from '#constants/chat.constants.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import { useKernel } from '#hooks/use-kernel.js';
 import { useChatSnapshot } from '#hooks/use-chat-snapshot.js';
@@ -495,7 +494,7 @@ export function ChatStackTrace({ entryFile, className, side, ...props }: ChatSta
         content: errorPrompt,
         role: messageRole.user,
         metadata: {
-          model: selectedModel?.id ?? defaultChatModel,
+          model: selectedModel.id,
           status: messageStatus.pending,
           kernel,
           snapshot,
@@ -525,7 +524,7 @@ export function ChatStackTrace({ entryFile, className, side, ...props }: ChatSta
       editorRef,
       createChat,
       setLastChatId,
-      selectedModel?.id,
+      selectedModel.id,
       sendMessage,
       snapshot,
     ],

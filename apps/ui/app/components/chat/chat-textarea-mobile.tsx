@@ -217,9 +217,9 @@ export const ChatTextareaMobile = memo(function ({
                     <div className={menuItemClassName}>
                       <span className='flex w-full items-center justify-between'>
                         <div className='flex items-center gap-2'>
-                          <SvgIcon id={selectedModel?.details.family ?? 'anthropic'} className='size-4 grayscale' />
+                          <SvgIcon id={selectedModel.family} className='size-4 grayscale' />
                           <div className='flex flex-col items-start'>
-                            <span>{selectedModel?.name ?? 'Select model'}</span>
+                            <span>{selectedModel.name}</span>
                             <span className='text-xs text-muted-foreground'>AI model for responses</span>
                           </div>
                         </div>

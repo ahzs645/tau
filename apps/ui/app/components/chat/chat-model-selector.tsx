@@ -7,11 +7,12 @@ import { Badge } from '#components/ui/badge.js';
 import { SvgIcon } from '#components/icons/svg-icon.js';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '#components/ui/hover-card.js';
 import { useModels } from '#hooks/use-models.js';
+import type { ResolvedModel } from '#hooks/use-models.js';
 
 type ChatModelSelectorProps = Omit<React.HTMLAttributes<HTMLDivElement>, 'children' | 'onSelect'> & {
   readonly onSelect?: (modelId: string) => void;
   readonly onClose?: () => void;
-  readonly children: (props: { selectedModel?: Model }) => ReactNode;
+  readonly children: (props: { selectedModel: ResolvedModel }) => ReactNode;
   readonly popoverProperties?: React.ComponentProps<typeof ComboBoxResponsive>['popoverProperties'];
   readonly isNested?: boolean;
 };
@@ -119,7 +120,7 @@ export const ChatModelSelector = memo(function ({
       )}
       getValue={(item) => item.id}
       placeholder='Select a model'
-      defaultValue={selectedModel}
+      defaultValue={selectedModel.model}
       isNested={isNested}
       onSelect={handleSelectModel}
       onClose={onClose}

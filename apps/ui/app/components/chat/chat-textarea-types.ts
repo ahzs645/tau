@@ -223,7 +223,7 @@ export function useChatTextareaLogic({
     try {
       await onSubmitRef.current({
         content: inputTextRef.current,
-        model: selectedModelRef.current?.id ?? '',
+        model: selectedModelRef.current.id,
         metadata: {
           toolChoice: selectedToolChoiceRef.current,
           mode: selectedModeRef.current,

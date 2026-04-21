@@ -1,5 +1,5 @@
 import { memo, useEffect, useMemo, useReducer } from 'react';
-import { DollarSign, Clock, Cpu } from 'lucide-react';
+import { DollarSign, Clock } from 'lucide-react';
 import { useSelector } from '@xstate/react';
 import { useChatSelector } from '#hooks/use-chat.js';
 import { formatCurrency } from '#utils/currency.utils.js';
@@ -10,6 +10,7 @@ import { cookieName } from '#constants/cookie.constants.js';
 import { useModels } from '#hooks/use-models.js';
 import { useProject } from '#hooks/use-project.js';
 import { useChats } from '#hooks/use-chats.js';
+import { SvgIcon } from '#components/icons/svg-icon.js';
 
 type ChatHistoryStatusProps = {
   readonly className?: string;
@@ -17,7 +18,7 @@ type ChatHistoryStatusProps = {
 
 export const ChatHistoryStatus = memo(function ({ className }: ChatHistoryStatusProps): React.JSX.Element {
   const [showModelCost] = useCookie(cookieName.chatModelCost, true);
-  const { data: models } = useModels();
+  const { resolveModel } = useModels();
 
   // Get active chat info
   const { editorRef, projectId } = useProject();
@@ -63,17 +64,7 @@ export const ChatHistoryStatus = memo(function ({ className }: ChatHistoryStatus
     return cost;
   });
 
-  // Look up the model by ID to get the display name
-  const model = useMemo(() => {
-    if (!currentModel || !models) {
-      return undefined;
-    }
-
-    return models.find((m) => m.id === currentModel);
-  }, [currentModel, models]);
-
-  // Use the model name if available, otherwise fall back to the ID
-  const displayModel = model?.name ?? (currentModel ? (currentModel.split('/').pop() ?? currentModel) : undefined);
+  const model = useMemo(() => (currentModel ? resolveModel(currentModel) : undefined), [currentModel, resolveModel]);
 
   return (
     <div
@@ -96,10 +87,10 @@ export const ChatHistoryStatus = memo(function ({ className }: ChatHistoryStatus
 
       {/* Right side: Model and cost */}
       <div className='flex items-center gap-3'>
-        {displayModel ? (
+        {model ? (
           <div className='flex items-center gap-1 text-muted-foreground'>
-            <Cpu className='size-3' />
-            <span className='max-w-24 truncate'>{displayModel}</span>
+            <SvgIcon id={model.family} className='size-3 grayscale' />
+            <span className='hidden max-w-24 truncate @[20rem]:inline'>{model.name}</span>
           </div>
         ) : undefined}
 

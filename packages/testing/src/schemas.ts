@@ -100,7 +100,7 @@ export type TestPass = z.infer<typeof testPassSchema>;
  * Output schema for test_model tool.
  * Includes both failures (with detailed feedback) and passes (for UI display).
  * `geometryArtifactPaths` maps each tested source file to the captured GLB
- * artifact written for that compilation unit.
+ * artifact written for that geometry unit.
  * @public
  */
 export const testModelOutputSchema = z.object({

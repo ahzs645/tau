@@ -33,7 +33,7 @@ export function ChatMessageDataUsage({
 }: {
   readonly usageParts: UsageData[];
 }): React.JSX.Element | undefined {
-  const { data: models } = useModels();
+  const { resolveModel } = useModels();
   const [showModelCost] = useCookie(cookieName.chatModelCost, true);
 
   // Calculate totals from usage parts
@@ -69,13 +69,12 @@ export function ChatMessageDataUsage({
       calculated.totalCost += usage.totalCost;
     }
 
-    // Use the model from the last usage part (most recent)
     const lastUsage = usageParts.at(-1);
     const modelId = lastUsage?.model;
-    const foundModel = modelId ? models?.find((m) => m.id === modelId) : undefined;
+    const resolvedModel = modelId ? resolveModel(modelId) : undefined;
 
-    return { totals: calculated, hasMultipleTurns: hasMultiple, model: foundModel };
-  }, [usageParts, models]);
+    return { totals: calculated, hasMultipleTurns: hasMultiple, model: resolvedModel };
+  }, [usageParts, resolveModel]);
 
   if (!totals) {
     return undefined;
@@ -100,7 +99,7 @@ export function ChatMessageDataUsage({
             <h4 className='font-medium'>Usage Details</h4>
             {model ? (
               <div className='flex items-baseline gap-2 text-xs'>
-                <SvgIcon id={model.details.family} className='size-4 translate-y-[0.25em] text-muted-foreground' />
+                <SvgIcon id={model.family} className='size-4 translate-y-[0.25em] text-muted-foreground' />
                 <span className='font-mono'>{model.name}</span>
               </div>
             ) : undefined}

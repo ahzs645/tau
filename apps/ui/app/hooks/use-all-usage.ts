@@ -46,22 +46,7 @@ export function useAllUsage(): {
   refetch: () => void;
 } {
   const { getProjects, getChatsForResource, isLoading: isProjectManagerLoading } = useProjectManager();
-  const { data: models } = useModels();
-
-  // Create a map for quick model lookup
-  const modelMap = useMemo(() => {
-    const map = new Map<string, { name: string; provider: string }>();
-    if (models) {
-      for (const model of models) {
-        map.set(model.id, {
-          name: model.name,
-          provider: model.provider.name,
-        });
-      }
-    }
-
-    return map;
-  }, [models]);
+  const { resolveModel } = useModels();
 
   // Fetch all projects and their chats in a single query
   const {
@@ -108,15 +93,15 @@ export function useAllUsage(): {
         for (const part of usageParts) {
           // Type is already narrowed by the filter above
           const { data } = part;
-          const modelInfo = modelMap.get(data.model);
+          const resolved = resolveModel(data.model);
 
           usageRecords.push({
             id: data.id,
             // Use chat's updatedAt as the timestamp (more accurate for when usage occurred)
             date: new Date(chat.updatedAt),
             model: data.model,
-            modelName: modelInfo?.name ?? data.model,
-            provider: modelInfo?.provider ?? 'Unknown',
+            modelName: resolved.name,
+            provider: resolved.provider.name,
             projectId: project.id,
             projectName: project.name,
             chatId: chat.id,
@@ -139,7 +124,7 @@ export function useAllUsage(): {
     usageRecords.sort((a, b) => b.date.getTime() - a.date.getTime());
 
     return usageRecords;
-  }, [projectsWithChats, modelMap]);
+  }, [projectsWithChats, resolveModel]);
 
   const handleRefetch = (): void => {
     void refetch();

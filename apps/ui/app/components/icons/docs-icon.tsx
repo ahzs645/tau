@@ -2,7 +2,7 @@ import { icons } from 'lucide-react';
 import { createElement } from 'react';
 import type { LucideIcon } from 'lucide-react';
 import { SvgIcon } from '#components/icons/svg-icon.js';
-import type { SvgIcons } from '#components/icons/generated/svg-icons.js';
+import type { IconId as SvgIconId } from '#components/icons/svg-icon.js';
 
 type IconNamespace = 'lucide' | 'lib';
 
@@ -94,5 +94,5 @@ export function DocsIcon({
   }
 
   // Library icons (SvgIcon sprite)
-  return <SvgIcon id={id as SvgIcons} className={className} />;
+  return <SvgIcon id={id as SvgIconId} className={className} />;
 }

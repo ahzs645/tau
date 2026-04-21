@@ -171,7 +171,7 @@ function ProjectCard({
                       <TooltipTrigger>
                         <Avatar className='h-5 w-5'>
                           <AvatarFallback>
-                            <SvgIcon id={kernel} className='size-3' />
+                            <SvgIcon id={kernelConfiguration.id} className='size-3' />
                           </AvatarFallback>
                         </Avatar>
                       </TooltipTrigger>

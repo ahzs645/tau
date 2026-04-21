@@ -22,7 +22,7 @@ export const ChatExamples = memo(function () {
       content: example.prompt,
       role: messageRole.user,
       metadata: {
-        model: selectedModel?.id ?? '',
+        model: selectedModel.id,
         status: messageStatus.pending,
         snapshot,
       },

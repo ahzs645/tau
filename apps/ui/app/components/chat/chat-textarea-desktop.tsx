@@ -321,11 +321,11 @@ const ChatTextareaLeftControls = memo(function ({
                 size='sm'
                 className='h-7 cursor-pointer! rounded-full text-muted-foreground hover:text-foreground @max-[22rem]:w-7 @xs:max-w-fit @[22rem]:pr-2'
               >
-                <span className='hidden truncate text-xs @[22rem]:block'>{selectedModel?.name ?? 'Offline'}</span>
+                <span className='hidden truncate text-xs @[22rem]:block'>{selectedModel.name}</span>
                 <span className='relative flex size-4 items-center justify-center'>
                   <ChevronDown className='absolute scale-0 transition-transform duration-200 ease-in-out group-hover:scale-0 @[22rem]:scale-100' />
                   <SvgIcon
-                    id={selectedModel?.details.family ?? 'anthropic'}
+                    id={selectedModel.family}
                     className='absolute scale-100 grayscale transition-transform duration-200 ease-in-out group-hover:scale-100 @[22rem]:scale-0'
                   />
                 </span>
@@ -335,7 +335,7 @@ const ChatTextareaLeftControls = memo(function ({
         </ChatModelSelector>
         <TooltipContent>
           <span>Select model{` `}</span>
-          <span>({selectedModel?.name ?? 'Offline'})</span>
+          <span>({selectedModel.name})</span>
         </TooltipContent>
       </Tooltip>
       {/* Kernel selector */}

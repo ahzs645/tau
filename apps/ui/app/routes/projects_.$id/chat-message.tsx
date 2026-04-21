@@ -602,7 +602,7 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
                           'group w-full hover:bg-neutral/30 hover:text-foreground',
                         )}
                       >
-                        <span>{selectedModel?.name ?? 'Offline'}</span>
+                        <span>{selectedModel.name}</span>
                         <ChevronRight className='ml-auto size-3.5 text-muted-foreground transition-transform duration-200 ease-in-out group-data-[state=open]:rotate-90' />
                       </button>
                     )}
