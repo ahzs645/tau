@@ -19,8 +19,8 @@ import { ChatTextareaSubmitButton } from '#components/chat/chat-textarea-submit-
 import { focusTrapAttribute } from '#components/chat/chat-textarea-types.js';
 import { useSelector } from '@xstate/react';
 import { useChatActions, useChatContext } from '#hooks/use-chat.js';
-import type { useModels } from '#hooks/use-models.js';
-import { useKernel } from '#hooks/use-kernel.js';
+import type { ResolvedModel } from '#hooks/use-models.js';
+import { useActiveChatKernel } from '#hooks/use-active-chat-kernel.js';
 import { useFeature } from '#flags/use-feature.js';
 import { ChatEditor } from '#components/chat/tiptap/chat-editor.js';
 import { useChatEditor, buildEditorContentJson } from '#components/chat/tiptap/use-chat-editor.js';
@@ -44,7 +44,7 @@ type ChatTextareaDesktopProperties = {
   readonly images: string[];
   readonly selectedToolChoice: ToolSelection;
   readonly status: string;
-  readonly selectedModel: ReturnType<typeof useModels>['selectedModel'];
+  readonly selectedModel: ResolvedModel;
   readonly formattedCancelKeyCombination: string;
 
   // Context data for Tiptap editor
@@ -281,8 +281,13 @@ ChatTextareaDesktop.displayName = 'ChatTextareaDesktop';
 /**
  * Memo'd left control bar containing model/kernel/tool selectors.
  * Isolated to prevent Radix TooltipTrigger asChild composeRefs loops.
+ *
+ * Exported for chat-scoped kernel label tests (E2). External consumers
+ * should keep using {@link ChatTextareaDesktop}.
+ *
+ * @internal
  */
-const ChatTextareaLeftControls = memo(function ({
+export const ChatTextareaLeftControls = memo(function ({
   selectedModel,
   enableKernelSelector,
   selectedToolChoice,
@@ -291,7 +296,7 @@ const ChatTextareaLeftControls = memo(function ({
   fileInputReference,
   handleFileChange,
 }: {
-  readonly selectedModel: ReturnType<typeof useModels>['selectedModel'];
+  readonly selectedModel: ResolvedModel;
   readonly enableKernelSelector: boolean;
   readonly selectedToolChoice: ToolSelection;
   readonly focusEditor: () => void;
@@ -300,7 +305,10 @@ const ChatTextareaLeftControls = memo(function ({
   readonly fileInputReference: React.RefObject<HTMLInputElement | null>;
   readonly handleFileChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
 }): React.JSX.Element {
-  const { selectedKernel } = useKernel();
+  // R6: chat-scoped resolver — falls back to cookie kernel when no chat-local
+  // selection exists. Display label follows the chat's active kernel so
+  // cookie changes elsewhere can no longer flip the label mid-conversation.
+  const { kernel: selectedKernel } = useActiveChatKernel();
   const selectedKernelName = selectedKernel?.name;
 
   return (

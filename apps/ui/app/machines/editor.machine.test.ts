@@ -16,7 +16,7 @@ const stubEditorState: EditorState = {
     { path: 'src/utils.ts', name: 'utils.ts', lastAccessedAt: 2000 },
   ],
   activeFilePath: 'src/main.ts',
-  lastChatId: 'chat-1',
+  focusedChatId: 'chat-1',
   panelState: defaultPanelState,
   editorLayout: undefined,
   viewerLayout: undefined,
@@ -364,6 +364,57 @@ describe('editorMachine', () => {
         await vi.advanceTimersByTimeAsync(0);
         await waitFor(actor, (s) => s.matches({ ready: { storing: 'idle' } }));
         expect(writeCallCount).toBe(1);
+        actor.stop();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  // =========================================================================
+  // State: ready – focused chat
+  // =========================================================================
+  describe('ready – focused chat', () => {
+    it('should set focusedChatId when setFocusedChatId is dispatched', async () => {
+      const actor = await startAndLoad({ loadResult: undefined });
+      actor.send({ type: 'setFocusedChatId', chatId: 'chat-42' });
+      expect(actor.getSnapshot().context.focusedChatId).toBe('chat-42');
+      actor.stop();
+    });
+
+    it('should clear focusedChatId when setFocusedChatId is dispatched with undefined', async () => {
+      const actor = await startAndLoad({ loadResult: stubEditorState });
+      expect(actor.getSnapshot().context.focusedChatId).toBe('chat-1');
+      actor.send({ type: 'setFocusedChatId', chatId: undefined });
+      expect(actor.getSnapshot().context.focusedChatId).toBeUndefined();
+      actor.stop();
+    });
+
+    it('should hydrate focusedChatId from loaded EditorState', async () => {
+      const actor = await startAndLoad({ loadResult: stubEditorState });
+      expect(actor.getSnapshot().context.focusedChatId).toBe('chat-1');
+      actor.stop();
+    });
+
+    it('should persist focusedChatId via the storing region', async () => {
+      vi.useFakeTimers();
+      try {
+        let savedFocusedChatId: string | undefined;
+        const actor = await startAndLoad({
+          loadResult: undefined,
+          // oxlint-disable-next-line require-await -- save actor must be async
+          saveResult: async () => {
+            savedFocusedChatId = actor.getSnapshot().context.focusedChatId;
+          },
+        });
+
+        actor.send({ type: 'setFocusedChatId', chatId: 'chat-42' });
+        expect(actor.getSnapshot().matches({ ready: { storing: 'pending' } })).toBe(true);
+
+        await vi.advanceTimersByTimeAsync(500);
+        await waitFor(actor, (s) => s.matches({ ready: { storing: 'idle' } }));
+
+        expect(savedFocusedChatId).toBe('chat-42');
         actor.stop();
       } finally {
         vi.useRealTimers();

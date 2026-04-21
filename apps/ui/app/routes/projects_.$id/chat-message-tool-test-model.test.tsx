@@ -113,7 +113,6 @@ type TestModelInvocation = ToolInvocation<typeof toolName.testModel>;
 type TestModelOutputAvailable = Extract<TestModelInvocation, { state: 'output-available' }>;
 
 const buildPart = (output: TestModelOutputAvailable['output']): TestModelOutputAvailable => ({
-  type: 'tool-test_model',
   toolCallId: 'tc_1',
   state: 'output-available',
   input: {},
@@ -201,7 +200,7 @@ describe('ChatMessageToolTestModel — multi-file rendering', () => {
     render(<ChatMessageToolTestModel part={part} />);
 
     const links = screen.getAllByTestId('viewer-link');
-    const paths = links.map((l) => l.dataset.path);
+    const paths = links.map((l) => l.dataset['path']);
     expect(paths).toContain('.tau/artifacts/tc_1__main.scad.glb');
     expect(paths).toContain('.tau/artifacts/tc_1__lib_bracket.scad.glb');
   });
@@ -236,7 +235,7 @@ describe('ChatMessageToolTestModel — multi-file rendering', () => {
 
     const links = screen.getAllByTestId('viewer-link');
     const artifactPaths = links
-      .map((l) => l.dataset.path)
+      .map((l) => l.dataset['path'])
       .filter((p): p is string => typeof p === 'string' && p.startsWith('.tau/artifacts/'));
     expect(artifactPaths).toEqual(['.tau/artifacts/tc_1__main.scad.glb']);
   });
@@ -336,7 +335,7 @@ describe('ChatMessageToolTestModel — multi-file rendering', () => {
     // single visual cue that distinguishes failure from success now that the
     // header chrome is identical in both branches.
     const icon = screen.getByTestId('chat-tool-card-icon');
-    expect(icon.dataset.tone).toBe('destructive');
+    expect(icon.dataset['tone']).toBe('destructive');
   });
 
   it('should NOT apply the destructive icon tone when every requirement passes', () => {
@@ -354,7 +353,7 @@ describe('ChatMessageToolTestModel — multi-file rendering', () => {
     render(<ChatMessageToolTestModel part={part} />);
 
     const icon = screen.getByTestId('chat-tool-card-icon');
-    expect(icon.dataset.tone).toBe('');
+    expect(icon.dataset['tone']).toBe('');
   });
 
   it('should singularise the requirement noun when a single requirement passes', () => {

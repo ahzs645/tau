@@ -5,7 +5,7 @@ import type { ChatTextareaProperties } from '#components/chat/chat-textarea-type
 import { ChatTextarea } from '#components/chat/chat-textarea.js';
 import { KernelSelector } from '#components/chat/kernel-selector.js';
 import { Button } from '#components/ui/button.js';
-import { ChatProvider } from '#hooks/use-chat.js';
+import { ActiveChatProvider } from '#hooks/active-chat-provider.js';
 import { toast } from '#components/ui/sonner.js';
 import { useProjectManager } from '#hooks/use-project-manager.js';
 import { useKernel } from '#hooks/use-kernel.js';
@@ -48,8 +48,10 @@ export function CtaSection(): React.JSX.Element {
             </p>
           </div>
 
-          {/* Chat Input */}
-          <ChatProvider>
+          {/* Chat Input — ephemeral mode (no chatId) so the draft is held in
+              memory only. The marketing CTA never persists; it just routes
+              into project creation on submit. */}
+          <ActiveChatProvider chatId={undefined}>
             <div className='space-y-4'>
               <div className='flex justify-center'>
                 <KernelSelector selectedKernel={kernel} onKernelChange={setKernel} />
@@ -62,7 +64,7 @@ export function CtaSection(): React.JSX.Element {
                 onSubmit={onSubmit}
               />
             </div>
-          </ChatProvider>
+          </ActiveChatProvider>
 
           {/* CTA Button */}
           <div className='mt-8 flex justify-center'>

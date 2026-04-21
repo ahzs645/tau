@@ -58,7 +58,7 @@ export function ChatActivitySummary({
 
   return (
     <ChatToolLabel verb={verb}>
-      {detail !== '' ? <ChatToolDescription>{detail}</ChatToolDescription> : undefined}
+      {detail === '' ? undefined : <ChatToolDescription>{detail}</ChatToolDescription>}
     </ChatToolLabel>
   );
 }

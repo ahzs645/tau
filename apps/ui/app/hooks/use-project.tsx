@@ -56,7 +56,7 @@ type ProjectContextType = {
   updateTags: (tags: string[]) => void;
   updateThumbnail: (thumbnail: string) => void;
   getMainFilename: () => Promise<string>;
-  setLastChatId: (chatId: string) => void;
+  setFocusedChatId: (chatId: string | undefined) => void;
 };
 
 const ProjectContext = createContext<ProjectContextType | undefined>(undefined);
@@ -346,9 +346,9 @@ export function ProjectProvider({
     [actorRef],
   );
 
-  const setLastChatId = useCallback(
-    (chatId: string) => {
-      editorRef.send({ type: 'setLastChatId', chatId });
+  const setFocusedChatId = useCallback(
+    (chatId: string | undefined) => {
+      editorRef.send({ type: 'setFocusedChatId', chatId });
     },
     [editorRef],
   );
@@ -385,7 +385,7 @@ export function ProjectProvider({
       updateDescription,
       updateTags,
       updateThumbnail,
-      setLastChatId,
+      setFocusedChatId,
       getMainFilename,
     };
   }, [
@@ -409,7 +409,7 @@ export function ProjectProvider({
     updateDescription,
     updateTags,
     updateThumbnail,
-    setLastChatId,
+    setFocusedChatId,
     getMainFilename,
   ]);
 
@@ -469,7 +469,7 @@ export function useResolveGraphicsForFile(): (targetFile: string) => ActorRefFro
 
   return useCallback(
     (targetFile: string) => {
-      const viewSettings = editorRef.getSnapshot().context.viewSettings;
+      const { viewSettings } = editorRef.getSnapshot().context;
       for (const [viewId, graphicsRef] of viewGraphics) {
         if (viewSettings[viewId]?.entryFile === targetFile) {
           return graphicsRef;

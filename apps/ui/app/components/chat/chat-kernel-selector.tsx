@@ -5,7 +5,7 @@ import type { KernelProvider } from '@taucad/runtime';
 import { kernelConfigurations } from '@taucad/types/constants';
 import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
 import { SvgIcon } from '#components/icons/svg-icon.js';
-import { useKernel } from '#hooks/use-kernel.js';
+import { useActiveChatKernel } from '#hooks/use-active-chat-kernel.js';
 
 type ChatKernelSelectorProps = Omit<React.HTMLAttributes<HTMLDivElement>, 'children' | 'onSelect'> & {
   readonly onSelect?: (kernelId: KernelProvider) => void;
@@ -22,20 +22,22 @@ export const ChatKernelSelector = memo(function ({
   isNested,
   ...properties
 }: ChatKernelSelectorProps): React.JSX.Element {
-  const { kernel, setKernel } = useKernel();
-
-  const selectedKernel = kernelConfigurations.find((k) => k.id === kernel);
+  // R6 / decision C: read AND write through the chat-scoped resolver so a
+  // kernel switch inside chat A patches `Chat.activeKernel` for A *and*
+  // updates the cookie default for future new chats. The selector no
+  // longer touches `useKernel` directly.
+  const { kernel: selectedKernel, setActiveKernel } = useActiveChatKernel();
 
   const handleSelectKernel = useCallback(
     (item: string) => {
       const kernel = kernelConfigurations.find((k) => k.id === item);
 
       if (kernel) {
-        setKernel(kernel.id);
+        setActiveKernel(kernel.id);
         onSelect?.(kernel.id);
       }
     },
-    [onSelect, setKernel],
+    [onSelect, setActiveKernel],
   );
 
   return (

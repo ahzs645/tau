@@ -38,6 +38,19 @@ type CreateProjectChatOptions = {
   editorState?: InitialEditorState;
   /** Explicit backend override — takes precedence over the cookie default */
   backend?: FileSystemBackend;
+  /**
+   * Seed `Chat.activeModel` so the chat owns its model choice independent
+   * of the cookie default. Defaults to `initialMessage.model` when an
+   * initial message is provided, otherwise undefined (chat-scoped resolver
+   * falls back to the cookie). See
+   * `docs/research/chat-active-model-kernel-persistence.md` (R3).
+   */
+  activeModel?: string;
+  /**
+   * Seed `Chat.activeKernel`. Defaults to the project's `kernel` field when
+   * the project is created from a kernel template, otherwise undefined.
+   */
+  activeKernel?: KernelProvider;
 };
 
 /**
@@ -189,12 +202,23 @@ export function ProjectManagerProvider({ children }: { readonly children: ReactN
 
       const chatName = options.chatName ?? (options.initialMessage ? 'Initial design' : 'Initial chat');
 
+      // R3: Seed the chat row with chat-scoped active model + kernel so a
+      // cookie change in another tab does not mutate the active selection
+      // for this freshly-created chat. Falls back to the per-message model
+      // (when an initialMessage is supplied) and the kernel chosen by the
+      // creation flow. Callers may override via `options.activeModel` /
+      // `options.activeKernel` when seeding from a non-default source.
+      const seededActiveModel = options.activeModel ?? options.initialMessage?.model;
+      const seededActiveKernel = options.activeKernel ?? kernel;
+
       // Single atomic call to create project + chat + Editor state
       const { project } = await worker.createProjectWithResources({
         project: projectData,
         chat: {
           name: chatName,
           messages: chatMessages,
+          activeModel: seededActiveModel,
+          activeKernel: seededActiveKernel,
         },
         editorState: options.editorState,
       });

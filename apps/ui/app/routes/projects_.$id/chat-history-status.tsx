@@ -22,7 +22,7 @@ export const ChatHistoryStatus = memo(function ({ className }: ChatHistoryStatus
 
   // Get active chat info
   const { editorRef, projectId } = useProject();
-  const activeChatId = useSelector(editorRef, (state) => state.context.lastChatId);
+  const activeChatId = useSelector(editorRef, (state) => state.context.focusedChatId);
   const { chats } = useChats(projectId);
   const activeChat = useMemo(() => chats.find((chat) => chat.id === activeChatId), [chats, activeChatId]);
   const updatedAt = activeChat?.updatedAt;
@@ -37,18 +37,14 @@ export const ChatHistoryStatus = memo(function ({ className }: ChatHistoryStatus
     };
   }, []);
 
-  // Get the current model from the last message's metadata
-  const currentModel = useChatSelector((state) => {
-    const { messages } = state;
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const message = messages[i];
-      if (message?.metadata?.model) {
-        return message.metadata.model;
-      }
-    }
-
-    return undefined;
-  });
+  // R8/F1: read the chat-scoped active model directly from the chat row.
+  // The previous implementation scanned the full message history backwards
+  // to derive the "current" model from the latest stamped metadata, which
+  // (a) duplicated the chat-scoped resolver's responsibility and (b) was
+  // wrong while a chat existed but had not yet been used (no messages →
+  // no model badge). The persisted `Chat.activeModel` is now the source
+  // of truth, with a cookie fallback when the chat hasn't pinned one.
+  const currentModel = useChatSelector((state) => state.activeModel);
 
   // Calculate total cost from all usage data parts
   const totalCost = useChatSelector((state) => {

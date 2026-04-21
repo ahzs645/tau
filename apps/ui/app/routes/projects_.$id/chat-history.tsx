@@ -26,7 +26,7 @@ import type { KeyCombination } from '#utils/keys.utils.js';
 import { formatKeyCombination } from '#utils/keys.utils.js';
 import { cn } from '#utils/ui.utils.js';
 import { ChatHistoryEmpty } from '#routes/projects_.$id/chat-history-empty.js';
-import { useKernel } from '#hooks/use-kernel.js';
+import { useActiveChatKernel } from '#hooks/use-active-chat-kernel.js';
 import { useCookie } from '#hooks/use-cookie.js';
 import { cookieName } from '#constants/cookie.constants.js';
 import { AtReferenceProvider } from '#components/chat/at-reference-context.js';
@@ -80,7 +80,11 @@ export const ChatHistory = memo(function (props: {
   const { className, isExpanded = true, setIsExpanded } = props;
   const messageIds = useChatSelector((state) => state.messageOrder);
   const { sendMessage } = useChatActions();
-  const { kernel } = useKernel();
+  // R6/R11: stamp outgoing user-message metadata with the chat-scoped
+  // kernel (chat row first, cookie fallback) so a cookie change in
+  // another tab cannot retroactively retag the kernel for the *current*
+  // chat session.
+  const { kernelId: kernel } = useActiveChatKernel();
   const { treeService } = useFileManager();
   const { projectId } = useProject();
   const { chats } = useChats(projectId);

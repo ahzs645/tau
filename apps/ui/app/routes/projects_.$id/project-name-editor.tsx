@@ -17,7 +17,7 @@ export function ProjectNameEditor(): React.JSX.Element {
   const projectName = useSelector(projectRef, (state) => state.context.project?.name) ?? '';
   const isLoading = useSelector(projectRef, (state) => state.context.isLoading);
   const isProjectError = useSelector(projectRef, (state) => state.matches('error'));
-  const activeChatId = useSelector(editorRef, (state) => state.context.lastChatId);
+  const activeChatId = useSelector(editorRef, (state) => state.context.focusedChatId);
   const { getChat } = useProjectManager();
 
   const [displayName, setDisplayName] = useState<string>(projectName);

@@ -25,6 +25,7 @@ import {
   FloatingPanelButtonGroup,
 } from '#components/ui/floating-panel.js';
 import { useChatRpcStatus } from '#hooks/use-chat-rpc-socket.js';
+import { pickNextFocusedChatId } from '#routes/projects_.$id/chat-history-selector.utils.js';
 
 const newChatKeyCombination = {
   key: 'c',
@@ -39,7 +40,7 @@ export function ChatHistorySelector({
   readonly onNewChat?: () => void;
   readonly closeButton?: ReactNode;
 }): ReactNode {
-  const { projectRef, editorRef, projectId, setLastChatId } = useProject();
+  const { projectRef, editorRef, projectId, setFocusedChatId } = useProject();
   const { chats, createChat, updateChatName, deleteChat, isLoading: isChatsLoading } = useChats(projectId);
 
   // Connection status for visual indicator
@@ -47,7 +48,7 @@ export function ChatHistorySelector({
   const isDisconnected = connectionStatus === 'disconnected' || connectionStatus === 'error';
 
   const isBuildLoading = useSelector(projectRef, (state) => state.context.isLoading);
-  const activeChatId = useSelector(editorRef, (state) => state.context.lastChatId) ?? '';
+  const activeChatId = useSelector(editorRef, (state) => state.context.focusedChatId) ?? '';
 
   // Derive activeChat and groupedChats from chats
   const activeChat = useMemo(() => chats.find((chat) => chat.id === activeChatId), [chats, activeChatId]);
@@ -66,11 +67,11 @@ export function ChatHistorySelector({
     });
 
     // Set as active chat
-    setLastChatId(newChat.id);
+    setFocusedChatId(newChat.id);
 
     // Notify parent that a new chat was created
     onNewChat?.();
-  }, [createChat, setLastChatId, onNewChat]);
+  }, [createChat, setFocusedChatId, onNewChat]);
 
   const { formattedKeyCombination } = useKeybinding(newChatKeyCombination, handleAddChat);
 
@@ -143,23 +144,22 @@ export function ChatHistorySelector({
     async (chatId: string) => {
       await deleteChat(chatId);
 
-      // If we deleted the active chat, switch to the most recent one
-      if (activeChatId === chatId && chats.length > 1) {
-        const remainingChats = chats.filter((chat) => chat.id !== chatId);
-        const mostRecent = [...remainingChats].sort((a, b) => b.updatedAt - a.updatedAt)[0];
-        if (mostRecent) {
-          setLastChatId(mostRecent.id);
-        }
+      // Re-focus only when the deleted chat was the focused one. The pure
+      // helper handles the "no chats remaining" + tie-break cases — see
+      // `chat-history-selector.utils.test.ts` for the policy.
+      if (activeChatId === chatId) {
+        const nextFocused = pickNextFocusedChatId(chats, chatId, activeChatId);
+        setFocusedChatId(nextFocused);
       }
     },
-    [deleteChat, chats, activeChatId, setLastChatId],
+    [deleteChat, chats, activeChatId, setFocusedChatId],
   );
 
   const handleSelectChat = useCallback(
     (chatId: string) => {
-      setLastChatId(chatId);
+      setFocusedChatId(chatId);
     },
-    [setLastChatId],
+    [setFocusedChatId],
   );
 
   // Render function for each chat item

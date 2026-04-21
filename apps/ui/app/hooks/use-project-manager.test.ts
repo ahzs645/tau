@@ -276,6 +276,65 @@ describe('useProjectManager', () => {
       expect(mockMount).toHaveBeenCalledWith(`/projects/${fakeProject.id}`, 'indexeddb', { preservePath: true });
     });
 
+    it('should seed activeModel and activeKernel on the new chat from the kernel template + initial message (D1, R3)', async () => {
+      const { result } = renderHook(() => useProjectManager(), { wrapper: createWrapper() });
+
+      await act(async () => {
+        await result.current.createProject({
+          kernel: 'openscad',
+          projectName: 'Seeded',
+          initialMessage: {
+            content: 'hello',
+            model: 'anthropic/claude-sonnet-4-5',
+          },
+        });
+      });
+
+      const callArgs = mockCreateProjectWithResources.mock.calls.at(-1)?.[0] as
+        | { chat: { activeModel?: string; activeKernel?: string } }
+        | undefined;
+      expect(callArgs?.chat.activeModel).toBe('anthropic/claude-sonnet-4-5');
+      expect(callArgs?.chat.activeKernel).toBe('openscad');
+    });
+
+    it('should leave activeModel undefined when no initialMessage and no explicit override (D1, R3)', async () => {
+      const { result } = renderHook(() => useProjectManager(), { wrapper: createWrapper() });
+
+      await act(async () => {
+        await result.current.createProject({
+          kernel: 'openscad',
+        });
+      });
+
+      const callArgs = mockCreateProjectWithResources.mock.calls.at(-1)?.[0] as
+        | { chat: { activeModel?: string; activeKernel?: string } }
+        | undefined;
+      expect(callArgs?.chat.activeModel).toBeUndefined();
+      expect(callArgs?.chat.activeKernel).toBe('openscad');
+    });
+
+    it('should honor explicit activeModel/activeKernel overrides over derived defaults (D1, R3)', async () => {
+      const { result } = renderHook(() => useProjectManager(), { wrapper: createWrapper() });
+
+      await act(async () => {
+        await result.current.createProject({
+          kernel: 'openscad',
+          activeModel: 'override-model',
+          activeKernel: 'manifold',
+          initialMessage: {
+            content: 'hello',
+            model: 'derived-model',
+          },
+        });
+      });
+
+      const callArgs = mockCreateProjectWithResources.mock.calls.at(-1)?.[0] as
+        | { chat: { activeModel?: string; activeKernel?: string } }
+        | undefined;
+      expect(callArgs?.chat.activeModel).toBe('override-model');
+      expect(callArgs?.chat.activeKernel).toBe('manifold');
+    });
+
     it('should write files with correct project paths', async () => {
       const sourceFile = 'src/main.ts';
       const packageFile = 'package.json';

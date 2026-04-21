@@ -9,9 +9,9 @@ import { defaultPanelState } from '#constants/editor.constants.js';
 /**
  * Type for initial editor state overrides during project creation.
  * Uses PartialDeep to allow partial nested objects (e.g., openPanels: { chat: true }).
- * Excludes projectId and lastChatId as those are set automatically.
+ * Excludes projectId and focusedChatId as those are set automatically.
  */
-export type InitialEditorState = PartialDeep<Omit<EditorStateInput, 'projectId' | 'lastChatId'>>;
+export type InitialEditorState = PartialDeep<Omit<EditorStateInput, 'projectId' | 'focusedChatId'>>;
 
 // Create a singleton instance of the storage provider
 const storage = new IndexedDbStorageProvider();
@@ -96,7 +96,7 @@ const objectStoreWorker = {
         projectId: project.id,
         openFiles,
         activeFilePath,
-        lastChatId: chat.id,
+        focusedChatId: chat.id,
         panelState: mergedPanelState,
         editorLayout: undefined,
         viewerLayout: undefined,
@@ -137,15 +137,17 @@ const objectStoreWorker = {
     // Duplicate all chats for this project
     const chatIdMapping = await storage.duplicateResourceChats(projectId, newProject.id);
 
-    // Duplicate Editor state if it exists, mapping lastChatId to the cloned chat
+    // Duplicate Editor state if it exists, mapping focusedChatId to the cloned chat
     const sourceEditorState = await storage.getEditorState(projectId);
     if (sourceEditorState) {
-      const newLastChatId = sourceEditorState.lastChatId ? chatIdMapping[sourceEditorState.lastChatId] : undefined;
+      const newFocusedChatId = sourceEditorState.focusedChatId
+        ? chatIdMapping[sourceEditorState.focusedChatId]
+        : undefined;
       await storage.updateEditorState({
         projectId: newProject.id,
         openFiles: sourceEditorState.openFiles,
         activeFilePath: sourceEditorState.activeFilePath,
-        lastChatId: newLastChatId,
+        focusedChatId: newFocusedChatId,
         panelState: sourceEditorState.panelState,
         editorLayout: sourceEditorState.editorLayout,
         viewerLayout: sourceEditorState.viewerLayout,

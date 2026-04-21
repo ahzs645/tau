@@ -55,9 +55,6 @@ vi.mock('#hooks/use-kernel.js', () => ({
 }));
 
 vi.mock('#hooks/use-chat.js', () => ({
-  ChatProvider({ children }: { readonly children: React.ReactNode }) {
-    return <div data-testid='chat-provider'>{children}</div>;
-  },
   useChatContext() {
     return {
       draftActorRef: {
@@ -75,8 +72,10 @@ vi.mock('#hooks/use-chat.js', () => ({
   },
 }));
 
-vi.mock('#hooks/use-flush-on-close.js', () => ({
-  useFlushOnClose: vi.fn(),
+vi.mock('#hooks/active-chat-provider.js', () => ({
+  ActiveChatProvider({ children }: { readonly children: React.ReactNode }) {
+    return <div data-testid='active-chat-provider'>{children}</div>;
+  },
 }));
 
 vi.mock('#components/chat/chat-textarea.js', () => ({
@@ -236,6 +235,23 @@ describe('ChatStart', () => {
     });
     expect(mockCreateChat).toHaveBeenCalledTimes(0);
     expect(mockNavigate).toHaveBeenCalledWith('/projects/project_123');
+  });
+
+  it('should pass cookie kernel and per-message model to createProject so the seeded chat owns them (D2, R3)', async () => {
+    mockCreateProject.mockResolvedValue({ id: 'project_123' });
+
+    render(<ChatStart />);
+    const submitButton = await screen.findByTestId('submit-homepage-chat');
+    fireEvent.click(submitButton);
+
+    await waitFor(() => {
+      expect(mockCreateProject).toHaveBeenCalledOnce();
+    });
+    const [firstCallArgs] = mockCreateProject.mock.calls[0] ?? [];
+    expect(firstCallArgs).toMatchObject({
+      kernel: 'openscad',
+    });
+    expect(firstCallArgs?.initialMessage?.model).toBe('mock-model');
   });
 
   it('should not clear draft when project creation fails', async () => {

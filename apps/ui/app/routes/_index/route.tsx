@@ -21,7 +21,13 @@ import {
   ComingSoonSkeleton,
   CtaSkeleton,
 } from '#routes/_index/section-skeletons.js';
-import { ChatProvider, useChatActions, useChatContext } from '#hooks/use-chat.js';
+import { useChatActions, useChatContext } from '#hooks/use-chat.js';
+import { ActiveChatProvider } from '#hooks/active-chat-provider.js';
+// Chat draft / persistence flush is owned by `<GlobalChatFlushGuard>` at
+// the app shell — every live session in `ChatSessionStore` (including the
+// homepage's `chat_homepage_main`, which `<ActiveChatProvider>` acquires
+// through `useChatSession`) is fanned out automatically, so this route no
+// longer needs a bespoke per-mount flush guard.
 import { Separator } from '#components/ui/separator.js';
 import { InteractiveHoverButton } from '#components/magicui/interactive-hover-button.js';
 import { toast } from '#components/ui/sonner.js';
@@ -29,12 +35,10 @@ import { Loader } from '#components/ui/loader.js';
 import type { Handle } from '#types/matches.types.js';
 import { useProjectManager } from '#hooks/use-project-manager.js';
 import { useKernel } from '#hooks/use-kernel.js';
-import { useFlushOnClose } from '#hooks/use-flush-on-close.js';
-
 const homepageChatResourceId = 'homepage_main_chat_resource';
 const homepageChatId = 'chat_homepage_main';
 
-function useHomepageChatSession(): { chatId: string | undefined; resourceId: string; isReady: boolean } {
+function useHomepageChatSession(): { chatId: string | undefined; isReady: boolean } {
   const projectManager = useProjectManager();
   const [isReady, setIsReady] = useState(false);
   const createInFlightRef = useRef(false);
@@ -69,23 +73,8 @@ function useHomepageChatSession(): { chatId: string | undefined; resourceId: str
 
   return {
     chatId: isReady ? homepageChatId : undefined,
-    resourceId: homepageChatResourceId,
     isReady,
   };
-}
-
-function HomepageChatFlushOnCloseGuard(): React.JSX.Element {
-  const { persistenceActorRef, draftActorRef } = useChatContext();
-
-  useFlushOnClose(() => {
-    persistenceActorRef.send({ type: 'flushNow' });
-  });
-  useFlushOnClose(() => {
-    draftActorRef.send({ type: 'flushNow' });
-  });
-
-  // oxlint-disable-next-line react/jsx-no-useless-fragment -- headless hook-only component
-  return <></>;
 }
 
 export const handle: Handle = {
@@ -108,10 +97,9 @@ export default function ChatStart(): React.JSX.Element {
           </div>
 
           {homepageChatSession.chatId ? (
-            <ChatProvider chatId={homepageChatSession.chatId} resourceId={homepageChatSession.resourceId}>
-              <HomepageChatFlushOnCloseGuard />
+            <ActiveChatProvider chatId={homepageChatSession.chatId}>
               <HomepageChatInput kernel={kernel} setKernel={setKernel} />
-            </ChatProvider>
+            </ActiveChatProvider>
           ) : (
             <div className='space-y-4'>
               <div className='flex justify-center'>

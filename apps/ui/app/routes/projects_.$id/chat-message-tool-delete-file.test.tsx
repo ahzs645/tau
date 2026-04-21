@@ -77,7 +77,6 @@ type DeleteInputAvailable = Extract<DeleteInvocation, { state: 'input-available'
 type DeleteOutputError = Extract<DeleteInvocation, { state: 'output-error' }>;
 
 const buildOutputPart = (targetFile: string): DeleteOutputAvailable => ({
-  type: 'tool-delete_file',
   toolCallId: 'tc_1',
   state: 'output-available',
   input: { targetFile },
@@ -85,14 +84,12 @@ const buildOutputPart = (targetFile: string): DeleteOutputAvailable => ({
 });
 
 const buildInputPart = (targetFile: string): DeleteInputAvailable => ({
-  type: 'tool-delete_file',
   toolCallId: 'tc_1',
   state: 'input-available',
   input: { targetFile },
 });
 
 const buildErrorPart = (errorText: string): DeleteOutputError => ({
-  type: 'tool-delete_file',
   toolCallId: 'tc_1',
   state: 'output-error',
   input: { targetFile: 'lib/skids.ts' },

@@ -11,6 +11,7 @@
 import { setup, assign, emit } from 'xstate';
 import type { Chat, MyUIMessage } from '@taucad/chat';
 import type { ChatError } from '@taucad/types';
+import type { KernelId } from '@taucad/types/constants';
 import { fromSafeAsync } from '#lib/xstate.lib.js';
 
 // Input types
@@ -43,10 +44,29 @@ export type ChatPersistenceMachineContext = {
   loadError?: Error;
   // Pending messages to persist (set by queuePersist, consumed by debounced persist)
   pendingMessages?: MyUIMessage[];
+  /**
+   * Snapshot of `activeChatId` captured at `queuePersist` time. The debounced
+   * `persistMessagesActor` reads this — never `activeChatId` directly — so a
+   * mid-pending `setActiveChatId` swap (focus flipping between chats inside
+   * the 100 ms debounce window) cannot mis-target the write at the new chat.
+   */
+  pendingChatId?: string;
   // Persisted error - survives page reload
   persistedError?: ChatError;
   // Request queued while a previous request is being stopped; consumed on requestFinished
   pendingRequest?: ChatRequest;
+  /**
+   * Chat-scoped active model id. Hydrated from the loaded `Chat.activeModel`
+   * row and updated by `setActiveModel`. Mirrors the chat row so consumers
+   * can read the chat-local choice off the persistence machine snapshot
+   * without an extra storage read per render.
+   */
+  activeModel?: string;
+  /**
+   * Chat-scoped active CAD kernel. Same hydration + propagation semantics
+   * as {@link ChatPersistenceMachineContext.activeModel}.
+   */
+  activeKernel?: KernelId;
 };
 
 export type ChatRetrievedEvent = { type: 'chatRetrieved'; chat: Chat | undefined };
@@ -64,10 +84,13 @@ type ChatPersistenceMachineEvents =
   | { type: 'startRequest'; request: ChatRequest }
   | { type: 'stopRequest' }
   | { type: 'requestFinished'; messages: MyUIMessage[]; isAbort: boolean; isError: boolean }
+  // Active selection (chat-scoped model / kernel)
+  | { type: 'setActiveModel'; model: string | undefined }
+  | { type: 'setActiveKernel'; kernel: KernelId | undefined }
   | ChatRetrievedEvent;
 
 /**
- * Events emitted by the machine for the React shell (`ChatProvider`) to
+ * Events emitted by the machine for the React shell (`<ChatInstance>`) to
  * translate into AI SDK side effects via `actor.on(...)` subscriptions.
  *
  * These run synchronously inside the originating transition, so any
@@ -99,6 +122,16 @@ const clearErrorActor = fromSafeAsync<void, { chatId: string }>(async () => {
   throw new Error('clearErrorActor not provided');
 });
 
+const persistActiveModelActor = fromSafeAsync<void, { chatId: string; activeModel: string | undefined }>(async () => {
+  throw new Error('persistActiveModelActor not provided');
+});
+
+const persistActiveKernelActor = fromSafeAsync<void, { chatId: string; activeKernel: KernelId | undefined }>(
+  async () => {
+    throw new Error('persistActiveKernelActor not provided');
+  },
+);
+
 export const chatPersistenceMachine = setup({
   types: {
     // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate types
@@ -115,6 +148,8 @@ export const chatPersistenceMachine = setup({
     persistMessagesActor,
     persistErrorActor,
     clearErrorActor,
+    persistActiveModelActor,
+    persistActiveKernelActor,
   },
   guards: {
     hasValidChatId({ context, event }) {
@@ -123,7 +158,17 @@ export const chatPersistenceMachine = setup({
 
       return Boolean(chatId?.startsWith('chat_'));
     },
-    hasPendingMessages: ({ context }) => Boolean(context.pendingMessages && context.pendingMessages.length >= 0),
+    hasPendingMessages: ({ context }) =>
+      Boolean(context.pendingMessages && context.pendingMessages.length > 0 && context.pendingChatId),
+    /**
+     * Allow `queuePersist` whenever a chat is selected — even while loading.
+     * The actual write is gated separately so a brand-new chat that's still
+     * hydrating can buffer the user's first message instead of swallowing it.
+     */
+    canQueuePersist({ context, event }) {
+      const chatId = 'chatId' in event ? event.chatId : context.activeChatId;
+      return Boolean(chatId?.startsWith('chat_'));
+    },
     canPersist({ context, event }) {
       // Can persist if: not loading AND has valid chatId
       const chatId = 'chatId' in event ? event.chatId : context.activeChatId;
@@ -143,8 +188,11 @@ export const chatPersistenceMachine = setup({
       isLoadingChat: false,
       loadError: undefined,
       pendingMessages: undefined,
+      pendingChatId: undefined,
       persistedError: undefined,
       pendingRequest: undefined,
+      activeModel: undefined,
+      activeKernel: undefined,
     };
   },
   type: 'parallel',
@@ -190,6 +238,8 @@ export const chatPersistenceMachine = setup({
             chatRetrieved: {
               actions: assign({
                 persistedError: ({ event }) => event.chat?.error,
+                activeModel: ({ event }) => event.chat?.activeModel,
+                activeKernel: ({ event }) => event.chat?.activeKernel,
               }),
             },
             setActiveChatId: {
@@ -212,9 +262,10 @@ export const chatPersistenceMachine = setup({
           on: {
             queuePersist: {
               target: 'pending',
-              guard: 'canPersist',
+              guard: 'canQueuePersist',
               actions: assign({
                 pendingMessages: ({ event }) => event.messages,
+                pendingChatId: ({ context }) => context.activeChatId,
               }),
             },
           },
@@ -233,6 +284,7 @@ export const chatPersistenceMachine = setup({
               reenter: true,
               actions: assign({
                 pendingMessages: ({ event }) => event.messages,
+                pendingChatId: ({ context }) => context.activeChatId,
               }),
             },
             // Immediately bypass debounce and persist
@@ -245,20 +297,26 @@ export const chatPersistenceMachine = setup({
         persisting: {
           invoke: {
             src: 'persistMessagesActor',
+            // Read the chatId snapshot, NOT context.activeChatId — the user
+            // may have flipped focus to a different chat inside the debounce
+            // window and we must still write to the chat the messages were
+            // queued for.
             input: ({ context }) => ({
-              chatId: context.activeChatId!,
+              chatId: context.pendingChatId!,
               messages: context.pendingMessages!,
             }),
             onDone: {
               target: 'idle',
               actions: assign({
                 pendingMessages: undefined,
+                pendingChatId: undefined,
               }),
             },
             onError: {
               target: 'idle',
               actions: assign({
                 pendingMessages: undefined,
+                pendingChatId: undefined,
               }),
             },
           },
@@ -267,6 +325,7 @@ export const chatPersistenceMachine = setup({
             queuePersist: {
               actions: assign({
                 pendingMessages: ({ event }) => event.messages,
+                pendingChatId: ({ context }) => context.activeChatId,
               }),
             },
           },
@@ -276,7 +335,7 @@ export const chatPersistenceMachine = setup({
     // Chat request lifecycle - centralizes send/regenerate/edit/retry/stop so
     // every "request starts" path clears persistedError synchronously, eliminating
     // the stale error banner flicker. Side effects flow out via emits to the
-    // ChatProvider listeners (which drive the AI SDK calls).
+    // ChatInstance listeners (which drive the AI SDK calls).
     requestLifecycle: {
       initial: 'idle',
       states: {
@@ -357,6 +416,85 @@ export const chatPersistenceMachine = setup({
                 })),
               },
             ],
+          },
+        },
+      },
+    },
+    // Active model persistence — chat-scoped active model.
+    // Mirrors errorPersistence: idle → persisting → idle, where the second
+    // `setActiveModel` while persisting re-enters so the latest value wins.
+    activeModelPersistence: {
+      initial: 'idle',
+      states: {
+        idle: {
+          on: {
+            setActiveModel: {
+              target: 'persisting',
+              guard: 'hasValidChatId',
+              actions: assign({
+                activeModel: ({ event }) => event.model,
+              }),
+            },
+          },
+        },
+        persisting: {
+          invoke: {
+            src: 'persistActiveModelActor',
+            input: ({ context }) => ({
+              chatId: context.activeChatId!,
+              activeModel: context.activeModel,
+            }),
+            onDone: { target: 'idle' },
+            onError: { target: 'idle' },
+          },
+          on: {
+            setActiveModel: {
+              target: 'persisting',
+              reenter: true,
+              guard: 'hasValidChatId',
+              actions: assign({
+                activeModel: ({ event }) => event.model,
+              }),
+            },
+          },
+        },
+      },
+    },
+    // Active kernel persistence — chat-scoped active CAD kernel. Same shape
+    // as activeModelPersistence.
+    activeKernelPersistence: {
+      initial: 'idle',
+      states: {
+        idle: {
+          on: {
+            setActiveKernel: {
+              target: 'persisting',
+              guard: 'hasValidChatId',
+              actions: assign({
+                activeKernel: ({ event }) => event.kernel,
+              }),
+            },
+          },
+        },
+        persisting: {
+          invoke: {
+            src: 'persistActiveKernelActor',
+            input: ({ context }) => ({
+              chatId: context.activeChatId!,
+              activeKernel: context.activeKernel,
+            }),
+            onDone: { target: 'idle' },
+            onError: { target: 'idle' },
+          },
+          on: {
+            setActiveKernel: {
+              target: 'persisting',
+              reenter: true,
+              guard: 'hasValidChatId',
+              actions: assign({
+                activeKernel: ({ event }) => event.kernel,
+              }),
+            },
           },
         },
       },

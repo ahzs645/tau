@@ -49,7 +49,7 @@ export type EditorStateContext = {
   projectId: string;
   openFiles: OpenFile[];
   activeFilePath: string | undefined;
-  lastChatId: string | undefined;
+  focusedChatId: string | undefined;
   /** Panel layout state (open/close, sizes, mobile tab) */
   panelState: PanelState;
   /** Serialized DockviewReact layout for the code editor area */
@@ -85,7 +85,7 @@ type EditorStateEvent =
   | { type: 'renameFile'; oldPath: string; newPath: string }
   | { type: 'closeAll' }
   // Chat operations
-  | { type: 'setLastChatId'; chatId: string }
+  | { type: 'setFocusedChatId'; chatId: string | undefined }
   // Panel operations
   | { type: 'setPanelState'; panelState: PartialDeep<PanelState> }
   // Dockview layout operations
@@ -125,7 +125,7 @@ const saveEditorStateActor = fromSafeAsync<void, { editorState: EditorStateInput
  * Manages transient Editor state per-build:
  * - Open files / tabs
  * - Active file path
- * - Last active chat ID
+ * - Focused chat ID
  *
  * This machine is DECOUPLED from the project machine to keep the project machine
  * clean for CLI/multi-frontend reuse.
@@ -192,7 +192,7 @@ export const editorMachine = setup({
       enqueue.assign({
         openFiles: loadedState?.openFiles ?? [],
         activeFilePath: loadedState?.activeFilePath,
-        lastChatId: loadedState?.lastChatId,
+        focusedChatId: loadedState?.focusedChatId,
         panelState: mergedPanelState,
         editorLayout,
         viewerLayout,
@@ -222,7 +222,7 @@ export const editorMachine = setup({
         projectId: event.projectId,
         openFiles: [],
         activeFilePath: undefined,
-        lastChatId: undefined,
+        focusedChatId: undefined,
         panelState: defaultPanelState,
         editorLayout: undefined,
         viewerLayout: undefined,
@@ -410,9 +410,9 @@ export const editorMachine = setup({
     // ============================================================================
     // Chat operations
     // ============================================================================
-    setLastChatIdInContext: assign(({ event }) => {
-      assertEvent(event, 'setLastChatId');
-      return { lastChatId: event.chatId };
+    setFocusedChatIdInContext: assign(({ event }) => {
+      assertEvent(event, 'setFocusedChatId');
+      return { focusedChatId: event.chatId };
     }),
 
     // ============================================================================
@@ -497,7 +497,7 @@ export const editorMachine = setup({
       projectId: input.projectId,
       openFiles: [],
       activeFilePath: undefined,
-      lastChatId: undefined,
+      focusedChatId: undefined,
       panelState: defaultPanelState,
       editorLayout: undefined,
       viewerLayout: undefined,
@@ -574,8 +574,8 @@ export const editorMachine = setup({
               actions: 'closeAll',
             },
             // Chat operations
-            setLastChatId: {
-              actions: 'setLastChatIdInContext',
+            setFocusedChatId: {
+              actions: 'setFocusedChatIdInContext',
             },
             // Panel operations
             setPanelState: {
@@ -615,7 +615,7 @@ export const editorMachine = setup({
                 closeAll: { target: 'pending' },
                 setActiveFile: { target: 'pending' },
                 renameFile: { target: 'pending' },
-                setLastChatId: { target: 'pending' },
+                setFocusedChatId: { target: 'pending' },
                 setPanelState: { target: 'pending' },
                 setEditorLayout: { target: 'pending' },
                 setViewerLayout: { target: 'pending' },
@@ -634,7 +634,7 @@ export const editorMachine = setup({
                 closeAll: { target: 'pending', reenter: true },
                 setActiveFile: { target: 'pending', reenter: true },
                 renameFile: { target: 'pending', reenter: true },
-                setLastChatId: { target: 'pending', reenter: true },
+                setFocusedChatId: { target: 'pending', reenter: true },
                 setPanelState: { target: 'pending', reenter: true },
                 setEditorLayout: { target: 'pending', reenter: true },
                 setViewerLayout: { target: 'pending', reenter: true },
@@ -654,7 +654,7 @@ export const editorMachine = setup({
                       projectId: context.projectId,
                       openFiles: context.openFiles,
                       activeFilePath: context.activeFilePath,
-                      lastChatId: context.lastChatId,
+                      focusedChatId: context.focusedChatId,
                       panelState: context.panelState,
                       editorLayout: context.editorLayout,
                       viewerLayout: context.viewerLayout,
@@ -679,7 +679,7 @@ export const editorMachine = setup({
                 closeAll: { actions: 'setPendingChanges' },
                 setActiveFile: { actions: 'setPendingChanges' },
                 renameFile: { actions: 'setPendingChanges' },
-                setLastChatId: { actions: 'setPendingChanges' },
+                setFocusedChatId: { actions: 'setPendingChanges' },
                 setPanelState: { actions: 'setPendingChanges' },
                 setEditorLayout: { actions: 'setPendingChanges' },
                 setViewerLayout: { actions: 'setPendingChanges' },

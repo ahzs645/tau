@@ -5,7 +5,7 @@ import { getRandomExamples } from '#constants/chat-prompt-examples.js';
 import type { ChatExample } from '#constants/chat-prompt-examples.js';
 import { Button } from '#components/ui/button.js';
 import { useChatActions } from '#hooks/use-chat.js';
-import { useModels } from '#hooks/use-models.js';
+import { useActiveChatModel } from '#hooks/use-active-chat-model.js';
 import { createMessage } from '#utils/chat.utils.js';
 import { EmptyItems } from '#components/ui/empty-items.js';
 import { useChatSnapshot } from '#hooks/use-chat-snapshot.js';
@@ -14,7 +14,10 @@ export const ChatExamples = memo(function () {
   // Use lazy initialization to ensure consistent examples across renders
   const [examples, setExamples] = useState(() => getRandomExamples(3));
   const { sendMessage } = useChatActions();
-  const { selectedModel } = useModels();
+  // R6/E8: stamp messages with the chat-scoped model so quickly-clicked
+  // examples respect the chat's pinned selection rather than a stale
+  // cookie that may have shifted in another tab.
+  const { modelId } = useActiveChatModel();
   const snapshot = useChatSnapshot();
 
   const handleExampleClick = (example: ChatExample) => {
@@ -22,7 +25,7 @@ export const ChatExamples = memo(function () {
       content: example.prompt,
       role: messageRole.user,
       metadata: {
-        model: selectedModel.id,
+        model: modelId,
         status: messageStatus.pending,
         snapshot,
       },

@@ -74,7 +74,7 @@ import { EmptyItems } from '#components/ui/empty-items.js';
 import { ChatTextarea } from '#components/chat/chat-textarea.js';
 import type { ChatTextareaProperties } from '#components/chat/chat-textarea-types.js';
 import { KernelSelector } from '#components/chat/kernel-selector.js';
-import { ChatProvider } from '#hooks/use-chat.js';
+import { ActiveChatProvider } from '#hooks/active-chat-provider.js';
 import { InteractiveHoverButton } from '#components/magicui/interactive-hover-button.js';
 import { useProjectManager } from '#hooks/use-project-manager.js';
 import { useKernel } from '#hooks/use-kernel.js';
@@ -436,7 +436,8 @@ function UnifiedProjectList({
   if (projects.length === 0) {
     return (
       <EmptyItems className='min-h-[60vh]'>
-        <ChatProvider>
+        {/* Empty-library CTA — ephemeral mode, no chat to attach to. */}
+        <ActiveChatProvider chatId={undefined}>
           <div className='mx-auto max-w-2xl space-y-6'>
             <div className='flex flex-col items-center space-y-4 text-center'>
               <PackageX className='size-16 text-muted-foreground' strokeWidth={1} />
@@ -471,7 +472,7 @@ function UnifiedProjectList({
               </NavLink>
             </div>
           </div>
-        </ChatProvider>
+        </ActiveChatProvider>
       </EmptyItems>
     );
   }

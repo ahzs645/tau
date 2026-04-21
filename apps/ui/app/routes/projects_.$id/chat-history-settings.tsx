@@ -9,14 +9,22 @@ import {
   DropdownMenuTrigger,
 } from '#components/ui/dropdown-menu.js';
 import { useChatContext } from '#hooks/use-chat.js';
+import { useChats } from '#hooks/use-chats.js';
+import { useProject } from '#hooks/use-project.js';
 import { downloadBlob } from '@taucad/utils/file';
 import { serializeTranscript } from '#utils/chat.utils.js';
 import { toSnakeCase } from '#utils/string.utils.js';
 
 export function ChatHistorySettings(): React.ReactNode {
-  const { chat, chatName } = useChatContext();
+  const { chat, activeChatId } = useChatContext();
+  const { projectId } = useProject();
+  const { chats } = useChats(projectId);
+  const chatName = chats.find((c) => c.id === activeChatId)?.name ?? 'Chat Transcript';
 
   const handleExport = useCallback(() => {
+    if (!chat) {
+      return;
+    }
     const transcript = serializeTranscript(chat.messages, chatName);
     const blob = new Blob([transcript], {
       type: 'text/markdown;charset=utf-8',
@@ -24,7 +32,7 @@ export function ChatHistorySettings(): React.ReactNode {
     const timestamp = new Date().toISOString().slice(0, 16).replaceAll(':', '-');
     const snakeName = toSnakeCase(chatName) || 'chat_transcript';
     downloadBlob(blob, `${snakeName}_${timestamp}.md`);
-  }, [chat.messages, chatName]);
+  }, [chat?.messages, chat, chatName]);
 
   return (
     <DropdownMenu modal={false}>
@@ -42,7 +50,7 @@ export function ChatHistorySettings(): React.ReactNode {
         }}
       >
         <DropdownMenuLabel>Export</DropdownMenuLabel>
-        <DropdownMenuItem disabled={chat.messages.length === 0} onSelect={handleExport}>
+        <DropdownMenuItem disabled={!chat || chat.messages.length === 0} onSelect={handleExport}>
           <Download />
           Export Transcript
         </DropdownMenuItem>

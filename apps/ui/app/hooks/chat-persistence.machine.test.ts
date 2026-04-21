@@ -2,8 +2,9 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createActor, waitFor } from 'xstate';
 import type { Chat, MyUIMessage } from '@taucad/chat';
 import type { ChatError } from '@taucad/types';
+import type { KernelId } from '@taucad/types/constants';
 import { chatPersistenceMachine } from '#hooks/chat-persistence.machine.js';
-import type { ChatRequest } from '#hooks/chat-persistence.machine.js';
+import type { ChatRequest, ChatRetrievedEvent } from '#hooks/chat-persistence.machine.js';
 import { fromSafeAsync } from '#lib/xstate.lib.js';
 
 type MockMessage = { id: string; role: string; parts: Array<{ type: string; text?: string }> };
@@ -251,6 +252,128 @@ describe('chatPersistenceMachine', () => {
       }
     });
 
+    it('should queue messages while chatLoading is in flight', async () => {
+      // Regression: when a brand-new chat is created and the user submits a
+      // message before `loadChatActor` resolves, `queuePersist` was dropped
+      // because `canPersist` is gated on `!isLoadingChat`. Queuing must be
+      // allowed during loading; the actual persist write is what should
+      // wait. Otherwise the very first message on a freshly-created chat is
+      // silently swallowed.
+      let resolveLoad: (() => void) | undefined;
+      const actor = createTestActor({
+        loadResult: async () =>
+          new Promise<undefined>((resolve) => {
+            resolveLoad = () => {
+              resolve(undefined);
+            };
+          }),
+      });
+      actor.start();
+      actor.send({ type: 'setActiveChatId', chatId: 'chat_abc' });
+      expect(actor.getSnapshot().matches({ chatLoading: 'loading' })).toBe(true);
+
+      const messages: MockMessage[] = [{ id: 'msg1', role: 'user', parts: [{ type: 'text', text: 'queued' }] }];
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- mock<T>() proxy not assignable to MyUIMessage[]
+      actor.send({ type: 'queuePersist', messages: messages as unknown as MyUIMessage[] });
+
+      expect(actor.getSnapshot().matches({ messagePersistence: 'pending' })).toBe(true);
+      expect(actor.getSnapshot().context.pendingMessages).toHaveLength(1);
+
+      resolveLoad!();
+      actor.stop();
+    });
+
+    it('should not transition pending to persisting when pendingMessages is empty', async () => {
+      // Regression: `hasPendingMessages` previously checked `length >= 0`,
+      // which is always true. An empty messages array would have triggered
+      // a no-op persist write — wasted RPC plus a misleading "wrote zero
+      // messages" footprint. Empty arrays must short-circuit the debounce.
+      vi.useFakeTimers();
+      try {
+        let persistCallCount = 0;
+        const actor = createTestActor({
+          activeChatId: 'chat_abc',
+          persistResult: async () => {
+            persistCallCount++;
+          },
+        });
+        actor.start();
+
+        actor.send({ type: 'queuePersist', messages: [] });
+        // Even though queuePersist fires, an empty array must not arm the
+        // debounce → persist transition.
+        await vi.advanceTimersByTimeAsync(200);
+
+        expect(persistCallCount).toBe(0);
+        expect(actor.getSnapshot().matches({ messagePersistence: 'persisting' })).toBe(false);
+        actor.stop();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('should snapshot chatId on queuePersist so a mid-pending switch never persists to the new chat', async () => {
+      // Regression: `setActiveChatId` mid-pending swapped `context.activeChatId`,
+      // and the debounced `persistMessagesActor` invocation read the swapped
+      // value — meaning messages typed for chat A could be written to chat B
+      // if focus flipped within the 100 ms debounce window. The snapshot must
+      // capture the chatId in effect at queuePersist time.
+      vi.useFakeTimers();
+      try {
+        const persistCalls: Array<{ chatId: string }> = [];
+        const actor = createTestActor({
+          activeChatId: 'chat_a',
+          loadResult: undefined,
+          persistResult: async () => {
+            // oxlint-disable-next-line no-empty-function -- recorded via mock body below
+          },
+        });
+        // Re-provide persistMessagesActor so we can capture inputs.
+        actor.stop();
+        const { chatPersistenceMachine: machineRef } = await import('#hooks/chat-persistence.machine.js');
+        const { fromSafeAsync: fromSafeAsyncRef } = await import('#lib/xstate.lib.js');
+        const { createActor: createActorRef } = await import('xstate');
+        const recordingMachine = machineRef.provide({
+          actors: {
+            loadChatActor: fromSafeAsyncRef<ChatRetrievedEvent, { chatId: string }>(async () => ({
+              type: 'chatRetrieved',
+              chat: undefined,
+            })),
+            persistMessagesActor: fromSafeAsyncRef<void, { chatId: string; messages: MyUIMessage[] }>(
+              async ({ input }) => {
+                persistCalls.push({ chatId: input.chatId });
+              },
+            ),
+            persistErrorActor: fromSafeAsyncRef<void, { chatId: string; error: ChatError }>(async () => undefined),
+            clearErrorActor: fromSafeAsyncRef<void, { chatId: string }>(async () => undefined),
+          },
+        });
+        const recordingActor = createActorRef(recordingMachine, {
+          input: { activeChatId: 'chat_a' },
+        });
+        recordingActor.start();
+        // Drain the initial setActiveChatId so chatLoading reaches idle.
+        recordingActor.send({ type: 'setActiveChatId', chatId: 'chat_a' });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const messages: MockMessage[] = [{ id: 'msg1', role: 'user', parts: [{ type: 'text', text: 'for A' }] }];
+        // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- mock<T>() proxy not assignable to MyUIMessage[]
+        recordingActor.send({ type: 'queuePersist', messages: messages as unknown as MyUIMessage[] });
+
+        // Switch focus to chat_b BEFORE debounce expires.
+        recordingActor.send({ type: 'setActiveChatId', chatId: 'chat_b' });
+
+        await vi.advanceTimersByTimeAsync(100);
+        await waitFor(recordingActor, (s) => s.matches({ messagePersistence: 'idle' }));
+
+        expect(persistCalls).toHaveLength(1);
+        expect(persistCalls[0]?.chatId).toBe('chat_a');
+        recordingActor.stop();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('should flush immediately on flushNow', async () => {
       vi.useFakeTimers();
       try {
@@ -378,6 +501,167 @@ describe('chatPersistenceMachine', () => {
   });
 
   // ===========================================================================
+  // activeSelectionPersistence (B1) — setActiveModel / setActiveKernel
+  // patches Chat.activeModel / Chat.activeKernel via patchChat. Hydrates
+  // from the loaded Chat row so reload preserves the chat-local choice.
+  // ===========================================================================
+  describe('activeSelectionPersistence (B1)', () => {
+    it('should hydrate activeModel and activeKernel from the loaded Chat row', async () => {
+      const mockChat = createMockChat({
+        id: 'chat_abc',
+        activeModel: 'gpt-5.4-medium',
+        activeKernel: 'manifold',
+      });
+      const actor = createTestActor({ loadResult: mockChat });
+      actor.start();
+      actor.send({ type: 'setActiveChatId', chatId: 'chat_abc' });
+      await waitFor(actor, (s) => s.matches({ chatLoading: 'idle' }));
+
+      expect(actor.getSnapshot().context.activeModel).toBe('gpt-5.4-medium');
+      expect(actor.getSnapshot().context.activeKernel).toBe('manifold');
+      actor.stop();
+    });
+
+    it('should patch context and invoke persistActiveModelActor when setActiveModel fires', async () => {
+      const persistCalls: Array<{ chatId: string; model: string | undefined }> = [];
+      const machine = chatPersistenceMachine.provide({
+        actors: {
+          loadChatActor: fromSafeAsync<ChatRetrievedEvent, { chatId: string }>(async () => ({
+            type: 'chatRetrieved',
+            chat: undefined,
+          })),
+          // oxlint-disable-next-line no-empty-function -- mock stub
+          persistMessagesActor: fromSafeAsync(async () => {}),
+          // oxlint-disable-next-line no-empty-function -- mock stub
+          persistErrorActor: fromSafeAsync(async () => {}),
+          // oxlint-disable-next-line no-empty-function -- mock stub
+          clearErrorActor: fromSafeAsync(async () => {}),
+          persistActiveModelActor: fromSafeAsync<void, { chatId: string; activeModel: string | undefined }>(
+            async ({ input }) => {
+              persistCalls.push({ chatId: input.chatId, model: input.activeModel });
+            },
+          ),
+          // oxlint-disable-next-line no-empty-function -- mock stub
+          persistActiveKernelActor: fromSafeAsync(async () => {}),
+        },
+      });
+      const actor = createActor(machine, { input: { activeChatId: 'chat_abc' } });
+      actor.start();
+
+      actor.send({ type: 'setActiveModel', model: 'gpt-5.4-medium' });
+
+      expect(actor.getSnapshot().context.activeModel).toBe('gpt-5.4-medium');
+      await waitFor(actor, (s) => s.matches({ activeModelPersistence: 'idle' }));
+      expect(persistCalls).toEqual([{ chatId: 'chat_abc', model: 'gpt-5.4-medium' }]);
+      actor.stop();
+    });
+
+    it('should patch context and invoke persistActiveKernelActor when setActiveKernel fires', async () => {
+      const persistCalls: Array<{ chatId: string; kernel: string | undefined }> = [];
+      const machine = chatPersistenceMachine.provide({
+        actors: {
+          loadChatActor: fromSafeAsync<ChatRetrievedEvent, { chatId: string }>(async () => ({
+            type: 'chatRetrieved',
+            chat: undefined,
+          })),
+          // oxlint-disable-next-line no-empty-function -- mock stub
+          persistMessagesActor: fromSafeAsync(async () => {}),
+          // oxlint-disable-next-line no-empty-function -- mock stub
+          persistErrorActor: fromSafeAsync(async () => {}),
+          // oxlint-disable-next-line no-empty-function -- mock stub
+          clearErrorActor: fromSafeAsync(async () => {}),
+          // oxlint-disable-next-line no-empty-function -- mock stub
+          persistActiveModelActor: fromSafeAsync(async () => {}),
+          persistActiveKernelActor: fromSafeAsync<void, { chatId: string; activeKernel: KernelId | undefined }>(
+            async ({ input }) => {
+              persistCalls.push({ chatId: input.chatId, kernel: input.activeKernel });
+            },
+          ),
+        },
+      });
+      const actor = createActor(machine, { input: { activeChatId: 'chat_abc' } });
+      actor.start();
+
+      actor.send({ type: 'setActiveKernel', kernel: 'manifold' });
+
+      expect(actor.getSnapshot().context.activeKernel).toBe('manifold');
+      await waitFor(actor, (s) => s.matches({ activeKernelPersistence: 'idle' }));
+      expect(persistCalls).toEqual([{ chatId: 'chat_abc', kernel: 'manifold' }]);
+      actor.stop();
+    });
+
+    it('should ignore setActiveModel when no valid chatId is set', () => {
+      const persistCalls: string[] = [];
+      const machine = chatPersistenceMachine.provide({
+        actors: {
+          loadChatActor: fromSafeAsync<ChatRetrievedEvent, { chatId: string }>(async () => ({
+            type: 'chatRetrieved',
+            chat: undefined,
+          })),
+          // oxlint-disable-next-line no-empty-function -- mock stub
+          persistMessagesActor: fromSafeAsync(async () => {}),
+          // oxlint-disable-next-line no-empty-function -- mock stub
+          persistErrorActor: fromSafeAsync(async () => {}),
+          // oxlint-disable-next-line no-empty-function -- mock stub
+          clearErrorActor: fromSafeAsync(async () => {}),
+          persistActiveModelActor: fromSafeAsync<void, { chatId: string; activeModel: string | undefined }>(
+            async ({ input }) => {
+              persistCalls.push(input.chatId);
+            },
+          ),
+          // oxlint-disable-next-line no-empty-function -- mock stub
+          persistActiveKernelActor: fromSafeAsync(async () => {}),
+        },
+      });
+      const actor = createActor(machine, { input: {} });
+      actor.start();
+
+      actor.send({ type: 'setActiveModel', model: 'gpt-5.4-medium' });
+
+      // Context should not update without a valid chat id, and the actor must
+      // never be invoked. The selection only makes sense bound to a chat.
+      expect(actor.getSnapshot().context.activeModel).toBeUndefined();
+      expect(persistCalls).toEqual([]);
+      actor.stop();
+    });
+
+    it('should replace prior activeModel writes with the latest value when setActiveModel races', async () => {
+      const persistCalls: string[] = [];
+      const machine = chatPersistenceMachine.provide({
+        actors: {
+          loadChatActor: fromSafeAsync<ChatRetrievedEvent, { chatId: string }>(async () => ({
+            type: 'chatRetrieved',
+            chat: undefined,
+          })),
+          // oxlint-disable-next-line no-empty-function -- mock stub
+          persistMessagesActor: fromSafeAsync(async () => {}),
+          // oxlint-disable-next-line no-empty-function -- mock stub
+          persistErrorActor: fromSafeAsync(async () => {}),
+          // oxlint-disable-next-line no-empty-function -- mock stub
+          clearErrorActor: fromSafeAsync(async () => {}),
+          persistActiveModelActor: fromSafeAsync<void, { chatId: string; activeModel: string | undefined }>(
+            async ({ input }) => {
+              persistCalls.push(input.activeModel ?? '<undef>');
+            },
+          ),
+          // oxlint-disable-next-line no-empty-function -- mock stub
+          persistActiveKernelActor: fromSafeAsync(async () => {}),
+        },
+      });
+      const actor = createActor(machine, { input: { activeChatId: 'chat_abc' } });
+      actor.start();
+
+      actor.send({ type: 'setActiveModel', model: 'first' });
+      actor.send({ type: 'setActiveModel', model: 'second' });
+
+      await waitFor(actor, (s) => s.matches({ activeModelPersistence: 'idle' }));
+      expect(actor.getSnapshot().context.activeModel).toBe('second');
+      expect(persistCalls.at(-1)).toBe('second');
+      actor.stop();
+    });
+  });
+
+  // ===========================================================================
   // requestLifecycle
   // ===========================================================================
   describe('requestLifecycle', () => {
@@ -472,7 +756,7 @@ describe('chatPersistenceMachine', () => {
       actor.start();
 
       actor.send({ type: 'startRequest', request: { kind: 'regenerate' } });
-      // Mid-stream error, set by ChatProvider's onError handler before onFinish fires.
+      // Mid-stream error, set by ChatInstance's onError handler before onFinish fires.
       actor.send({ type: 'setPersistedError', error: sampleChatError });
 
       const finalMessages: MyUIMessage[] = [sampleMessage];

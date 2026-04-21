@@ -8,6 +8,7 @@ import { SvgIcon } from '#components/icons/svg-icon.js';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '#components/ui/hover-card.js';
 import { useModels } from '#hooks/use-models.js';
 import type { ResolvedModel } from '#hooks/use-models.js';
+import { useActiveChatModel } from '#hooks/use-active-chat-model.js';
 
 type ChatModelSelectorProps = Omit<React.HTMLAttributes<HTMLDivElement>, 'children' | 'onSelect'> & {
   readonly onSelect?: (modelId: string) => void;
@@ -40,7 +41,13 @@ export const ChatModelSelector = memo(function ({
   isNested,
   ...properties
 }: ChatModelSelectorProps): React.JSX.Element {
-  const { selectedModel, setSelectedModelId, data: models = [] } = useModels();
+  // R6: write through the chat-scoped resolver so picking a model inside
+  // chat A patches `Chat.activeModel` for A AND updates the cookie default
+  // (decision C in chat-active-model-kernel-persistence.md). Reads
+  // `data: models` from the global hook because the catalogue itself is
+  // not chat-scoped.
+  const { model: selectedModel, setActiveModel } = useActiveChatModel();
+  const { data: models = [] } = useModels();
 
   const providerModelsMap = new Map<string, Model[]>();
   for (const model of models) {
@@ -56,11 +63,11 @@ export const ChatModelSelector = memo(function ({
       const model = models.find((m) => m.id === item);
 
       if (model) {
-        setSelectedModelId(model.id);
+        setActiveModel(model.id);
         onSelect?.(model.id);
       }
     },
-    [models, onSelect, setSelectedModelId],
+    [models, onSelect, setActiveModel],
   );
 
   return (

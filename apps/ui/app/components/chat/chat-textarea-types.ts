@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect, useCallback, useImperativeHandle } from 'react';
 import type { ToolSelection } from '@taucad/chat';
 import { useChatActions, useChatSelector } from '#hooks/use-chat.js';
-import { useModels } from '#hooks/use-models.js';
+import { useActiveChatModel } from '#hooks/use-active-chat-model.js';
+import type { ResolvedModel } from '#hooks/use-models.js';
 import type { KeyCombination } from '#utils/keys.utils.js';
 import { toast } from '#components/ui/sonner.js';
 import { useKeybinding } from '#hooks/use-keyboard.js';
@@ -98,7 +99,7 @@ export function useChatTextareaLogic({
   images: string[];
   selectedToolChoice: ToolSelection;
   status: string;
-  selectedModel: ReturnType<typeof useModels>['selectedModel'];
+  selectedModel: ResolvedModel;
   formattedCancelKeyCombination: string;
 
   // Refs
@@ -142,7 +143,10 @@ export function useChatTextareaLogic({
   const fileInputReference = useRef<HTMLInputElement>(null);
   const textareaReference = useRef<HTMLTextAreaElement>(null);
   const containerReference = useRef<HTMLDivElement>(null);
-  const { selectedModel } = useModels();
+  // R6/R11: chat-scoped resolver — falls back to cookie when no chat-local
+  // selection exists. Submit handler stamps `selectedModel.id` into outgoing
+  // metadata, keeping the wire format unchanged.
+  const { model: selectedModel } = useActiveChatModel();
   const status = useChatSelector((state) => state.status);
 
   // Read draft state from machine based on mode

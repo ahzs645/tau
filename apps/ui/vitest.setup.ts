@@ -106,6 +106,67 @@ const stubEntry = {
 globalThis.performance.mark = (() => stubEntry) as typeof globalThis.performance.mark;
 globalThis.performance.measure = (() => stubEntry) as typeof globalThis.performance.measure;
 
+// Jsdom returns null from HTMLCanvasElement.getContext('2d'), which crashes
+// `three/addons` modules that call `ctx.fillStyle = …` at module load time
+// (e.g. `lottie_canvas.module.js`'s ImagePreloader). Stub a minimal 2d context
+// shape so test files importing from `three/addons` don't fail to load.
+// oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- jsdom only ships HTMLCanvasElement when canvas package is installed
+if (typeof HTMLCanvasElement !== 'undefined') {
+  const originalGetContext = HTMLCanvasElement.prototype.getContext;
+  HTMLCanvasElement.prototype.getContext = function getContext(
+    this: HTMLCanvasElement,
+    contextId: string,
+    options?: unknown,
+  ): unknown {
+    if (contextId === '2d') {
+      return {
+        canvas: this,
+        fillStyle: '',
+        strokeStyle: '',
+        globalAlpha: 1,
+        // oxlint-disable-next-line no-empty-function -- noop stub for jsdom
+        fillRect() {},
+        // oxlint-disable-next-line no-empty-function -- noop stub for jsdom
+        clearRect() {},
+        // oxlint-disable-next-line no-empty-function -- noop stub for jsdom
+        drawImage() {},
+        getImageData: () => ({ data: new Uint8ClampedArray(4) }),
+        // oxlint-disable-next-line no-empty-function -- noop stub for jsdom
+        putImageData() {},
+        createImageData: () => ({ data: new Uint8ClampedArray(4) }),
+        // oxlint-disable-next-line no-empty-function -- noop stub for jsdom
+        setTransform() {},
+        // oxlint-disable-next-line no-empty-function -- noop stub for jsdom
+        translate() {},
+        // oxlint-disable-next-line no-empty-function -- noop stub for jsdom
+        scale() {},
+        // oxlint-disable-next-line no-empty-function -- noop stub for jsdom
+        save() {},
+        // oxlint-disable-next-line no-empty-function -- noop stub for jsdom
+        restore() {},
+        // oxlint-disable-next-line no-empty-function -- noop stub for jsdom
+        beginPath() {},
+        // oxlint-disable-next-line no-empty-function -- noop stub for jsdom
+        closePath() {},
+        // oxlint-disable-next-line no-empty-function -- noop stub for jsdom
+        moveTo() {},
+        // oxlint-disable-next-line no-empty-function -- noop stub for jsdom
+        lineTo() {},
+        // oxlint-disable-next-line no-empty-function -- noop stub for jsdom
+        stroke() {},
+        // oxlint-disable-next-line no-empty-function -- noop stub for jsdom
+        fill() {},
+        measureText: () => ({ width: 0 }),
+      };
+    }
+    return (originalGetContext as (this: HTMLCanvasElement, ...args: unknown[]) => unknown).call(
+      this,
+      contextId,
+      options,
+    );
+  } as typeof HTMLCanvasElement.prototype.getContext;
+}
+
 // PerformanceObserver is not available in jsdom -- stub it for telemetry code
 // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition, @typescript-eslint/consistent-type-assertions -- jsdom doesn't provide PerformanceObserver despite type declarations; class assignment to globalThis requires cast
 globalThis.PerformanceObserver ??= class PerformanceObserver {

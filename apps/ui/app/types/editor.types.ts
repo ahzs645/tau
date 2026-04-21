@@ -114,8 +114,8 @@ export type EditorState = {
   openFiles: OpenFile[];
   /** Currently active file path */
   activeFilePath: string | undefined;
-  /** Last active chat ID */
-  lastChatId: string | undefined;
+  /** Currently focused chat ID (the chat the user is actively viewing) */
+  focusedChatId: string | undefined;
   /** Panel layout state (open/close, sizes, mobile tab) */
   panelState: PanelState;
   /** Serialized DockviewReact layout for the code editor area */

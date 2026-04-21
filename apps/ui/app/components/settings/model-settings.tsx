@@ -17,7 +17,7 @@ export function ModelSettings(): React.JSX.Element {
   const [sorting, setSorting] = useState<SortingState>([{ id: 'name', desc: false }]);
   const [globalFilter, setGlobalFilter] = useState('');
 
-  const columns = useMemo(() => createColumns({ selectedModelId: selectedModel?.id }), [selectedModel?.id]);
+  const columns = useMemo(() => createColumns({ selectedModelId: selectedModel.id }), [selectedModel.id]);
 
   const table = useReactTable({
     data: models ?? [],
@@ -47,11 +47,9 @@ export function ModelSettings(): React.JSX.Element {
     <div className='space-y-4'>
       <div className='flex items-center justify-between gap-2'>
         <DataTableSearch table={table} placeholder='Search models...' containerClassName='max-w-sm' />
-        {selectedModel ? (
-          <div className='text-sm text-muted-foreground'>
-            Current: <span className='font-medium text-foreground'>{selectedModel.name}</span>
-          </div>
-        ) : undefined}
+        <div className='text-sm text-muted-foreground'>
+          Current: <span className='font-medium text-foreground'>{selectedModel.name}</span>
+        </div>
       </div>
 
       <DataTable table={table} columns={columns} emptyMessage='No models available.' onRowClick={handleRowClick} />

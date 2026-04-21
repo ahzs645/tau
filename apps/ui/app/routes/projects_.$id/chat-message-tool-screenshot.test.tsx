@@ -81,7 +81,6 @@ const buildOutputPart = (
   mode: 'single' | 'multi_angle',
   output: ScreenshotOutputAvailable['output'],
 ): ScreenshotOutputAvailable => ({
-  type: 'tool-screenshot',
   toolCallId: 'tc_1',
   state: 'output-available',
   input: { mode, targetFile },
@@ -89,7 +88,6 @@ const buildOutputPart = (
 });
 
 const buildInputPart = (targetFile: string, mode: 'single' | 'multi_angle'): ScreenshotInputAvailable => ({
-  type: 'tool-screenshot',
   toolCallId: 'tc_1',
   state: 'input-available',
   input: { mode, targetFile },

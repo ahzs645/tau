@@ -100,7 +100,6 @@ type KernelOutputAvailable = Extract<KernelInvocation, { state: 'output-availabl
 type KernelInputAvailable = Extract<KernelInvocation, { state: 'input-available' }>;
 
 const buildOutputPart = (targetFile: string, output: KernelOutputAvailable['output']): KernelOutputAvailable => ({
-  type: 'tool-get_kernel_result',
   toolCallId: 'tc_1',
   state: 'output-available',
   input: { targetFile },
@@ -108,7 +107,6 @@ const buildOutputPart = (targetFile: string, output: KernelOutputAvailable['outp
 });
 
 const buildInputPart = (targetFile: string): KernelInputAvailable => ({
-  type: 'tool-get_kernel_result',
   toolCallId: 'tc_1',
   state: 'input-available',
   input: { targetFile },

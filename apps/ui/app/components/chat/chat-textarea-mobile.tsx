@@ -1,7 +1,7 @@
 import { memo, useState } from 'react';
 import { Plus, Wrench, Paperclip, ChevronRight } from 'lucide-react';
 import type { ToolSelection } from '@taucad/chat';
-import { kernelConfigurations } from '@taucad/types/constants';
+import { useActiveChatKernel } from '#hooks/use-active-chat-kernel.js';
 import { Button } from '#components/ui/button.js';
 import { Textarea } from '#components/ui/textarea.js';
 import { SvgIcon } from '#components/icons/svg-icon.js';
@@ -16,7 +16,7 @@ import { ChatTextareaSubmitButton } from '#components/chat/chat-textarea-submit-
 import { focusTrapAttribute } from '#components/chat/chat-textarea-types.js';
 import { Drawer, DrawerContent, DrawerDescription, DrawerTitle, DrawerTrigger } from '#components/ui/drawer.js';
 import { Command, CommandGroup, CommandItem, CommandList } from '#components/ui/command.js';
-import type { useModels } from '#hooks/use-models.js';
+import type { ResolvedModel } from '#hooks/use-models.js';
 
 // Styled div that looks like CommandItem but works as a trigger for nested drawers.
 // Uses menuItemVariants with mobile-specific size overrides (gap-1, px-2, py-1.5, text-sm, size-5 icons).
@@ -42,7 +42,7 @@ type ChatTextareaMobileProperties = {
   readonly selectedToolChoice: ToolSelection;
   readonly setDraftToolChoice: (choice: ToolSelection) => void;
   readonly status: string;
-  readonly selectedModel: ReturnType<typeof useModels>['selectedModel'];
+  readonly selectedModel: ResolvedModel;
   readonly formattedCancelKeyCombination: string;
 
   // Refs
@@ -152,7 +152,10 @@ export const ChatTextareaMobile = memo(function ({
 }: ChatTextareaMobileProperties): React.JSX.Element {
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
 
-  const selectedKernel = kernelConfigurations.find((k) => k.id === 'openscad');
+  // R6/R7: chat-scoped kernel resolver — replaces the prior hardcoded
+  // `'openscad'` lookup so the mobile drawer label matches the chat's
+  // actual active kernel (and falls back to the cookie when unset).
+  const { kernel: selectedKernel } = useActiveChatKernel();
 
   const handleDrawerAddImage = (image: string): void => {
     handleAddImage(image);

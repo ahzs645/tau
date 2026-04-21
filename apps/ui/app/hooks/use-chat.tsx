@@ -1,391 +1,190 @@
 /**
- * Chat Provider and Hooks
+ * Chat Hooks
  *
- * Event-driven architecture using AI SDK callbacks + XState debouncing.
- * - useChat from AI SDK is the source of truth for messages
- * - chatPersistenceMachine handles message persistence with debouncing
- * - draftMachine handles drafts/edits with direct persistence
- * - useChatRpcConnection handles RPC execution via Socket.IO
+ * Store-resolved hooks for reading chat state and dispatching chat actions
+ * from anywhere in the React tree. The streaming + persistence + draft +
+ * RPC layer now lives in the vanilla `ChatSessionStore` (see
+ * `apps/ui/app/services/chat-session-store.ts`); these hooks compose:
+ *
+ * - `useChatSessionSnapshot` for re-rendering on per-chatId AI SDK updates
+ *   (messages / status / error)
+ * - `<ActiveChatProvider>` for resolving the implicit "current chat" when
+ *   no `chatId` is passed and for owning the ephemeral draft actor on
+ *   marketing routes
+ *
+ * Resolution rules (mirrored across `useChatContext` / `useChatSelector` /
+ * `useChatActions`):
+ *
+ * - Omitting `chatId` resolves to the active chat from the nearest
+ *   `<ActiveChatProvider>` (project route's focused chat, homepage's
+ *   sticky chat). Throws when neither an explicit id nor an active
+ *   provider supply one.
+ * - Passing `chatId` resolves to that exact chat from the store. The
+ *   caller is responsible for keeping the session live (typically by
+ *   wrapping the subtree in `<ActiveChatProvider chatId={chatId}>` or
+ *   calling `useChatSession(chatId)` directly).
+ *
+ * Lifecycle vs draft:
+ *
+ * - `useChatContext()` / `useChatSelector()` reflect the live `ChatSession`.
+ *   When no session exists for the resolved chat (cross-chat read before
+ *   anything has acquired it), message-derived fields fall back to a
+ *   stable empty snapshot (no error). Draft-derived fields always come
+ *   from `<ActiveChatProvider>`.
+ * - `useChatActions().setDraftText` / draft mutators always work as long
+ *   as an `<ActiveChatProvider>` is in scope (no chat session required —
+ *   covers marketing routes that render the composer without a real
+ *   chat).
+ * - `useChatActions().sendMessage` / lifecycle mutators are no-ops with a
+ *   `console.warn` when no session is mounted for the resolved chat.
  */
 
-import { useChat } from '@ai-sdk/react';
-import { useActorRef, useSelector } from '@xstate/react';
-import { createContext, useContext, useEffect, useRef, useMemo, useCallback } from 'react';
-import { fromSafeAsync } from '#lib/xstate.lib.js';
+import type { Chat as AiSdkChat } from '@ai-sdk/react';
+import { useSelector } from '@xstate/react';
+import { useCallback, useMemo, useSyncExternalStore } from 'react';
 import type { MyUIMessage } from '@taucad/chat';
-import { DefaultChatTransport } from 'ai';
-import { generatePrefixedId } from '@taucad/utils/id';
-import { idPrefix } from '@taucad/types/constants';
 import type { ChatError } from '@taucad/types';
-import { draftMachine } from '#hooks/draft.machine.js';
-import { chatPersistenceMachine } from '#hooks/chat-persistence.machine.js';
-import type { ChatRequest } from '#hooks/chat-persistence.machine.js';
-import { useChats } from '#hooks/use-chats.js';
-import { inspect } from '#machines/inspector.js';
-import { ENV } from '#environment.config.js';
-import { parseErrorForPersistence } from '#utils/error.utils.js';
-import { extractMimeTypeFromDataUrl, finalizeInterruptedToolParts } from '#utils/chat.utils.js';
+import type { KernelId } from '@taucad/types/constants';
+import type { ActorRefFrom } from 'xstate';
+import { useActiveChat } from '#hooks/active-chat-provider.js';
+import { useChatSessionStore } from '#hooks/chat-session-store-provider.js';
+import { useChatSessionSnapshot } from '#hooks/use-chat-session.js';
+import type { ChatSession } from '#services/chat-session-store.js';
+import type { chatPersistenceMachine } from '#hooks/chat-persistence.machine.js';
+import type { draftMachine } from '#hooks/draft.machine.js';
 import type { ChatMode } from '#routes/projects_.$id/chat-mode-selector.js';
 
-type UseChatReturn = ReturnType<typeof useChat<MyUIMessage>>;
+type ChatInstance = AiSdkChat<MyUIMessage>;
 
-type SendMessageInput = Parameters<UseChatReturn['sendMessage']>[0];
+type SendMessageInput = Parameters<ChatInstance['sendMessage']>[0];
 
-/**
- * Build the user message that replaces an edited message in the transcript.
- * Mirrors the prior inline construction in `useChatActions.editMessage`.
- */
-function buildEditedMessage(request: Extract<ChatRequest, { kind: 'edit' }>): MyUIMessage {
-  return {
-    id: request.messageId,
-    role: 'user',
-    parts: [
-      { type: 'text', text: request.content },
-      ...(request.imageUrls?.map(
-        (url) =>
-          ({
-            type: 'file',
-            url,
-            mediaType: extractMimeTypeFromDataUrl(url),
-          }) as const,
-      ) ?? []),
-    ],
-    metadata: {
-      createdAt: Date.now(),
-      status: 'pending',
-      model: request.model,
-    },
-  };
+const emptyMessages: readonly MyUIMessage[] = Object.freeze([]);
+const emptyMessageOrder: readonly string[] = Object.freeze([]);
+const emptyMessagesById: ReadonlyMap<string, MyUIMessage> = new Map();
+
+const messagesByIdCache = new WeakMap<readonly MyUIMessage[], Map<string, MyUIMessage>>();
+
+function getMessagesById(messages: readonly MyUIMessage[]): ReadonlyMap<string, MyUIMessage> {
+  if (messages === emptyMessages) {
+    return emptyMessagesById;
+  }
+  let cached = messagesByIdCache.get(messages);
+  if (!cached) {
+    cached = new Map<string, MyUIMessage>();
+    for (const message of messages) {
+      cached.set(message.id, message);
+    }
+    messagesByIdCache.set(messages, cached);
+  }
+  return cached;
 }
 
-/**
- * Build the message slice that retry replaces. Returns `undefined` if the
- * target message is no longer in the transcript (race with a concurrent
- * setMessages). Mirrors the prior inline logic in `useChatActions.retryMessage`.
- */
-function buildRetryMessages(
-  messages: MyUIMessage[],
-  request: Extract<ChatRequest, { kind: 'retry' }>,
-): MyUIMessage[] | undefined {
-  const messageIndex = messages.findIndex((m) => m.id === request.messageId);
-  if (messageIndex === -1) {
-    return undefined;
-  }
+// ---------------------------------------------------------------------------
+// Context surface
+// ---------------------------------------------------------------------------
 
-  const sliceIndex = Math.max(messageIndex - 1, 0);
-  const previousMessage = messages[sliceIndex];
-
-  if (previousMessage && request.modelId) {
-    return [
-      ...messages.slice(0, sliceIndex),
-      {
-        ...previousMessage,
-        metadata: { ...previousMessage.metadata, model: request.modelId },
-      },
-    ];
-  }
-
-  return messages.slice(0, messageIndex);
-}
-
-// Single context for all chat state
-type ChatContextValue = {
-  chat: UseChatReturn;
+export type ChatContextValue = {
+  /**
+   * The resolved chat id. Either the explicit `chatId` argument or the
+   * `<ActiveChatProvider>` binding. `undefined` only when called outside
+   * any `<ActiveChatProvider>` and without an explicit id (which throws —
+   * `undefined` is therefore unreachable in practice and kept for callers
+   * that pre-destructure the field defensively).
+   */
   activeChatId: string | undefined;
-  resourceId: string | undefined;
-  chatName: string;
-  isLoadingChat: boolean;
-  queuePersist: (messages: MyUIMessage[]) => void;
-  draftActorRef: ReturnType<typeof useActorRef<typeof draftMachine>>;
-  persistenceActorRef: ReturnType<typeof useActorRef<typeof chatPersistenceMachine>>;
+  /**
+   * The live AI SDK `Chat` instance for this chat. `undefined` when no
+   * session is mounted for `activeChatId` (e.g. marketing pages or a
+   * cross-chat read before anything has acquired it).
+   */
+  chat: ChatInstance | undefined;
+  /**
+   * Persistence machine for this chat. `undefined` when no session is
+   * mounted for `activeChatId`.
+   */
+  persistenceActorRef: ActorRefFrom<typeof chatPersistenceMachine> | undefined;
+  /**
+   * Draft machine for this chat. Always defined — sourced from
+   * `<ActiveChatProvider>`, so the composer's draft surface works even
+   * when no session is mounted.
+   */
+  draftActorRef: ActorRefFrom<typeof draftMachine>;
 };
 
-const ChatContext = createContext<ChatContextValue | undefined>(undefined);
+type SessionSnapshotFields = {
+  chat: ChatInstance | undefined;
+  persistenceActorRef: ActorRefFrom<typeof chatPersistenceMachine> | undefined;
+  messages: readonly MyUIMessage[];
+  status: ChatInstance['status'];
+  error: Error | undefined;
+};
 
-// Provider component - manages all chat state
-export function ChatProvider({
-  children,
-  resourceId,
-  chatId: activeChatId,
-}: {
-  readonly children: React.ReactNode;
-  readonly resourceId?: string;
-  readonly chatId?: string;
-}): React.JSX.Element {
-  const { getChat, patchChat, setMessageEdit, clearMessageEdit, chats } = useChats(resourceId ?? '');
+const emptySessionSnapshot: SessionSnapshotFields = {
+  chat: undefined,
+  persistenceActorRef: undefined,
+  messages: emptyMessages,
+  status: 'ready',
+  error: undefined,
+};
 
-  // Refs for functions that actors need access to (set after useChat is created)
-  const setMessagesRef = useRef<UseChatReturn['setMessages'] | undefined>(undefined);
-  const regenerateRef = useRef<(() => void) | undefined>(undefined);
-  const initializeDraftRef = useRef<((chat: NonNullable<Awaited<ReturnType<typeof getChat>>>) => void) | undefined>(
-    undefined,
-  );
-
-  // Create draft machine with provided actors (like use-project.tsx pattern)
-  const draftActorRef = useActorRef(
-    draftMachine.provide({
-      actors: {
-        persistDraftActor: fromSafeAsync(async ({ input }) => {
-          await patchChat(input.chatId, 'draft', input.draft);
-        }),
-        persistEditDraftActor: fromSafeAsync(async ({ input }) => {
-          await setMessageEdit(input.chatId, input.messageId, input.draft);
-        }),
-        clearMessageEditActor: fromSafeAsync(async ({ input }) => {
-          await clearMessageEdit(input.chatId, input.messageId);
-        }),
-      },
-    }),
-    {
-      input: {
-        chatId: activeChatId,
-      },
-      inspect,
-    },
-  );
-
-  // Create persistence machine with provided actors
-  // Actors handle the complete load flow: fetch → setMessages → initialize draft
-  // The machine's onDone action sets persistedError from the returned chat
-  const persistenceActorRef = useActorRef(
-    chatPersistenceMachine.provide({
-      actors: {
-        loadChatActor: fromSafeAsync(async ({ input }) => {
-          const loadedChat = await getChat(input.chatId);
-
-          if (loadedChat) {
-            setMessagesRef.current?.(loadedChat.messages);
-            initializeDraftRef.current?.(loadedChat);
-
-            const lastMessage = loadedChat.messages.at(-1);
-            if (lastMessage?.role === 'user' && lastMessage.metadata?.status === 'pending') {
-              void regenerateRef.current?.();
-
-              return { type: 'chatRetrieved', chat: { ...loadedChat, error: undefined } };
-            }
-          } else {
-            setMessagesRef.current?.([]);
-          }
-
-          return { type: 'chatRetrieved', chat: loadedChat };
-        }),
-        persistMessagesActor: fromSafeAsync(async ({ input }) => {
-          await patchChat(input.chatId, 'messages', input.messages);
-        }),
-        persistErrorActor: fromSafeAsync(async ({ input }) => {
-          await patchChat(input.chatId, 'error', input.error);
-        }),
-        clearErrorActor: fromSafeAsync(async ({ input }) => {
-          await patchChat(input.chatId, 'error', undefined);
-        }),
-      },
-    }),
-    {
-      input: {
-        activeChatId,
-        resourceId,
-      },
-      inspect,
-    },
-  );
-
-  // Track loading state from persistence machine
-  const isLoadingChat = useSelector(persistenceActorRef, (state) => state.context.isLoadingChat);
-
-  // Initialize useChat. The lifecycle (send/regenerate/edit/retry/stop, queue-while-streaming)
-  // is owned by `chatPersistenceMachine.requestLifecycle`; the callbacks below just forward
-  // events into the machine, which then emits side-effect requests for the listeners installed
-  // in the useEffect further down.
-  const chat = useChat<MyUIMessage>({
-    id: activeChatId,
-    transport: new DefaultChatTransport({
-      api: `${ENV.TAU_API_URL}/v1/chat`,
-      credentials: 'include',
-    }),
-    generateId: () => generatePrefixedId(idPrefix.message),
-    onFinish({ messages, isAbort, isError }) {
-      persistenceActorRef.send({ type: 'requestFinished', messages, isAbort, isError });
-    },
-    onError(error) {
-      persistenceActorRef.send({ type: 'handleError', error });
-      persistenceActorRef.send({
-        type: 'setPersistedError',
-        error: parseErrorForPersistence(error),
-      });
-    },
-  });
-
-  // Stable ref so emit listeners always read the latest AI SDK chat instance
-  // without requiring the effect to resubscribe on every render.
-  const chatRef = useRef<UseChatReturn>(chat);
-  chatRef.current = chat;
-
-  // Update refs so actors can access current functions
-  setMessagesRef.current = chat.setMessages;
-  regenerateRef.current = () => {
-    persistenceActorRef.send({ type: 'startRequest', request: { kind: 'regenerate' } });
+function selectSessionSnapshot(session: ChatSession | undefined): SessionSnapshotFields {
+  if (!session) {
+    return emptySessionSnapshot;
+  }
+  return {
+    chat: session.chat,
+    persistenceActorRef: session.persistenceActorRef,
+    messages: session.chat.messages,
+    status: session.chat.status,
+    error: session.chat.error,
   };
-  initializeDraftRef.current = (loadedChat) => {
-    draftActorRef.send({ type: 'initializeFromChat', chat: loadedChat });
-  };
-
-  // Subscribe to lifecycle emits from the persistence machine. These run
-  // synchronously inside the originating transition, so any persistedError
-  // assign in the same transition lands before the AI SDK clears its own
-  // chat.error — both layers reset in a single React frame (no flicker).
-  useEffect(() => {
-    const dispatchSubscription = persistenceActorRef.on('dispatchRequest', ({ request }) => {
-      const c = chatRef.current;
-      switch (request.kind) {
-        case 'send': {
-          void c.sendMessage(request.message);
-          return;
-        }
-
-        case 'regenerate': {
-          void c.regenerate();
-          return;
-        }
-
-        case 'edit': {
-          const messageIndex = c.messages.findIndex((m) => m.id === request.messageId);
-          if (messageIndex === -1) {
-            return;
-          }
-          const next = [...c.messages.slice(0, messageIndex), buildEditedMessage(request)];
-          c.setMessages(next);
-          void c.regenerate();
-          return;
-        }
-
-        case 'retry': {
-          const next = buildRetryMessages(c.messages, request);
-          if (!next) {
-            return;
-          }
-          c.setMessages(next);
-          void c.regenerate();
-        }
-      }
-    });
-
-    const stopSubscription = persistenceActorRef.on('dispatchStop', () => {
-      void chatRef.current.stop();
-    });
-
-    const finishedSubscription = persistenceActorRef.on('applyFinishedRequest', ({ messages }) => {
-      const sanitized = finalizeInterruptedToolParts(messages);
-      // Only update messages when sanitization changed something to avoid
-      // unnecessary AI SDK state churn on the success path.
-      if (sanitized !== messages) {
-        chatRef.current.setMessages(sanitized);
-      }
-      persistenceActorRef.send({ type: 'queuePersist', messages: sanitized });
-    });
-
-    const stoppedSubscription = persistenceActorRef.on('applyStoppedRequest', ({ messages }) => {
-      let sanitized = finalizeInterruptedToolParts(messages);
-
-      // If stopped before any AI response, the last message is the user's
-      // pending message. Mark it as cancelled to prevent auto-regeneration
-      // on page reload (loadChatActor checks for pending user messages).
-      const last = sanitized.at(-1);
-      if (last?.role === 'user' && last.metadata?.status === 'pending') {
-        sanitized = sanitized.with(-1, {
-          ...last,
-          metadata: { ...last.metadata, status: 'cancelled' },
-        });
-      }
-
-      chatRef.current.setMessages(sanitized);
-      persistenceActorRef.send({ type: 'queuePersist', messages: sanitized });
-    });
-
-    const resumedSubscription = persistenceActorRef.on('applyResumedRequest', ({ messages }) => {
-      const sanitized = finalizeInterruptedToolParts(messages);
-      chatRef.current.setMessages(sanitized);
-      persistenceActorRef.send({ type: 'queuePersist', messages: sanitized });
-    });
-
-    return () => {
-      dispatchSubscription.unsubscribe();
-      stopSubscription.unsubscribe();
-      finishedSubscription.unsubscribe();
-      stoppedSubscription.unsubscribe();
-      resumedSubscription.unsubscribe();
-    };
-  }, [persistenceActorRef]);
-
-  // Load chat when activeChatId changes
-  useEffect(() => {
-    if (!activeChatId) {
-      return;
-    }
-
-    // Tell persistence machine to load chat (actor handles setMessages)
-    persistenceActorRef.send({ type: 'setActiveChatId', chatId: activeChatId });
-
-    // Update draft machine with new chat ID
-    draftActorRef.send({ type: 'setChatId', chatId: activeChatId });
-  }, [activeChatId, persistenceActorRef, draftActorRef]);
-
-  // Queue persistence function for use by actions
-  const queuePersist = useCallback(
-    (messages: MyUIMessage[]) => {
-      if (activeChatId) {
-        persistenceActorRef.send({ type: 'queuePersist', messages });
-      }
-    },
-    [activeChatId, persistenceActorRef],
-  );
-
-  const chatName = useMemo(
-    () => chats.find((c) => c.id === activeChatId)?.name ?? 'Chat Transcript',
-    [chats, activeChatId],
-  );
-
-  const contextValue = useMemo<ChatContextValue>(
-    () => ({
-      chat,
-      activeChatId,
-      resourceId,
-      chatName,
-      isLoadingChat,
-      queuePersist,
-      draftActorRef,
-      persistenceActorRef,
-    }),
-    [chat, activeChatId, resourceId, chatName, isLoadingChat, queuePersist, draftActorRef, persistenceActorRef],
-  );
-
-  return <ChatContext.Provider value={contextValue}>{children}</ChatContext.Provider>;
 }
 
 /**
- * Hook to get the chat context values.
- * Returns activeChatId, isLoadingChat, and other context values.
+ * Resolve the live session snapshot + draft binding for the current (or
+ * explicit) chat. Throws when no `<ActiveChatProvider>` is in scope.
  */
-export function useChatContext(): ChatContextValue {
-  const context = useContext(ChatContext);
-  if (!context) {
-    throw new Error('useChatContext must be used within a ChatProvider');
-  }
+export function useChatContext(chatId?: string): ChatContextValue {
+  const active = useActiveChat();
+  const resolvedChatId = chatId ?? active.activeChatId;
+  const snapshot = useChatSessionSnapshot(resolvedChatId ?? '', selectSessionSnapshot);
 
-  return context;
+  return useMemo<ChatContextValue>(
+    () => ({
+      activeChatId: resolvedChatId,
+      chat: snapshot.chat,
+      persistenceActorRef: snapshot.persistenceActorRef,
+      draftActorRef: active.draftActorRef,
+    }),
+    [resolvedChatId, snapshot.chat, snapshot.persistenceActorRef, active.draftActorRef],
+  );
 }
 
-// Combined state type for useChatSelector - the primary way to read chat state
-type CombinedChatState = {
-  messages: MyUIMessage[];
-  messagesById: Map<string, MyUIMessage>;
-  messageOrder: string[];
-  status: UseChatReturn['status'];
+// ---------------------------------------------------------------------------
+// State + selector surface
+// ---------------------------------------------------------------------------
+
+export type CombinedChatState = {
+  messages: readonly MyUIMessage[];
+  messagesById: ReadonlyMap<string, MyUIMessage>;
+  messageOrder: readonly string[];
+  status: ChatInstance['status'];
   error: Error | undefined;
-  // Persisted error - survives page reload (from chat entity)
+  /** Persisted error survives reload (from the chat entity in IndexedDB). */
   persistedError: ChatError | undefined;
   isLoading: boolean;
-  chatName: string;
-  // Draft state from machine
+  /**
+   * Chat-scoped active model id, mirrored from the persistence machine's
+   * `Chat.activeModel`. When undefined the consumer falls back to the
+   * cookie default (see `useActiveChatModel`).
+   */
+  activeModel: string | undefined;
+  /**
+   * Chat-scoped active CAD kernel, mirrored from the persistence machine's
+   * `Chat.activeKernel`. When undefined the consumer falls back to the
+   * cookie default (see `useActiveChatKernel`).
+   */
+  activeKernel: KernelId | undefined;
   draftText: string;
   draftImages: string[];
   draftToolChoice: string | string[];
@@ -396,65 +195,137 @@ type CombinedChatState = {
   editDraftImages: string[];
 };
 
-// Cache for messagesById to avoid recreating on every render
-const messagesByIdCache = new WeakMap<MyUIMessage[], Map<string, MyUIMessage>>();
+type PersistenceSliceFields = {
+  persistedError: ChatError | undefined;
+  activeModel: string | undefined;
+  activeKernel: KernelId | undefined;
+};
 
-function getMessagesById(messages: MyUIMessage[]): Map<string, MyUIMessage> {
-  let cached = messagesByIdCache.get(messages);
-  if (!cached) {
-    cached = new Map<string, MyUIMessage>();
-    for (const message of messages) {
-      cached.set(message.id, message);
+const emptyPersistenceSlice: PersistenceSliceFields = {
+  persistedError: undefined,
+  activeModel: undefined,
+  activeKernel: undefined,
+};
+
+const persistenceSliceCache = new WeakMap<
+  ActorRefFrom<typeof chatPersistenceMachine>,
+  { context: unknown; slice: PersistenceSliceFields }
+>();
+
+/**
+ * Subscribe to a possibly-undefined persistence actor's chat-scoped fields
+ * (`persistedError`, `activeModel`, `activeKernel`) without violating the
+ * rules of hooks when the actor is not yet present. Slices are cached per
+ * actor + context reference so `useSyncExternalStore` returns the same
+ * object reference across notifications that did not change the slice.
+ */
+function usePersistenceSlice(
+  persistenceActorRef: ActorRefFrom<typeof chatPersistenceMachine> | undefined,
+): PersistenceSliceFields {
+  const subscribe = useCallback(
+    (callback: () => void) => {
+      if (!persistenceActorRef) {
+        return () => undefined;
+      }
+      const sub = persistenceActorRef.subscribe(callback);
+      return () => {
+        sub.unsubscribe();
+      };
+    },
+    [persistenceActorRef],
+  );
+  const getSnapshot = useCallback((): PersistenceSliceFields => {
+    if (!persistenceActorRef) {
+      return emptyPersistenceSlice;
     }
-
-    messagesByIdCache.set(messages, cached);
-  }
-
-  return cached;
+    const { context } = persistenceActorRef.getSnapshot();
+    const cached = persistenceSliceCache.get(persistenceActorRef);
+    if (
+      cached &&
+      cached.context === context &&
+      cached.slice.persistedError === context.persistedError &&
+      cached.slice.activeModel === context.activeModel &&
+      cached.slice.activeKernel === context.activeKernel
+    ) {
+      return cached.slice;
+    }
+    const slice: PersistenceSliceFields = {
+      persistedError: context.persistedError,
+      activeModel: context.activeModel,
+      activeKernel: context.activeKernel,
+    };
+    persistenceSliceCache.set(persistenceActorRef, { context, slice });
+    return slice;
+  }, [persistenceActorRef]);
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
 /**
- * Primary hook for reading chat state.
- * Combines AI SDK useChat state with draft machine state and persistence state.
+ * Primary hook for reading chat + draft state. Combines the live AI SDK
+ * snapshot from the store with the draft state from `<ActiveChatProvider>`.
+ * Selectors run on every notification — the `messagesById` and
+ * `messageOrder` derivations are memoised on the message array reference
+ * so equivalent reads are O(1).
  */
-export function useChatSelector<T>(selector: (state: CombinedChatState) => T): T {
-  const { chat, chatName, draftActorRef, persistenceActorRef } = useChatContext();
+export function useChatSelector<T>(selector: (state: CombinedChatState) => T, chatId?: string): T {
+  const { chat, persistenceActorRef, draftActorRef } = useChatContext(chatId);
   const draftContext = useSelector(draftActorRef, (state) => state.context);
-  const persistedError = useSelector(persistenceActorRef, (state) => state.context.persistedError);
+  const persistenceSlice = usePersistenceSlice(persistenceActorRef);
 
-  // Use cached messagesById based on messages array identity
-  const messagesById = getMessagesById(chat.messages);
-  const messageOrder = useMemo(() => chat.messages.map((m) => m.id), [chat.messages]);
+  const messages = chat?.messages ?? emptyMessages;
+  const status = chat?.status ?? 'ready';
+  const error = chat?.error;
+  const isLoading = status === 'streaming';
 
-  // Combine chat state with draft state and persistence state
+  const messagesById = getMessagesById(messages);
+  const messageOrder = useMemo<readonly string[]>(
+    () => (messages === emptyMessages ? emptyMessageOrder : messages.map((m) => m.id)),
+    [messages],
+  );
+
   const combinedState = useMemo<CombinedChatState>(
     () => ({
-      messages: chat.messages,
+      messages,
       messagesById,
       messageOrder,
-      status: chat.status,
-      error: chat.error,
-      persistedError,
-      isLoading: chat.status === 'streaming',
-      chatName,
-      // Draft state
+      status,
+      error,
+      persistedError: persistenceSlice.persistedError,
+      isLoading,
+      activeModel: persistenceSlice.activeModel,
+      activeKernel: persistenceSlice.activeKernel,
       draftText: draftContext.draftText,
       draftImages: draftContext.draftImages,
       draftToolChoice: draftContext.draftToolChoice,
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- ChatMode is the agent/plan superset narrowed at the consumer layer
       draftMode: draftContext.draftMode as ChatMode,
       messageEdits: draftContext.messageEdits,
       activeEditMessageId: draftContext.activeEditMessageId,
       editDraftText: draftContext.editDraftText,
       editDraftImages: draftContext.editDraftImages,
     }),
-    [chat.messages, messagesById, messageOrder, chat.status, chat.error, persistedError, chatName, draftContext],
+    [messages, messagesById, messageOrder, status, error, persistenceSlice, isLoading, draftContext],
   );
 
   return selector(combinedState);
 }
 
-// Hook for chat actions
-export function useChatActions(): {
+/**
+ * Read state from a non-active chat (e.g. an agents-panel row showing a
+ * background chat's status while a different chat is focused). The caller
+ * is responsible for ensuring a session for `chatId` is alive (typically
+ * by mounting `<ActiveChatProvider chatId={chatId}>` higher up or calling
+ * `useChatSession(chatId)` in the same component).
+ */
+export function useChatById<T>(chatId: string, selector: (state: CombinedChatState) => T): T {
+  return useChatSelector(selector, chatId);
+}
+
+// ---------------------------------------------------------------------------
+// Action surface
+// ---------------------------------------------------------------------------
+
+export type ChatActions = {
   sendMessage: (message: SendMessageInput) => void;
   regenerate: () => void;
   stop: () => void;
@@ -474,36 +345,80 @@ export function useChatActions(): {
   // oxlint-disable-next-line max-params -- callback signature shared across chat components; refactoring would require updating many call sites
   editMessage: (messageId: string, content: string, model: string, metadata?: unknown, imageUrls?: string[]) => void;
   retryMessage: (messageId: string, modelId?: string) => void;
-} {
-  const { chat, draftActorRef, persistenceActorRef } = useChatContext();
+  /**
+   * Patch the chat-scoped active model id. The persistence machine writes
+   * `Chat.activeModel` so a reload preserves this choice independent of
+   * the cookie default.
+   */
+  setActiveModel: (model: string | undefined) => void;
+  /**
+   * Patch the chat-scoped active CAD kernel. Same semantics as
+   * {@link ChatActions.setActiveModel}.
+   */
+  setActiveKernel: (kernel: KernelId | undefined) => void;
+};
 
-  return useMemo(
-    () => ({
-      // Lifecycle actions: thin event forwarders. The persistence machine's
-      // requestLifecycle owns clear-error / queue-while-streaming / interrupt
-      // semantics — see chat-persistence.machine.ts.
+function warnNoInstance(action: string, chatId: string | undefined): void {
+  console.warn(`[useChatActions] ${action} ignored: no chat session for chatId=${chatId ?? '<unknown>'}.`);
+}
+
+/**
+ * Returns the full action surface for the resolved chat. Lifecycle actions
+ * (send/regenerate/stop/edit/retry/setMessages) require a live session in
+ * the store; draft actions only require an `<ActiveChatProvider>`. See the
+ * module docstring for resolution rules.
+ *
+ * For lifecycle actions we read the latest chat instance off the store at
+ * dispatch time (instead of capturing it in the memoised closure). The
+ * store outlives every render, so this always reflects the freshest state
+ * — no stale-Chat hazard.
+ */
+export function useChatActions(chatId?: string): ChatActions {
+  const store = useChatSessionStore();
+  const { activeChatId, draftActorRef } = useChatContext(chatId);
+
+  return useMemo<ChatActions>(() => {
+    const resolveSession = (): ChatSession | undefined => (activeChatId ? store.get(activeChatId) : undefined);
+
+    return {
       sendMessage(message: SendMessageInput) {
         draftActorRef.send({ type: 'clearDraft' });
-        // The 'send' kind requires a full MyUIMessage. All in-app callers pass
-        // a full message (chat-textarea constructs one via createMessage); the
-        // text/files convenience union is not exercised internally.
-        persistenceActorRef.send({
+        const session = resolveSession();
+        if (!session) {
+          warnNoInstance('sendMessage', activeChatId);
+          return;
+        }
+        session.persistenceActorRef.send({
           type: 'startRequest',
           // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- AI SDK sendMessage union narrows to MyUIMessage at all call sites
           request: { kind: 'send', message: message as MyUIMessage },
         });
       },
       regenerate() {
-        persistenceActorRef.send({ type: 'startRequest', request: { kind: 'regenerate' } });
+        const session = resolveSession();
+        if (!session) {
+          warnNoInstance('regenerate', activeChatId);
+          return;
+        }
+        session.persistenceActorRef.send({ type: 'startRequest', request: { kind: 'regenerate' } });
       },
       stop() {
-        persistenceActorRef.send({ type: 'stopRequest' });
+        const session = resolveSession();
+        if (!session) {
+          warnNoInstance('stop', activeChatId);
+          return;
+        }
+        session.persistenceActorRef.send({ type: 'stopRequest' });
       },
       setMessages(messages: MyUIMessage[]) {
-        chat.setMessages(messages);
+        const session = resolveSession();
+        if (!session) {
+          warnNoInstance('setMessages', activeChatId);
+          return;
+        }
+        session.chat.messages = messages;
       },
 
-      // Draft actions (via XState)
       setDraftText(text: string) {
         draftActorRef.send({ type: 'setDraftText', text });
       },
@@ -517,23 +432,17 @@ export function useChatActions(): {
         draftActorRef.send({ type: 'setDraftToolChoice', toolChoice });
       },
       setDraftMode(mode: string) {
-        draftActorRef.send({
-          type: 'setDraftMode',
-          mode: mode as 'agent' | 'plan',
-        });
+        // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- mode is one of the ChatMode literals at every call site
+        draftActorRef.send({ type: 'setDraftMode', mode: mode as 'agent' | 'plan' });
       },
       clearDraft() {
         draftActorRef.send({ type: 'clearDraft' });
       },
 
-      // Edit actions (via XState)
       startEditingMessage(messageId: string) {
-        const originalMessage = chat.messages.find((m) => m.id === messageId);
-        draftActorRef.send({
-          type: 'startEditingMessage',
-          messageId,
-          originalMessage,
-        });
+        const session = resolveSession();
+        const originalMessage = session?.chat.messages.find((m) => m.id === messageId);
+        draftActorRef.send({ type: 'startEditingMessage', messageId, originalMessage });
       },
       exitEditMode() {
         draftActorRef.send({ type: 'exitEditMode' });
@@ -554,27 +463,53 @@ export function useChatActions(): {
       // oxlint-disable-next-line max-params -- matches the callback signature used across chat components
       editMessage(messageId: string, content: string, model: string, _metadata?: unknown, imageUrls?: string[]) {
         draftActorRef.send({ type: 'clearMessageEdit', messageId });
-        // Validate before transitioning — avoids leaving requestLifecycle in a
-        // partially-driven state if the message is gone.
-        if (!chat.messages.some((m) => m.id === messageId)) {
+        const session = resolveSession();
+        if (!session) {
+          warnNoInstance('editMessage', activeChatId);
           return;
         }
-        persistenceActorRef.send({
+        // Validate before transitioning so requestLifecycle stays clean if
+        // the message has gone (e.g. raced with a concurrent setMessages).
+        if (!session.chat.messages.some((m) => m.id === messageId)) {
+          return;
+        }
+        session.persistenceActorRef.send({
           type: 'startRequest',
           request: { kind: 'edit', messageId, content, model, imageUrls },
         });
       },
 
       retryMessage(messageId: string, modelId?: string) {
-        if (!chat.messages.some((m) => m.id === messageId)) {
+        const session = resolveSession();
+        if (!session) {
+          warnNoInstance('retryMessage', activeChatId);
           return;
         }
-        persistenceActorRef.send({
+        if (!session.chat.messages.some((m) => m.id === messageId)) {
+          return;
+        }
+        session.persistenceActorRef.send({
           type: 'startRequest',
           request: { kind: 'retry', messageId, modelId },
         });
       },
-    }),
-    [chat, draftActorRef, persistenceActorRef],
-  );
+
+      setActiveModel(model: string | undefined) {
+        const session = resolveSession();
+        if (!session) {
+          warnNoInstance('setActiveModel', activeChatId);
+          return;
+        }
+        session.persistenceActorRef.send({ type: 'setActiveModel', model });
+      },
+      setActiveKernel(kernel: KernelId | undefined) {
+        const session = resolveSession();
+        if (!session) {
+          warnNoInstance('setActiveKernel', activeChatId);
+          return;
+        }
+        session.persistenceActorRef.send({ type: 'setActiveKernel', kernel });
+      },
+    };
+  }, [store, activeChatId, draftActorRef]);
 }

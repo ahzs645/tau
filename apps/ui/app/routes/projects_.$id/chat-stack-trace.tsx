@@ -18,9 +18,9 @@ import { formatKeyCombination } from '#utils/keys.utils.js';
 import { cn } from '#utils/ui.utils.js';
 import { createMessage } from '#utils/chat.utils.js';
 import { decodeTextFile } from '#utils/filesystem.utils.js';
-import { useModels } from '#hooks/use-models.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
-import { useKernel } from '#hooks/use-kernel.js';
+import { useActiveChatModel } from '#hooks/use-active-chat-model.js';
+import { useActiveChatKernel } from '#hooks/use-active-chat-kernel.js';
 import { useChatSnapshot } from '#hooks/use-chat-snapshot.js';
 
 const shiftKey = formatKeyCombination({ key: 'Shift' });
@@ -438,7 +438,7 @@ type ChatStackTraceProps = React.HTMLAttributes<HTMLDivElement> & {
 };
 
 export function ChatStackTrace({ entryFile, className, side, ...props }: ChatStackTraceProps): React.ReactNode {
-  const { getMainFilename, editorRef, projectId, setLastChatId } = useProject();
+  const { getMainFilename, editorRef, projectId, setFocusedChatId } = useProject();
   const fileManager = useFileManager();
   const { createChat } = useChats(projectId);
   const [isOpen, setIsOpen] = useState(true);
@@ -455,8 +455,12 @@ export function ChatStackTrace({ entryFile, className, side, ...props }: ChatSta
   const errors = isCadActorStale ? undefined : rawErrors;
 
   const { sendMessage } = useChatActions();
-  const { selectedModel } = useModels();
-  const { kernel } = useKernel();
+  // R6/E7: read the model/kernel from the chat-scoped resolvers so the
+  // Fix-with-AI prompt always uses what the active chat is actually
+  // running on. The cookie default still wins on the homepage / before a
+  // chat is bound (the resolvers fall back to it transparently).
+  const { modelId: selectedModelId } = useActiveChatModel();
+  const { kernelId: kernel } = useActiveChatKernel();
   const snapshot = useChatSnapshot();
 
   const handleFixWithAi = useCallback(
@@ -494,7 +498,7 @@ export function ChatStackTrace({ entryFile, className, side, ...props }: ChatSta
         content: errorPrompt,
         role: messageRole.user,
         metadata: {
-          model: selectedModel.id,
+          model: selectedModelId,
           status: messageStatus.pending,
           kernel,
           snapshot,
@@ -504,13 +508,17 @@ export function ChatStackTrace({ entryFile, className, side, ...props }: ChatSta
       // Create a new chat if shift was held
       if (createNewChat) {
         // Create the chat with the message already included.
-        // When ChatProvider loads this chat, it will see the pending user message
-        // and automatically trigger the AI response via regenerate().
+        // When ChatInstance loads this chat, it will see the pending user
+        // message and automatically trigger the AI response via regenerate().
+        // R3: seed activeModel + activeKernel on the new chat so cookie
+        // changes elsewhere never silently retarget this Fix-with-AI thread.
         const newChat = await createChat({
           name: 'New chat',
           messages: [message],
+          activeModel: selectedModelId,
+          activeKernel: kernel,
         });
-        setLastChatId(newChat.id);
+        setFocusedChatId(newChat.id);
       } else {
         // Send to current chat
         sendMessage(message);
@@ -523,8 +531,8 @@ export function ChatStackTrace({ entryFile, className, side, ...props }: ChatSta
       kernel,
       editorRef,
       createChat,
-      setLastChatId,
-      selectedModel.id,
+      setFocusedChatId,
+      selectedModelId,
       sendMessage,
       snapshot,
     ],

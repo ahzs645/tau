@@ -68,7 +68,7 @@ describe('StructuredToolError', () => {
     const verb = screen.getByText('Tool Error');
     const labelWrapper = verb.parentElement;
     expect(labelWrapper).not.toBeNull();
-    expect(labelWrapper).toHaveClass('inline');
+    expect(labelWrapper?.tagName).toBe('SPAN');
 
     const description = screen.getByText('web_browser');
     expect(description).toHaveClass('font-mono');
