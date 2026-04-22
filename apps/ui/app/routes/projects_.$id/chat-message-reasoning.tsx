@@ -79,13 +79,48 @@ export function ChatMessageReasoning({
   const trimmedText = useMemo(() => part.text.trim(), [part.text]);
   const hasReasoningText = trimmedText !== '';
 
+  // Three-state header label (see docs/research/reasoning-duration-display.md).
+  // Computed early because `isReasoningStreaming` also gates `isContentVisible`
+  // below: while reasoning is actively streaming the chevron must never fully
+  // hide the scrolling preview — it can only toggle preview ↔ expanded so the
+  // user always retains a multi-line view of the live thoughts.
+  //
+  // We deliberately ignore `part.state` for the live gate. The AI SDK reducer
+  // (`processUIMessageStream`) only flips `parts[i].state` to `'done'` inside
+  // the `case "reasoning-end"` branch; on `case "finish-step"` it merely clears
+  // the `activeReasoningParts` lookup map, leaving any unmatched part stuck at
+  // `'streaming'` for the lifetime of the message. Trusting `isMessageActive`
+  // instead is the canonical "is *this* message still arriving?" signal and
+  // stops the live counter the instant the stream closes — and never relights
+  // it on prior messages when a follow-up turn begins (Finding 9).
+  const reasoningStartedAtMs = getReasoningStartedAtMs(part);
+  const finalReasoningDurationMs = getReasoningDurationMs(part);
+  const isReasoningStreaming = isMessageActive && finalReasoningDurationMs === undefined;
+
   // Three visual states:
-  //   preview  — during streaming with no content after: half-height, auto-scroll
+  //   preview  — during streaming (or `hasContent === false`): half-height, auto-scroll
   //   collapsed — after completion (hasContent): header only
   //   expanded  — user explicitly toggled open: full height
-  const isContentVisible = hasContent ? userToggleState === 'expanded' : userToggleState !== 'collapsed';
+  //
+  // While reasoning is still streaming we force preview-or-expanded, never
+  // fully hidden — the chevron toggles between the two. This keeps the live
+  // thoughts visible at the scrolling-area height even after the user clicks
+  // to "collapse", since losing all visibility on an in-flight reasoning
+  // block was disorienting.
+  const isContentVisible = isReasoningStreaming
+    ? true
+    : hasContent
+      ? userToggleState === 'expanded'
+      : userToggleState !== 'collapsed';
 
   const isExpanded = userToggleState === 'expanded';
+
+  // Outside streaming the chevron mirrors visibility (rotated when open) so
+  // done-collapsed flips back to a right-pointing chevron. While streaming,
+  // visibility is pinned to true so we instead rotate only on the full
+  // expansion — preview keeps the chevron pointing right to invite "click to
+  // see more".
+  const isChevronRotated = isReasoningStreaming ? isExpanded : isContentVisible;
 
   const displayText = useMemo(() => {
     if (!isContentVisible) {
@@ -199,25 +234,14 @@ export function ChatMessageReasoning({
     });
   }, []);
 
-  // Three-state header label (see docs/research/reasoning-duration-display.md):
+  // Header label state machine:
   //   1. Live      — this is the trailing message, the chat is still streaming,
   //                  and we have not yet observed a server-derived final
   //                  duration → "Thinking for Ns" ticks.
   //   2. Final     — server stamped both endpoints → "Thought for Ns".
   //   3. Fallback  — orphaned (chat ended without `reasoning-end`) or legacy /
   //                  uninstrumented part → "Thought briefly".
-  //
-  // We deliberately ignore `part.state` for the live gate. The AI SDK reducer
-  // (`processUIMessageStream`) only flips `parts[i].state` to `'done'` inside
-  // the `case "reasoning-end"` branch; on `case "finish-step"` it merely clears
-  // the `activeReasoningParts` lookup map, leaving any unmatched part stuck at
-  // `'streaming'` for the lifetime of the message. Trusting `isMessageActive`
-  // instead is the canonical "is *this* message still arriving?" signal and
-  // stops the live counter the instant the stream closes — and never relights
-  // it on prior messages when a follow-up turn begins (Finding 9).
-  const reasoningStartedAtMs = getReasoningStartedAtMs(part);
-  const finalReasoningDurationMs = getReasoningDurationMs(part);
-  const isReasoningStreaming = isMessageActive && finalReasoningDurationMs === undefined;
+  // (`isReasoningStreaming` is computed above so it can also gate visibility.)
   const liveReasoningElapsedMs = useReasoningStopwatch(reasoningStartedAtMs, isReasoningStreaming);
 
   const reasoningLabel = isReasoningStreaming
@@ -257,7 +281,7 @@ export function ChatMessageReasoning({
           {reasoningLabelSuffix && <ChatToolDescription>{reasoningLabelSuffix}</ChatToolDescription>}
         </ChatToolLabel>
         <ChevronRight
-          className={cn('size-3 shrink-0 transition-transform duration-200', isContentVisible && 'rotate-90')}
+          className={cn('size-3 shrink-0 transition-transform duration-200', isChevronRotated && 'rotate-90')}
         />
       </Button>
 

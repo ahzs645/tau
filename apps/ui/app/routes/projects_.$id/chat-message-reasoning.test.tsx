@@ -441,10 +441,130 @@ describe('ChatMessageReasoning', () => {
       expect(harness.constructions).toBe(0);
     });
 
-    it('should not construct a ResizeObserver when reasoning is collapsed (hasContent and no toggle)', () => {
-      renderReasoning({ part: createReasoningPart(), hasContent: true });
+    it('should not construct a ResizeObserver when reasoning is collapsed (hasContent, reasoning done)', () => {
+      // Once `isReasoningStreaming` flips to false (server stamped both
+      // endpoints, OR the chat is no longer active), `hasContent` reasserts
+      // its default-collapse behavior. This test pins that path; the
+      // streaming-window override is covered by `streaming collapse floor`.
+      mockChatStatus.current = 'idle';
+      renderReasoning({
+        part: createReasoningPartWithTiming({
+          state: 'done',
+          reasoningStartedAtMs: 1_700_000_000_000,
+          reasoningEndedAtMs: 1_700_000_002_000,
+        }),
+        hasContent: true,
+      });
 
       expect(harness.constructions).toBe(0);
+    });
+  });
+
+  describe('streaming collapse floor', () => {
+    /**
+     * Locate the Brain toggle button. Mirrors the lookup used by
+     * `readLabelSpans` but standalone so the streaming-collapse tests can
+     * also synthesize click events.
+     */
+    const getToggleButton = (): HTMLButtonElement => {
+      const buttons = screen.getAllByRole('button');
+      const button = buttons.find((b): b is HTMLButtonElement => b.querySelector('svg.lucide-brain') !== null);
+      if (!button) {
+        throw new Error('could not locate the Brain toggle button');
+      }
+      return button;
+    };
+
+    const clickToggle = (): void => {
+      act(() => {
+        getToggleButton().click();
+      });
+    };
+
+    const getChevron = (): SVGElement => {
+      const chevron = getToggleButton().querySelector('svg.lucide-chevron-right');
+      if (!(chevron instanceof SVGElement)) {
+        throw new Error('could not locate the chevron');
+      }
+      return chevron;
+    };
+
+    it('should keep the scrolling preview visible after the user collapses while reasoning is still streaming', () => {
+      // Preview (default) → expanded (1st click) → would-be-collapsed (2nd click).
+      // Under the new behavior, the 2nd click lands on `userToggleState === 'collapsed'`
+      // but `isReasoningStreaming === true` forces the scroll container to remain
+      // mounted at the same `max-h-48` preview height — never fully hidden.
+      renderReasoning({ part: createReasoningPart() });
+
+      expect(screen.getByTestId('markdown-content')).toBeInTheDocument();
+
+      clickToggle();
+      clickToggle();
+
+      const markdown = screen.getByTestId('markdown-content');
+      expect(markdown).toBeInTheDocument();
+      const scrollContainer = markdown.parentElement?.parentElement;
+      expect(scrollContainer?.className).toContain('max-h-48');
+      expect(scrollContainer?.className).toContain('overflow-y-auto');
+    });
+
+    it('should still hide the content on the second click when reasoning has completed (hasContent path)', () => {
+      // Regression guard for the unchanged path: once `isReasoningStreaming`
+      // is false, the `hasContent` collapse contract reasserts and a click
+      // can fully hide the reasoning block.
+      mockChatStatus.current = 'idle';
+      renderReasoning({
+        part: createReasoningPartWithTiming({
+          text: 'Some reasoning text',
+          state: 'done',
+          reasoningStartedAtMs: 1_700_000_000_000,
+          reasoningEndedAtMs: 1_700_000_002_000,
+        }),
+        hasContent: true,
+      });
+
+      expect(screen.queryByTestId('markdown-content')).toBeNull();
+
+      clickToggle();
+      expect(screen.getByTestId('markdown-content')).toBeInTheDocument();
+
+      clickToggle();
+      expect(screen.queryByTestId('markdown-content')).toBeNull();
+    });
+
+    it('should keep the auto-pin observer attached after the user collapses during streaming', () => {
+      // Because the scroll container remains mounted in the would-be-collapsed
+      // state, the ResizeObserver never tears down and continued streaming
+      // tokens still snap the preview to the latest content.
+      renderReasoning({ part: createReasoningPart() });
+
+      const { scrollContainer } = getElements();
+      installScrollMetrics(scrollContainer, { scrollHeight: 500, clientHeight: 192, scrollTop: 0 });
+      triggerResize();
+      expect(scrollContainer.scrollTop).toBe(500);
+
+      clickToggle();
+      clickToggle();
+
+      // Same DOM nodes, observer still attached — new tokens still pin.
+      const stillStreaming = getElements().scrollContainer;
+      expect(stillStreaming).toBe(scrollContainer);
+      updateScrollHeight(scrollContainer, 900);
+      triggerResize();
+      expect(scrollContainer.scrollTop).toBe(900);
+    });
+
+    it('should rotate the chevron only when fully expanded while reasoning streams (preview keeps it pointing right)', () => {
+      renderReasoning({ part: createReasoningPart() });
+
+      // Preview state: chevron points right.
+      expect(getChevron().getAttribute('class')).not.toContain('rotate-90');
+
+      clickToggle();
+      expect(getChevron().getAttribute('class')).toContain('rotate-90');
+
+      clickToggle();
+      expect(getChevron().getAttribute('class')).not.toContain('rotate-90');
     });
   });
 
