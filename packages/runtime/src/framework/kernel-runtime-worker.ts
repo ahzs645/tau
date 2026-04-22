@@ -329,7 +329,7 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
       return;
     }
 
-    this.logger.debug(`Initializing kernel: ${kernel.entry.id}`);
+    this.logger.trace(`Initializing kernel: ${kernel.entry.id}`);
 
     const rawOptions = kernel.entry.options ?? {};
     const validatedOptions = kernel.definition.optionsSchema
