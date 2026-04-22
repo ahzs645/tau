@@ -523,7 +523,7 @@ export default defineKernel({
           shapeCount: shapes3d.length,
           phase: 'computingGeometry',
         });
-        const gltfBlob = convertReplicadGeometriesToGltf(shapes3d, 'glb');
+        const gltfBlob = convertReplicadGeometriesToGltf(shapes3d, 'glb', runtime.logger);
         gltfSpan.end();
         gltfShapes.push({ format: 'gltf', content: gltfBlob });
       }
@@ -545,7 +545,7 @@ export default defineKernel({
     }
   },
 
-  async exportGeometry(input, _runtime, _context) {
+  async exportGeometry(input, runtime, _context) {
     const { format, nativeHandle, options } = input;
 
     if (nativeHandle.length === 0) {
@@ -588,7 +588,7 @@ export default defineKernel({
           } satisfies GeometryReplicad;
         });
 
-        const gltfData = convertReplicadGeometriesToGltf(temporaryShapes, format);
+        const gltfData = convertReplicadGeometriesToGltf(temporaryShapes, format, runtime.logger);
         return createKernelSuccess([
           createExportFile(format, format === 'glb' ? 'model.glb' : 'model.gltf', asBuffer(gltfData)),
         ]);

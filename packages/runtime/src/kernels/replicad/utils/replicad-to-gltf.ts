@@ -2,6 +2,7 @@ import { cadMaterialDefaults } from '@taucad/types/constants';
 import { normalizeColor } from '#kernels/replicad/utils/normalize-color.js';
 import { transformNormalArray, transformVertexArray } from '#framework/common.js';
 import type { GeometryReplicad } from '#kernels/replicad/replicad.types.js';
+import type { RuntimeLogger } from '#types/runtime-kernel.types.js';
 import { srgbHexToLinearTuple } from '#utils/color-space.js';
 import { writeGlb, writeGltfJson } from '#utils/glb-writer.js';
 import type { GlbInput, GlbNode, GlbPrimitive } from '#utils/glb-writer.js';
@@ -93,13 +94,24 @@ function buildNodeFromReplicadGeometry(geometry: GeometryReplicad, geometryIndex
  * This function preserves the original triangulation from replicad without re-triangulating,
  * resulting in better rendering quality and performance.
  *
+ * When `logger` is supplied, emits a debug log with the produced GLB byte
+ * length and node count. This is the upstream half of the OCJS-rendering
+ * smoke trail (see `docs/research/staging-cors-coep-safari-rendering-audit.md`
+ * R6); the downstream half lives in `apps/ui/.../gltf-mesh.tsx` and only logs
+ * when `GLTFLoader` resolves zero scene children, so the two together let us
+ * tell "kernel produced empty GLB" vs "loader silently dropped nodes" apart
+ * without spamming Console on every successful render.
+ *
  * @param geometries - Array of Shape3D objects from replicad
  * @param format - Output format: 'glb' for binary, 'gltf' for JSON
+ * @param logger - Optional kernel logger; when present, a debug line with
+ *   `byteLength` and `nodeCount` is emitted for every conversion
  * @returns GLTF blob
  */
 export function convertReplicadGeometriesToGltf(
   geometries: GeometryReplicad[],
   format: 'glb' | 'gltf' = 'glb',
+  logger?: RuntimeLogger,
 ): Uint8Array<ArrayBuffer> {
   const nodes: GlbNode[] = [];
 
@@ -112,9 +124,11 @@ export function convertReplicadGeometriesToGltf(
 
   const input: GlbInput = { nodes };
 
-  if (format === 'gltf') {
-    return writeGltfJson(input);
-  }
+  const output = format === 'gltf' ? writeGltfJson(input) : writeGlb(input);
 
-  return writeGlb(input);
+  logger?.debug(
+    `convertReplicadGeometriesToGltf: format=${format} nodeCount=${nodes.length} byteLength=${output.byteLength}`,
+  );
+
+  return output;
 }

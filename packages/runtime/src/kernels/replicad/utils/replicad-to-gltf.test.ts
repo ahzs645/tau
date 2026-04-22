@@ -1,7 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import { mock } from 'vitest-mock-extended';
 import { NodeIO } from '@gltf-transform/core';
 import { convertReplicadGeometriesToGltf } from '#kernels/replicad/utils/replicad-to-gltf.js';
 import type { GeometryReplicad } from '#kernels/replicad/replicad.types.js';
+import type { RuntimeLogger } from '#types/runtime-kernel.types.js';
 
 // =============================================================================
 // Fixtures
@@ -204,5 +206,37 @@ describe('convertReplicadGeometriesToGltf', () => {
 
     expect(material.getMetallicFactor()).toBeCloseTo(0, 2);
     expect(material.getRoughnessFactor()).toBeCloseTo(0.35, 2);
+  });
+
+  describe('logger instrumentation (R6)', () => {
+    it('should log a debug line with format/nodeCount/byteLength when a logger is supplied', () => {
+      const debug = vi.fn();
+      const logger = mock<RuntimeLogger>({ debug });
+      const geometry = createSimpleGeometry({ name: 'Logged' });
+
+      const glb = convertReplicadGeometriesToGltf([geometry], 'glb', logger);
+
+      expect(debug).toHaveBeenCalledTimes(1);
+      const message = debug.mock.calls[0]![0] as string;
+      expect(message).toContain('format=glb');
+      expect(message).toContain('nodeCount=1');
+      expect(message).toContain(`byteLength=${glb.byteLength}`);
+    });
+
+    it('should report nodeCount=0 when given an empty geometries array', () => {
+      const debug = vi.fn();
+      const logger = mock<RuntimeLogger>({ debug });
+
+      convertReplicadGeometriesToGltf([], 'glb', logger);
+
+      expect(debug).toHaveBeenCalledTimes(1);
+      expect(debug.mock.calls[0]![0] as string).toContain('nodeCount=0');
+    });
+
+    it('should not invoke any logger method when no logger is supplied', () => {
+      // No throw / no crash means the optional path is exercised; assertion
+      // is implicit (no logger to spy on). This locks in the optional contract.
+      expect(() => convertReplicadGeometriesToGltf([createSimpleGeometry()], 'glb')).not.toThrow();
+    });
   });
 });
