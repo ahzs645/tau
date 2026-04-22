@@ -1,6 +1,5 @@
 import type { KernelId } from '@taucad/types/constants';
 import type { ModelFamily } from '@taucad/chat';
-import spriteSvg from '#components/icons/generated/sprite.svg';
 import type { SvgIcons } from '#components/icons/generated/svg-icons.js';
 import manifoldPng from '#components/icons/raw/manifold.png?url';
 
@@ -62,9 +61,13 @@ export function SvgIcon({
   const aliasTarget = (iconAliases as Record<string, SvgIcons | undefined>)[id];
   const resolvedIconId: SvgIcons = aliasTarget ?? (id as SvgIcons);
 
+  // Same-document `<use>` reference: the sprite is inlined once at the app
+  // shell via `<SvgSpriteMount />` (mounted in `root.tsx`), so every browser
+  // (including Safari) materialises the symbol's `<defs>` correctly. See
+  // `docs/research/safari-svg-rendering-compatibility.md`.
   return (
     <svg {...properties} className={className} viewBox='0 0 56 56'>
-      <use href={`${spriteSvg}#${resolvedIconId}`} />
+      <use href={`#${resolvedIconId}`} />
     </svg>
   );
 }

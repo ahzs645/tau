@@ -31,6 +31,7 @@ import { KeyboardProvider } from '#hooks/use-keyboard.js';
 import { UnloadProvider } from '#hooks/use-flush-on-close.js';
 import { ChatSessionStoreProvider } from '#hooks/chat-session-store-provider.js';
 import { GlobalChatFlushGuard } from '#components/global-chat-flush-guard.js';
+import { SvgSpriteMount } from '#components/icons/svg-sprite-mount.js';
 
 export const links: LinksFunction = () => [...globalStylesLinks, ...webManifestLinks];
 
@@ -169,6 +170,7 @@ function LayoutDocument({
             __html: `window.ENV = ${JSON.stringify(env)}`,
           }}
         />
+        <SvgSpriteMount />
         {children}
         <ScrollRestoration />
         <Scripts />

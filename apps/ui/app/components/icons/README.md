@@ -1,19 +1,21 @@
 # SVG Icons
 
-SVG sprites are used to improve the user experience by packing all SVGs into a single statically
-served file, reducing total bundle size and improving caching performance.
+SVG icons are packed into a single sprite (`generated/sprite.svg`) and inlined once
+at the app shell via `<SvgSpriteMount />` (mounted in
+[`apps/ui/app/root.tsx`](../../root.tsx)). Every `<SvgIcon id="...">` then renders
+a same-document `<use href="#id">` reference, so all browsers — including Safari —
+correctly materialise the symbol's `<filter>`, `<mask>`, and `<linearGradient>`
+definitions.
 
-See:
-
-- https://www.npmjs.com/package/vite-svg-sprite-wrapper
-- https://benadam.me/thoughts/react-svg-sprites/
+The previous external `<use href="sprite.svg#id">` form silently dropped those
+`<defs>` in WebKit, breaking icons such as `opencascadejs`, `meta`, `autodesk`,
+and `cursor`. See [`docs/research/safari-svg-rendering-compatibility.md`](../../../../../docs/research/safari-svg-rendering-compatibility.md)
+for the root-cause analysis.
 
 ## Usage
 
-`<SvgIcon>` is a component that renders the icon using
-the SVG sprite, all svg props are passed through to the `<svg>` element.
-
-For example, to render the `kcl` icon, use:
+`<SvgIcon>` renders the icon by id; all SVG props are forwarded to the wrapper
+`<svg>` element.
 
 ```tsx
 <SvgIcon id='kcl' />
@@ -21,19 +23,26 @@ For example, to render the `kcl` icon, use:
 
 ## Raw Icons
 
-The `raw` directory contains the raw SVG icons. Simply add the SVG files to this directory and
-they will be automatically picked up by the SVG sprite generator, with the filename being the icon
-name used with `<SvgIcon id={iconName} />`.
+The `raw/` directory contains the source SVG icons. Add an SVG file there and it
+will be picked up by the SVG sprite generator, with the filename becoming the icon
+id used by `<SvgIcon id="iconName" />`.
 
 ## Generated Icons
 
-The `generated` directory contains the generated SVG icons using SVG sprites.
-DO NOT EDIT THESE FILES DIRECTLY.
+The `generated/` directory contains the build output of the sprite generator
+(`sprite.svg` + `svg-icons.d.ts`). DO NOT edit these files directly.
 
-These files should be checked into source control.
+These files are checked into source control. To refresh them after editing or
+adding a raw icon, flip `enableSpriteGeneration` to `true` in
+[`apps/ui/vite.config.ts`](../../../vite.config.ts), run a Vite build, then flip
+the flag back off and commit the regenerated artefacts.
 
 ## Notes
 
-- The size of the `sprite.svg` file should be checked periodically to ensure it is not too large,
-  ideally below 125kb. If it becomes larger than this, we should split the icons into multiple
-  sprites.
+- The sprite is inlined into the SSR HTML, so its raw size matters. Keep
+  `sprite.svg` below ~125 KB (compressed in transit, but uncompressed in the
+  initial document). If it grows further, split icons into multiple sprites or
+  move large/rare icons to lazy-loaded React components.
+- For raster brand assets (e.g. `manifold.png`), `<SvgIcon>` already supports a
+  PNG fallback via the `pngIcons` map — use it when an asset cannot be expressed
+  cleanly as path data.
