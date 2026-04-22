@@ -1,16 +1,31 @@
-# Netlify configuration for Tau UI (production site: `taucad-prod`)
+# Netlify configuration for Tau UI (production site: `taucad-prod`, https://tau.new)
 #
-# AUTHORITATIVE for the production Netlify site. By convention, dashboard
-# env-var overrides are forbidden for endpoint URLs and NODE_ENV — change
-# them here in source so a PR review covers the full env diff. Only
-# **secrets** that cannot be committed (e.g. POSTHOG_API_KEY,
-# SENTRY_AUTH_TOKEN, third-party keys) live in the Netlify dashboard.
+# Authoritative for **build-time** configuration only. Per Netlify's
+# environment-variable model, values declared in `[context.*.environment]` are
+# injected during the build container's lifetime and ARE NOT visible to
+# Netlify Functions (SSR) at request time. Because this app SSRs via React
+# Router on Netlify Functions, every endpoint URL we read from `process.env`
+# inside server code (apps/ui/app/environment.config.ts) MUST also exist as a
+# dashboard env var with `runtime` (and `functions`) scope, or SSR will see
+# `undefined` and BetterAuth/etc. will throw.
+#
+# Convention:
+#   - **Endpoint URLs** (TAU_API_URL / TAU_WEBSOCKET_URL / TAU_FRONTEND_URL)
+#     and **NODE_ENV** are duplicated here AND in the dashboard. The TOML
+#     entries cover the build container; the dashboard entries cover SSR.
+#     Keep them in sync; review both together when changing endpoints.
+#   - **Secrets** (POSTHOG_API_KEY, SENTRY_AUTH_TOKEN, …) live ONLY in the
+#     dashboard.
+#   - **NODE_ENV** in the dashboard MUST be scoped to `functions,runtime`
+#     ONLY — never to `builds`. Setting `NODE_ENV=production` at build time
+#     makes pnpm skip devDependencies, breaking the Vite build.
 #
 # This config is invoked by `.github/workflows/prod-deploy-ui.yml` via
-# `netlify deploy --prod --config apps/ui/netlify.prod.toml`. The site has
-# `skip_automatic_builds: true` (set by `scripts/netlify-provision-prod.sh`),
-# so there is no `[context.deploy-preview]` or `[context.branch-deploy]` —
-# the only deploy path is the manual `workflow_dispatch`.
+# `netlify deploy --prod --config apps/ui/netlify.prod.toml`. The
+# `taucad-prod` site has no Git integration wired (provisioning script in
+# `scripts/netlify-provision-prod.sh` creates it bare), so auto-builds are
+# inherently impossible — the only deploy path is the manual
+# `workflow_dispatch`.
 #
 # Staging uses `apps/ui/netlify.toml` (default Netlify config), wired to the
 # `taucad` site via the Netlify GitHub integration. Both files share the

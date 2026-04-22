@@ -1,13 +1,27 @@
-# Netlify configuration for Tau UI (staging site: `taucad`)
+# Netlify configuration for Tau UI (staging site: `taucad`, https://taucad.dev)
 #
-# AUTHORITATIVE for the staging Netlify site. By convention, dashboard env-var
-# overrides are forbidden for endpoint URLs and NODE_ENV — change them here in
-# source so a PR review covers the full env diff. Only **secrets** that cannot
-# be committed (e.g. POSTHOG_API_KEY, SENTRY_AUTH_TOKEN, third-party keys) live
-# in the Netlify dashboard.
+# Authoritative for **build-time** configuration only. Per Netlify's
+# environment-variable model, values declared in `[context.*.environment]` are
+# injected during the build container's lifetime and ARE NOT visible to
+# Netlify Functions (SSR) at request time. Because this app SSRs via React
+# Router on Netlify Functions, every endpoint URL we read from `process.env`
+# inside server code (apps/ui/app/environment.config.ts) MUST also exist as a
+# dashboard env var with `runtime` (and `functions`) scope, or SSR will see
+# `undefined` and BetterAuth/etc. will throw.
 #
-# The production Netlify site (`taucad-prod`) injects prod endpoints via the
-# sibling `apps/ui/netlify.prod.toml`, invoked from the manual
+# Convention:
+#   - **Endpoint URLs** (TAU_API_URL / TAU_WEBSOCKET_URL / TAU_FRONTEND_URL)
+#     and **NODE_ENV** are duplicated here AND in the dashboard. The TOML
+#     entries cover the build container; the dashboard entries cover SSR.
+#     Keep them in sync; review both together when changing endpoints.
+#   - **Secrets** (POSTHOG_API_KEY, SENTRY_AUTH_TOKEN, …) live ONLY in the
+#     dashboard.
+#   - **NODE_ENV** in the dashboard MUST be scoped to `functions,runtime`
+#     ONLY — never to `builds`. Setting `NODE_ENV=production` at build time
+#     makes pnpm skip devDependencies, breaking the Vite build.
+#
+# The production Netlify site (`taucad-prod`, https://tau.new) uses the sibling
+# `apps/ui/netlify.prod.toml`, invoked from the manual
 # `.github/workflows/prod-deploy-ui.yml` workflow with
 # `netlify deploy --prod --config apps/ui/netlify.prod.toml`. Both files share
 # the same `[build]` command and `[[headers]]` block so security posture stays
