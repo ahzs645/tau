@@ -682,6 +682,131 @@ describe('messageContentSanitizerMiddleware', () => {
     });
   });
 
+  describe('partial-input output-error parts (interrupted tools)', () => {
+    /**
+     * The sanitizer operates on the provider-agnostic LangChain BaseMessage shape after
+     * `toBaseMessages` has flattened MyUIMessage parts. Each test below mirrors the wire
+     * mental model of one provider so we can assert that the orphaned-tool insertion produces
+     * a tool_call/tool_result pair the provider will accept (Finding 4 in the research doc).
+     */
+    it('should pair Anthropic tool_use with synthetic tool_result preserving partial args', async () => {
+      const messages: BaseMessage[] = [
+        new HumanMessage('Inspect main.ts.'),
+        new AIMessage({
+          content: [
+            { type: 'text', text: 'Reading the file…' },
+            {
+              type: 'tool_use',
+              id: 'toolu_anthropic_partial',
+              name: 'read_file',
+              input: { limit: 15 },
+            },
+          ],
+          // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
+          tool_calls: [{ id: 'toolu_anthropic_partial', name: 'read_file', args: { limit: 15 } }],
+        }),
+        new HumanMessage('continue'),
+      ];
+
+      await invokeWrapModelCall(messageContentSanitizerMiddleware, { messages }, handler);
+
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
+      const synthetic = request.messages.find(
+        (message): message is ToolMessage =>
+          ToolMessage.isInstance(message) && message.tool_call_id === 'toolu_anthropic_partial',
+      );
+      if (!synthetic) {
+        throw new Error('expected synthetic ToolMessage paired with Anthropic tool_use');
+      }
+      expect(synthetic.name).toBe('read_file');
+      expect(synthetic.status).toBe('error');
+      const content = JSON.parse(synthetic.content as string) as Record<string, unknown>;
+      expect(content).toMatchObject({
+        errorCode: 'USER_INTERRUPTED',
+        toolName: 'read_file',
+        toolCallId: 'toolu_anthropic_partial',
+      });
+    });
+
+    it('should pair Vertex functionCall with synthetic functionResponse preserving partial args', async () => {
+      const messages: BaseMessage[] = [
+        new HumanMessage('Run the search.'),
+        new AIMessage({
+          content: '',
+          // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
+          tool_calls: [{ id: 'fn_vertex_partial', name: 'web_search', args: { query: 'gears' } }],
+          // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
+          additional_kwargs: {
+            // eslint-disable-next-line @typescript-eslint/naming-convention -- Vertex wire field uses snake_case
+            function_call: { name: 'web_search', arguments: '{"query":"gears"}' },
+          },
+        }),
+        new HumanMessage('actually never mind'),
+      ];
+
+      await invokeWrapModelCall(messageContentSanitizerMiddleware, { messages }, handler);
+
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
+      const synthetic = request.messages.find(
+        (message): message is ToolMessage =>
+          ToolMessage.isInstance(message) && message.tool_call_id === 'fn_vertex_partial',
+      );
+      if (!synthetic) {
+        throw new Error('expected synthetic ToolMessage paired with Vertex functionCall');
+      }
+      expect(synthetic.name).toBe('web_search');
+      expect(synthetic.status).toBe('error');
+      const content = JSON.parse(synthetic.content as string) as Record<string, unknown>;
+      expect(content).toMatchObject({
+        errorCode: 'USER_INTERRUPTED',
+        toolName: 'web_search',
+        toolCallId: 'fn_vertex_partial',
+      });
+    });
+
+    it('should pair OpenAI tool_calls with synthetic tool message preserving partial args', async () => {
+      const messages: BaseMessage[] = [
+        new HumanMessage('Open file.'),
+        new AIMessage({
+          content: '',
+          // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
+          tool_calls: [{ id: 'call_openai_partial', name: 'read_file', args: { limit: 15 } }],
+          // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
+          additional_kwargs: {
+            // eslint-disable-next-line @typescript-eslint/naming-convention -- OpenAI wire field uses snake_case
+            tool_calls: [
+              {
+                id: 'call_openai_partial',
+                type: 'function',
+                function: { name: 'read_file', arguments: '{"limit":15}' },
+              },
+            ],
+          },
+        }),
+        new HumanMessage('continue'),
+      ];
+
+      await invokeWrapModelCall(messageContentSanitizerMiddleware, { messages }, handler);
+
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
+      const synthetic = request.messages.find(
+        (message): message is ToolMessage =>
+          ToolMessage.isInstance(message) && message.tool_call_id === 'call_openai_partial',
+      );
+      if (!synthetic) {
+        throw new Error('expected synthetic ToolMessage paired with OpenAI tool_call');
+      }
+      expect(synthetic.name).toBe('read_file');
+      expect(synthetic.status).toBe('error');
+      const content = JSON.parse(synthetic.content as string) as Record<string, unknown>;
+      expect(content).toMatchObject({
+        errorCode: 'USER_INTERRUPTED',
+        toolName: 'read_file',
+        toolCallId: 'call_openai_partial',
+      });
+    });
+  });
+
   describe('edge cases', () => {
     it('should handle empty messages array', async () => {
       const messages: BaseMessage[] = [];
