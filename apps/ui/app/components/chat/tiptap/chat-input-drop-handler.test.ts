@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
+import { mock } from 'vitest-mock-extended';
 import { tauEditorPanelDragMime, tauFileDragMime, tauViewerPanelDragMime } from '@taucad/types/constants';
-import { ChatInputDropHandler } from '#components/chat/tiptap/chat-input-drop-handler.js';
+import { handleChatInputDrop } from '#components/chat/tiptap/chat-input-drop-handler.js';
 
 /**
  * The chat textarea container's React `onDrop` handler is the single source of
@@ -11,42 +12,26 @@ import { ChatInputDropHandler } from '#components/chat/tiptap/chat-input-drop-ha
  *  - return `true` (and `preventDefault()`) when a custom MIME is present so
  *    ProseMirror does not eagerly insert garbage text from `dataTransfer`.
  */
-describe('ChatInputDropHandler — custom-mime passthrough contract', () => {
-  type ProseMirrorPlugin = {
-    readonly props: {
-      readonly handleDrop?: (view: unknown, event: DragEvent) => boolean | undefined;
-    };
-  };
+describe('handleChatInputDrop — custom-mime passthrough contract', () => {
+  const buildEvent = (mimeTypes: readonly string[]): DragEvent =>
+    mock<DragEvent>({
+      dataTransfer: mock<DataTransfer>({ types: [...mimeTypes] }),
+      preventDefault: vi.fn(),
+    });
 
-  const getHandleDrop = (): ((view: unknown, event: DragEvent) => boolean | undefined) => {
-    const extension = ChatInputDropHandler;
-    const plugins = extension.config.addProseMirrorPlugins?.call({} as never) ?? [];
-    const plugin = plugins[0] as unknown as ProseMirrorPlugin | undefined;
-    if (!plugin?.props.handleDrop) {
-      throw new Error('ChatInputDropHandler is missing handleDrop');
-    }
-    return plugin.props.handleDrop;
-  };
+  it('should return false when no DataTransfer is present', () => {
+    // DragEvent.dataTransfer is `DataTransfer | null` per DOM spec; this
+    // branch verifies the early-return guard for that legitimate null case.
+    const event = mock<DragEvent>({ dataTransfer: null, preventDefault: vi.fn() });
 
-  const buildEvent = (mimeTypes: readonly string[]): DragEvent => {
-    const preventDefault = vi.fn();
-    const dataTransfer = {
-      types: mimeTypes,
-      getData: (): string => '',
-    } as unknown as DataTransfer;
-    return { dataTransfer, preventDefault } as unknown as DragEvent;
-  };
-
-  it('returns false when no DataTransfer is present', () => {
-    const handleDrop = getHandleDrop();
-    const event = { dataTransfer: null } as unknown as DragEvent;
-    expect(handleDrop({}, event)).toBe(false);
+    expect(handleChatInputDrop(undefined, event)).toBe(false);
+    expect(event.preventDefault).not.toHaveBeenCalled();
   });
 
-  it('returns false for plain text drops (passthrough to ProseMirror default)', () => {
-    const handleDrop = getHandleDrop();
+  it('should return false for plain text drops (passthrough to ProseMirror default)', () => {
     const event = buildEvent(['text/plain']);
-    expect(handleDrop({}, event)).toBe(false);
+
+    expect(handleChatInputDrop(undefined, event)).toBe(false);
     expect(event.preventDefault).not.toHaveBeenCalled();
   });
 
@@ -54,11 +39,10 @@ describe('ChatInputDropHandler — custom-mime passthrough contract', () => {
     ['viewer panel mime', tauViewerPanelDragMime],
     ['editor panel mime', tauEditorPanelDragMime],
     ['file-tree mime', tauFileDragMime],
-  ])('intercepts %s and prevents default without inserting nodes', (_label, mime) => {
-    const handleDrop = getHandleDrop();
+  ])('should intercept %s and prevent default without inserting nodes', (_label, mime) => {
     const event = buildEvent([mime]);
 
-    const result = handleDrop({}, event);
+    const result = handleChatInputDrop(undefined, event);
 
     expect(result).toBe(true);
     expect(event.preventDefault).toHaveBeenCalledOnce();
