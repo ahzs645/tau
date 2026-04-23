@@ -8,7 +8,7 @@
  * to a polling/timeout-based approach.
  */
 
-import { waitAsyncPollIntervalMs } from '#framework/runtime-framework.constants.js';
+import { waitAsyncPollInterval } from '#framework/runtime-framework.constants.js';
 
 /**
  * Wait for a slot in a SharedArrayBuffer to change from an expected value.
@@ -28,7 +28,7 @@ export async function waitForSlotChange(view: Int32Array, slot: number, expected
     }
   } else {
     await new Promise<void>((resolve) => {
-      setTimeout(resolve, waitAsyncPollIntervalMs);
+      setTimeout(resolve, waitAsyncPollInterval);
     });
   }
 }

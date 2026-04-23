@@ -24,15 +24,16 @@ type PendingEvent = {
  * @public
  */
 export type CoalescerOptions = {
-  /** Window in milliseconds for coalescing events. Default: 50. */
-  windowMs?: number;
+  /** Window for coalescing events. Default: 50. Milliseconds. */
+  coalescingWindow?: number;
   /** Maximum queue depth before emitting overflow. Default: 10,000. */
   maxQueueDepth?: number;
   /** Called when queue depth is exceeded. */
   onOverflow?: () => void;
 };
 
-const defaultWindowMs = 50;
+/** Milliseconds. */
+const defaultCoalescingWindow = 50;
 const defaultMaxQueueDepth = 10_000;
 
 /**
@@ -41,7 +42,8 @@ const defaultMaxQueueDepth = 10_000;
  * @public
  */
 export class EventCoalescer {
-  private readonly _windowMs: number;
+  /** Milliseconds. */
+  private readonly _coalescingWindow: number;
   private readonly _maxQueueDepth: number;
   private readonly _onOverflow?: () => void;
   private readonly _deliverCallback: (events: ChangeEvent[]) => void;
@@ -56,7 +58,7 @@ export class EventCoalescer {
    */
   public constructor(deliverCallback: (events: ChangeEvent[]) => void, options?: CoalescerOptions) {
     this._deliverCallback = deliverCallback;
-    this._windowMs = options?.windowMs ?? defaultWindowMs;
+    this._coalescingWindow = options?.coalescingWindow ?? defaultCoalescingWindow;
     this._maxQueueDepth = options?.maxQueueDepth ?? defaultMaxQueueDepth;
     this._onOverflow = options?.onOverflow;
   }
@@ -84,7 +86,7 @@ export class EventCoalescer {
     }
     this._timer = setTimeout(() => {
       this._flush();
-    }, this._windowMs);
+    }, this._coalescingWindow);
   }
 
   /** Immediately flush any pending events (e.g. on dispose). */

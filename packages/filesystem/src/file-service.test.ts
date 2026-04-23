@@ -19,18 +19,18 @@ const decoder = new TextDecoder();
  * timer-driven side effects (e.g. EventCoalescer flushes) without coupling
  * the test to a specific wall-clock duration. Pure scheduler-bounded waits
  * are inherently flaky on loaded CI runners; this loop is bounded by
- * `timeoutMs` instead, so a slow scheduler delays the test rather than
- * failing it.
+ * `timeout` (milliseconds) instead, so a slow scheduler delays the test rather
+ * than failing it.
  */
-async function waitFor(predicate: () => boolean, timeoutMs = 2000, pollMs = 5): Promise<void> {
+async function waitFor(predicate: () => boolean, waitTimeout = 2000, pollInterval = 5): Promise<void> {
   const start = Date.now();
   while (!predicate()) {
-    if (Date.now() - start > timeoutMs) {
-      throw new Error(`waitFor timed out after ${timeoutMs}ms`);
+    if (Date.now() - start > waitTimeout) {
+      throw new Error(`waitFor timed out after ${waitTimeout}ms`);
     }
     // oxlint-disable-next-line no-await-in-loop -- Sequential execution is intentional for polling
     await new Promise((resolve) => {
-      setTimeout(resolve, pollMs);
+      setTimeout(resolve, pollInterval);
     });
   }
 }

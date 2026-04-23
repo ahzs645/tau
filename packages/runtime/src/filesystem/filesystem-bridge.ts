@@ -16,7 +16,8 @@ import { createBridgeServer, catchMessages } from '#framework/runtime-filesystem
 import { workerReadyMessageType } from '#framework/runtime-framework.constants.js';
 
 const defaultBridgeMessageType = 'connect';
-const defaultUiCoalescingWindowMs = 500;
+/** Milliseconds. */
+const defaultUiCoalescingWindow = 500;
 
 /**
  * Minimal interface for an event coalescer that batches ChangeEvents
@@ -37,7 +38,11 @@ export type ChangeEventCoalescer = {
  * to all connected bridge ports) and the configured coalescing window.
  * @public
  */
-export type CoalescerFactory = (deliver: (events: ChangeEvent[]) => void, windowMs: number) => ChangeEventCoalescer;
+export type CoalescerFactory = (
+  deliver: (events: ChangeEvent[]) => void,
+  /** Coalescing window. Milliseconds. */
+  coalescingWindow: number,
+) => ChangeEventCoalescer;
 
 /**
  * Minimal interface for a throttled worker that delivers events in chunks.
@@ -67,8 +72,8 @@ export type ThrottledWorkerFactory = (handler: (chunk: ChangeEvent[]) => void) =
  */
 export type FileSystemBridgeOptions = {
   messageType?: string;
-  /** Coalescing window for UI-bound fileChanged events (default: 500ms). */
-  uiCoalescingWindowMs?: number;
+  /** Coalescing window for UI-bound fileChanged events (default: 500). Milliseconds. */
+  uiCoalescingWindow?: number;
   /**
    * Factory for creating a change event coalescer. When provided, events
    * from `changeEventBus` are batched before broadcasting to bridge clients.
@@ -160,10 +165,7 @@ export function exposeFileSystem<T extends StringKeyedObject>(
 
   let coalescer: ChangeEventCoalescer | undefined;
   if (options?.createCoalescer) {
-    coalescer = options.createCoalescer(
-      deliverFromCoalescer,
-      options.uiCoalescingWindowMs ?? defaultUiCoalescingWindowMs,
-    );
+    coalescer = options.createCoalescer(deliverFromCoalescer, options.uiCoalescingWindow ?? defaultUiCoalescingWindow);
   }
 
   const unsubscribeEventBus = options?.changeEventBus?.subscribe((event) => {

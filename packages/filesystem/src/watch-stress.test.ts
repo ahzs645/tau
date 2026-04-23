@@ -230,13 +230,13 @@ describe('Watch event latency measurement', () => {
   });
 
   it('should bound coalescer window at configured ms', () => {
-    const windowMs = 50;
+    const coalescingWindow = 50;
     const deliver = vi.fn();
-    const coalescer = new EventCoalescer(deliver, { windowMs });
+    const coalescer = new EventCoalescer(deliver, { coalescingWindow });
 
     coalescer.push(written('/test.ts'));
 
-    vi.advanceTimersByTime(windowMs - 1);
+    vi.advanceTimersByTime(coalescingWindow - 1);
     expect(deliver).not.toHaveBeenCalled();
 
     vi.advanceTimersByTime(1);
@@ -246,9 +246,9 @@ describe('Watch event latency measurement', () => {
   });
 
   it('should batch multiple events within window into one delivery', () => {
-    const windowMs = 50;
+    const coalescingWindow = 50;
     const deliveries: ChangeEvent[][] = [];
-    const coalescer = new EventCoalescer((events) => deliveries.push([...events]), { windowMs });
+    const coalescer = new EventCoalescer((events) => deliveries.push([...events]), { coalescingWindow });
 
     coalescer.push(written('/a.ts'));
     vi.advanceTimersByTime(10);
@@ -256,7 +256,7 @@ describe('Watch event latency measurement', () => {
     vi.advanceTimersByTime(10);
     coalescer.push(written('/c.ts'));
 
-    vi.advanceTimersByTime(windowMs);
+    vi.advanceTimersByTime(coalescingWindow);
     expect(deliveries.length).toBe(1);
     expect(deliveries[0]!.length).toBe(3);
 

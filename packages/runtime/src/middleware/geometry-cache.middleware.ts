@@ -127,20 +127,20 @@ function hasVideoStreamGeometry(geometries: readonly GeometryResponse[]): boolea
 
 /**
  * Clean up old cache entries to prevent unbounded cache growth.
- * Deletes entries older than maxAgeMs and keeps only maxEntries most recent files.
+ * Deletes entries older than `maxAge` and keeps only `maxEntries` most recent files.
  */
 async function cleanupOldCacheEntries({
   filesystem,
   cacheDirectory,
-  maxAgeMs,
+  maxAge,
   maxEntries,
 }: {
   /** The filesystem for file operations */
   filesystem: RuntimeFileSystem;
   /** The cache directory path */
   cacheDirectory: string;
-  /** Maximum age in milliseconds for cache entries */
-  maxAgeMs: number;
+  /** Maximum age for cache entries. Milliseconds. */
+  maxAge: number;
   /** Maximum number of cache entries to keep */
   maxEntries: number;
 }): Promise<void> {
@@ -157,10 +157,10 @@ async function cleanupOldCacheEntries({
     const now = Date.now();
     const filesToDelete: string[] = [];
 
-    // First pass: identify files older than maxAgeMs
+    // First pass: identify files older than maxAge
     for (const file of cacheFiles) {
       const age = now - file.mtimeMs;
-      if (age > maxAgeMs) {
+      if (age > maxAge) {
         filesToDelete.push(file.path);
       }
     }
@@ -208,7 +208,8 @@ export const geometryCacheMiddleware = defineMiddleware({
 
   optionsSchema: z.object({
     maxEntries: z.number().default(100),
-    maxAgeMs: z.number().default(7 * 24 * 60 * 60 * 1000),
+    /** Maximum age for cache entries. Milliseconds. */
+    maxAge: z.number().default(7 * 24 * 60 * 60 * 1000),
   }),
 
   async wrapCreateGeometry(input, handler, { logger, filesystem, dependencyHash, options }) {
@@ -256,7 +257,7 @@ export const geometryCacheMiddleware = defineMiddleware({
           await cleanupOldCacheEntries({
             filesystem,
             cacheDirectory,
-            maxAgeMs: options.maxAgeMs,
+            maxAge: options.maxAge,
             maxEntries: options.maxEntries,
           });
         } catch (error) {

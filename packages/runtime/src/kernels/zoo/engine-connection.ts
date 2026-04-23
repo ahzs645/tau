@@ -27,7 +27,7 @@ export type WebSocketResponse = Models['WebSocketResponse_type'];
 type PendingCommand = {
   resolve: (value: unknown) => void;
   reject: (error: unknown) => void;
-  timeout: NodeJS.Timeout;
+  timeoutTimer: NodeJS.Timeout;
 };
 
 type InitializationContext = {
@@ -244,7 +244,7 @@ export class EngineConnection {
 
     // Clear all pending commands
     for (const [_id, pending] of this.pendingCommands) {
-      clearTimeout(pending.timeout);
+      clearTimeout(pending.timeoutTimer);
       pending.reject(KclError.simple({ kind: 'io', message: 'Connection closed' }));
     }
 
@@ -402,7 +402,7 @@ export class EngineConnection {
     this.pendingCommands.set(commandId, {
       resolve,
       reject,
-      timeout: setTimeout(() => {
+      timeoutTimer: setTimeout(() => {
         this.pendingCommands.delete(commandId);
         reject(
           KclError.simple({
@@ -480,7 +480,7 @@ export class EngineConnection {
     if (message.request_id) {
       const pending = this.pendingCommands.get(message.request_id);
       if (pending) {
-        clearTimeout(pending.timeout);
+        clearTimeout(pending.timeoutTimer);
         this.pendingCommands.delete(message.request_id);
 
         if (message.success) {
@@ -544,7 +544,7 @@ export class EngineConnection {
         const pendingCommand = this.pendingCommands.get(commandId);
         if (pendingCommand) {
           log.debug(`Resolving batch command: ${commandId}`);
-          clearTimeout(pendingCommand.timeout);
+          clearTimeout(pendingCommand.timeoutTimer);
           this.pendingCommands.delete(commandId);
           pendingCommand.resolve(individualResponse);
         }
@@ -555,7 +555,7 @@ export class EngineConnection {
         const batchCommand = this.pendingCommands.get(message.request_id);
         if (batchCommand) {
           log.debug(`Resolving batch request: ${message.request_id}`);
-          clearTimeout(batchCommand.timeout);
+          clearTimeout(batchCommand.timeoutTimer);
           this.pendingCommands.delete(message.request_id);
           batchCommand.resolve(message);
         } else {

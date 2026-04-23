@@ -91,9 +91,15 @@ export type KernelMiddlewareRuntime<
    * Idempotent — re-registering the same path updates the debounce value.
    *
    * @param absolutePath - Absolute filesystem path to watch
-   * @param options - Optional configuration with debounceMs override
+   * @param options - Optional configuration with `watchDebounce` (milliseconds) override
    */
-  registerWatchPath(absolutePath: string, options?: { debounceMs?: number }): void;
+  registerWatchPath(
+    absolutePath: string,
+    options?: {
+      /** Milliseconds. */
+      watchDebounce?: number;
+    },
+  ): void;
 };
 
 // =============================================================================

@@ -120,7 +120,7 @@ describe('EventCoalescer (timed)', () => {
 
   it('should deliver events after the window elapses', () => {
     const deliver = vi.fn();
-    const coalescer = new EventCoalescer(deliver, { windowMs: 50 });
+    const coalescer = new EventCoalescer(deliver, { coalescingWindow: 50 });
 
     coalescer.push(written('/a.txt'));
     expect(deliver).not.toHaveBeenCalled();
@@ -134,7 +134,7 @@ describe('EventCoalescer (timed)', () => {
 
   it('should coalesce events within the same window', () => {
     const deliver = vi.fn();
-    const coalescer = new EventCoalescer(deliver, { windowMs: 50 });
+    const coalescer = new EventCoalescer(deliver, { coalescingWindow: 50 });
 
     coalescer.push(written('/a.txt'));
     coalescer.push(written('/a.txt'));
@@ -148,7 +148,7 @@ describe('EventCoalescer (timed)', () => {
 
   it('should cancel written+deleted within same window', () => {
     const deliver = vi.fn();
-    const coalescer = new EventCoalescer(deliver, { windowMs: 50 });
+    const coalescer = new EventCoalescer(deliver, { coalescingWindow: 50 });
 
     coalescer.push(written('/a.txt'));
     coalescer.push(deleted('/a.txt'));
@@ -161,7 +161,7 @@ describe('EventCoalescer (timed)', () => {
 
   it('should deliver immediately when flush() is called', () => {
     const deliver = vi.fn();
-    const coalescer = new EventCoalescer(deliver, { windowMs: 500 });
+    const coalescer = new EventCoalescer(deliver, { coalescingWindow: 500 });
 
     coalescer.push(written('/a.txt'));
     coalescer.flush();
@@ -209,7 +209,7 @@ describe('EventCoalescer (timed)', () => {
 
   it('should prevent further delivery after dispose()', () => {
     const deliver = vi.fn();
-    const coalescer = new EventCoalescer(deliver, { windowMs: 50 });
+    const coalescer = new EventCoalescer(deliver, { coalescingWindow: 50 });
 
     coalescer.push(written('/a.txt'));
     coalescer.dispose();
@@ -220,7 +220,7 @@ describe('EventCoalescer (timed)', () => {
 
   it('should process separate windows independently', () => {
     const deliver = vi.fn();
-    const coalescer = new EventCoalescer(deliver, { windowMs: 50 });
+    const coalescer = new EventCoalescer(deliver, { coalescingWindow: 50 });
 
     coalescer.push(written('/a.txt'));
     vi.advanceTimersByTime(50);
@@ -236,7 +236,7 @@ describe('EventCoalescer (timed)', () => {
 
   it('should reset timer on each push (sliding window)', () => {
     const deliver = vi.fn();
-    const coalescer = new EventCoalescer(deliver, { windowMs: 75 });
+    const coalescer = new EventCoalescer(deliver, { coalescingWindow: 75 });
 
     coalescer.push(written('/a.txt'));
     vi.advanceTimersByTime(50);
@@ -253,11 +253,11 @@ describe('EventCoalescer (timed)', () => {
     coalescer.dispose();
   });
 
-  it('should respect configurable windowMs for different tiers', () => {
+  it('should respect configurable window for different tiers', () => {
     const kernelDeliver = vi.fn();
     const uiDeliver = vi.fn();
-    const kernelCoalescer = new EventCoalescer(kernelDeliver, { windowMs: 75 });
-    const uiCoalescer = new EventCoalescer(uiDeliver, { windowMs: 500 });
+    const kernelCoalescer = new EventCoalescer(kernelDeliver, { coalescingWindow: 75 });
+    const uiCoalescer = new EventCoalescer(uiDeliver, { coalescingWindow: 500 });
 
     kernelCoalescer.push(written('/a.txt'));
     uiCoalescer.push(written('/a.txt'));

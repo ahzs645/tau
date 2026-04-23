@@ -19,7 +19,8 @@ import type { SharedPool } from '@taucad/memory';
 import type { MountTable, MountOptions, MountResolution } from '#mount-table.js';
 import { parentDirectory, joinPath, normalizePath } from '@taucad/utils/path';
 
-const kernelCoalescingWindowMs = 75;
+/** Milliseconds. */
+const kernelCoalescingWindow = 75;
 
 function toFileStat(stat: ProviderFileStat): FileStat {
   return {
@@ -76,7 +77,7 @@ export class FileService {
     this._resourceQueue = options.resourceQueue;
     this._treeCache = options.treeCache;
     this._eventBus = options.eventBus;
-    this._watchRegistry = new WatchRegistry(options.eventBus, { windowMs: kernelCoalescingWindowMs });
+    this._watchRegistry = new WatchRegistry(options.eventBus, { coalescingWindow: kernelCoalescingWindow });
     this._crossTabCoordinator = options.crossTabCoordinator ?? new CrossTabCoordinator();
     this._filePool = options.filePool;
     this._mountTable = options.mountTable;

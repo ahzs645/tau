@@ -504,9 +504,9 @@ describe('WatchRegistry', () => {
     });
   });
 
-  describe('windowMs propagation', () => {
-    it('should pass windowMs to the underlying EventCoalescer', () => {
-      const slowRegistry = new WatchRegistry(bus, { windowMs: 500 });
+  describe('window propagation', () => {
+    it('should pass window to the underlying EventCoalescer', () => {
+      const slowRegistry = new WatchRegistry(bus, { coalescingWindow: 500 });
       const handler = vi.fn();
       const request: WatchRequest = { paths: ['/src'], recursive: true };
 
@@ -523,8 +523,8 @@ describe('WatchRegistry', () => {
     });
 
     it('should use different coalescing windows for different registry instances', () => {
-      const kernelRegistry = new WatchRegistry(bus, { windowMs: 75 });
-      const uiRegistry = new WatchRegistry(bus, { windowMs: 500 });
+      const kernelRegistry = new WatchRegistry(bus, { coalescingWindow: 75 });
+      const uiRegistry = new WatchRegistry(bus, { coalescingWindow: 500 });
       const kernelHandler = vi.fn();
       const uiHandler = vi.fn();
 

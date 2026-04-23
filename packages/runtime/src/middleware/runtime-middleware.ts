@@ -258,7 +258,13 @@ export type CreateMiddlewareRuntimeOptions = {
   /** Pre-created logger to avoid closure allocation per operation */
   logger?: RuntimeLogger;
   /** Callback for middleware to register additional watch paths with optional debounce tiers */
-  registerWatchPath?: (absolutePath: string, options?: { debounceMs?: number }) => void;
+  registerWatchPath?: (
+    absolutePath: string,
+    options?: {
+      /** Milliseconds. */
+      watchDebounce?: number;
+    },
+  ) => void;
 };
 
 /**

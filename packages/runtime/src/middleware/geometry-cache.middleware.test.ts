@@ -41,7 +41,7 @@ function createSerializedCacheContent(
  * Create input and runtime for cache testing.
  */
 
-type GeometryCacheOptions = { maxEntries: number; maxAgeMs: number };
+type GeometryCacheOptions = { maxEntries: number; maxAge: number };
 
 function createCacheTestContext(options?: {
   cacheExists?: boolean;
@@ -70,7 +70,7 @@ function createCacheTestContext(options?: {
     dependencyHash: options?.dependencyHash ?? 'a'.repeat(64),
     options: options?.cacheOptions ?? {
       maxEntries: 100,
-      maxAgeMs: 7 * 24 * 60 * 60 * 1000,
+      maxAge: 7 * 24 * 60 * 60 * 1000,
     },
   });
 
@@ -158,7 +158,7 @@ describe('geometryCacheMiddleware', () => {
           },
           dependencies: createMockDependencies(),
           dependencyHash: 'a'.repeat(64),
-          options: { maxEntries: 100, maxAgeMs: 7 * 24 * 60 * 60 * 1000 },
+          options: { maxEntries: 100, maxAge: 7 * 24 * 60 * 60 * 1000 },
         });
 
         const input = createMockInput();
@@ -540,7 +540,7 @@ describe('geometryCacheMiddleware', () => {
         },
         dependencies: createMockDependencies(),
         dependencyHash,
-        options: { maxEntries: 100, maxAgeMs: 7 * 24 * 60 * 60 * 1000 },
+        options: { maxEntries: 100, maxAge: 7 * 24 * 60 * 60 * 1000 },
       });
 
       const input = createMockInput();
@@ -568,7 +568,7 @@ describe('geometryCacheMiddleware', () => {
         },
         dependencies: createMockDependencies([{ type: 'parameter', parameters: { key: 'newParams123' } }]),
         dependencyHash,
-        options: { maxEntries: 100, maxAgeMs: 7 * 24 * 60 * 60 * 1000 },
+        options: { maxEntries: 100, maxAge: 7 * 24 * 60 * 60 * 1000 },
       });
 
       const input = createMockInput();
@@ -596,7 +596,7 @@ describe('geometryCacheMiddleware', () => {
         },
         dependencies: createMockDependencies([{ type: 'parameter', parameters: { key: 'sameParams' } }]),
         dependencyHash,
-        options: { maxEntries: 100, maxAgeMs: 7 * 24 * 60 * 60 * 1000 },
+        options: { maxEntries: 100, maxAge: 7 * 24 * 60 * 60 * 1000 },
       });
 
       const input = createMockInput();
@@ -766,7 +766,7 @@ describe('geometryCacheMiddleware', () => {
         },
         dependencies: createMockDependencies(),
         dependencyHash: 'a'.repeat(64),
-        options: { maxEntries: 100, maxAgeMs: 7 * 24 * 60 * 60 * 1000 },
+        options: { maxEntries: 100, maxAge: 7 * 24 * 60 * 60 * 1000 },
       });
       const input = createMockInput();
       const handler = createMockCreateGeometryHandler();
