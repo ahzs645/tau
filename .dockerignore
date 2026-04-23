@@ -18,6 +18,15 @@ apps/api/reports
 packages/runtime/reports
 packages/runtime/occt-reports
 
+# -- WASM experiment / benchmark / packaging artifacts (~2 GB locally) --------
+# Keep root-level tarballs/*.tgz (referenced by package.json file: deps); only
+# exclude the experimental subdirectories produced by scripts/wasm-experiment.sh
+# and the package-release skill.
+tarballs/experiments
+tarballs/comparisons
+tarballs/package
+tarballs/active
+
 # -- E2E test projects (trigger @nx/playwright plugin in Nx project graph) ----
 apps/ui-e2e
 apps/api-e2e
