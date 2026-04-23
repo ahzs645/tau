@@ -22,21 +22,19 @@ import { useCad, useCadSelector } from '#hooks/use-cad.js';
 // Up direction options
 type UpDirection = 'x' | 'y' | 'z';
 
-// Timeout option type
 type TimeoutOption = {
-  // Value in seconds
+  /** Render timeout. Milliseconds. */
   value: number;
   label: string;
 };
 
-// Predefined timeout options
 const timeoutOptions: TimeoutOption[] = [
   { value: 0, label: 'Disabled' },
-  { value: 15, label: '15s' },
-  { value: 30, label: '30s' },
-  { value: 60, label: '1 min' },
-  { value: 300, label: '5 min' },
-  { value: 600, label: '10 min' },
+  { value: 15_000, label: '15s' },
+  { value: 30_000, label: '30s' },
+  { value: 60_000, label: '1 min' },
+  { value: 300_000, label: '5 min' },
+  { value: 600_000, label: '10 min' },
 ];
 
 const upDirectionOptions: Array<{ value: UpDirection; label: React.ReactNode; ariaLabel: string }> = [
@@ -81,7 +79,7 @@ export function ViewerSettings({ className, overflowControls }: ViewerSettingsPr
   );
 
   const cadRef = useCad();
-  const renderTimeout = useCadSelector((state) => state.context.renderTimeout, 30);
+  const renderTimeout = useCadSelector((state) => state.context.renderTimeout, 30_000);
 
   const handleMeshToggle = useCallback(
     (checked: boolean) => {
@@ -141,12 +139,11 @@ export function ViewerSettings({ className, overflowControls }: ViewerSettingsPr
 
   const handleRenderTimeoutChange = useCallback(
     (value: string) => {
-      cadRef?.send({ type: 'setRenderTimeout', seconds: Number(value) });
+      cadRef?.send({ type: 'setRenderTimeout', renderTimeout: Number(value) });
     },
     [cadRef],
   );
 
-  // Get current timeout option for display (default to 30s if not found)
   const currentTimeoutOption = useMemo(
     () => timeoutOptions.find((option) => option.value === renderTimeout) ?? timeoutOptions[2]!,
     [renderTimeout],

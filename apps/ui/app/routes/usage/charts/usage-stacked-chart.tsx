@@ -12,12 +12,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '#comp
 import { formatNumberAbbreviation } from '#utils/number.utils.js';
 import type { UsageRecord } from '#hooks/use-all-usage.js';
 import type { TimeBucket } from '#routes/usage/time-bucket.utils.js';
-import {
-  formatBucketLabel,
-  getBucketIntervalMs,
-  getBucketKey,
-  roundToBucket,
-} from '#routes/usage/time-bucket.utils.js';
+import { formatBucketLabel, getBucketInterval, getBucketKey, roundToBucket } from '#routes/usage/time-bucket.utils.js';
 
 type UsageStackedChartProps = {
   readonly records: UsageRecord[];
@@ -86,7 +81,7 @@ function aggregateTokensByBucket(records: UsageRecord[], bucket: TimeBucket): Bu
   const endDate = roundToBucket(maxDate, bucket);
 
   // Generate all bucket keys between start and end
-  const intervalMs = getBucketIntervalMs(bucket);
+  const bucketInterval = getBucketInterval(bucket);
   const result: BucketedTokenData[] = [];
   let currentDate = new Date(startDate);
 
@@ -100,7 +95,7 @@ function aggregateTokensByBucket(records: UsageRecord[], bucket: TimeBucket): Bu
       ...tokens,
     });
 
-    currentDate = new Date(currentDate.getTime() + intervalMs);
+    currentDate = new Date(currentDate.getTime() + bucketInterval);
   }
 
   return result;

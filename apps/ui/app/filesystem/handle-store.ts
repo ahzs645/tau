@@ -41,7 +41,8 @@ export type ProjectFileSystemConfig = {
 
 // ============ Database (ref-counted singleton) ============
 
-const idleCloseMs = 5000;
+/** Idle delay before the cached DB connection is closed. Milliseconds. */
+const idleCloseDelay = 5000;
 
 let cachedDb: IDBDatabase | undefined;
 let refCount = 0;
@@ -100,7 +101,7 @@ function releaseDb(): void {
     cachedDb?.close();
     cachedDb = undefined;
     idleTimer = undefined;
-  }, idleCloseMs);
+  }, idleCloseDelay);
 }
 
 async function withDb<T>(operation: (db: IDBDatabase) => Promise<T>): Promise<T> {

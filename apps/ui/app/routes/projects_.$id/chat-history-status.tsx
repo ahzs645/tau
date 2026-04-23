@@ -30,10 +30,10 @@ export const ChatHistoryStatus = memo(function ({ className }: ChatHistoryStatus
   // Force re-render every minute to update relative time
   const [, forceUpdate] = useReducer((x: number) => x + 1, 0);
   useEffect(() => {
-    const interval = setInterval(forceUpdate, 60_000); // Update every minute
+    const refreshIntervalTimer = setInterval(forceUpdate, 60_000); // Update every minute
 
     return () => {
-      clearInterval(interval);
+      clearInterval(refreshIntervalTimer);
     };
   }, []);
 

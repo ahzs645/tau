@@ -31,8 +31,8 @@ function formatRelativeTime(dateString: string | undefined): string {
 
   const date = new Date(dateString);
   const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  const diff = now.getTime() - date.getTime();
+  const diffDays = Math.floor(diff / (1000 * 60 * 60 * 24));
 
   if (diffDays === 0) {
     return 'Today';

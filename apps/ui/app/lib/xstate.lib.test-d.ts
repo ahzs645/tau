@@ -22,7 +22,7 @@ import { fromSafeAsync } from '#lib/xstate.lib.js';
 describe('fromSafeAsync<TReturn, TInput> generic parameters', () => {
   it('should type input and return from explicit generics', () => {
     type LoadedEvent = { type: 'loaded'; data: string };
-    type LoadInput = { url: string; timeout: number };
+    type LoadInput = { url: string; loadTimeout: number };
 
     const machine = setup({
       types: {
@@ -45,7 +45,7 @@ describe('fromSafeAsync<TReturn, TInput> generic parameters', () => {
         loading: {
           invoke: {
             src: 'loadActor',
-            input: () => ({ url: 'https://example.com', timeout: 5000 }),
+            input: () => ({ url: 'https://example.com', loadTimeout: 5000 }),
             onDone: 'done',
           },
           on: {

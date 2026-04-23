@@ -242,10 +242,10 @@ export function ChatMessageReasoning({
   //   3. Fallback  — orphaned (chat ended without `reasoning-end`) or legacy /
   //                  uninstrumented part → "Thought briefly".
   // (`isReasoningStreaming` is computed above so it can also gate visibility.)
-  const liveReasoningElapsedMs = useReasoningStopwatch(reasoningStartedAtMs, isReasoningStreaming);
+  const liveReasoningElapsed = useReasoningStopwatch(reasoningStartedAtMs, isReasoningStreaming);
 
   const reasoningLabel = isReasoningStreaming
-    ? formatReasoningDuration(liveReasoningElapsedMs, { verb: 'Thinking' })
+    ? formatReasoningDuration(liveReasoningElapsed, { verb: 'Thinking' })
     : finalReasoningDurationMs === undefined
       ? 'Thought briefly'
       : formatReasoningDuration(finalReasoningDurationMs);

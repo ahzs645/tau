@@ -212,12 +212,12 @@ function TypewriterPrompt({
     const charDelay = timing.typingDuration / text.length;
     let currentIndex = 0;
 
-    const interval = setInterval(() => {
+    const typingIntervalTimer = setInterval(() => {
       if (currentIndex < text.length) {
         setDisplayedText(text.slice(0, currentIndex + 1));
         currentIndex++;
       } else {
-        clearInterval(interval);
+        clearInterval(typingIntervalTimer);
         setIsTyping(false);
         setTypingComplete(true);
         onTypingComplete();
@@ -225,7 +225,7 @@ function TypewriterPrompt({
     }, charDelay);
 
     return () => {
-      clearInterval(interval);
+      clearInterval(typingIntervalTimer);
     };
   }, [isTyping, isActive, text, onTypingComplete]);
 

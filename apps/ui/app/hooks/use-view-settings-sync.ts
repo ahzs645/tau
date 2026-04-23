@@ -53,7 +53,7 @@ export function useViewSettingsSync({
   const measurements = useSelector(graphicsRef, (s) => s.context.measurements);
 
   // Render timeout lives on the cad machine (per-file), not the graphics machine (per-view)
-  const renderTimeout = useSelector(cadRef, (s) => s?.context.renderTimeout ?? 30);
+  const renderTimeout = useSelector(cadRef, (s) => s?.context.renderTimeout ?? 30_000);
 
   useEffect(() => {
     // Extract pinned measurements for persistence

@@ -199,7 +199,7 @@ describe('ChatViewer reopen-renderer overlay', () => {
           geometries: [],
           units: { length: { symbol: 'mm', factor: 1 } },
           kernelClient: undefined,
-          renderTimeout: 30,
+          renderTimeout: 30_000,
         },
       })),
       send: vi.fn(),

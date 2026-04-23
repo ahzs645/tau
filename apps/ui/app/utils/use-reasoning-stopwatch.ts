@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 
-const tickIntervalMs = 1000;
+/** Milliseconds. */
+const tickInterval = 1000;
 
 /**
  * Live elapsed-time stopwatch for streaming reasoning blocks.
@@ -32,7 +33,7 @@ export const useReasoningStopwatch = (startedAtMs: number | undefined, enabled: 
     }
     const intervalId = setInterval(() => {
       setNow(Date.now());
-    }, tickIntervalMs);
+    }, tickInterval);
     return () => {
       clearInterval(intervalId);
     };

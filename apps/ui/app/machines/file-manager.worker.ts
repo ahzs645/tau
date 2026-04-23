@@ -154,7 +154,7 @@ exposeFileSystem(fileService, {
     },
   },
   changeEventBus: eventBus,
-  createCoalescer: (deliver, windowMs) => new EventCoalescer(deliver, { windowMs }),
+  createCoalescer: (deliver, coalescingWindow) => new EventCoalescer(deliver, { coalescingWindow }),
   createThrottledWorker: (handler) => new ThrottledWorker(handler),
 });
 

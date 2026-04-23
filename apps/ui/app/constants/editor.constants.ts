@@ -107,10 +107,17 @@ export type GraphicsViewSettings = {
   enablePostProcessing: boolean;
   upDirection: 'x' | 'y' | 'z';
   cameraFovAngle: number;
+  /** Render timeout. Milliseconds. */
   renderTimeout: number;
   environmentPreset: EnvironmentPreset;
   /** Persisted pinned measurements -- optional so legacy data deserializes cleanly */
   pinnedMeasurements?: PinnedMeasurement[];
+  /**
+   * Settings schema version. Absent / `1` = legacy seconds-based renderTimeout
+   * persisted before the milliseconds-only migration; values are multiplied
+   * by 1000 on parse. `2` = milliseconds-only contract (current).
+   */
+  schemaVersion?: 2;
 };
 
 // ============================================================================
@@ -137,23 +144,43 @@ export const graphicsViewSettingsSchema = z.object({
   enablePostProcessing: z.boolean(),
   upDirection: z.enum(['x', 'y', 'z']),
   cameraFovAngle: z.number(),
+  /** Render timeout. Milliseconds. */
   renderTimeout: z.number(),
   environmentPreset: z.enum(['studio', 'neutral', 'soft', 'performance']),
   pinnedMeasurements: z.array(pinnedMeasurementSchema).optional(),
+  /**
+   * Settings schema version. Absent / `1` = legacy seconds-based renderTimeout;
+   * `2` = milliseconds-only contract.
+   */
+  schemaVersion: z.literal(2).optional(),
 });
 
 /**
  * Safely parse persisted graphics view settings.
  * Returns validated settings on success, or defaults if the data is
  * missing / corrupt / from an older schema version.
+ *
+ * Backward-compat migration: persisted settings without `schemaVersion: 2`
+ * are interpreted as v1 (seconds) and multiplied by 1000 to upgrade
+ * `renderTimeout` to milliseconds. After upgrade the result is stamped
+ * with `schemaVersion: 2`.
  */
 export function parseGraphicsViewSettings(raw: unknown): GraphicsViewSettings {
   const result = graphicsViewSettingsSchema.safeParse(raw);
-  if (result.success) {
-    return result.data;
+  if (!result.success) {
+    return { ...defaultGraphicsSettings };
   }
 
-  return { ...defaultGraphicsSettings };
+  const parsed = result.data;
+  if (parsed.schemaVersion === 2) {
+    return parsed;
+  }
+
+  return {
+    ...parsed,
+    renderTimeout: parsed.renderTimeout * 1000,
+    schemaVersion: 2,
+  };
 }
 
 /**
@@ -170,8 +197,9 @@ export const defaultGraphicsSettings: GraphicsViewSettings = {
   enablePostProcessing: true,
   upDirection: 'z',
   cameraFovAngle: 60,
-  renderTimeout: 30,
+  renderTimeout: 30_000,
   environmentPreset: 'studio',
+  schemaVersion: 2,
 };
 
 // ============================================================================

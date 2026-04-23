@@ -374,7 +374,8 @@ export class ChatRpcSocketService {
     }
   }
 
-  private static get joinAckTimeoutMs(): number {
+  /** Milliseconds. */
+  private static get joinAckTimeout(): number {
     return 5000;
   }
 
@@ -399,12 +400,12 @@ export class ChatRpcSocketService {
       }
 
       const ack = await new Promise<{ success: boolean } | undefined>((resolve) => {
-        const timeout = setTimeout(() => {
+        const ackTimeoutTimer = setTimeout(() => {
           resolve(undefined);
-        }, ChatRpcSocketService.joinAckTimeoutMs);
+        }, ChatRpcSocketService.joinAckTimeout);
 
         socket.emit('join', { chatId }, (response: { success: boolean }) => {
-          clearTimeout(timeout);
+          clearTimeout(ackTimeoutTimer);
           resolve(response);
         });
       });

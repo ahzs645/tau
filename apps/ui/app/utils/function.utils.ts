@@ -25,17 +25,17 @@ export const debounce = <ArgumentsType extends unknown[], U>(
   options: DebounceOptions = {},
 ): ((...args: ArgumentsType) => Promise<U>) => {
   let leadingValue: U | PromiseLike<U>;
-  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let debounceTimer: ReturnType<typeof setTimeout> | undefined;
   let resolveList: Array<(value: U | PromiseLike<U>) => void> = [];
 
   return async function (this: unknown, ...args: ArgumentsType): Promise<U> {
     return new Promise((resolve) => {
-      const shouldCallNow = options.before && !timeout;
+      const shouldCallNow = options.before && !debounceTimer;
 
-      clearTimeout(timeout);
+      clearTimeout(debounceTimer);
 
-      timeout = setTimeout(() => {
-        timeout = undefined;
+      debounceTimer = setTimeout(() => {
+        debounceTimer = undefined;
 
         const result = options.before ? leadingValue : function_.apply(this, args);
 

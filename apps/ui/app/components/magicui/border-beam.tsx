@@ -12,9 +12,9 @@ type BorderBeamProps = {
    */
   readonly duration?: number;
   /**
-   * The delay of the border beam.
+   * The delay before the border beam animation starts. Seconds.
    */
-  readonly delay?: number;
+  readonly animationDelay?: number;
   /**
    * The color of the border beam from.
    */
@@ -52,7 +52,7 @@ type BorderBeamProps = {
 export function BorderBeam({
   className,
   size = 50,
-  delay = 0,
+  animationDelay = 0,
   duration = 6,
   // oxlint-disable-next-line tau-lint/no-hardcoded-color -- decorative default
   colorFrom = '#ffaa40',
@@ -98,7 +98,7 @@ export function BorderBeam({
           repeat: Infinity,
           ease: 'linear',
           duration,
-          delay: -delay,
+          delay: -animationDelay,
           ...transition,
         }}
       />

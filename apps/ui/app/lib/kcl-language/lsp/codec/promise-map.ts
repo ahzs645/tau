@@ -42,19 +42,20 @@ type PromiseMapEntry<V> = {
 
 type PromiseMapOptions = {
   /**
-   * Default TTL in milliseconds for all entries.
+   * Default TTL for all entries. Milliseconds.
    * If undefined, entries will not expire automatically.
    * Per-entry TTL can override this value.
    */
-  defaultTtlMs?: number;
+  defaultTtl?: number;
 };
 
 export class PromiseMap<K, V> {
   private readonly map = new Map<K, PromiseMapEntry<V>>();
-  private readonly defaultTtlMs: number | undefined;
+  /** Milliseconds. */
+  private readonly defaultTtl: number | undefined;
 
   public constructor(options: PromiseMapOptions = {}) {
-    this.defaultTtlMs = options.defaultTtlMs;
+    this.defaultTtl = options.defaultTtl;
   }
 
   /**
@@ -62,18 +63,18 @@ export class PromiseMap<K, V> {
    * The promise will resolve when `set()` is called with the same key.
    *
    * @param key - The key to get or create a promise for.
-   * @param ttlMs - Optional TTL in milliseconds for this entry. Overrides the default TTL.
+   * @param entryTtl - Optional TTL for this entry. Overrides the default TTL. Milliseconds.
    *                If the TTL expires before `set()` is called, the promise will be rejected
    *                with a `PromiseMapTimeoutError` and the entry will be removed.
    * @returns A promise that resolves when `set()` is called with the same key.
    */
-  public async get(key: K, ttlMs?: number): Promise<V> {
+  public async get(key: K, entryTtl?: number): Promise<V> {
     const existingEntry = this.map.get(key);
     if (existingEntry) {
       return existingEntry.promise;
     }
 
-    const entry = this.createEntry(key, ttlMs ?? this.defaultTtlMs);
+    const entry = this.createEntry(key, entryTtl ?? this.defaultTtl);
     return entry.promise;
   }
 
@@ -135,7 +136,7 @@ export class PromiseMap<K, V> {
     return this.map.size;
   }
 
-  private createEntry(key: K, ttlMs: number | undefined): PromiseMapEntry<V> {
+  private createEntry(key: K, entryTtl: number | undefined): PromiseMapEntry<V> {
     let resolve: (item: V) => void = () => {
       // Placeholder - will be replaced by Promise constructor
     };
@@ -151,12 +152,11 @@ export class PromiseMap<K, V> {
 
     let timerId: ReturnType<typeof setTimeout> | undefined;
 
-    if (ttlMs !== undefined) {
+    if (entryTtl !== undefined) {
       timerId = setTimeout(() => {
-        // Remove entry and reject promise on timeout
         this.map.delete(key);
         reject(new PromiseMapTimeoutError());
-      }, ttlMs);
+      }, entryTtl);
     }
 
     const entry: PromiseMapEntry<V> = {

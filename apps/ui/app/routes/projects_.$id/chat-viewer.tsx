@@ -265,7 +265,7 @@ const ViewerContent = memo(function ({
     const persisted = viewSettings[viewId]?.graphicsSettings.renderTimeout;
     if (persisted !== undefined) {
       restoredTimeoutRef.current = true;
-      cadRef.send({ type: 'setRenderTimeout', seconds: persisted });
+      cadRef.send({ type: 'setRenderTimeout', renderTimeout: persisted });
     }
   }, [cadRef, viewId, viewSettings]);
 

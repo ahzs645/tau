@@ -7,7 +7,7 @@ type TypingAnimationProps = {
   readonly children: string;
   readonly className?: string;
   readonly duration?: number;
-  readonly delay?: number;
+  readonly startDelay?: number;
   readonly as?: React.ElementType;
   readonly shouldStartOnView?: boolean;
 } & MotionProps;
@@ -16,7 +16,7 @@ export function TypingAnimation({
   children,
   className,
   duration = 100,
-  delay = 0,
+  startDelay = 0,
   as: Component = 'div',
   shouldStartOnView = false,
   ...props
@@ -33,7 +33,7 @@ export function TypingAnimation({
     if (!shouldStartOnView) {
       const startTimeout = setTimeout(() => {
         setStarted(true);
-      }, delay);
+      }, startDelay);
       return () => {
         clearTimeout(startTimeout);
       };
@@ -44,7 +44,7 @@ export function TypingAnimation({
         if (entry?.isIntersecting) {
           setTimeout(() => {
             setStarted(true);
-          }, delay);
+          }, startDelay);
           observer.disconnect();
         }
       },
@@ -58,7 +58,7 @@ export function TypingAnimation({
     return () => {
       observer.disconnect();
     };
-  }, [delay, shouldStartOnView]);
+  }, [startDelay, shouldStartOnView]);
 
   useEffect(() => {
     if (!started) {

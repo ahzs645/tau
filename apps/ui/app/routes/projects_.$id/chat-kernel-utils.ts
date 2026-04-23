@@ -351,25 +351,31 @@ export function collectAllSpanIds(roots: SpanNode[]): Set<string> {
 // Waterfall ticks
 // ---------------------------------------------------------------------------
 
-export function generateTicks(durationMs: number, availableWidth: number): number[] {
-  if (durationMs <= 0) {
+/**
+ * Generate evenly-spaced tick marks for waterfall charts.
+ *
+ * @param duration - Duration in milliseconds.
+ * @param availableWidth - Available width in pixels for the tick row.
+ */
+export function generateTicks(duration: number, availableWidth: number): number[] {
+  if (duration <= 0) {
     return [0];
   }
 
   const targetTickCount = Math.max(2, Math.min(6, Math.floor(availableWidth / 80)));
-  const rawInterval = durationMs / targetTickCount;
+  const rawInterval = duration / targetTickCount;
 
   const magnitudes = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10_000] as const;
-  let interval = 1;
+  let tickInterval = 1;
   for (const m of magnitudes) {
     if (m >= rawInterval) {
-      interval = m;
+      tickInterval = m;
       break;
     }
   }
 
   const ticks: number[] = [];
-  for (let t = 0; t <= durationMs + interval * 0.1; t += interval) {
+  for (let t = 0; t <= duration + tickInterval * 0.1; t += tickInterval) {
     ticks.push(t);
   }
 

@@ -106,9 +106,9 @@ describe('PromiseMap', () => {
     });
   });
 
-  describe('timeout (defaultTtlMs)', () => {
+  describe('timeout (defaultTtl)', () => {
     it('should reject after default TTL expires', async () => {
-      const map = new PromiseMap<number, string>({ defaultTtlMs: 5000 });
+      const map = new PromiseMap<number, string>({ defaultTtl: 5000 });
       const promise = map.get(1);
       let caught: unknown;
 
@@ -125,7 +125,7 @@ describe('PromiseMap', () => {
     });
 
     it('should not reject before TTL expires', async () => {
-      const map = new PromiseMap<number, string>({ defaultTtlMs: 5000 });
+      const map = new PromiseMap<number, string>({ defaultTtl: 5000 });
       const promise = map.get(1);
 
       vi.advanceTimersByTime(4999);
@@ -135,9 +135,9 @@ describe('PromiseMap', () => {
     });
   });
 
-  describe('timeout (per-entry ttlMs)', () => {
+  describe('timeout (per-entry ttl)', () => {
     it('should use per-entry TTL over default', async () => {
-      const map = new PromiseMap<number, string>({ defaultTtlMs: 10_000 });
+      const map = new PromiseMap<number, string>({ defaultTtl: 10_000 });
       const promise = map.get(1, 2000);
       let caught: unknown;
 
@@ -153,7 +153,7 @@ describe('PromiseMap', () => {
     });
 
     it('should clear timeout on successful set', async () => {
-      const map = new PromiseMap<number, string>({ defaultTtlMs: 5000 });
+      const map = new PromiseMap<number, string>({ defaultTtl: 5000 });
       const promise = map.get(1);
       map.set(1, 'value');
 
@@ -163,7 +163,7 @@ describe('PromiseMap', () => {
     });
 
     it('should clear timeout on delete', async () => {
-      const map = new PromiseMap<number, string>({ defaultTtlMs: 5000 });
+      const map = new PromiseMap<number, string>({ defaultTtl: 5000 });
       const promise = map.get(1);
       let caught: unknown;
       try {

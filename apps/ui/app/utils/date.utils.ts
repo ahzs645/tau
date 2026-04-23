@@ -60,13 +60,12 @@ const timeUnits: readonly TimeUnit[] = [
 export const formatRelativeTime = (date: Date | number, options?: FormatRelativeTimeOptions): string => {
   const targetDate = date instanceof Date ? date : new Date(date);
   const now = new Date();
-  const diffInMs = now.getTime() - targetDate.getTime();
+  const diff = now.getTime() - targetDate.getTime();
   const short = options?.short ?? false;
 
-  // Find the appropriate time unit
   for (const unit of timeUnits) {
-    if (diffInMs < unit.threshold) {
-      const value = Math.floor(diffInMs / unit.divisor);
+    if (diff < unit.threshold) {
+      const value = Math.floor(diff / unit.divisor);
       const format = short ? unit.short : unit.long;
       return typeof format === 'function' ? format(value) : format;
     }

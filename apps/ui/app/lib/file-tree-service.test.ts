@@ -96,7 +96,7 @@ describe('FileTreeService', () => {
       proxy: localProxy,
       rootDirectory: '/project',
       initialEntries: [createEntry('main.ts'), createEntry('lib/utils.ts'), createEntry('lib/helpers.ts')],
-      debounceMs: 10,
+      refreshDebounce: 10,
     });
 
     localService.scheduleRefresh('lib');
@@ -345,7 +345,7 @@ describe('FileTreeService', () => {
         proxy: localProxy,
         rootDirectory: '/project',
         initialEntries: [createEntry('.tau', 'dir')],
-        debounceMs: 10,
+        refreshDebounce: 10,
       });
 
       expect(localService.hasChildrenLoaded('.tau')).toBe(false);

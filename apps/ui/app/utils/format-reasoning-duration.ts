@@ -1,9 +1,11 @@
-const briefThresholdMs = 1000;
-const minuteMs = 60_000;
+/** Milliseconds. */
+const briefThreshold = 1000;
+/** Milliseconds. */
+const minute = 60_000;
 
 /**
- * Format a reasoning duration in milliseconds for display in
- * `ChatMessageReasoning`'s collapsible header.
+ * Format a reasoning duration for display in `ChatMessageReasoning`'s
+ * collapsible header. Input is milliseconds.
  *
  * Buckets:
  * - `< 1000ms` → `"Thought briefly"` / `"Thinking…"`
@@ -15,20 +17,19 @@ const minuteMs = 60_000;
  * sub-second window matches the prior-art shimmer pattern from Cline / Zoo
  * Modeling App so the header doesn't visually flicker between briefly and
  * the first full second tick.
+ *
+ * @param duration - Duration in milliseconds.
  */
-export const formatReasoningDuration = (
-  durationMs: number,
-  options: { verb?: 'Thought' | 'Thinking' } = {},
-): string => {
+export const formatReasoningDuration = (duration: number, options: { verb?: 'Thought' | 'Thinking' } = {}): string => {
   const verb = options.verb ?? 'Thought';
-  if (durationMs < briefThresholdMs) {
+  if (duration < briefThreshold) {
     return verb === 'Thinking' ? 'Thinking…' : 'Thought briefly';
   }
-  if (durationMs < minuteMs) {
-    const seconds = Math.round(durationMs / 1000);
+  if (duration < minute) {
+    const seconds = Math.round(duration / 1000);
     return `${verb} for ${seconds}s`;
   }
-  const totalSeconds = Math.round(durationMs / 1000);
+  const totalSeconds = Math.round(duration / 1000);
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return seconds === 0 ? `${verb} for ${minutes}m` : `${verb} for ${minutes}m ${seconds}s`;

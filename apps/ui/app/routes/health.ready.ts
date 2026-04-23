@@ -24,7 +24,8 @@ import { getEnvironment } from '#environment.config.js';
  * See `docs/research/staging-cors-coep-safari-rendering-audit.md` (NEW UI
  * health routes) for the design contract.
  */
-const apiProbeTimeoutMs = 4000;
+/** Milliseconds. */
+const apiProbeTimeout = 4000;
 
 export const loader: LoaderFunction = async ({ request }) => {
   const env = await getEnvironment();
@@ -36,7 +37,7 @@ export const loader: LoaderFunction = async ({ request }) => {
   const timeoutController = new AbortController();
   const timeoutHandle = setTimeout(() => {
     timeoutController.abort();
-  }, apiProbeTimeoutMs);
+  }, apiProbeTimeout);
   const signal = AbortSignal.any([request.signal, timeoutController.signal]);
 
   let apiStatus: 'up' | 'down' = 'down';

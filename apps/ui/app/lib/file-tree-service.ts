@@ -5,9 +5,12 @@ import type { FileContentService, ContentChangeEvent } from '#lib/file-content-s
 import { FileSystemObserverBridge } from '@taucad/filesystem';
 import { normalizePath, joinPath } from '@taucad/utils/path';
 
-const defaultDebounceMs = 100;
-const watchIntervalFocusedMs = 2000;
-const watchIntervalBlurredMs = 10_000;
+/** Milliseconds. */
+const defaultRefreshDebounce = 100;
+/** Milliseconds. */
+const watchIntervalFocused = 2000;
+/** Milliseconds. */
+const watchIntervalBlurred = 10_000;
 
 export type FileItem = {
   path: string;
@@ -18,7 +21,8 @@ type FileTreeServiceInit = {
   proxy: FileManagerProxy;
   rootDirectory: string;
   initialEntries?: FileEntry[];
-  debounceMs?: number;
+  /** Debounce window between subsequent tree-refresh fires. Milliseconds. */
+  refreshDebounce?: number;
 };
 
 /**
@@ -36,7 +40,8 @@ export class FileTreeService {
   private pollingTimer: ReturnType<typeof setInterval> | undefined;
   private contentUnsubscribe: (() => void) | undefined;
   private visibilityHandler: (() => void) | undefined;
-  private readonly debounceMs: number;
+  /** Milliseconds. */
+  private readonly refreshDebounce: number;
   private _observerBridge: FileSystemObserverBridge | undefined;
   private _refreshAbortController: AbortController | undefined;
   private _cachedCompleteTree: FileItem[] | undefined;
@@ -47,7 +52,7 @@ export class FileTreeService {
   public constructor(init: FileTreeServiceInit) {
     this.proxy = init.proxy;
     this.rootDirectory = init.rootDirectory;
-    this.debounceMs = init.debounceMs ?? defaultDebounceMs;
+    this.refreshDebounce = init.refreshDebounce ?? defaultRefreshDebounce;
     this._tree = new Map();
     if (init.initialEntries) {
       for (const entry of init.initialEntries) {
@@ -286,7 +291,7 @@ export class FileTreeService {
       this.refreshTimer = undefined;
       void this.executeRefresh(this.pendingRefreshPath);
       this.pendingRefreshPath = '';
-    }, this.debounceMs);
+    }, this.refreshDebounce);
   }
 
   // === Change Detection (Observer preferred, polling fallback) ===
@@ -353,16 +358,16 @@ export class FileTreeService {
     this.stopPolling();
 
     const poll = (): void => {
-      let interval: number;
+      let pollInterval: number;
       if (typeof document === 'undefined') {
-        interval = watchIntervalBlurredMs;
+        pollInterval = watchIntervalBlurred;
       } else {
-        interval = document.visibilityState === 'visible' ? watchIntervalFocusedMs : watchIntervalBlurredMs;
+        pollInterval = document.visibilityState === 'visible' ? watchIntervalFocused : watchIntervalBlurred;
       }
       this.pollingTimer = setTimeout(() => {
         this.scheduleRefresh('');
         poll();
-      }, interval);
+      }, pollInterval);
     };
 
     poll();

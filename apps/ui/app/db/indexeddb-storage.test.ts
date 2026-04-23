@@ -54,7 +54,7 @@ async function freshProject(provider: IndexedDbStorageProvider): Promise<Project
   return provider.createProject(sampleProject());
 }
 
-const delay = async (ms: number): Promise<void> => {
+const sleep = async (ms: number): Promise<void> => {
   await new Promise<void>((resolve) => {
     setTimeout(() => {
       resolve();
@@ -175,7 +175,7 @@ describe('IndexedDbStorageProvider', () => {
       const chat = await freshChat(provider);
 
       // Wait a tick so Date.now() can advance past the createChat timestamp
-      await delay(2);
+      await sleep(2);
 
       const bumped = await provider.updateChat(chat.id, { name: 'bump' });
       expect(bumped?.updatedAt).toBeGreaterThan(chat.updatedAt);
@@ -268,7 +268,7 @@ describe('IndexedDbStorageProvider', () => {
     it('should bump updatedAt', async () => {
       const provider = new IndexedDbStorageProvider();
       const chat = await freshChat(provider);
-      await delay(2);
+      await sleep(2);
 
       const result = await provider.patchChat(chat.id, 'name', 'Bumped');
       expect(result?.updatedAt).toBeGreaterThan(chat.updatedAt);
@@ -695,7 +695,7 @@ describe('IndexedDbStorageProvider', () => {
     it('should set deletedAt and bump updatedAt atomically', async () => {
       const provider = new IndexedDbStorageProvider();
       const chat = await freshChat(provider);
-      await delay(2);
+      await sleep(2);
 
       const result = await provider.softDeleteChat(chat.id);
 

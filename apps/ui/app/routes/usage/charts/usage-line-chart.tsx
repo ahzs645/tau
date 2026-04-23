@@ -6,12 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '#comp
 import { formatCurrency } from '#utils/currency.utils.js';
 import type { UsageRecord } from '#hooks/use-all-usage.js';
 import type { TimeBucket } from '#routes/usage/time-bucket.utils.js';
-import {
-  formatBucketLabel,
-  getBucketIntervalMs,
-  getBucketKey,
-  roundToBucket,
-} from '#routes/usage/time-bucket.utils.js';
+import { formatBucketLabel, getBucketInterval, getBucketKey, roundToBucket } from '#routes/usage/time-bucket.utils.js';
 
 type UsageLineChartProps = {
   readonly records: UsageRecord[];
@@ -66,7 +61,7 @@ function aggregateByBucket(records: UsageRecord[], bucket: TimeBucket): Bucketed
   const endDate = roundToBucket(maxDate, bucket);
 
   // Generate all bucket keys between start and end
-  const intervalMs = getBucketIntervalMs(bucket);
+  const bucketInterval = getBucketInterval(bucket);
   const result: BucketedData[] = [];
   let currentDate = new Date(startDate);
 
@@ -80,7 +75,7 @@ function aggregateByBucket(records: UsageRecord[], bucket: TimeBucket): Bucketed
       cost,
     });
 
-    currentDate = new Date(currentDate.getTime() + intervalMs);
+    currentDate = new Date(currentDate.getTime() + bucketInterval);
   }
 
   return result;

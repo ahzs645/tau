@@ -50,11 +50,11 @@ export type TypeAcquisitionConfig = {
 
 const esmShBase = 'https://esm.sh';
 
-/** Debounce delay for model content changes (ms) */
-const debounceMs = 500;
+/** Debounce delay for model content changes. Milliseconds. */
+const requestDebounce = 500;
 
-/** Minimum time between retry attempts for failed packages (ms) */
-const retryDelayMs = 60_000;
+/** Minimum time between retry attempts for failed packages. Milliseconds. */
+const retryDelay = 60_000;
 
 /** JS/TS language IDs that we watch for imports */
 const jsTsLanguages = new Set(['typescript', 'javascript', 'typescriptreact', 'javascriptreact']);
@@ -310,7 +310,7 @@ export class TypeAcquisitionService {
     const timer = setTimeout(() => {
       this.debounceTimers.delete(model);
       void this.scanModelImports(model);
-    }, debounceMs);
+    }, requestDebounce);
 
     this.debounceTimers.set(model, timer);
   }
@@ -382,7 +382,7 @@ export class TypeAcquisitionService {
 
     // Check retry delay for previously failed packages
     const lastFailure = this.failedPackages.get(packageName);
-    if (lastFailure !== undefined && Date.now() - lastFailure < retryDelayMs) {
+    if (lastFailure !== undefined && Date.now() - lastFailure < retryDelay) {
       return;
     }
 

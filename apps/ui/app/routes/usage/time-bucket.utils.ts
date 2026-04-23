@@ -25,8 +25,8 @@ export function getBucketKey(date: Date, bucket: TimeBucket): string {
 
     case '6h': {
       // Bucket by 6-hour periods: 0-5, 6-11, 12-17, 18-23
-      const period = Math.floor(hour / 6) * 6;
-      return `${dateOnly}T${period.toString().padStart(2, '0')}`;
+      const periodStart = Math.floor(hour / 6) * 6;
+      return `${dateOnly}T${periodStart.toString().padStart(2, '0')}`;
     }
 
     case '1d': {
@@ -67,9 +67,9 @@ export function formatBucketLabel(bucketKey: string, bucket: TimeBucket): string
 }
 
 /**
- * Get the bucket interval in milliseconds.
+ * Get the bucket interval. Milliseconds.
  */
-export function getBucketIntervalMs(bucket: TimeBucket): number {
+export function getBucketInterval(bucket: TimeBucket): number {
   switch (bucket) {
     case '5m': {
       return 5 * 60 * 1000;

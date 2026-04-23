@@ -40,11 +40,11 @@ export type ServiceDiagnostics = {
 /** Default maximum number of background models */
 const maxBackgroundModels = 200;
 
-/** Background model TTL in milliseconds (1 hour) */
-const backgroundModelTtlMs = 60 * 60 * 1000;
+/** Background model TTL (1 hour). Milliseconds. */
+const backgroundModelTtl = 60 * 60 * 1000;
 
-/** Eviction check interval in milliseconds (60 seconds) */
-const evictionCheckIntervalMs = 60 * 1000;
+/** Eviction check interval (60 seconds). Milliseconds. */
+const evictionCheckInterval = 60 * 1000;
 
 export class MonacoModelService {
   private monaco: typeof Monaco | undefined;
@@ -98,7 +98,7 @@ export class MonacoModelService {
     // Start eviction timer
     this.evictionTimerId = setInterval(() => {
       this.evictStaleBackgroundModels();
-    }, evictionCheckIntervalMs);
+    }, evictionCheckInterval);
 
     // Start background sync
     this.startBackgroundSync();
@@ -531,7 +531,7 @@ export class MonacoModelService {
 
     // TTL eviction
     for (const [path, lastAccess] of this.backgroundAccessTimes) {
-      if (now - lastAccess > backgroundModelTtlMs) {
+      if (now - lastAccess > backgroundModelTtl) {
         const uri = this.createUri(path);
         this.monaco.editor.getModel(uri)?.dispose();
         this.backgroundAccessTimes.delete(path);
