@@ -150,6 +150,8 @@ export function createWorkerDispatcher(worker: KernelWorker, port: RuntimeMessag
           };
 
           worker.onGeometryComputed = (result) => {
+            flushLogs();
+            worker.flushTelemetry();
             const transport = toTransportResult(result, worker.geometryPool);
             respond({ type: 'geometryComputed', requestId: '', result: transport });
           };

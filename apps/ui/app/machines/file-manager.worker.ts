@@ -29,6 +29,80 @@ const treeCache = new DirectoryTreeCache();
 const eventBus = new ChangeEventBus();
 const mountTable = new MountTable();
 
+/**
+ * Structured envelope sent to the main thread when the worker catches one of
+ * its own crashes. Mirrors the `WorkerErrorEnvelope` type the main-thread FM
+ * machine listens for in `file-manager-worker-error.ts`. Posting this before
+ * the worker re-throws (or before the browser fires the opaque load-failure
+ * `error` event) ensures the FM XState machine surfaces a real message
+ * instead of `undefined undefined undefined`.
+ */
+type WorkerErrorEnvelope = {
+  type: '__worker_init_error__' | '__worker_runtime_error__';
+  phase: string;
+  name?: string;
+  message: string;
+  stack?: string;
+  filename?: string;
+  lineno?: number;
+  colno?: number;
+  causeMessage?: string;
+};
+
+const stringifyCause = (cause: unknown): string | undefined => {
+  if (cause === undefined) {
+    return undefined;
+  }
+  if (cause instanceof Error) {
+    return cause.message;
+  }
+  if (typeof cause === 'string') {
+    return cause;
+  }
+  try {
+    return JSON.stringify(cause);
+  } catch {
+    return Object.prototype.toString.call(cause);
+  }
+};
+
+const serializeError = (error: unknown): { name?: string; message: string; stack?: string; causeMessage?: string } => {
+  if (error instanceof Error) {
+    const { name, message, stack, cause } = error;
+    return { name, message, stack, causeMessage: stringifyCause(cause) };
+  }
+  return { message: typeof error === 'string' ? error : JSON.stringify(error) };
+};
+
+const postWorkerInitError = (phase: string, error: unknown): void => {
+  const envelope: WorkerErrorEnvelope = { type: '__worker_init_error__', phase, ...serializeError(error) };
+  self.postMessage(envelope);
+  console.error(`[FM-Worker] ${phase} failed:`, error);
+};
+
+self.addEventListener('error', (event) => {
+  const envelope: WorkerErrorEnvelope = {
+    type: '__worker_runtime_error__',
+    phase: 'runtime',
+    message: event.message || 'Unknown worker runtime error',
+    filename: event.filename || undefined,
+    lineno: event.lineno || undefined,
+    colno: event.colno || undefined,
+    stack: event.error instanceof Error ? event.error.stack : undefined,
+    name: event.error instanceof Error ? event.error.name : undefined,
+  };
+  self.postMessage(envelope);
+});
+
+self.addEventListener('unhandledrejection', (event) => {
+  const envelope: WorkerErrorEnvelope = {
+    type: '__worker_runtime_error__',
+    phase: 'unhandledrejection',
+    ...serializeError(event.reason),
+  };
+  self.postMessage(envelope);
+});
+
 async function createNodeModulesMount(): Promise<void> {
   if (!('storage' in navigator) || !('getDirectory' in navigator.storage)) {
     console.debug('[FM-Worker] OPFS not available, /node_modules falls through to root mount');
@@ -56,8 +130,19 @@ const fileService = new FileService({
 const t0 = performance.now();
 console.debug(`[FM-Worker] module evaluated in ${t0.toFixed(1)}ms`);
 
-await fileService.mount('/', 'indexeddb');
-await createNodeModulesMount();
+try {
+  await fileService.mount('/', 'indexeddb');
+} catch (error) {
+  postWorkerInitError("mount('/', 'indexeddb')", error);
+  throw error;
+}
+
+try {
+  await createNodeModulesMount();
+} catch (error) {
+  postWorkerInitError('createNodeModulesMount', error);
+  throw error;
+}
 
 exposeFileSystem(fileService, {
   watchHandler: {

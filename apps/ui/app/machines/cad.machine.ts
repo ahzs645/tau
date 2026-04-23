@@ -124,11 +124,13 @@ const connectKernelActor = fromSafeAsync<KernelConnectedEvent, ConnectKernelInpu
 
   cleanups.push(
     client.on('geometry', (result: HashedGeometryResult) => {
-      console.log('[CadMachine] geometry event received', {
-        success: result.success,
-        dataLength: result.success ? result.data.length : 0,
-      });
       if (result.success) {
+        if (result.data.length === 0) {
+          console.warn('[CadMachine] kernel returned success with zero geometries', {
+            issuesLength: result.issues.length,
+            firstIssue: result.issues[0]?.message,
+          });
+        }
         machineRef.send({
           type: 'geometryComputed',
           geometries: result.data,

@@ -17,39 +17,88 @@ import { darkModeIntensityScale } from '#components/geometry/graphics/three/util
 const gltfLoader = new GLTFLoader();
 
 /**
- * Logs a single warning when GLTFLoader produces a scene with zero children.
+ * Snapshot of the three R6 OCJS-rendering smoke-trail probe values:
+ *   1. byteLength of the GLB Uint8Array fed to GLTFLoader
+ *   2. childrenCount on the parsed `gltf.scene`
+ *   3. world-space bbox of `gltf.scene` after parse
  *
- * This is the downstream half of the OCJS-rendering smoke trail (see
- * `docs/research/staging-cors-coep-safari-rendering-audit.md` R6). Pairs with
- * the kernel-side `convertReplicadGeometriesToGltf` debug log so that a
- * "geometry compute completed but nothing rendered" report can be diagnosed
- * from the browser console alone:
- *
- *   - kernel byteLength > 0 + zero children here = loader silently dropped nodes
- *   - kernel byteLength == 0 = upstream produced an empty GLB
- *
- * Silent on the happy path (≥1 child); never logs bbox for non-empty scenes
- * to avoid console noise on every successful render.
- *
- * Exported only so the diagnostic can be unit-tested without bootstrapping a
- * React-Three-Fiber renderer for the parent component; not part of the public
- * `GltfMesh` API.
+ * The flat shape (no nesting beyond `bbox.min`/`bbox.max`) is intentional so
+ * that Safari's console payload formatter shows every value without truncation
+ * — Safari collapses deeply nested objects in WebInspector by default.
  */
-export function warnIfEmptyGltfScene(gltf: GLTF, byteLength: number): void {
-  if (gltf.scene.children.length > 0) {
-    return;
-  }
+type GltfSceneProbe = {
+  readonly byteLength: number;
+  readonly childrenCount: number;
+  readonly bbox: {
+    readonly min: { readonly x: number; readonly y: number; readonly z: number };
+    readonly max: { readonly x: number; readonly y: number; readonly z: number };
+    readonly finite: boolean;
+  };
+};
 
+/**
+ * Build a flat probe snapshot from a parsed GLTF scene.
+ *
+ * `bbox.finite` is true iff every component of `min` and `max` is a finite
+ * number. `Box3#isEmpty()` (min.x > max.x after `setFromObject` on an empty
+ * group) coerces to `±Infinity` for every coordinate, so `finite === false`
+ * uniformly catches both the empty-children case AND the coordinate-transform
+ * regression case (NaN/Infinity positions on otherwise-populated meshes).
+ */
+function buildGltfSceneProbe(gltf: GLTF, byteLength: number): GltfSceneProbe {
   const bbox = new Box3().setFromObject(gltf.scene);
-  console.warn('GLTFLoader produced a scene with zero children', {
+  const finite =
+    Number.isFinite(bbox.min.x) &&
+    Number.isFinite(bbox.min.y) &&
+    Number.isFinite(bbox.min.z) &&
+    Number.isFinite(bbox.max.x) &&
+    Number.isFinite(bbox.max.y) &&
+    Number.isFinite(bbox.max.z);
+
+  return {
     byteLength,
     childrenCount: gltf.scene.children.length,
     bbox: {
       min: { x: bbox.min.x, y: bbox.min.y, z: bbox.min.z },
       max: { x: bbox.max.x, y: bbox.max.y, z: bbox.max.z },
-      finite: Number.isFinite(bbox.min.x) && Number.isFinite(bbox.max.x),
+      finite,
     },
-  });
+  };
+}
+
+/**
+ * Downstream half of the R6 OCJS-rendering smoke trail (see
+ * `docs/research/staging-cors-coep-safari-rendering-audit.md` Finding 7 + R6).
+ *
+ * Pairs with the kernel-side `convertReplicadGeometriesToGltf` debug log to
+ * triangulate "geometry compute completed but nothing rendered" reports from
+ * the browser console alone, with no debugger attach required:
+ *
+ *   1. kernel `byteLength == 0`                                  → upstream produced an empty GLB
+ *      (SLProps-normal pipeline regression — `replicad-occt-normal-pipeline-v3.md`)
+ *   2. kernel `byteLength > 0` + UI `childrenCount == 0`         → GLTFLoader silently dropped nodes
+ *      (glTF binary malformed for Safari — accessor / extension Safari rejects)
+ *   3. UI `childrenCount > 0` + UI `bbox.finite === false`       → coordinate transform regression
+ *      (NaN/Infinity positions reaching the GPU)
+ *
+ * Silent on the happy path (≥1 child AND finite bbox); never logs anything for
+ * a successful render to keep the console quiet across project hot-reloads.
+ *
+ * Exported only so each gate can be unit-tested without bootstrapping a
+ * React-Three-Fiber renderer for the parent component; not part of the public
+ * `GltfMesh` API.
+ */
+export function probeGltfScene(gltf: GLTF, byteLength: number): void {
+  const probe = buildGltfSceneProbe(gltf, byteLength);
+
+  if (probe.childrenCount === 0) {
+    console.warn('GLTFLoader produced a scene with zero children', probe);
+    return;
+  }
+
+  if (!probe.bbox.finite) {
+    console.warn('GLTFLoader produced a scene with a non-finite bounding box', probe);
+  }
 }
 
 /**
@@ -296,7 +345,7 @@ export function GltfMesh({
           return;
         }
 
-        warnIfEmptyGltfScene(gltf, gltfFile.byteLength);
+        probeGltfScene(gltf, gltfFile.byteLength);
 
         // Convert LineSegments to LineSegments2 for fat line rendering
         applyFatLineSegments(gltf, resolutionRef.current);

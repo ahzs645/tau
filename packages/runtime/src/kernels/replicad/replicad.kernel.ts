@@ -342,7 +342,15 @@ export default defineKernel({
 
     const wasmSpan = tracer.startSpan('replicad.wasm-init');
     const resolved = await resolveWasm(wasm, tracer);
-    let openCascade = await initOpenCascade(resolved.wasmUrl, resolved.bindingsFactory, { tracer });
+    let openCascade = await initOpenCascade(resolved.wasmUrl, resolved.bindingsFactory, {
+      tracer,
+      print: (text) => {
+        logger.trace('OCJS stdout', { data: { text } });
+      },
+      printErr: (text) => {
+        logger.warn('OCJS stderr', { data: { text } });
+      },
+    });
     let tracingSummary: OcTracingSummary | undefined;
 
     if (ocTracing === 'summary' || ocTracing === 'per-call') {
@@ -476,6 +484,9 @@ export default defineKernel({
       const shapes = mainResult.value;
 
       if (shapes === undefined) {
+        runtime.logger.warn('createGeometry returning empty: main-returned-undefined', {
+          data: { filePath: relativeFilePath },
+        });
         return {
           geometry: [],
           nativeHandle: [],
@@ -503,6 +514,13 @@ export default defineKernel({
       const shapes2d = renderedShapes.filter((shape): shape is GeometrySvg => shape.format === 'svg');
 
       if (shapes3d.length === 0 && shapes2d.length === 0) {
+        runtime.logger.warn('createGeometry returning empty: render-output-filtered-empty', {
+          data: {
+            filePath: relativeFilePath,
+            rawShapeCount: Array.isArray(shapes) ? shapes.length : 1,
+            renderedShapeCount: renderedShapes.length,
+          },
+        });
         return { geometry: [], nativeHandle: [] };
       }
 

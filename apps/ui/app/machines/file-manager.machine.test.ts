@@ -2,12 +2,40 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createActor } from 'xstate';
 import { fileManagerMachine } from '#machines/file-manager.machine.js';
 
+const workerTestState = vi.hoisted(() => {
+  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- recursive type cannot be expressed inline
+  const instances: Array<{
+    addEventListener: ReturnType<typeof vi.fn>;
+    removeEventListener: ReturnType<typeof vi.fn>;
+    terminate: ReturnType<typeof vi.fn>;
+    postMessage: ReturnType<typeof vi.fn>;
+    dispatchEvent: (event: Event) => void;
+  }> = [];
+  return { instances };
+});
+
 vi.mock('#machines/file-manager.worker.js?worker', () => ({
   default: class MockWorker {
     public terminate = vi.fn();
-    public addEventListener = vi.fn();
-    public removeEventListener = vi.fn();
     public postMessage = vi.fn();
+    public addEventListener = vi.fn((type: string, handler: (event: Event) => void) => {
+      const handlers = this.listeners.get(type) ?? new Set<(event: Event) => void>();
+      handlers.add(handler);
+      this.listeners.set(type, handlers);
+    });
+    public removeEventListener = vi.fn((type: string, handler: (event: Event) => void) => {
+      this.listeners.get(type)?.delete(handler);
+    });
+    private readonly listeners = new Map<string, Set<(event: Event) => void>>();
+    public constructor() {
+      workerTestState.instances.push(this);
+    }
+    public dispatchEvent(event: Event): boolean {
+      for (const handler of this.listeners.get(event.type) ?? []) {
+        handler(event);
+      }
+      return true;
+    }
   },
 }));
 
@@ -47,6 +75,7 @@ vi.mock('#filesystem/handle-store.js', () => ({
 describe('fileManagerMachine', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    workerTestState.instances.length = 0;
     mockGetProjectFileSystemConfig.mockResolvedValue(undefined);
     mockWaitForWorkerReady.mockResolvedValue(undefined);
   });
@@ -698,6 +727,194 @@ describe('fileManagerMachine', () => {
       } finally {
         (globalThis as Record<string, unknown>)['SharedArrayBuffer'] = original;
       }
+    });
+
+    // ── R8: nested FM reuses parent SAB instead of allocating a new one ──
+    // See docs/research/staging-cors-coep-safari-rendering-audit.md
+    it('should reuse parent sharedFilePoolBuffer instead of allocating a new SAB (R8)', async () => {
+      const sharedWorker = {
+        terminate: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        postMessage: vi.fn(),
+      } as unknown as Worker;
+
+      // Match the production filePoolBytes size (50 MiB) so SharedPool init succeeds.
+      const parentBuffer = new SharedArrayBuffer(50 * 1024 * 1024);
+
+      const actor = createActor(fileManagerMachine, {
+        input: {
+          rootDirectory: '/projects/nested',
+          shouldInitializeOnStart: true,
+          projectId: 'nested',
+          sharedWorker,
+          sharedFilePoolBuffer: parentBuffer,
+        },
+      });
+      actor.start();
+
+      await vi.waitFor(() => {
+        expect(actor.getSnapshot().value).toBe('ready');
+      });
+
+      // The nested machine inherits the parent's SAB by reference.
+      expect(actor.getSnapshot().context.filePoolBuffer).toBe(parentBuffer);
+
+      // It must not re-post `filePool` to the shared worker — the parent FM
+      // already did that for this worker instance.
+      const sharedPostMessage = vi.mocked(sharedWorker.postMessage);
+      const filePoolCall = sharedPostMessage.mock.calls.find(
+        ([message]) => (message as { type?: string }).type === 'filePool',
+      );
+      expect(filePoolCall).toBeUndefined();
+
+      actor.stop();
+    });
+
+    it('should allocate exactly one SAB per machine when no sharedFilePoolBuffer provided (R8)', async () => {
+      const actor = createActor(fileManagerMachine, {
+        input: {
+          rootDirectory: '/test',
+          shouldInitializeOnStart: true,
+        },
+      });
+      actor.start();
+
+      await vi.waitFor(() => {
+        expect(actor.getSnapshot().value).toBe('ready');
+      });
+
+      const { worker: fmWorker, filePoolBuffer } = actor.getSnapshot().context;
+      expect(filePoolBuffer).toBeInstanceOf(SharedArrayBuffer);
+
+      const postMessage = vi.mocked(fmWorker!.postMessage);
+      const filePoolCalls = postMessage.mock.calls.filter(
+        ([message]) => (message as { type?: string }).type === 'filePool',
+      );
+      expect(filePoolCalls).toHaveLength(1);
+      expect((filePoolCalls[0]![0] as { buffer: SharedArrayBuffer }).buffer).toBe(filePoolBuffer);
+
+      actor.stop();
+    });
+  });
+
+  // ── worker error diagnostics ────────────────────────────────────────────
+  // See docs/research/staging-cors-coep-safari-rendering-audit.md and
+  // .cursor/plans/file-manager_worker_error_diagnostics_*.plan.md
+  describe('worker error diagnostics', () => {
+    const startActorAndGrabWorker = async (): Promise<{
+      actor: ReturnType<typeof createActor<typeof fileManagerMachine>>;
+      worker: (typeof workerTestState.instances)[number];
+    }> => {
+      // Block worker readiness so we can dispatch the error before resolution.
+      mockWaitForWorkerReady.mockReturnValue(
+        new Promise<void>(() => {
+          /* Never resolves — tests dispatch worker error events synchronously to win the race. */
+        }),
+      );
+
+      const actor = createActor(fileManagerMachine, {
+        input: { rootDirectory: '/test', shouldInitializeOnStart: true },
+      });
+      actor.start();
+
+      await vi.waitFor(() => {
+        expect(workerTestState.instances).toHaveLength(1);
+      });
+      return { actor, worker: workerTestState.instances[0]! };
+    };
+
+    it('routes a plain `error` Event (load failure) into the FM error state with actionable guidance', async () => {
+      const { actor, worker } = await startActorAndGrabWorker();
+
+      worker.dispatchEvent(new Event('error'));
+
+      await vi.waitFor(() => {
+        expect(actor.getSnapshot().value).toBe('error');
+      });
+
+      const { error } = actor.getSnapshot().context;
+      expect(error).toBeInstanceOf(Error);
+      expect(error?.message).toMatch(/Worker script failed to load/);
+      expect(error?.message).toMatch(/Network tab/);
+      expect(worker.terminate).toHaveBeenCalledTimes(1);
+
+      actor.stop();
+    });
+
+    it('routes an `ErrorEvent` with `error.stack` into the FM error state preserving the stack', async () => {
+      const { actor, worker } = await startActorAndGrabWorker();
+
+      const cause = new Error('boom inside worker');
+      cause.stack = 'Error: boom inside worker\n    at file-manager.worker.ts:42:7';
+      worker.dispatchEvent(
+        new ErrorEvent('error', {
+          message: 'Uncaught Error: boom inside worker',
+          filename: 'http://localhost:3000/assets/file-manager.worker-XXX.js',
+          lineno: 42,
+          colno: 7,
+          error: cause,
+        }),
+      );
+
+      await vi.waitFor(() => {
+        expect(actor.getSnapshot().value).toBe('error');
+      });
+
+      const { error } = actor.getSnapshot().context;
+      expect(error?.message).toContain('Uncaught Error: boom inside worker');
+      expect(error?.message).toContain('file-manager.worker-XXX.js:42:7');
+      expect(error?.stack).toBe(cause.stack);
+
+      actor.stop();
+    });
+
+    it('routes a `messageerror` Event into the FM error state with a structured-clone explanation', async () => {
+      const { actor, worker } = await startActorAndGrabWorker();
+
+      worker.dispatchEvent(new Event('messageerror'));
+
+      await vi.waitFor(() => {
+        expect(actor.getSnapshot().value).toBe('error');
+      });
+
+      expect(actor.getSnapshot().context.error?.message).toMatch(/messageerror/);
+      expect(actor.getSnapshot().context.error?.message).toMatch(/structured-clone/);
+
+      actor.stop();
+    });
+
+    it('routes a `__worker_init_error__` envelope into the FM error state with the originating phase', async () => {
+      const { actor, worker } = await startActorAndGrabWorker();
+
+      const envelope = {
+        type: '__worker_init_error__',
+        phase: "mount('/', 'indexeddb')",
+        message: 'IndexedDB unavailable',
+        stack: 'Error: IndexedDB unavailable\n    at file-manager.worker.ts:56',
+      };
+      worker.dispatchEvent(new MessageEvent('message', { data: envelope }));
+
+      await vi.waitFor(() => {
+        expect(actor.getSnapshot().value).toBe('error');
+      });
+
+      const { error } = actor.getSnapshot().context;
+      expect(error?.message).toContain("Worker mount('/', 'indexeddb') failed: IndexedDB unavailable");
+
+      actor.stop();
+    });
+
+    it('ignores unrelated worker `message` events', async () => {
+      const { actor, worker } = await startActorAndGrabWorker();
+
+      worker.dispatchEvent(new MessageEvent('message', { data: { type: 'something-else' } }));
+
+      // Still waiting on `waitForWorkerReady` (which never resolves) — must
+      // not have fallen into the error state from an unrelated message.
+      expect(actor.getSnapshot().value).toBe('connectingWorker');
+
+      actor.stop();
     });
   });
 });

@@ -121,6 +121,9 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
   ): Promise<GetParametersResult> {
     const kernel = await this.ensureActiveKernel(input.filePath, runtime);
     if (!kernel) {
+      runtime.logger.warn('getParameters returning empty: kernel-not-selected', {
+        data: { filePath: input.filePath, loadedKernels: [...this.loadedKernels.keys()] },
+      });
       return {
         success: true,
         data: { defaultParameters: {}, jsonSchema: {} },
@@ -137,6 +140,9 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
   ): Promise<CreateGeometryResult> {
     const kernel = await this.ensureActiveKernel(input.filePath, runtime);
     if (!kernel) {
+      runtime.logger.warn('createGeometry returning empty: kernel-not-selected', {
+        data: { filePath: input.filePath, loadedKernels: [...this.loadedKernels.keys()] },
+      });
       return { success: true, data: [], issues: [] };
     }
 
@@ -408,7 +414,10 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
           this.selectionCache.set(filePath, { id: config.id, method: 'regex' });
           return { kernel, method: 'regex' };
         }
-      } catch {
+      } catch (error) {
+        runtime.logger.warn('selectKernel pass 1 (extension/regex) failed', {
+          data: { kernel: config.id, file: filePath, error: String(error) },
+        });
         continue;
       }
     }
@@ -457,8 +466,15 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
             });
             return { kernel: primaryKernel, method: 'bundler' };
           }
-        } catch {
-          // Bundler detection failed — fall through to catch-all
+        } catch (error) {
+          runtime.logger.warn('selectKernel pass 2 (bundler-detect) failed', {
+            data: {
+              file: filePath,
+              configs: configsWithBuiltins.map((c) => c.id),
+              error: String(error),
+            },
+          });
+          // Fall through to catch-all
         }
       }
     }
