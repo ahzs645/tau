@@ -880,7 +880,7 @@ module.exports = { main, getParameterDefinitions }
         );
       });
 
-      it('should return warning when main returns undefined (no return statement)', async () => {
+      it('should return success with no issues when main returns undefined (no return statement)', async () => {
         const result = await createGeometry(
           {
             'no_return.ts': `
@@ -897,19 +897,12 @@ module.exports = { main, getParameterDefinitions }
 
         expect(result.success).toBe(true);
         if (result.success) {
-          expect(result.issues.length).toBeGreaterThan(0);
-          expect(result.issues.some((index) => index.severity === 'warning')).toBe(true);
-          expect(result.issues.some((index) => index.message.includes('did not return'))).toBe(true);
-          // Warning should point to line 1 of the file for navigation
-          expect(result.issues[0]?.location).toEqual({
-            fileName: 'no_return.ts',
-            startLineNumber: 1,
-            startColumn: 1,
-          });
+          expect(result.issues).toEqual([]);
+          expect(result.data).toHaveLength(0);
         }
       });
 
-      it('should return warning when main explicitly returns undefined', async () => {
+      it('should return success with no issues when main explicitly returns undefined', async () => {
         const result = await createGeometry(
           {
             'explicit_undefined.ts': `
@@ -925,15 +918,8 @@ module.exports = { main, getParameterDefinitions }
 
         expect(result.success).toBe(true);
         if (result.success) {
-          expect(result.issues.length).toBeGreaterThan(0);
-          expect(result.issues.some((index) => index.severity === 'warning')).toBe(true);
-          expect(result.issues.some((index) => index.message.includes('did not return'))).toBe(true);
-          // Warning should point to line 1 of the file for navigation
-          expect(result.issues[0]?.location).toEqual({
-            fileName: 'explicit_undefined.ts',
-            startLineNumber: 1,
-            startColumn: 1,
-          });
+          expect(result.issues).toEqual([]);
+          expect(result.data).toHaveLength(0);
         }
       });
     });

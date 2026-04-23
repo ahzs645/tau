@@ -1655,7 +1655,7 @@ export default function main() {
         expect(result.data).toHaveLength(0);
       });
 
-      it('should return info when main returns undefined (no return statement)', async () => {
+      it('should return success with no issues when main returns undefined (no return statement)', async () => {
         const result = await createGeometry({
           files: {
             'no_return.ts': `
@@ -1677,18 +1677,11 @@ export default function main() {
         });
 
         assertSuccess(result);
-        expect(result.issues.length).toBeGreaterThan(0);
-        expect(result.issues.some((index) => index.severity === 'info')).toBe(true);
-        expect(result.issues.some((index) => index.message.includes('did not return'))).toBe(true);
-        // Issue should point to line 1 of the file for navigation
-        expect(result.issues[0]?.location).toEqual({
-          fileName: 'no_return.ts',
-          startLineNumber: 1,
-          startColumn: 1,
-        });
+        expect(result.issues).toEqual([]);
+        expect(result.data).toHaveLength(0);
       });
 
-      it('should return info when main explicitly returns undefined', async () => {
+      it('should return success with no issues when main explicitly returns undefined', async () => {
         const result = await createGeometry({
           files: {
             'explicit_undefined.ts': `
@@ -1703,15 +1696,8 @@ export default function main() {
         });
 
         assertSuccess(result);
-        expect(result.issues.length).toBeGreaterThan(0);
-        expect(result.issues.some((index) => index.severity === 'info')).toBe(true);
-        expect(result.issues.some((index) => index.message.includes('did not return'))).toBe(true);
-        // Issue should point to line 1 of the file for navigation
-        expect(result.issues[0]?.location).toEqual({
-          fileName: 'explicit_undefined.ts',
-          startLineNumber: 1,
-          startColumn: 1,
-        });
+        expect(result.issues).toEqual([]);
+        expect(result.data).toHaveLength(0);
       });
     });
 
