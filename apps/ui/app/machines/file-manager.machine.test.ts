@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createActor } from 'xstate';
+import { SharedPool } from '@taucad/memory';
 import { fileManagerMachine } from '#machines/file-manager.machine.js';
 
 const workerTestState = vi.hoisted(() => {
@@ -795,6 +796,85 @@ describe('fileManagerMachine', () => {
       expect((filePoolCalls[0]![0] as { buffer: SharedArrayBuffer }).buffer).toBe(filePoolBuffer);
 
       actor.stop();
+    });
+
+    // ── R8 end-to-end topology ──────────────────────────────────────────────
+    // Locks down the producer/consumer invariant the R8 SAB-sharing change
+    // depends on:
+    //   root FM allocates SAB
+    //     → posts to FM worker (writer)
+    //     → seeds nested FM context (reader-side FileContentService)
+    //     → flows into every cad.machine kernel runtime worker (reader)
+    //
+    // Each cad.machine spins up its own kernel runtime worker, which in turn
+    // constructs `new SharedPool(filePoolBuffer)` (kernel-worker.ts:495). This
+    // test simulates that fan-out by manually constructing reader pools over
+    // the SAB extracted from the root machine's `postMessage`. A bug that
+    // re-allocates the SAB anywhere along the chain would break either the
+    // identity assertion or the cross-instance read assertion.
+    it('should propagate one SAB end-to-end so writer stores are visible to nested FM and every kernel runtime reader', async () => {
+      const rootActor = createActor(fileManagerMachine, {
+        input: {
+          rootDirectory: '/test',
+          shouldInitializeOnStart: true,
+        },
+      });
+      rootActor.start();
+
+      await vi.waitFor(() => {
+        expect(rootActor.getSnapshot().value).toBe('ready');
+      });
+
+      const { worker: rootWorker, filePoolBuffer: rootBuffer } = rootActor.getSnapshot().context;
+      expect(rootBuffer).toBeInstanceOf(SharedArrayBuffer);
+
+      const filePoolMessage = vi
+        .mocked(rootWorker!.postMessage)
+        .mock.calls.find(([message]) => (message as { type?: string }).type === 'filePool');
+      expect(filePoolMessage).toBeDefined();
+      const postedBuffer = (filePoolMessage![0] as { buffer: SharedArrayBuffer }).buffer;
+      expect(postedBuffer).toBe(rootBuffer);
+
+      const writerPool = new SharedPool(postedBuffer);
+
+      const nestedActor = createActor(fileManagerMachine, {
+        input: {
+          rootDirectory: '/projects/nested',
+          shouldInitializeOnStart: true,
+          projectId: 'nested',
+          sharedWorker: rootWorker,
+          sharedFilePoolBuffer: rootBuffer,
+        },
+      });
+      nestedActor.start();
+
+      await vi.waitFor(() => {
+        expect(nestedActor.getSnapshot().value).toBe('ready');
+      });
+
+      expect(nestedActor.getSnapshot().context.filePoolBuffer).toBe(rootBuffer);
+
+      const cadKernelReaderA = new SharedPool(nestedActor.getSnapshot().context.filePoolBuffer!);
+      const cadKernelReaderB = new SharedPool(nestedActor.getSnapshot().context.filePoolBuffer!);
+
+      const encoder = new TextEncoder();
+      const decoder = new TextDecoder();
+      writerPool.store('/projects/nested/main.scad', encoder.encode('cube([1,2,3]);'));
+      writerPool.store('/projects/nested/util.scad', encoder.encode('module noop() {}'));
+
+      expect(decoder.decode(cadKernelReaderA.resolveCopy('/projects/nested/main.scad'))).toBe('cube([1,2,3]);');
+      expect(decoder.decode(cadKernelReaderB.resolveCopy('/projects/nested/main.scad'))).toBe('cube([1,2,3]);');
+      expect(decoder.decode(cadKernelReaderA.resolveCopy('/projects/nested/util.scad'))).toBe('module noop() {}');
+      expect(decoder.decode(cadKernelReaderB.resolveCopy('/projects/nested/util.scad'))).toBe('module noop() {}');
+
+      writerPool.invalidate('/projects/nested/main.scad');
+
+      expect(cadKernelReaderA.resolve('/projects/nested/main.scad')).toBeUndefined();
+      expect(cadKernelReaderB.resolve('/projects/nested/main.scad')).toBeUndefined();
+      expect(decoder.decode(cadKernelReaderA.resolveCopy('/projects/nested/util.scad'))).toBe('module noop() {}');
+
+      nestedActor.stop();
+      rootActor.stop();
     });
   });
 

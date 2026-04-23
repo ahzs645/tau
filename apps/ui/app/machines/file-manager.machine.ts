@@ -14,6 +14,12 @@ import { FileContentService } from '#lib/file-content-service.js';
 import { SharedPool } from '@taucad/memory';
 import { FileTreeService } from '#lib/file-tree-service.js';
 import type { FileManagerProxy, FileManagerProtocol } from '#machines/file-manager.machine.types.js';
+import {
+  formatWorkerError,
+  formatWorkerErrorEnvelope,
+  isWorkerErrorEnvelope,
+  toWorkerError,
+} from '#machines/file-manager-worker-error.js';
 
 const fileCacheMaxEntries = 500;
 const fileCacheMaxTotalBytes = 128 * 1024 * 1024;
@@ -73,22 +79,91 @@ const connectWorkerActor = fromSafeAsync<WorkerConnectedEvent, { context: FileMa
 
     const worker = context.sharedWorker ?? new FileManagerWorker({ name: `fm-root` });
     console.debug(`[FileManager] worker created +${(performance.now() - initT0).toFixed(1)}ms`);
-    worker.addEventListener('error', (error) => {
-      console.error(`[FileManager] WORKER ERROR:`, error.message, error.filename, error.lineno);
+
+    // Crash-aware error/messageerror/envelope listeners. Listeners are
+    // installed before any await so a synchronous load failure (404 served as
+    // HTML, COEP block, SyntaxError) is captured and surfaced through the
+    // XState `error` transition instead of being silently swallowed. The
+    // listeners stay attached after readiness so post-init crashes are at
+    // least visible in the console (the `crashSignal` Promise is only racy
+    // during the connect phase — `armed` is flipped to `false` afterwards
+    // so its callback no longer rejects).
+    let armed = true;
+    let rejectOnCrash!: (error: Error) => void;
+    const crashSignal = new Promise<never>((_resolve, reject) => {
+      rejectOnCrash = reject;
     });
+    // Suppress unhandled-rejection warnings if `crashSignal` never wins the race.
+    // The handler is intentionally inert because errors are already reported
+    // via `console.error` inside `reportAndMaybeReject`.
+    const noop = (): void => {
+      /* Swallowed by design — see comment above. */
+    };
+    // oxlint-disable-next-line eslint-plugin-promise(prefer-await-to-then) -- attaching a catch handler to a Promise we may never await
+    crashSignal.catch(noop);
+
+    const reportAndMaybeReject = (formatted: ReturnType<typeof formatWorkerError>): void => {
+      const error = toWorkerError(formatted);
+      console.error('[FileManager] worker error:', formatted.message, formatted);
+      if (armed) {
+        rejectOnCrash(error);
+      }
+    };
+
+    const onWorkerError = (event: Event): void => {
+      reportAndMaybeReject(formatWorkerError(event));
+    };
+    const onWorkerMessageError = (event: Event): void => {
+      reportAndMaybeReject(formatWorkerError(event));
+    };
+    const onWorkerEnvelope = (event: MessageEvent<unknown>): void => {
+      if (isWorkerErrorEnvelope(event.data)) {
+        reportAndMaybeReject(formatWorkerErrorEnvelope(event.data));
+      }
+    };
+
+    worker.addEventListener('error', onWorkerError);
+    worker.addEventListener('messageerror', onWorkerMessageError);
+    worker.addEventListener('message', onWorkerEnvelope);
 
     if (!context.sharedWorker) {
-      await waitForWorkerReady(worker, signal);
-      console.debug(`[FileManager] worker ready +${(performance.now() - initT0).toFixed(1)}ms`);
+      try {
+        await Promise.race([waitForWorkerReady(worker, signal), crashSignal]);
+        console.debug(`[FileManager] worker ready +${(performance.now() - initT0).toFixed(1)}ms`);
+      } catch (error) {
+        worker.removeEventListener('error', onWorkerError);
+        worker.removeEventListener('messageerror', onWorkerMessageError);
+        worker.removeEventListener('message', onWorkerEnvelope);
+        // We only entered this branch when `context.sharedWorker` was undefined,
+        // so the freshly-created worker is owned by us and must be terminated
+        // here before re-throwing. Wrapped in `safeDispose` to mirror the rest
+        // of the file's worker-teardown patterns.
+        safeDispose(() => {
+          worker.terminate();
+        });
+        throw error;
+      }
     }
+    armed = false;
 
-    let filePoolBuffer: SharedArrayBuffer | undefined;
-    try {
-      filePoolBuffer = new SharedArrayBuffer(filePoolBytes);
-      worker.postMessage({ type: 'filePool', buffer: filePoolBuffer });
-      console.debug(`[FileManager] filePool SAB sent +${(performance.now() - initT0).toFixed(1)}ms`);
-    } catch {
-      console.debug('[FileManager] SharedArrayBuffer unavailable, skipping file pool');
+    // Allocate the file-pool SharedArrayBuffer at most once per worker instance
+    // (R8 — see docs/research/staging-cors-coep-safari-rendering-audit.md).
+    // When `sharedWorker` is supplied, the parent FM has already allocated the
+    // SAB and posted the `filePool` message to that worker; nested FMs reuse
+    // the parent's SAB by reading it from `context.filePoolBuffer` so the
+    // 50 MiB pool isn't duplicated per project route.
+    const { filePoolBuffer: inheritedPoolBuffer } = context;
+    let filePoolBuffer: SharedArrayBuffer | undefined = inheritedPoolBuffer;
+    if (inheritedPoolBuffer) {
+      console.debug(`[FileManager] filePool SAB inherited from parent +${(performance.now() - initT0).toFixed(1)}ms`);
+    } else {
+      try {
+        filePoolBuffer = new SharedArrayBuffer(filePoolBytes);
+        worker.postMessage({ type: 'filePool', buffer: filePoolBuffer });
+        console.debug(`[FileManager] filePool SAB allocated +${(performance.now() - initT0).toFixed(1)}ms`);
+      } catch {
+        console.debug('[FileManager] SharedArrayBuffer unavailable, skipping file pool');
+      }
     }
 
     const { port, dispose: bridgeDispose } = createFileSystemBridge(worker);
@@ -224,6 +299,12 @@ type FileManagerInput = {
   initialBackend?: FileSystemBackend;
   projectId?: string;
   sharedWorker?: Worker;
+  /**
+   * SharedArrayBuffer to reuse for the file-pool when nested under another
+   * `FileManagerProvider`. Set to the parent FM's `filePoolBuffer` so the
+   * nested machine skips its own allocation/post (R8).
+   */
+  sharedFilePoolBuffer?: SharedArrayBuffer;
 };
 
 export const fileManagerMachine = setup({
@@ -356,7 +437,9 @@ export const fileManagerMachine = setup({
   context: ({ input }) => ({
     worker: undefined,
     proxy: undefined,
-    filePoolBuffer: undefined,
+    // Seed with the parent's SAB when nested so the connect actor's gate
+    // observes a non-undefined buffer and skips re-allocation (R8).
+    filePoolBuffer: input.sharedFilePoolBuffer,
     contentService: undefined,
     treeService: undefined,
     error: undefined,

@@ -69,6 +69,14 @@ const FileManagerContext = createContext<FileManagerContextType | undefined>(und
 const SharedWorkerContext = createContext<Worker | undefined>(undefined);
 
 /**
+ * Carries the root FileManagerProvider's file-pool SharedArrayBuffer down to
+ * nested providers (R8). Nested machines reuse this SAB instead of allocating
+ * their own 50 MiB pool, avoiding duplicate `postMessage({ type: 'filePool' })`
+ * traffic to the shared worker.
+ */
+const SharedFilePoolBufferContext = createContext<SharedArrayBuffer | undefined>(undefined);
+
+/**
  * Gate component that defers rendering until the parent FileManagerProvider's
  * worker is available via SharedWorkerContext. Prevents nested
  * FileManagerProviders from creating duplicate workers during the window
@@ -97,6 +105,7 @@ export function FileManagerProvider({
 }): React.JSX.Element {
   const [backendCookie] = useCookie(cookieName.filesystemBackend, 'indexeddb' as FileSystemBackend);
   const parentWorker = useContext(SharedWorkerContext);
+  const parentFilePoolBuffer = useContext(SharedFilePoolBufferContext);
 
   const fileManagerRef = useActorRef(fileManagerMachine, {
     input: {
@@ -105,6 +114,7 @@ export function FileManagerProvider({
       initialBackend: backendCookie,
       projectId,
       sharedWorker: parentWorker,
+      sharedFilePoolBuffer: parentFilePoolBuffer,
     },
   });
 
@@ -361,11 +371,18 @@ export function FileManagerProvider({
 
   const isRoot = parentWorker === undefined;
   const workerForChildren = useSelector(fileManagerRef, (state) => state.context.worker);
+  const filePoolBufferForChildren = useSelector(fileManagerRef, (state) => state.context.filePoolBuffer);
 
   const provider = <FileManagerContext.Provider value={value}>{children}</FileManagerContext.Provider>;
 
   if (isRoot) {
-    return <SharedWorkerContext.Provider value={workerForChildren}>{provider}</SharedWorkerContext.Provider>;
+    return (
+      <SharedWorkerContext.Provider value={workerForChildren}>
+        <SharedFilePoolBufferContext.Provider value={filePoolBufferForChildren}>
+          {provider}
+        </SharedFilePoolBufferContext.Provider>
+      </SharedWorkerContext.Provider>
+    );
   }
 
   return provider;
