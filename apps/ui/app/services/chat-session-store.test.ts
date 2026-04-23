@@ -269,30 +269,51 @@ describe('ChatSessionStore', () => {
   // ===========================================================================
 
   describe('membership notifications', () => {
-    it('notifies membership subscribers on first acquire only', () => {
+    it('notifies membership subscribers on first acquire only', async () => {
       const store = createStore();
       const listener = vi.fn();
       store.subscribeMembership(listener);
 
       store.acquire('chat_a');
+      // Membership notifications fan out on a microtask so an in-render
+      // acquire never triggers a re-entrant React update.
+      await Promise.resolve();
       expect(listener).toHaveBeenCalledTimes(1);
 
       store.acquire('chat_a');
+      await Promise.resolve();
       expect(listener).toHaveBeenCalledTimes(1);
     });
 
-    it('notifies membership subscribers on final release only', () => {
+    it('notifies membership subscribers on final release only', async () => {
       const store = createStore();
       store.acquire('chat_a');
       store.acquire('chat_a');
+      await Promise.resolve();
 
       const listener = vi.fn();
       store.subscribeMembership(listener);
 
       store.release('chat_a');
+      await Promise.resolve();
       expect(listener).not.toHaveBeenCalled();
 
       store.release('chat_a');
+      await Promise.resolve();
+      expect(listener).toHaveBeenCalledTimes(1);
+    });
+
+    it('coalesces a burst of membership changes into one notification', async () => {
+      const store = createStore();
+      const listener = vi.fn();
+      store.subscribeMembership(listener);
+
+      store.acquire('chat_a');
+      store.acquire('chat_b');
+      store.acquire('chat_c');
+      expect(listener).not.toHaveBeenCalled();
+
+      await Promise.resolve();
       expect(listener).toHaveBeenCalledTimes(1);
     });
 
@@ -308,13 +329,14 @@ describe('ChatSessionStore', () => {
       expect([...store.list()].sort()).toEqual(['chat_a', 'chat_b']);
     });
 
-    it('stops invoking membership listeners after unsubscribe', () => {
+    it('stops invoking membership listeners after unsubscribe', async () => {
       const store = createStore();
       const listener = vi.fn();
       const unsubscribe = store.subscribeMembership(listener);
       unsubscribe();
 
       store.acquire('chat_a');
+      await Promise.resolve();
       expect(listener).not.toHaveBeenCalled();
     });
   });

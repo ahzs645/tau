@@ -172,6 +172,17 @@ export class ChatSessionStore {
   readonly #statusListeners = new Map<string, Set<() => void>>();
   readonly #usageListeners = new Map<string, Set<() => void>>();
   #snapshot: readonly string[] = [];
+  /**
+   * Coalesces membership notifications onto a microtask so an `acquire`/
+   * `release` triggered during another component's render (e.g. the React
+   * `useChatSession` lazy initializer) never schedules a `setState` on a
+   * concurrently-rendering subscriber. Without this, `<ProjectChatRpcBindings>`'s
+   * `useSyncExternalStore` would wake mid-render of `<SessionBackedActiveChatProvider>`
+   * and React would log the "Cannot update a component while rendering a
+   * different component" warning. Snapshot mutation stays synchronous so
+   * `getSnapshot` callers always observe the latest membership.
+   */
+  #membershipNotifyScheduled = false;
   // Default deps throw — `setDependencies` must be called before any acquire.
   // Stored as a single object so swaps are atomic (no torn reads).
   #deps: ChatSessionDeps = {
@@ -525,8 +536,15 @@ export class ChatSessionStore {
   }
 
   #notifyMembership(): void {
-    for (const listener of this.#membershipListeners) {
-      listener();
+    if (this.#membershipNotifyScheduled) {
+      return;
     }
+    this.#membershipNotifyScheduled = true;
+    queueMicrotask(() => {
+      this.#membershipNotifyScheduled = false;
+      for (const listener of this.#membershipListeners) {
+        listener();
+      }
+    });
   }
 }
