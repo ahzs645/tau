@@ -479,18 +479,7 @@ export default defineKernel({
         return {
           geometry: [],
           nativeHandle: [],
-          issues: [
-            {
-              message: 'main() did not return any shapes. Did you forget to add a return statement?',
-              location: {
-                fileName: relativeFilePath,
-                startLineNumber: 1,
-                startColumn: 1,
-              },
-              type: 'runtime',
-              severity: 'info',
-            },
-          ],
+          issues: [],
         };
       }
 
