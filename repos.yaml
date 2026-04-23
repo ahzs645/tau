@@ -21,6 +21,7 @@ groups:
       - zalo-opencascade.js
       - ForgeCAD
       - tinyusdz
+      - SysML-v2-Release
   slicers:
     description: 3D printer slicer applications
     repos:
@@ -40,6 +41,8 @@ groups:
       - open-interpreter
       - bolt.diy
       - novu
+      - atopile
+      - props
   3d:
     description: 3D rendering and visualization
     repos:
@@ -425,3 +428,12 @@ repos:
     upstream: novuhq/novu
     branch: next
     description: The open-source notification infrastructure. In-app Inbox component, E-mail, SMS, Push and Slack Integrations.
+  SysML-v2-Release:
+    upstream: Systems-Modeling/SysML-v2-Release
+    description: OMG SysML v2 standard library + textual notation BNF + spec docs
+  atopile:
+    upstream: atopile/atopile
+    description: Electronics-as-code DSL with units, tolerances, assert constraint solving
+  props:
+    upstream: tscircuit/props
+    description: Zod props for tscircuit React components (BoardProps, ChipProps, ResistorProps)
