@@ -17,12 +17,13 @@ import { AttributeKey } from '@taucad/telemetry';
 import { MetricsService } from '#telemetry/metrics.js';
 import { injectTraceContext } from '#telemetry/tracer.service.js';
 
-/** Timeout for RPC execution in milliseconds (60 seconds) */
-export const rpcExecutionTimeoutMs = 60_000;
+/** Timeout for RPC execution (60 seconds). Milliseconds. */
+export const rpcExecutionTimeout = 60_000;
 
-/** Delay before clearing the aborted-chat entry after an abort signal fires (milliseconds).
- *  Catches straggler RPCs that start after abort but before LangGraph fully stops. */
-export const abortCleanupDelayMs = 5000;
+/** Delay before clearing the aborted-chat entry after an abort signal fires.
+ *  Catches straggler RPCs that start after abort but before LangGraph fully stops.
+ *  Milliseconds. */
+export const abortCleanupDelay = 5000;
 
 /**
  * Service for managing Socket.IO-based RPC execution.
@@ -286,7 +287,7 @@ export class ChatRpcService implements OnModuleDestroy {
 
     try {
       /* oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- emitWithAck returns untyped ack */
-      const response: RpcResponse = await socket.timeout(rpcExecutionTimeoutMs).emitWithAck('rpc_request', rpcRequest);
+      const response: RpcResponse = await socket.timeout(rpcExecutionTimeout).emitWithAck('rpc_request', rpcRequest);
 
       const inboundSize = estimateJsonSize(response);
       this.metrics.wsMessageSize.record(inboundSize, {
@@ -312,7 +313,7 @@ export class ChatRpcService implements OnModuleDestroy {
     } catch {
       const errorCode = socket.connected ? 'TIMEOUT' : 'CLIENT_DISCONNECTED';
       const message = socket.connected
-        ? `RPC execution timed out after ${rpcExecutionTimeoutMs / 1000} seconds. The client may be disconnected or unresponsive.`
+        ? `RPC execution timed out after ${rpcExecutionTimeout / 1000} seconds. The client may be disconnected or unresponsive.`
         : 'WebSocket client disconnected before RPC execution completed.';
 
       this.recordRpcDuration(startTime, rpcName, { status: 'error', errorType: errorCode });
@@ -444,7 +445,7 @@ export class ChatRpcService implements OnModuleDestroy {
     const timerId = setTimeout(() => {
       this.abortedChats.delete(chatId);
       this.abortCleanupTimers.delete(chatId);
-    }, abortCleanupDelayMs);
+    }, abortCleanupDelay);
     this.abortCleanupTimers.set(chatId, timerId);
   }
 

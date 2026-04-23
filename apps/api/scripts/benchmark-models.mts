@@ -360,7 +360,7 @@ async function runSuite(): Promise<void> {
   const providers = values.providers?.split(',').map((s) => s.trim());
   const models = values.models?.split(',').map((s) => s.trim());
   const filterCats = values.filter?.split(',').map((s) => s.trim());
-  const timeoutMs = Number.parseInt(values.timeout, 10);
+  const benchmarkTimeout = Number.parseInt(values.timeout, 10);
   const rawConcurrency = Number.parseInt(values.concurrency, 10);
   const concurrency = rawConcurrency > 0 ? rawConcurrency : Infinity;
   const skipGeometry = values['skip-geometry'];
@@ -394,7 +394,7 @@ async function runSuite(): Promise<void> {
   );
   label('Total runs', `${active.length * cases.length}`);
   label('Concurrency', concurrencyLabel);
-  label('Timeout', `${timeoutMs}ms`);
+  label('Timeout', `${benchmarkTimeout}ms`);
   label('Geometry', skipGeometry ? 'skipped' : 'enabled');
   console.log('');
 
@@ -403,7 +403,7 @@ async function runSuite(): Promise<void> {
     cases,
     skippedModels: skipped,
     options: {
-      timeoutMs,
+      benchmarkTimeout,
       concurrency,
       skipGeometry,
       onProgress(info: ProgressInfo) {

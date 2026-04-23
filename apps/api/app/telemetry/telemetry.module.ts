@@ -4,7 +4,8 @@ import type { OnApplicationShutdown } from '@nestjs/common';
 import { TracerService } from '#telemetry/tracer.service.js';
 import { MetricsService } from '#telemetry/metrics.js';
 
-const shutdownTimeoutMs = 5000;
+/** Milliseconds. */
+const shutdownTimeout = 5000;
 
 @Global()
 @Module({
@@ -19,13 +20,13 @@ export class TelemetryModule implements OnApplicationShutdown {
 
     try {
       const { sdk } = await import('#telemetry/otel.js');
-      const timeout = new Promise<never>((_resolve, reject) => {
+      const shutdownTimeoutPromise = new Promise<never>((_resolve, reject) => {
         const timer = setTimeout(() => {
           reject(new Error('OTEL shutdown timeout'));
-        }, shutdownTimeoutMs);
+        }, shutdownTimeout);
         timer.unref();
       });
-      await Promise.race([sdk.shutdown(), timeout]);
+      await Promise.race([sdk.shutdown(), shutdownTimeoutPromise]);
       this.logger.log('OTEL SDK shut down successfully');
     } catch (error) {
       this.logger.warn(`OTEL SDK shutdown failed: ${error instanceof Error ? error.message : String(error)}`);

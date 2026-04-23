@@ -22,7 +22,7 @@ vi.mock('pdf-parse', () => ({
 }));
 
 // oxlint-disable-next-line eslint-plugin-import(first) -- must follow vi.mock calls
-import { fetchAndExtract, maxContentLength, fetchTimeoutMs } from '#api/tools/utils/web-content-extractor.js';
+import { fetchAndExtract, maxContentLength, fetchTimeout } from '#api/tools/utils/web-content-extractor.js';
 
 // =============================================================================
 // Helpers
@@ -257,8 +257,8 @@ describe('fetchAndExtract', () => {
       expect(callArgs.signal).toBeInstanceOf(AbortSignal);
     });
 
-    it('should export fetchTimeoutMs as 30 seconds', () => {
-      expect(fetchTimeoutMs).toBe(30_000);
+    it('should export fetchTimeout as 30 seconds', () => {
+      expect(fetchTimeout).toBe(30_000);
     });
   });
 });

@@ -1,4 +1,5 @@
-import { createRuntimeClient } from '@taucad/runtime';
+import { createRuntimeClient, fromMemoryFS } from '@taucad/runtime';
+import type { HashedGeometryResult } from '@taucad/runtime';
 import { createInProcessTransport } from '@taucad/runtime/transport';
 import { openscad } from '@taucad/openscad';
 import { gltfCoordinateTransform } from '@taucad/runtime/middleware';
@@ -39,12 +40,37 @@ export type GeometryValidationResult = {
 
 const defaultGeometryTolerance = 1;
 
+const benchmarkFileSystems = new WeakMap<ApiRuntimeClient, ReturnType<typeof fromMemoryFS>>();
+
 export function createGeometryRenderer(): ApiRuntimeClient {
-  return createRuntimeClient({
+  const fileSystem = fromMemoryFS();
+  const client = createRuntimeClient({
     kernels: [openscad()],
     middleware: [gltfCoordinateTransform()],
     transport: createInProcessTransport(),
+    fileSystem,
   });
+  benchmarkFileSystems.set(client, fileSystem);
+  return client;
+}
+
+/**
+ * Eagerly connect a benchmark renderer so its first `openFile` call does not
+ * throw `RuntimeNotConnectedError`. Per the v5 blueprint (R34), `connect()` is
+ * a hard precondition for `openFile`/`updateParameters`/`setOptions`.
+ *
+ * Reuses the in-memory filesystem registered in `createGeometryRenderer` so
+ * file writes flow through the same FS that the worker mounts.
+ */
+export async function ensureGeometryRendererConnected(client: ApiRuntimeClient): Promise<void> {
+  if (client.lifecycleState === 'connected') {
+    return;
+  }
+  const fileSystem = benchmarkFileSystems.get(client);
+  if (!fileSystem) {
+    throw new Error('createGeometryRenderer must be used to construct benchmark RuntimeClients');
+  }
+  await client.connect({ fileSystem });
 }
 
 export async function renderCodeToGlb(
@@ -53,19 +79,55 @@ export async function renderCodeToGlb(
   mainFile: string,
 ): Promise<GeometryRenderResult> {
   try {
-    const result = await client.render({ code: files, file: mainFile });
+    // Subscribe to the geometry event before kicking off the render, so we can
+    // observe the (possibly superseded) settled result. Per the v5 blueprint
+    // (R6, R10, R24), `openFile()` returns a `RenderSettlement` whose
+    // `geometry` field carries the latest hashed result; we defensively also
+    // listen on `'geometry'` in case the settlement was superseded by a fresh
+    // call (which is unlikely here since this is a one-shot helper).
+    let lastGeometry: HashedGeometryResult | undefined;
+    const off = client.on('geometry', (result) => {
+      lastGeometry = result;
+    });
 
-    if (!result.success) {
-      const messages = result.issues.map((i) => i.message).join('; ');
-      return { success: false, error: `Render failed: ${messages}` };
+    try {
+      await ensureGeometryRendererConnected(client);
+
+      // Pre-write inline files into the same memory FS the worker mounts so
+      // openFile() reads them without race / FS-mismatch concerns.
+      const fileSystem = benchmarkFileSystems.get(client);
+      if (!fileSystem) {
+        return { success: false, error: 'Renderer is missing its memory filesystem registration' };
+      }
+      await Promise.all(
+        Object.entries(files).map(async ([filename, content]) => {
+          const absolutePath = filename.startsWith('/') ? filename : `/${filename}`;
+          await fileSystem.writeFile(absolutePath, content);
+        }),
+      );
+      const resolvedMainFile = mainFile.startsWith('/') ? mainFile : `/${mainFile}`;
+
+      const settlement = await client.openFile({ file: resolvedMainFile });
+      const result: HashedGeometryResult | undefined = settlement.superseded ? lastGeometry : settlement.geometry;
+
+      if (!result) {
+        return { success: false, error: 'Render produced no geometry result' };
+      }
+
+      if (!result.success) {
+        const messages = result.issues.map((issue) => issue.message).join('; ');
+        return { success: false, error: `Render failed: ${messages}` };
+      }
+
+      const gltf = result.data.find((geometry) => geometry.format === 'gltf');
+      if (!gltf) {
+        return { success: false, error: 'No GLTF geometry in render result' };
+      }
+
+      return { success: true, glb: gltf.content };
+    } finally {
+      off();
     }
-
-    const gltf = result.data.find((g) => g.format === 'gltf');
-    if (!gltf) {
-      return { success: false, error: 'No GLTF geometry in render result' };
-    }
-
-    return { success: true, glb: gltf.content };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return { success: false, error: `Render error: ${message}` };

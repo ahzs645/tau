@@ -9,8 +9,8 @@ import type { Environment } from '#config/environment.config.js';
 type WebSocketResponse = Models['WebSocketResponse_type'];
 type WebSocketRequest = Models['WebSocketRequest_type'];
 
-/** Connection timeout in milliseconds - how long to wait for Zoo WebSocket to open */
-const zooConnectionTimeoutMs = 30_000;
+/** Connection timeout — how long to wait for Zoo WebSocket to open. Milliseconds. */
+const zooConnectionTimeout = 30_000;
 
 /** Maximum number of connection attempts before giving up */
 const zooMaxRetries = 3;
@@ -162,7 +162,7 @@ export class KernelsService {
     const connectionTimeout = setTimeout(() => {
       if (zooSocket.readyState === WebSocket.CONNECTING) {
         connectionState.connectionTimedOut = true;
-        this.logger.warn(`Zoo connection timeout after ${zooConnectionTimeoutMs}ms (attempt ${attempt})`);
+        this.logger.warn(`Zoo connection timeout after ${zooConnectionTimeout}ms (attempt ${attempt})`);
         zooSocket.close();
 
         // Retry if we haven't exceeded max attempts and client is still connected
@@ -173,7 +173,7 @@ export class KernelsService {
           clientSocket.close(1011, 'Upstream connection timeout');
         }
       }
-    }, zooConnectionTimeoutMs);
+    }, zooConnectionTimeout);
 
     /**
      * Attempts to claim exclusive cleanup responsibility.

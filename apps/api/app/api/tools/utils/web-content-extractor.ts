@@ -2,7 +2,8 @@ import TurndownService from 'turndown';
 import { PDFParse } from 'pdf-parse';
 
 export const maxContentLength = 10 * 1024 * 1024; // 10 MB
-export const fetchTimeoutMs = 30_000;
+/** Milliseconds. */
+export const fetchTimeout = 30_000;
 const userAgent = 'TauCAD-Agent/1.0';
 
 export type ExtractedContent = {
@@ -46,7 +47,7 @@ async function extractByContentType(buffer: Uint8Array<ArrayBuffer>, mimeType: s
 
 export async function fetchAndExtract(url: string): Promise<ExtractedContent> {
   const response = await fetch(url, {
-    signal: AbortSignal.timeout(fetchTimeoutMs),
+    signal: AbortSignal.timeout(fetchTimeout),
     headers: {
       'User-Agent': userAgent,
       // eslint-disable-next-line @typescript-eslint/naming-convention -- HTTP header

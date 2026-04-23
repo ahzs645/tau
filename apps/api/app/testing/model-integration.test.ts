@@ -772,11 +772,11 @@ describe('Chat RPC WebSocket Transport Resilience', () => {
 
     const emitJoinWithTimeout = async (): Promise<{ success: boolean } | undefined> =>
       new Promise<{ success: boolean } | undefined>((resolve) => {
-        const timeout = setTimeout(() => {
+        const joinTimeoutTimer = setTimeout(() => {
           resolve(undefined);
         }, 2000);
         client.emit('join', { chatId: 'chat_retry_test' }, (response: { success: boolean }) => {
-          clearTimeout(timeout);
+          clearTimeout(joinTimeoutTimer);
           resolve(response);
         });
       });

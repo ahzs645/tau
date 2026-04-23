@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mock } from 'vitest-mock-extended';
 import type { Socket } from 'socket.io';
-import { ChatRpcService, rpcExecutionTimeoutMs, abortCleanupDelayMs } from '#api/chat/chat-rpc.service.js';
+import { ChatRpcService, rpcExecutionTimeout, abortCleanupDelay } from '#api/chat/chat-rpc.service.js';
 import { MetricsService } from '#telemetry/metrics.js';
 
 const mockMetricsService = new MetricsService();
@@ -124,7 +124,7 @@ describe('ChatRpcService', () => {
         args: { targetFile: 'a.txt' },
       });
 
-      expect(socket.timeout).toHaveBeenCalledWith(rpcExecutionTimeoutMs);
+      expect(socket.timeout).toHaveBeenCalledWith(rpcExecutionTimeout);
       expect(ack).toHaveBeenCalledWith(
         'rpc_request',
         expect.objectContaining({ rpcName: 'read_file', chatId: 'chat_1' }),
@@ -357,7 +357,7 @@ describe('ChatRpcService', () => {
         errorCode: 'CLIENT_DISCONNECTED',
       });
 
-      vi.advanceTimersByTime(abortCleanupDelayMs);
+      vi.advanceTimersByTime(abortCleanupDelay);
 
       const socket = createMockSocket('s1');
       service.registerConnection('chat_123', socket, defaultUserId);
@@ -814,7 +814,7 @@ describe('ChatRpcService', () => {
       // Advance past the cleanup window — the old timer should NOT fire
       // (it would have called abortedChats.delete on the OLD service, but we
       // verify no errors occur)
-      vi.advanceTimersByTime(abortCleanupDelayMs);
+      vi.advanceTimersByTime(abortCleanupDelay);
 
       const ack2 = getEmitWithAck(socket2);
       ack2.mockResolvedValueOnce({

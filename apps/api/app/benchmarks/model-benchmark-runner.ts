@@ -100,7 +100,8 @@ export type GeometryProgressInfo = {
 export type RunOptions = {
   onProgress?: ProgressCallback;
   onGeometryProgress?: (info: GeometryProgressInfo) => void;
-  timeoutMs?: number;
+  /** Per-benchmark request timeout. Milliseconds. */
+  benchmarkTimeout?: number;
   concurrency?: number;
   skipGeometry?: boolean;
 };
@@ -278,14 +279,15 @@ type SingleBenchmarkOptions = {
   testApp: TestApp;
   model: FlatModel;
   benchmarkCase: ModelBenchmarkCase;
-  timeoutMs: number;
+  /** Milliseconds. */
+  benchmarkTimeout: number;
 };
 
 async function runSingleBenchmark({
   testApp,
   model,
   benchmarkCase,
-  timeoutMs,
+  benchmarkTimeout,
 }: SingleBenchmarkOptions): Promise<ModelBenchmarkResult> {
   const startTime = Date.now();
 
@@ -304,7 +306,7 @@ async function runSingleBenchmark({
           },
         ],
       }),
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: AbortSignal.timeout(benchmarkTimeout),
     });
 
     if (!response.ok) {
@@ -466,7 +468,7 @@ export async function runModelBenchmarks({
   skippedModels,
   options,
 }: BenchmarkRunInput): Promise<ModelBenchmarkRunResult> {
-  const timeoutMs = options?.timeoutMs ?? 180_000;
+  const benchmarkTimeout = options?.benchmarkTimeout ?? 180_000;
   const concurrency = options?.concurrency ?? Infinity;
   const skipGeometry = options?.skipGeometry ?? false;
   const runStart = Date.now();
@@ -520,7 +522,7 @@ export async function runModelBenchmarks({
         testApp,
         model: task.model,
         benchmarkCase: task.benchmarkCase,
-        timeoutMs,
+        benchmarkTimeout,
       });
       completed++;
       return result;

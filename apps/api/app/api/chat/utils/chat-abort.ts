@@ -57,7 +57,8 @@ export function isChatAbortError(value: unknown): value is ChatAbortError {
 // our aborts from unrelated AbortErrors.
 // ---------------------------------------------------------------------------
 
-const trackingWindowMs = 10_000;
+/** Milliseconds. */
+const trackingWindow = 10_000;
 
 const activeChatAborts = new Set<string>();
 const cleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -69,7 +70,7 @@ const cleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
  * place when node-fetch's rejection fires (which can happen synchronously
  * during the abort() call).
  *
- * The entry is automatically removed after {@link trackingWindowMs} to
+ * The entry is automatically removed after {@link trackingWindow} to
  * prevent unbounded growth.
  */
 export function registerChatAbort(chatId: string): void {
@@ -83,7 +84,7 @@ export function registerChatAbort(chatId: string): void {
   const timer = setTimeout(() => {
     activeChatAborts.delete(chatId);
     cleanupTimers.delete(chatId);
-  }, trackingWindowMs);
+  }, trackingWindow);
 
   cleanupTimers.set(chatId, timer);
 }
