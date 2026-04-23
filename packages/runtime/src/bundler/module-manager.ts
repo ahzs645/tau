@@ -63,14 +63,14 @@ const esmShBase = 'https://esm.sh';
 /** Fallback CDN */
 const jsdelivrBase = 'https://cdn.jsdelivr.net/npm';
 
-/** Fetch timeout in milliseconds */
-const fetchTimeoutMs = 15_000;
+/** Fetch timeout. Milliseconds. */
+const fetchTimeout = 15_000;
 
 /** Maximum response size in bytes (10 MB) */
 const maxResponseSizeBytes = 10 * 1024 * 1024;
 
-/** Minimum time between retry attempts for failed fetches (ms) */
-const retryDelayMs = 60_000;
+/** Minimum time between retry attempts for failed fetches. Milliseconds. */
+const retryDelay = 60_000;
 
 // =============================================================================
 // Module Manager Class
@@ -127,7 +127,7 @@ export class ModuleManager {
 
     // Retry guard: skip if recently failed
     const lastFailure = this.failedPackages.get(cacheKey);
-    if (lastFailure !== undefined && Date.now() - lastFailure < retryDelayMs) {
+    if (lastFailure !== undefined && Date.now() - lastFailure < retryDelay) {
       return;
     }
 
@@ -235,7 +235,7 @@ export class ModuleManager {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => {
       controller.abort();
-    }, fetchTimeoutMs);
+    }, fetchTimeout);
 
     try {
       const response = await fetch(url, { signal: controller.signal });

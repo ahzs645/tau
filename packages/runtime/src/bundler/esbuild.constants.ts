@@ -38,8 +38,8 @@ export const vfsNamespacePrefix = `${esbuildNamespace.vfs}:`;
  */
 export const nodeExecFilePrefix = 'taucad-exec-';
 
-/** Maximum time (ms) to wait for a remote HTTP module before aborting. */
-export const httpFetchTimeoutMs = 30_000;
+/** Maximum time to wait for a remote HTTP module before aborting. Milliseconds. */
+export const httpFetchTimeout = 30_000;
 
 /** Maximum response size (bytes) for fetched HTTP modules (10 MB). */
 export const httpFetchMaxSizeBytes = 10 * 1024 * 1024;

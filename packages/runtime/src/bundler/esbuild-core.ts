@@ -24,7 +24,7 @@ import { isNode } from '#framework/environment.js';
 import {
   esbuildNamespace,
   vfsNamespacePrefix,
-  httpFetchTimeoutMs,
+  httpFetchTimeout,
   httpFetchMaxSizeBytes,
 } from '#bundler/esbuild.constants.js';
 
@@ -519,7 +519,7 @@ export function createVfsPlugin(options: VfsPluginOptions): Plugin {
       build.onLoad({ filter: /.*/, namespace: esbuildNamespace.httpUrl }, async (args) => {
         try {
           const response = await fetch(args.path, {
-            signal: AbortSignal.timeout(httpFetchTimeoutMs),
+            signal: AbortSignal.timeout(httpFetchTimeout),
           });
           if (!response.ok) {
             return {
