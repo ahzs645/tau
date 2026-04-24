@@ -330,8 +330,7 @@ describe('uiMessagesSchema reasoning part narrowing', () => {
   });
 
   /**
-   * Backfill of the AI SDK approval lifecycle. R7 in
-   * `docs/research/interrupted-tool-call-validation-failure.md`: the upstream
+   * Backfill of the AI SDK approval lifecycle. The upstream
    * `validateUIMessages` schema accepts `approval-requested`,
    * `approval-responded`, and `output-denied` for both static and dynamic tool
    * parts. Mirroring those keeps `uiMessagesSchema` forward-compatible the

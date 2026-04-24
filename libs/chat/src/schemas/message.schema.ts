@@ -86,8 +86,7 @@ const createToolSchemas = <
     // Output-error state — `input` may be absent because the LLM stream was
     // interrupted before arguments fully serialised; the partial value is
     // moved to `rawInput` by the preprocess healer at the schema's top level.
-    // See docs/policy/interrupted-tool-call-contract.md and
-    // docs/research/interrupted-tool-call-validation-failure.md (R1, R3).
+    // See docs/policy/interrupted-tool-call-contract.md.
     z.object({
       type: z.literal(toolType),
       toolCallId: z.string(),
@@ -205,7 +204,8 @@ const createEmptyInputToolSchemas = <Name extends ToolName, Output extends z.Zod
       errorText: z.string(),
       callProviderMetadata: providerMetadataSchema.optional(),
     }),
-    // Approval-lifecycle states — see createToolSchemas notes; backfilled per R7.
+    // Approval-lifecycle states — see createToolSchemas notes; backfilled
+    // to match upstream `validateUIMessages`.
     z.object({
       type: z.literal(toolType),
       toolCallId: z.string(),
@@ -298,12 +298,9 @@ const rawUiMessagesSchema = z
               type: z.literal('reasoning'),
               text: z.string(),
               state: z.enum(['streaming', 'done']).optional(),
-              // Narrowed: the `common` namespace carries Tau-attached
-              // reasoning timing metadata (server-stamped on
-              // reasoning-start/end). The intersection keeps validation
-              // for sibling provider namespaces (anthropic, openai, …)
-              // via the loose record while typing `common` strictly.
-              // See docs/research/reasoning-duration-display.md § Finding 7.
+              // Narrow `common` to typed reasoning timing (server-stamped on
+              // reasoning-start/end); sibling provider namespaces stay on the
+              // loose record schema.
               providerMetadata: providerMetadataSchema
                 .and(z.object({ common: commonReasoningMetadataSchema.optional() }))
                 .optional(),
@@ -394,8 +391,7 @@ const rawUiMessagesSchema = z
               callProviderMetadata: providerMetadataSchema.optional(),
             }),
             // Approval-lifecycle states for dynamic tool parts. Mirrors
-            // upstream `validateUIMessages`; see R7 in
-            // docs/research/interrupted-tool-call-validation-failure.md.
+            // upstream `validateUIMessages`.
             z.object({
               type: z.literal('dynamic-tool'),
               toolName: z.string(),
@@ -474,8 +470,7 @@ const rawUiMessagesSchema = z
  * Static tool parts (e.g. `tool-read_file`) consult the registry; dynamic
  * tool parts have no strict input contract and are passed through unchanged.
  *
- * See docs/research/interrupted-tool-call-validation-failure.md (R3, F3, F7)
- * and docs/policy/interrupted-tool-call-contract.md.
+ * See docs/policy/interrupted-tool-call-contract.md.
  */
 const healInterruptedToolParts = (input: unknown): unknown => {
   if (!Array.isArray(input)) {

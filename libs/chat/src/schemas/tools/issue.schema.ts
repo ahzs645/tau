@@ -27,6 +27,16 @@ export const errorLocationSchema = z.object({
 export const kernelIssueSchema: z.ZodType<KernelIssue> = z
   .object({
     message: z.string(),
+    code: z.enum([
+      'RENDER_TIMEOUT',
+      'RENDER_ABORTED',
+      'KERNEL_BINDING_FAILED',
+      'KERNEL_CAPABILITY_MISSING',
+      'BUNDLER_FAILED',
+      'MIDDLEWARE_FAILED',
+      'RUNTIME',
+      'UNKNOWN',
+    ]),
     location: errorLocationSchema.optional(),
     stack: z.string().optional(),
     stackFrames: z

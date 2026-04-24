@@ -11,10 +11,10 @@ import type { ReasoningUIPart } from 'ai';
  * `reasoningEndedAtMs - reasoningStartedAtMs` so the wire format stays minimal
  * and the source of truth is a function of the two timestamps.
  *
- * See `docs/research/reasoning-duration-display.md` § Finding 7 (minimal-state
- * server design) and § Finding 8 (AI SDK `providerMetadata` replace-on-write)
- * for why both endpoints land on the `reasoning-end` chunk via a per-stream
- * lookup, and why duration is derived rather than transmitted.
+ * On the wire, `providerMetadata` is replace-on-write for a given part, so
+ * both stamps are merged onto the `reasoning-end` chunk via a per-stream
+ * lookup; duration is derived client-side from the two timestamps rather
+ * than transmitted as a third field.
  *
  * @public
  */
