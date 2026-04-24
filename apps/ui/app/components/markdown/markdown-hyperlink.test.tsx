@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { MemoryRouter } from 'react-router';
-import { isExternalLink, MarkdownHyperlink } from '#components/markdown/markdown-hyperlink.js';
+import { isExternalLink, MarkdownHyperlink, resolveRelativeHref } from '#components/markdown/markdown-hyperlink.js';
 
 describe('isExternalLink', () => {
   it('returns true for http:// URLs', () => {
@@ -41,24 +41,91 @@ describe('isExternalLink', () => {
   });
 });
 
+describe('resolveRelativeHref', () => {
+  it('returns absolute paths unchanged', () => {
+    expect(resolveRelativeHref('/docs/getting-started/quick-start', '/docs/guides/live-rendering')).toBe(
+      '/docs/getting-started/quick-start',
+    );
+  });
+
+  it('returns anchor-only links unchanged', () => {
+    expect(resolveRelativeHref('#section', '/docs/guides/live-rendering')).toBe('#section');
+  });
+
+  it('returns scheme links unchanged', () => {
+    expect(resolveRelativeHref('mailto:hello@example.com', '/docs/guides/live-rendering')).toBe(
+      'mailto:hello@example.com',
+    );
+    expect(resolveRelativeHref('https://example.com/foo', '/docs/guides/live-rendering')).toBe(
+      'https://example.com/foo',
+    );
+  });
+
+  it('resolves ../ from a leaf URL via standard URL semantics (RFC 3986)', () => {
+    // Regression: React Router's `relative='path'` would have produced
+    // /docs/guides/getting-started/quick-start (only popping `live-rendering`),
+    // breaking every cross-directory MDX link.
+    expect(resolveRelativeHref('../getting-started/quick-start', '/docs/guides/live-rendering')).toBe(
+      '/docs/getting-started/quick-start',
+    );
+  });
+
+  it('resolves ./sibling from a leaf URL', () => {
+    expect(resolveRelativeHref('./embedding-in-a-host', '/docs/guides/live-rendering')).toBe(
+      '/docs/guides/embedding-in-a-host',
+    );
+  });
+
+  it('resolves a bare sibling path from a leaf URL', () => {
+    expect(resolveRelativeHref('embedding-in-a-host', '/docs/guides/live-rendering')).toBe(
+      '/docs/guides/embedding-in-a-host',
+    );
+  });
+
+  it('preserves hash and search when resolving', () => {
+    expect(resolveRelativeHref('../api/client#methods', '/docs/guides/live-rendering')).toBe(
+      '/docs/api/client#methods',
+    );
+    expect(resolveRelativeHref('./error-handling?q=1#x', '/docs/guides/live-rendering')).toBe(
+      '/docs/guides/error-handling?q=1#x',
+    );
+  });
+
+  it('returns empty string unchanged', () => {
+    expect(resolveRelativeHref('', '/docs/guides/live-rendering')).toBe('');
+  });
+});
+
 describe('MarkdownHyperlink', () => {
   describe('external links', () => {
     it('opens in new tab for https:// links', () => {
-      render(<MarkdownHyperlink href='https://example.com'>External Link</MarkdownHyperlink>);
+      render(
+        <MemoryRouter>
+          <MarkdownHyperlink href='https://example.com'>External Link</MarkdownHyperlink>
+        </MemoryRouter>,
+      );
 
       const link = screen.getByRole('link', { name: 'External Link' });
       expect(link).toHaveAttribute('target', '_blank');
     });
 
     it('opens in new tab for http:// links', () => {
-      render(<MarkdownHyperlink href='http://example.com'>External Link</MarkdownHyperlink>);
+      render(
+        <MemoryRouter>
+          <MarkdownHyperlink href='http://example.com'>External Link</MarkdownHyperlink>
+        </MemoryRouter>,
+      );
 
       const link = screen.getByRole('link', { name: 'External Link' });
       expect(link).toHaveAttribute('target', '_blank');
     });
 
     it('sets rel="noopener noreferrer" for external links', () => {
-      render(<MarkdownHyperlink href='https://example.com'>External Link</MarkdownHyperlink>);
+      render(
+        <MemoryRouter>
+          <MarkdownHyperlink href='https://example.com'>External Link</MarkdownHyperlink>
+        </MemoryRouter>,
+      );
 
       const link = screen.getByRole('link', { name: 'External Link' });
       expect(link).toHaveAttribute('rel', 'noopener noreferrer');
@@ -158,6 +225,28 @@ describe('MarkdownHyperlink', () => {
 
       const link = screen.getByRole('link', { name: 'Link' });
       expect(link).toHaveAttribute('href', '/legal/privacy');
+    });
+
+    it('rewrites a relative ../ href into an absolute URL relative to the current pathname', () => {
+      render(
+        <MemoryRouter initialEntries={['/docs/guides/live-rendering']}>
+          <MarkdownHyperlink href='../getting-started/quick-start'>Quick Start</MarkdownHyperlink>
+        </MemoryRouter>,
+      );
+
+      const link = screen.getByRole('link', { name: 'Quick Start' });
+      expect(link).toHaveAttribute('href', '/docs/getting-started/quick-start');
+    });
+
+    it('rewrites a ./sibling href into an absolute URL within the current directory', () => {
+      render(
+        <MemoryRouter initialEntries={['/docs/guides/live-rendering']}>
+          <MarkdownHyperlink href='./embedding-in-a-host'>Embedding</MarkdownHyperlink>
+        </MemoryRouter>,
+      );
+
+      const link = screen.getByRole('link', { name: 'Embedding' });
+      expect(link).toHaveAttribute('href', '/docs/guides/embedding-in-a-host');
     });
 
     it('renders children', () => {
