@@ -10,11 +10,13 @@ import { Loader } from '#components/ui/loader.js';
 import { useSharedRenderer } from '#components/docs/shared-renderer.js';
 import { useRender } from '@taucad/react';
 import { cn } from '#utils/ui.utils.js';
+import { gltfCoordinateTransform } from '@taucad/runtime/middleware';
 
 const gltfLoader = new GLTFLoader();
 const defaultClientOptions = createRuntimeClientOptions({
   kernels: [replicad()],
   bundlers: [esbuild()],
+  middleware: [gltfCoordinateTransform()],
 });
 
 type KernelModelViewProps = {
