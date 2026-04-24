@@ -719,10 +719,12 @@ export const ChatEditorFileTree = memo(function ({
         parentPaths.push(current);
       }
 
-      if (parentPaths.length > 0) {
+      const pathsToExpand = event.expandTarget && targetPath ? [...parentPaths, targetPath] : parentPaths;
+
+      if (pathsToExpand.length > 0) {
         setExpandedItems((previous) => {
           const newExpanded = new Set(previous);
-          for (const path of parentPaths) {
+          for (const path of pathsToExpand) {
             newExpanded.add(path);
           }
 

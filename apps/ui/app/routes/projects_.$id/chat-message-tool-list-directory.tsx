@@ -1,4 +1,4 @@
-import { FolderOpen, Folder, File } from 'lucide-react';
+import { FolderOpen, Folder } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { ToolInvocation } from '@taucad/chat';
 import { toolName } from '@taucad/chat/constants';
@@ -14,6 +14,22 @@ import {
 import { ChatToolDescription } from '#components/chat/chat-tool-text.js';
 import { ChatToolLabel } from '#components/chat/chat-tool-label.js';
 import { ChatToolError } from '#components/chat/chat-tool-error.js';
+import { FileLink } from '#components/files/file-link.js';
+import { DirectoryLink } from '#components/files/directory-link.js';
+import { FileExtensionIcon } from '#components/icons/file-extension-icon.js';
+
+/**
+ * Joins a parent directory path with a basename. Tolerates root-listing
+ * conventions (`''`, `'/'`, `'.'`) and trailing slashes returned by the
+ * `list_directory` tool.
+ */
+function joinChildPath(parent: string, name: string): string {
+  if (!parent || parent === '/' || parent === '.') {
+    return name;
+  }
+
+  return `${parent.replace(/\/$/, '')}/${name}`;
+}
 
 export function ChatMessageToolListDirectory({
   part,
@@ -52,6 +68,9 @@ export function ChatMessageToolListDirectory({
         return a.name.localeCompare(b.name);
       });
 
+      const isRoot = !path || path === '/' || path === '.';
+      const headerLabel = `${path || '/'} (${entries.length} items)`;
+
       return (
         <ChatToolCard variant='minimal' status='ready' isDefaultOpen={false}>
           <ChatToolCardHeader>
@@ -59,7 +78,7 @@ export function ChatMessageToolListDirectory({
             <ChatToolCardTitle>
               <ChatToolLabel verb='Listed'>
                 <ChatToolDescription>
-                  {path || '/'} ({entries.length} items)
+                  {isRoot ? headerLabel : <DirectoryLink path={path}>{headerLabel}</DirectoryLink>}
                 </ChatToolDescription>
               </ChatToolLabel>
             </ChatToolCardTitle>
@@ -71,11 +90,26 @@ export function ChatMessageToolListDirectory({
                   (empty directory)
                 </ChatToolCardListItem>
               ) : (
-                sortedEntries.map((entry) => (
-                  <ChatToolCardListItem key={entry.name} icon={entry.type === 'dir' ? Folder : File}>
-                    {entry.name}
-                  </ChatToolCardListItem>
-                ))
+                sortedEntries.map((entry) => {
+                  const childPath = joinChildPath(path, entry.name);
+
+                  if (entry.type === 'dir') {
+                    return (
+                      <ChatToolCardListItem key={entry.name} icon={Folder}>
+                        <DirectoryLink path={childPath}>{entry.name}</DirectoryLink>
+                      </ChatToolCardListItem>
+                    );
+                  }
+
+                  return (
+                    <ChatToolCardListItem
+                      key={entry.name}
+                      iconNode={<FileExtensionIcon filename={entry.name} className='mt-0.5 size-3 shrink-0' />}
+                    >
+                      <FileLink path={childPath}>{entry.name}</FileLink>
+                    </ChatToolCardListItem>
+                  );
+                })
               )}
             </ChatToolCardList>
           </ChatToolCardContent>
