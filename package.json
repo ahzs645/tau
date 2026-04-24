@@ -105,8 +105,8 @@
     "@opentelemetry/sdk-node": "catalog:",
     "@oxc-node/core": "catalog:",
     "@panzoom/panzoom": "^4.6.1",
+    "@react-router/express": "catalog:",
     "@react-router/node": "catalog:",
-    "@react-router/serve": "catalog:",
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.5.0",
     "@react-three/postprocessing": "^3.0.4",
@@ -141,6 +141,7 @@
     "@tiptap/react": "catalog:",
     "@tiptap/suggestion": "catalog:",
     "@traceloop/instrumentation-langchain": "catalog:",
+    "@types/express": "catalog:",
     "@types/js-yaml": "catalog:",
     "@types/madge": "catalog:",
     "@types/pg": "^8.16.0",
@@ -175,6 +176,7 @@
     "eslint-plugin-import-x": "catalog:",
     "eslint-plugin-max-params-no-constructor": "catalog:",
     "eslint-plugin-react": "catalog:",
+    "express": "catalog:",
     "fake-indexeddb": "catalog:",
     "fastify": "^5.7.4",
     "fumadocs-core": "^16.6.5",
@@ -363,6 +365,7 @@
     "overrides": {
       "@langchain/google-common": "https://github.com/taucad/langchainjs/raw/0f065cb8c363ff95a2fdddfbe28bbac1970068cd/langchain-google-common-2.1.32.tgz",
       "@langchain/google-vertexai": "https://github.com/taucad/langchainjs/raw/0f065cb8c363ff95a2fdddfbe28bbac1970068cd/langchain-google-vertexai-2.1.27.tgz",
+      "@types/express": "catalog:",
       "vitest": "catalog:"
     },
     "onlyBuiltDependencies": [

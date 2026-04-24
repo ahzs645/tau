@@ -20,7 +20,10 @@
       "dependsOn": ["build"],
       "options": {
         "cwd": "{projectRoot}",
-        "command": "react-router-serve build/server/index.js"
+        "command": "node --env-file-if-exists=.env --import @oxc-node/core/register server.ts",
+        "env": {
+          "NODE_ENV": "production"
+        }
       },
       "configurations": {},
       "parallelism": true

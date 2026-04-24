@@ -29,6 +29,8 @@
     "tests/**/*.test.ts",
     "tests/**/*.spec.tsx",
     "tests/**/*.test.tsx",
+    "server.ts",
+    "server.test.ts",
     "vite-environment.d.ts",
     ".source/**/*", // Fumadocs collections
     "package.json"

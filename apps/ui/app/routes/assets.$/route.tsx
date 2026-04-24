@@ -3,8 +3,10 @@ import type { LoaderFunctionArgs } from 'react-router';
 /**
  * Catch-all loader for `/assets/*` requests.
  *
- * In production the UI is served by `react-router-serve`. Without an explicit
- * route for `/assets/*`, an asset hash that no longer exists on disk (e.g. a
+ * In production the UI is served by an Express server (`apps/ui/server.ts`)
+ * that mounts `@react-router/express` after `coiMiddleware` and the
+ * `express.static` asset pipeline. Without an explicit route for `/assets/*`,
+ * an asset hash that no longer exists on disk (e.g. a
  * stale browser cache pointing at an old chunk) falls through to the SPA's
  * root splat route (`routes/$/route.tsx`) and is answered with a `200 OK`
  * HTML response. The browser then tries to evaluate that HTML as JavaScript,

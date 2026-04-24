@@ -55,6 +55,7 @@
     "./middleware/gltf-coordinate-transform": "./src/middleware/gltf-coordinate-transform.middleware.ts",
     "./middleware/gltf-edge-detection": "./src/middleware/gltf-edge-detection.middleware.ts",
     "./cross-origin-isolation": "./src/cross-origin-isolation/index.ts",
+    "./cross-origin-isolation/express": "./src/cross-origin-isolation/express.ts",
     "./react-router": "./src/react-router/index.ts",
     "./vite": "./src/vite/index.ts"
   },
@@ -329,6 +330,16 @@
         "import": {
           "types": "./dist/esm/cross-origin-isolation/index.d.ts",
           "default": "./dist/esm/cross-origin-isolation/index.js"
+        }
+      },
+      "./cross-origin-isolation/express": {
+        "require": {
+          "types": "./dist/cjs/cross-origin-isolation/express.d.cts",
+          "default": "./dist/cjs/cross-origin-isolation/express.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/cross-origin-isolation/express.d.ts",
+          "default": "./dist/esm/cross-origin-isolation/express.js"
         }
       },
       "./react-router": {

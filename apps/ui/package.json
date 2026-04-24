@@ -4,6 +4,7 @@
   "type": "module",
   "private": true,
   "dependencies": {
+    "@react-router/express": "catalog:",
     "@react-router/node": "catalog:",
     "@taucad/api-extractor": "workspace:*",
     "@taucad/converter": "workspace:*",
@@ -20,11 +21,13 @@
     "@taucad/runtime": "workspace:*",
     "@taucad/telemetry": "workspace:*",
     "@taucad/testing": "workspace:*",
+    "express": "catalog:",
     "isbot": "catalog:",
     "tslib": "catalog:"
   },
   "devDependencies": {
-    "@taucad/vite": "workspace:*"
+    "@taucad/vite": "workspace:*",
+    "@types/express": "catalog:"
   },
   "imports": {
     "#*": "./app/*"
