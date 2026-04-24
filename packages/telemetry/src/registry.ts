@@ -166,8 +166,7 @@ export const TauMetrics = {
   }),
 
   /**
-   * Per-section system-prompt byte budget (R23 — see
-   * `docs/research/system-prompt-audit.md`). Recorded by `chat.service.ts`
+   * Per-section system-prompt byte budget. Recorded by `chat.service.ts`
    * via the `onSectionResolved` callback exposed by
    * [apps/api/app/api/chat/prompts/prompt-section-registry.ts]. One sample
    * per non-empty section per `getCadSystemPrompt` call, tagged with the

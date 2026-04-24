@@ -13,7 +13,6 @@ describe('TauMetrics', () => {
     expect(TauMetrics.genAiAgentSafeguardInterventions.type).toBe('counter');
   });
 
-  // Per docs/research/system-prompt-audit.md R23.
   it('should expose the prompt-section-size histogram with the canonical OTEL name', () => {
     expect(TauMetrics.genAiPromptSectionSize.name).toBe('gen_ai.prompt.section.size');
     expect(TauMetrics.genAiPromptSectionSize.type).toBe('histogram');
