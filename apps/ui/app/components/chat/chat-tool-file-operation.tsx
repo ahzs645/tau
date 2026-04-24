@@ -1,11 +1,11 @@
 import type { ToolUIPart } from 'ai';
 import type { DiffStatsWithContent } from '@taucad/chat';
 import type { CodeLanguage } from '@taucad/types';
-import { useState, useEffect, useRef } from 'react';
-import { LoaderCircle, ChevronRight } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { LoaderCircle, ChevronRight, ChevronDown } from 'lucide-react';
 import { languageFromExtension } from '@taucad/types/constants';
 import { CodeViewer } from '#components/code/code-viewer.js';
-import { DiffViewer, getDiffLineCount, getFirstChangedLine } from '#components/code/diff-viewer.js';
+import { DiffViewer, getFirstChangedLine } from '#components/code/diff-viewer.js';
 import { FileLink } from '#components/files/file-link.js';
 import { FileExtensionIcon } from '#components/icons/file-extension-icon.js';
 import { Tooltip, TooltipTrigger, TooltipContent } from '#components/ui/tooltip.js';
@@ -13,10 +13,24 @@ import { cn } from '#utils/ui.utils.js';
 import { getFileExtension } from '#utils/filesystem.utils.js';
 import { AnimatedShinyText } from '#components/magicui/animated-shiny-text.js';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '#components/ui/collapsible.js';
-import { CollapsibleContainer } from '#components/ui/collapsible-code-block.js';
 import { useCookie } from '#hooks/use-cookie.js';
+import { useResizeObserver } from '#hooks/use-resize-observer.js';
 import { cookieName } from '#constants/cookie.constants.js';
 import { ChangeIndicator } from '#components/chat/change-indicator.js';
+
+/**
+ * Fixed height of the collapsed preview viewport — exactly four `text-xs`
+ * lines at the line-height used by both `DiffViewer` (1.6) and `CodeViewer`
+ * (1.45), with a couple of pixels for vertical padding.
+ */
+const collapsedViewportClassName = 'max-h-[5rem]';
+
+/**
+ * Pixel height of the streaming preview box. Kept numerically aligned with
+ * `collapsedViewportClassName` so the height does not jump when streaming
+ * finishes and the diff snaps in.
+ */
+const streamingViewportClassName = 'h-[5rem]';
 
 /**
  * Extract the filename from a path.
@@ -39,19 +53,96 @@ function getLanguageFromFilename(filename: string): CodeLanguage {
   return 'typescript';
 }
 
+type FourLineViewportProps = {
+  readonly children: React.ReactNode;
+};
+
+/**
+ * Fixed-height preview viewport for the file-operation card. Defaults to a
+ * four-line clipped window with no scrolling and a conditional bottom fade
+ * indicating "more content below". The expand affordance is a full-width
+ * transparent hit-area overlaid on the bottom edge of the viewport; only a
+ * small circular chevron badge centred in that hit-area fades in on outer-
+ * card hover or keyboard focus, so the bar consumes zero vertical layout
+ * and the badge stands out against the dimmed last code line. Expanding
+ * grows the viewport to its natural content height with normal scroll.
+ */
+function FourLineViewport({ children }: FourLineViewportProps): React.JSX.Element {
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [hasOverflow, setHasOverflow] = useState(false);
+
+  const measureOverflow = useCallback(() => {
+    const node = viewportRef.current;
+    if (!node) {
+      return;
+    }
+
+    setHasOverflow(node.scrollHeight - node.clientHeight > 1);
+  }, []);
+
+  useResizeObserver({
+    ref: viewportRef,
+    onResize: measureOverflow,
+  });
+
+  // Re-measure when expand state flips so the fade is suppressed immediately
+  // on expand and restored immediately on collapse without waiting for the
+  // next ResizeObserver tick.
+  useEffect(() => {
+    measureOverflow();
+  }, [isExpanded, measureOverflow]);
+
+  const showChevron = hasOverflow || isExpanded;
+
+  return (
+    <div className='relative border-t'>
+      <div
+        ref={viewportRef}
+        className={cn(
+          'w-full',
+          isExpanded
+            ? 'overflow-auto'
+            : cn('overflow-hidden', collapsedViewportClassName, hasOverflow && 'scroll-shadow-bottom'),
+        )}
+      >
+        {children}
+      </div>
+      {showChevron ? (
+        <button
+          type='button'
+          aria-label={isExpanded ? 'Collapse code preview' : 'Expand code preview'}
+          aria-expanded={isExpanded}
+          onClick={() => {
+            setIsExpanded((previous) => !previous);
+          }}
+          className='group/chevron-trigger absolute inset-x-0 bottom-0 flex h-5 w-full cursor-pointer items-center justify-center outline-none'
+        >
+          <span
+            className={cn(
+              'flex size-4 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-xs',
+              'opacity-0 transition-opacity duration-150',
+              'group-hover/file-op:opacity-100 group-focus-visible/chevron-trigger:opacity-100',
+            )}
+          >
+            <ChevronDown className={cn('size-3 transition-transform duration-150', isExpanded && 'rotate-180')} />
+          </span>
+        </button>
+      ) : undefined}
+    </div>
+  );
+}
+
 type CodePreviewProps = {
   readonly content: string;
   readonly language?: CodeLanguage;
-  readonly maxCollapsedLines?: number;
 };
 
-function CodePreview({ content, language = 'typescript', maxCollapsedLines = 4 }: CodePreviewProps): React.JSX.Element {
-  const lineCount = content.split('\n').length;
-
+function CodePreview({ content, language = 'typescript' }: CodePreviewProps): React.JSX.Element {
   return (
-    <CollapsibleContainer lineCount={lineCount} collapsedLineCount={maxCollapsedLines} className='border-t'>
+    <FourLineViewport>
       <CodeViewer language={language} text={content} className='overflow-x-auto px-2.5 py-1.5 text-xs' />
-    </CollapsibleContainer>
+    </FourLineViewport>
   );
 }
 
@@ -59,27 +150,17 @@ type DiffPreviewProps = {
   readonly originalContent: string;
   readonly modifiedContent: string;
   readonly language?: CodeLanguage;
-  readonly maxCollapsedLines?: number;
 };
 
 export function DiffPreview({
   originalContent,
   modifiedContent,
   language = 'typescript',
-  maxCollapsedLines = 4,
 }: DiffPreviewProps): React.JSX.Element {
-  // Get actual visible line count (with context collapsing applied)
-  const lineCount = getDiffLineCount(originalContent, modifiedContent);
-
   return (
-    <CollapsibleContainer
-      lineCount={lineCount}
-      collapsedLineCount={maxCollapsedLines}
-      collapsedMaxHeight='max-h-24'
-      className='border-t'
-    >
+    <FourLineViewport>
       <DiffViewer originalContent={originalContent} modifiedContent={modifiedContent} language={language} />
-    </CollapsibleContainer>
+    </FourLineViewport>
   );
 }
 
@@ -290,7 +371,7 @@ export function CollapsibleFileOperation({
           )}
         </div>
         {shouldShowContent ? (
-          <div className='h-24 overflow-hidden border-t'>
+          <div className={cn('overflow-hidden border-t', streamingViewportClassName)}>
             <CodeViewer
               language={getLanguageFromFilename(filename)}
               text={lastFourLines}
@@ -328,8 +409,8 @@ export function CollapsibleFileOperation({
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
-      <div className='@container/code my-1 overflow-hidden rounded-md border bg-neutral/10'>
-        <div className='group/file-op flex items-center transition-colors hover:bg-foreground/5'>
+      <div className='group/file-op @container/code my-1 overflow-hidden rounded-md border bg-neutral/10'>
+        <div className='flex items-center transition-colors hover:bg-foreground/5'>
           <CollapsibleFileOperationTrigger
             targetFile={targetFile}
             toolStatus={toolStatus}

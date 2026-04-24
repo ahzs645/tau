@@ -377,7 +377,20 @@ function ChatToolCardList({ children, className, maxHeight = 'max-h-40' }: ChatT
 type ChatToolCardListItemProps = {
   readonly children: React.ReactNode;
   readonly className?: string;
-  readonly icon?: LucideIcon;
+  /**
+   * Leading icon component. Accepts any component that renders a `className`
+   * prop — `LucideIcon` for generic glyphs, or any custom icon component.
+   * For icons that need to be parameterised by data (e.g. `FileExtensionIcon`
+   * needs a `filename`), pass a pre-rendered node via `iconNode` instead.
+   */
+  readonly icon?: React.ComponentType<{ className?: string }>;
+  /**
+   * Pre-rendered leading icon node. Use this when the icon needs props the
+   * `icon` ComponentType signature can't carry (e.g. `<FileExtensionIcon
+   * filename={name} />`). Mutually exclusive with `icon`; if both are passed,
+   * `iconNode` wins.
+   */
+  readonly iconNode?: React.ReactNode;
   readonly iconClassName?: string;
 };
 
@@ -385,11 +398,14 @@ function ChatToolCardListItem({
   children,
   className,
   icon: Icon,
+  iconNode,
   iconClassName,
 }: ChatToolCardListItemProps): React.JSX.Element {
+  const iconElement = iconNode ?? (Icon ? <Icon className={cn('mt-0.5 size-3 shrink-0', iconClassName)} /> : undefined);
+
   return (
     <div className={cn('flex items-start gap-2 py-0.5 text-xs text-muted-foreground', className)}>
-      {Icon ? <Icon className={cn('mt-0.5 size-3 shrink-0', iconClassName)} /> : undefined}
+      {iconElement}
       <span className='min-w-0 wrap-break-word'>{children}</span>
     </div>
   );
