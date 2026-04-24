@@ -27,6 +27,7 @@ import {
 import { screenshotInputSchema, screenshotOutputSchema } from '#schemas/tools/screenshot.tool.schema.js';
 import { toolName } from '#constants/tool.constants.js';
 import type { ToolName } from '#types/tool.types.js';
+import { getToolInputSchema } from '#schemas/tool-input.registry.js';
 
 // Copied from https://github.com/vercel/ai/blob/0ed1ee6f34a252a9d1970d99ea8585529cbceeed/packages/ai/src/ui/validate-ui-messages.ts.
 // This is necessary as the AI SDK's `validateUIMessages` function is async and nestjs-zod does
@@ -82,16 +83,69 @@ const createToolSchemas = <
       callProviderMetadata: providerMetadataSchema.optional(),
       preliminary: z.boolean().optional(),
     }),
-    // Output-error state
+    // Output-error state — `input` may be absent because the LLM stream was
+    // interrupted before arguments fully serialised; the partial value is
+    // moved to `rawInput` by the preprocess healer at the schema's top level.
+    // See docs/policy/interrupted-tool-call-contract.md and
+    // docs/research/interrupted-tool-call-validation-failure.md (R1, R3).
     z.object({
       type: z.literal(toolType),
       toolCallId: z.string(),
       state: z.literal('output-error'),
       providerExecuted: z.boolean().optional(),
-      input: inputSchema,
+      input: z.union([inputSchema, z.undefined()]),
+      rawInput: z.unknown().optional(),
       output: z.never().optional(),
       errorText: z.string(),
       callProviderMetadata: providerMetadataSchema.optional(),
+    }),
+    // Approval-lifecycle states — backfilled from the upstream AI SDK
+    // `validateUIMessages` schema (`node_modules/ai/src/ui/validate-ui-messages.ts`).
+    // See docs/research/interrupted-tool-call-validation-failure.md R7.
+    z.object({
+      type: z.literal(toolType),
+      toolCallId: z.string(),
+      state: z.literal('approval-requested'),
+      providerExecuted: z.boolean().optional(),
+      input: inputSchema,
+      output: z.never().optional(),
+      errorText: z.never().optional(),
+      callProviderMetadata: providerMetadataSchema.optional(),
+      approval: z.object({
+        id: z.string(),
+        approved: z.never().optional(),
+        reason: z.never().optional(),
+      }),
+    }),
+    z.object({
+      type: z.literal(toolType),
+      toolCallId: z.string(),
+      state: z.literal('approval-responded'),
+      providerExecuted: z.boolean().optional(),
+      input: inputSchema,
+      output: z.never().optional(),
+      errorText: z.never().optional(),
+      callProviderMetadata: providerMetadataSchema.optional(),
+      approval: z.object({
+        id: z.string(),
+        approved: z.boolean(),
+        reason: z.string().optional(),
+      }),
+    }),
+    z.object({
+      type: z.literal(toolType),
+      toolCallId: z.string(),
+      state: z.literal('output-denied'),
+      providerExecuted: z.boolean().optional(),
+      input: inputSchema,
+      output: z.never().optional(),
+      errorText: z.never().optional(),
+      callProviderMetadata: providerMetadataSchema.optional(),
+      approval: z.object({
+        id: z.string(),
+        approved: z.literal(false),
+        reason: z.string().optional(),
+      }),
     }),
   ] as const;
 };
@@ -139,16 +193,63 @@ const createEmptyInputToolSchemas = <Name extends ToolName, Output extends z.Zod
       callProviderMetadata: providerMetadataSchema.optional(),
       preliminary: z.boolean().optional(),
     }),
-    // Output-error state
+    // Output-error state — see comment in createToolSchemas above.
     z.object({
       type: z.literal(toolType),
       toolCallId: z.string(),
       state: z.literal('output-error'),
       providerExecuted: z.boolean().optional(),
-      input: emptyInput,
+      input: z.union([emptyInput, z.undefined()]),
+      rawInput: z.unknown().optional(),
       output: z.never().optional(),
       errorText: z.string(),
       callProviderMetadata: providerMetadataSchema.optional(),
+    }),
+    // Approval-lifecycle states — see createToolSchemas notes; backfilled per R7.
+    z.object({
+      type: z.literal(toolType),
+      toolCallId: z.string(),
+      state: z.literal('approval-requested'),
+      providerExecuted: z.boolean().optional(),
+      input: emptyInput,
+      output: z.never().optional(),
+      errorText: z.never().optional(),
+      callProviderMetadata: providerMetadataSchema.optional(),
+      approval: z.object({
+        id: z.string(),
+        approved: z.never().optional(),
+        reason: z.never().optional(),
+      }),
+    }),
+    z.object({
+      type: z.literal(toolType),
+      toolCallId: z.string(),
+      state: z.literal('approval-responded'),
+      providerExecuted: z.boolean().optional(),
+      input: emptyInput,
+      output: z.never().optional(),
+      errorText: z.never().optional(),
+      callProviderMetadata: providerMetadataSchema.optional(),
+      approval: z.object({
+        id: z.string(),
+        approved: z.boolean(),
+        reason: z.string().optional(),
+      }),
+    }),
+    z.object({
+      type: z.literal(toolType),
+      toolCallId: z.string(),
+      state: z.literal('output-denied'),
+      providerExecuted: z.boolean().optional(),
+      input: emptyInput,
+      output: z.never().optional(),
+      errorText: z.never().optional(),
+      callProviderMetadata: providerMetadataSchema.optional(),
+      approval: z.object({
+        id: z.string(),
+        approved: z.literal(false),
+        reason: z.string().optional(),
+      }),
     }),
   ] as const;
 };
@@ -178,8 +279,7 @@ const toolPartSchemas = [
   ...createEmptyInputToolSchemas(toolName.transferBackToSupervisor, z.string()),
 ];
 
-/** @public */
-export const uiMessagesSchema: z.ZodType<MyUIMessage[]> = z
+const rawUiMessagesSchema = z
   .array(
     z.object({
       id: z.string(),
@@ -287,10 +387,62 @@ export const uiMessagesSchema: z.ZodType<MyUIMessage[]> = z
               toolCallId: z.string(),
               state: z.literal('output-error'),
               input: z.unknown(),
+              rawInput: z.unknown().optional(),
               providerExecuted: z.boolean().optional(),
               output: z.never().optional(),
               errorText: z.string(),
               callProviderMetadata: providerMetadataSchema.optional(),
+            }),
+            // Approval-lifecycle states for dynamic tool parts. Mirrors
+            // upstream `validateUIMessages`; see R7 in
+            // docs/research/interrupted-tool-call-validation-failure.md.
+            z.object({
+              type: z.literal('dynamic-tool'),
+              toolName: z.string(),
+              toolCallId: z.string(),
+              state: z.literal('approval-requested'),
+              input: z.unknown(),
+              providerExecuted: z.boolean().optional(),
+              output: z.never().optional(),
+              errorText: z.never().optional(),
+              callProviderMetadata: providerMetadataSchema.optional(),
+              approval: z.object({
+                id: z.string(),
+                approved: z.never().optional(),
+                reason: z.never().optional(),
+              }),
+            }),
+            z.object({
+              type: z.literal('dynamic-tool'),
+              toolName: z.string(),
+              toolCallId: z.string(),
+              state: z.literal('approval-responded'),
+              input: z.unknown(),
+              providerExecuted: z.boolean().optional(),
+              output: z.never().optional(),
+              errorText: z.never().optional(),
+              callProviderMetadata: providerMetadataSchema.optional(),
+              approval: z.object({
+                id: z.string(),
+                approved: z.boolean(),
+                reason: z.string().optional(),
+              }),
+            }),
+            z.object({
+              type: z.literal('dynamic-tool'),
+              toolName: z.string(),
+              toolCallId: z.string(),
+              state: z.literal('output-denied'),
+              input: z.unknown(),
+              providerExecuted: z.boolean().optional(),
+              output: z.never().optional(),
+              errorText: z.never().optional(),
+              callProviderMetadata: providerMetadataSchema.optional(),
+              approval: z.object({
+                id: z.string(),
+                approved: z.literal(false),
+                reason: z.string().optional(),
+              }),
             }),
             ...toolPartSchemas,
           ]),
@@ -299,3 +451,75 @@ export const uiMessagesSchema: z.ZodType<MyUIMessage[]> = z
     }),
   )
   .nonempty('Messages array must not be empty');
+
+/**
+ * Sole sanitiser for interrupted tool parts on the wire: walks every tool part
+ * in `output-error` state and demotes any `input` that no longer satisfies the
+ * strict per-tool schema into `rawInput`, clearing `input` to `undefined`.
+ *
+ * This recovers inbound payloads (regenerate, edit, retry, send) that resubmit
+ * an `output-error` part whose `input` was only partially serialised before the
+ * LLM stream was interrupted — across every caller (web, CLI, SDKs) and any
+ * chats whose `output-error` parts were captured before this preprocess
+ * existed. The healer runs as `z.preprocess` inside `uiMessagesSchema` itself,
+ * so strict per-tool input validation downstream still rejects genuinely
+ * malformed completed tool calls.
+ *
+ * Client-side healing is intentionally absent — the API is the single source
+ * of truth for normalising interrupted tool parts, and the UI renders
+ * `output-error` parts directly without depending on a valid `input`. See
+ * docs/policy/interrupted-tool-call-contract.md ("Anti-Pattern: Duplicate
+ * Healing on the Client").
+ *
+ * Static tool parts (e.g. `tool-read_file`) consult the registry; dynamic
+ * tool parts have no strict input contract and are passed through unchanged.
+ *
+ * See docs/research/interrupted-tool-call-validation-failure.md (R3, F3, F7)
+ * and docs/policy/interrupted-tool-call-contract.md.
+ */
+const healInterruptedToolParts = (input: unknown): unknown => {
+  if (!Array.isArray(input)) {
+    return input;
+  }
+  return input.map((message: unknown) => {
+    if (!message || typeof message !== 'object' || !('parts' in message) || !Array.isArray(message.parts)) {
+      return message;
+    }
+    const originalParts: unknown[] = message.parts;
+    let healedParts: unknown[] | undefined;
+    for (let index = 0; index < originalParts.length; index += 1) {
+      const part: unknown = originalParts[index];
+      if (
+        !part ||
+        typeof part !== 'object' ||
+        (part as { state?: unknown }).state !== 'output-error' ||
+        (part as { input?: unknown }).input === undefined ||
+        typeof (part as { type?: unknown }).type !== 'string' ||
+        (part as { type: string }).type === 'dynamic-tool'
+      ) {
+        continue;
+      }
+      const typedPart = part as { type: string; input: unknown };
+      const inputSchema = getToolInputSchema(typedPart.type);
+      if (!inputSchema || inputSchema.safeParse(typedPart.input).success) {
+        continue;
+      }
+      healedParts ??= [...originalParts];
+      healedParts[index] = { ...typedPart, input: undefined, rawInput: typedPart.input };
+    }
+    return healedParts ? { ...message, parts: healedParts } : message;
+  });
+};
+
+/** @public */
+export const uiMessagesSchema: z.ZodType<MyUIMessage[]> = z.preprocess(healInterruptedToolParts, rawUiMessagesSchema);
+
+/**
+ * Test-only export of the raw preprocess. Asserts reference-identity behaviour
+ * (no allocation on the no-heal path, copy-on-write on the heal path) without
+ * going through Zod's discriminated-union resolver, which always copies.
+ *
+ * @internal
+ */
+// oxlint-disable-next-line tau-lint/require-public-export-jsdoc -- @internal test-only export
+export const _healInterruptedToolPartsForTesting = healInterruptedToolParts;
