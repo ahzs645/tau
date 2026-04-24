@@ -55,6 +55,13 @@ export const opencascadeOptionsSchema = z.object({
     .union([z.literal('full'), z.object({ wasmUrl: z.string(), wasmBindingsUrl: z.string() })])
     .optional()
     .default('full'),
+  ocTracing: z
+    .enum(['off', 'summary', 'per-call'])
+    .optional()
+    .default('summary')
+    .describe(
+      'OC API call tracing mode. "summary" (default) emits aggregated stats, "per-call" emits individual spans, "off" disables tracing.',
+    ),
 });
 
 /**

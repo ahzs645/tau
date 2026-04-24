@@ -153,13 +153,13 @@ catalogs:
     '@react-router/dev':
       specifier: 7.12.0
       version: 7.12.0
+    '@react-router/express':
+      specifier: 7.12.0
+      version: 7.12.0
     '@react-router/fs-routes':
       specifier: 7.12.0
       version: 7.12.0
     '@react-router/node':
-      specifier: 7.12.0
-      version: 7.12.0
-    '@react-router/serve':
       specifier: 7.12.0
       version: 7.12.0
     '@size-limit/file':
@@ -303,6 +303,9 @@ catalogs:
     eslint-plugin-unicorn:
       specifier: ^63.0.0
       version: 63.0.0
+    express:
+      specifier: ^5.2.1
+      version: 5.2.1
     fake-indexeddb:
       specifier: ^6.2.5
       version: 6.2.5
@@ -436,6 +439,7 @@ catalogs:
 overrides:
   '@langchain/google-common': https://github.com/taucad/langchainjs/raw/0f065cb8c363ff95a2fdddfbe28bbac1970068cd/langchain-google-common-2.1.32.tgz
   '@langchain/google-vertexai': https://github.com/taucad/langchainjs/raw/0f065cb8c363ff95a2fdddfbe28bbac1970068cd/langchain-google-vertexai-2.1.27.tgz
+  '@types/express': ^5.0.0
   vitest: 4.1.0-beta.6
 
 patchedDependencies:
@@ -624,10 +628,10 @@ importers:
       '@panzoom/panzoom':
         specifier: ^4.6.1
         version: 4.6.1
-      '@react-router/node':
+      '@react-router/express':
         specifier: 'catalog:'
-        version: 7.12.0(react-router@7.12.0(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(typescript@5.9.3)
-      '@react-router/serve':
+        version: 7.12.0(express@5.2.1)(react-router@7.12.0(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(typescript@5.9.3)
+      '@react-router/node':
         specifier: 'catalog:'
         version: 7.12.0(react-router@7.12.0(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(typescript@5.9.3)
       '@react-three/drei':
@@ -732,6 +736,9 @@ importers:
       '@traceloop/instrumentation-langchain':
         specifier: 'catalog:'
         version: 0.22.6(@opentelemetry/exporter-trace-otlp-proto@0.213.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.6.0(@opentelemetry/api@1.9.0))(openai@4.104.0(encoding@0.1.13)(ws@8.19.0)(zod@4.3.6))
+      '@types/express':
+        specifier: ^5.0.0
+        version: 5.0.6
       '@types/js-yaml':
         specifier: 'catalog:'
         version: 4.0.9
@@ -834,6 +841,9 @@ importers:
       eslint-plugin-react:
         specifier: 'catalog:'
         version: 7.37.5(eslint@9.32.0(jiti@2.6.1))
+      express:
+        specifier: 'catalog:'
+        version: 5.2.1
       fake-indexeddb:
         specifier: 'catalog:'
         version: 6.2.5
@@ -928,8 +938,8 @@ importers:
         specifier: ^4.104.0
         version: 4.104.0(encoding@0.1.13)(ws@8.19.0)(zod@4.3.6)
       opencascade.js:
-        specifier: file:tarballs/opencascade.js-3.0.0-beta.d453dbf.tgz
-        version: '@taucad/opencascade.js@file:tarballs/opencascade.js-3.0.0-beta.d453dbf.tgz(ws@8.19.0)'
+        specifier: file:tarballs/opencascade.js-3.0.0-beta.bae75eb.tgz
+        version: '@taucad/opencascade.js@file:tarballs/opencascade.js-3.0.0-beta.bae75eb.tgz(ws@8.19.0)'
       openscad-wasm-prebuilt:
         specifier: 'catalog:'
         version: 1.2.0
@@ -1009,11 +1019,11 @@ importers:
         specifier: ^2.0.4
         version: 2.0.4(react-router@7.12.0(react-dom@19.2.4(react@19.2.4))(react@19.2.4))
       replicad:
-        specifier: file:tarballs/replicad-0.21.0-v8.56.tgz
-        version: file:tarballs/replicad-0.21.0-v8.56.tgz(patch_hash=b6ecc1ad0094dab60773fcac8449dfad615b406c272ce575101dbb704a428c39)
+        specifier: file:tarballs/replicad-0.21.0-v8.57.tgz
+        version: file:tarballs/replicad-0.21.0-v8.57.tgz(patch_hash=b6ecc1ad0094dab60773fcac8449dfad615b406c272ce575101dbb704a428c39)
       replicad-opencascadejs:
-        specifier: file:tarballs/replicad-opencascadejs-0.21.0-v8.55.tgz
-        version: file:tarballs/replicad-opencascadejs-0.21.0-v8.55.tgz
+        specifier: file:tarballs/replicad-opencascadejs-0.21.0-v8.57.tgz
+        version: file:tarballs/replicad-opencascadejs-0.21.0-v8.57.tgz
       rxjs:
         specifier: ^7.8.2
         version: 7.8.2
@@ -1388,6 +1398,9 @@ importers:
 
   apps/ui:
     dependencies:
+      '@react-router/express':
+        specifier: 'catalog:'
+        version: 7.12.0(express@5.2.1)(react-router@7.12.0(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(typescript@5.9.3)
       '@react-router/node':
         specifier: 'catalog:'
         version: 7.12.0(react-router@7.12.0(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(typescript@5.9.3)
@@ -1436,6 +1449,9 @@ importers:
       '@taucad/utils':
         specifier: workspace:*
         version: link:../../libs/utils
+      express:
+        specifier: 'catalog:'
+        version: 5.2.1
       isbot:
         specifier: 'catalog:'
         version: 5.1.35
@@ -1446,6 +1462,9 @@ importers:
       '@taucad/vite':
         specifier: workspace:*
         version: link:../../libs/vite
+      '@types/express':
+        specifier: ^5.0.0
+        version: 5.0.6
 
   kernels/openscad:
     dependencies:
@@ -1549,8 +1568,8 @@ importers:
         specifier: workspace:*
         version: link:../../libs/types
       assimpjs:
-        specifier: file:../../tarballs/taucad-assimpjs-0.0.18.tgz
-        version: '@taucad/assimpjs@file:tarballs/taucad-assimpjs-0.0.18.tgz'
+        specifier: file:../../tarballs/taucad-assimpjs-0.0.19.tgz
+        version: '@taucad/assimpjs@file:tarballs/taucad-assimpjs-0.0.19.tgz'
       draco3dgltf:
         specifier: ^1.5.7
         version: 1.5.7
@@ -1672,14 +1691,14 @@ importers:
         specifier: 'catalog:'
         version: 3.3.2
       opencascade.js:
-        specifier: file:../../tarballs/opencascade.js-3.0.0-beta.d453dbf.tgz
-        version: '@taucad/opencascade.js@file:tarballs/opencascade.js-3.0.0-beta.d453dbf.tgz(ws@8.19.0)'
+        specifier: file:../../tarballs/opencascade.js-3.0.0-beta.bae75eb.tgz
+        version: '@taucad/opencascade.js@file:tarballs/opencascade.js-3.0.0-beta.bae75eb.tgz(ws@8.19.0)'
       replicad:
-        specifier: file:../../tarballs/replicad-0.21.0-v8.56.tgz
-        version: file:tarballs/replicad-0.21.0-v8.56.tgz(patch_hash=b6ecc1ad0094dab60773fcac8449dfad615b406c272ce575101dbb704a428c39)
+        specifier: file:../../tarballs/replicad-0.21.0-v8.57.tgz
+        version: file:tarballs/replicad-0.21.0-v8.57.tgz(patch_hash=b6ecc1ad0094dab60773fcac8449dfad615b406c272ce575101dbb704a428c39)
       replicad-opencascadejs:
-        specifier: file:../../tarballs/replicad-opencascadejs-0.21.0-v8.55.tgz
-        version: file:tarballs/replicad-opencascadejs-0.21.0-v8.55.tgz
+        specifier: file:../../tarballs/replicad-opencascadejs-0.21.0-v8.57.tgz
+        version: file:tarballs/replicad-opencascadejs-0.21.0-v8.57.tgz
       source-map-js:
         specifier: 'catalog:'
         version: 1.2.1
@@ -9334,15 +9353,15 @@ packages:
   '@tanstack/virtual-core@3.13.19':
     resolution: {integrity: sha512-/BMP7kNhzKOd7wnDeB8NrIRNLwkf5AhCYCvtfZV2GXWbBieFm/el0n6LOAXlTi6ZwHICSNnQcIxRCWHrLzDY+g==}
 
-  '@taucad/assimpjs@file:tarballs/taucad-assimpjs-0.0.18.tgz':
-    resolution: {integrity: sha512-g3XaE5L/TApccthLc9WEdYEQNgQexIcxj0GGtVyEBQiQoExmvKJngdHim7XRYRaRw47X4QPnl5sVhr3PRCi4Ow==, tarball: file:tarballs/taucad-assimpjs-0.0.18.tgz}
-    version: 0.0.18
+  '@taucad/assimpjs@file:tarballs/taucad-assimpjs-0.0.19.tgz':
+    resolution: {integrity: sha512-YZi2A+ce8KCYA4KCh0k6lrnuZdxWvTayzBwKnFY0EnshtmmjKF5QTBbbLbEVt0ovxf/1g+1nc2ay5C3vQqBSnA==, tarball: file:tarballs/taucad-assimpjs-0.0.19.tgz}
+    version: 0.0.19
 
   '@taucad/kcl-wasm-lib@0.1.130':
     resolution: {integrity: sha512-nSmwe6gArl2YpgrS+XCSLFclNl5+rdznoMV7t/LdAKG9tzOv3O2iUKtpSDTFwDcFlIsTZZd8AmBoH9e9AoDsOg==}
 
-  '@taucad/opencascade.js@file:tarballs/opencascade.js-3.0.0-beta.d453dbf.tgz':
-    resolution: {integrity: sha512-M9lHmdXHYDsGUNvS+gtlzJcfI37pe4+Sy6fIevoYOvm+a0Y2vlQ7JIorAGCbySVg/BfYhfKYYRLlGKdFogMoww==, tarball: file:tarballs/opencascade.js-3.0.0-beta.d453dbf.tgz}
+  '@taucad/opencascade.js@file:tarballs/opencascade.js-3.0.0-beta.bae75eb.tgz':
+    resolution: {integrity: sha512-94j8ta5GxUBxxzmXc892Lm4uW7XBrUPhmGYaDhKKoAn44JVa+SUWgdMy88CI5kdk4yL5YiZBLEMizl+hQ5y8Jw==, tarball: file:tarballs/opencascade.js-3.0.0-beta.bae75eb.tgz}
     version: 3.0.0-beta.0
     peerDependencies:
       ws: ^8.5.0
@@ -9723,8 +9742,11 @@ packages:
   '@types/express-serve-static-core@4.19.8':
     resolution: {integrity: sha512-02S5fmqeoKzVZCHPZid4b8JH2eM5HzQLZWN2FohQEy/0eXTq8VXZfSN6Pcr3F6N9R/vNrj7cpgbhjie6m/1tCA==}
 
-  '@types/express@4.17.25':
-    resolution: {integrity: sha512-dVd04UKsfpINUnK0yBoYHDF3xu7xVH4BuDotC/xGuycx4CgbP48X/KF/586bcObxT0HENHXEU8Nqtu6NR+eKhw==}
+  '@types/express-serve-static-core@5.1.1':
+    resolution: {integrity: sha512-v4zIMr/cX7/d2BpAEX3KNKL/JrT1s43s96lLvvdTmza1oEvDudCqK9aF/djc/SWgy8Yh0h30TZx5VpzqFCxk5A==}
+
+  '@types/express@5.0.6':
+    resolution: {integrity: sha512-sKYVuV7Sv9fbPIt/442koC7+IIwK5olP1KWeD88e/idgoJqDm3JV/YUiPwkoKK92ylff2MGxSz1CSjsXelx0YA==}
 
   '@types/geojson@7946.0.16':
     resolution: {integrity: sha512-6C8nqWur3j98U6+lXDfTUWIfgvZU+EumvpHKcYjujKH7woYyLj2sUmff0tRhrqM7BohUw7Pz3ZB1jj2gW9Fvmg==}
@@ -9888,6 +9910,9 @@ packages:
 
   '@types/serve-static@1.15.10':
     resolution: {integrity: sha512-tRs1dB+g8Itk72rlSI2ZrW6vZg0YrLI81iQSTkMmOqnqCaNr/8Ek4VwWcN5vZgCYWbg/JJSGBlUaYGAOP73qBw==}
+
+  '@types/serve-static@2.2.0':
+    resolution: {integrity: sha512-8mam4H1NHLtu7nmtalF7eyBH14QyOASmcxHhSfEoRyr0nP/YdoesEtU+uSRvMe96TW/HPTtkoKqQLl53N7UXMQ==}
 
   '@types/sockjs@0.3.36':
     resolution: {integrity: sha512-MK9V6NzAS1+Ud7JV9lJLFqW85VbC9dq3LmwZCuBe4wBDgKC0Kj/jd8Xl+nSviU+Qc3+m7umHHyHg//2KSa0a0Q==}
@@ -14074,7 +14099,7 @@ packages:
     resolution: {integrity: sha512-c1IyJYLYppU574+YI7R4QyX2ystMtVXZwIdzazUIPIJsHuWNd+mho2j+bKoHftndicGj9yh+xjd+l0yj7VeT1Q==}
     engines: {node: '>=12.0.0'}
     peerDependencies:
-      '@types/express': ^4.17.13
+      '@types/express': ^5.0.0
     peerDependenciesMeta:
       '@types/express':
         optional: true
@@ -18322,13 +18347,13 @@ packages:
     resolution: {integrity: sha512-yD5BHCe7quCgBph4rMQ+0KkIRKwWCrHDOX1p1Gp6HwjPM5kVoCdKGNhN7ydqqsX6lJEnQDKZ/tFMiEdQ1dvPEw==}
     engines: {node: '>= 0.10'}
 
-  replicad-opencascadejs@file:tarballs/replicad-opencascadejs-0.21.0-v8.55.tgz:
-    resolution: {integrity: sha512-V5In9I9BfzOPAW/95Jd9x6vDwGTzJvYWzSCFxr/zKwm+vu48EoO7AwrZGnlSoC7kuSahUY4BbR5cuO+Bt85obQ==, tarball: file:tarballs/replicad-opencascadejs-0.21.0-v8.55.tgz}
-    version: 0.21.0-v8.55
+  replicad-opencascadejs@file:tarballs/replicad-opencascadejs-0.21.0-v8.57.tgz:
+    resolution: {integrity: sha512-mfN9YWlIvuelicz8CZxJgyeAklNwesdUlIVOfIdODEl296Wn3AsNDX98TRjKnAYtqQGRW+uXxhGtaQtb9bKsJQ==, tarball: file:tarballs/replicad-opencascadejs-0.21.0-v8.57.tgz}
+    version: 0.21.0-v8.57
 
-  replicad@file:tarballs/replicad-0.21.0-v8.56.tgz:
-    resolution: {integrity: sha512-ajvX5yQPwpByXK4OnAUP4xkg2dJVaIWwVnsHpSuIJjxki8lyeDwpXsLaj6zxP3b8a/vvtJzFrWJxGpungMM+4w==, tarball: file:tarballs/replicad-0.21.0-v8.56.tgz}
-    version: 0.21.0-v8.56
+  replicad@file:tarballs/replicad-0.21.0-v8.57.tgz:
+    resolution: {integrity: sha512-N+QzvkCIuvCDPTDBUwuIbVpMzLkFAlntpSRBqdJdFRK0ik0DfU5EODE5evYXdh7aJ4vr9xDqFcxq0S6QXym/fQ==, tarball: file:tarballs/replicad-0.21.0-v8.57.tgz}
+    version: 0.21.0-v8.57
 
   require-directory@2.1.1:
     resolution: {integrity: sha512-fGxEI7+wsG9xrvdjsrlmL22OMTTiHRwAMroiEeMgq8gzoLC/PQr7RsRDSTLUg/bZAZtF+TVIkHc6/4RIKrui+Q==}
@@ -27990,6 +28015,15 @@ snapshots:
       react-router: 7.12.0(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
     optionalDependencies:
       typescript: 5.9.3
+    optional: true
+
+  '@react-router/express@7.12.0(express@5.2.1)(react-router@7.12.0(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(typescript@5.9.3)':
+    dependencies:
+      '@react-router/node': 7.12.0(react-router@7.12.0(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(typescript@5.9.3)
+      express: 5.2.1
+      react-router: 7.12.0(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+    optionalDependencies:
+      typescript: 5.9.3
 
   '@react-router/fs-routes@7.12.0(@react-router/dev@7.12.0(@react-router/serve@7.12.0(react-router@7.12.0(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(typescript@5.9.3))(@types/node@24.0.15)(babel-plugin-macros@3.1.0)(less@4.5.1)(lightningcss@1.32.0)(react-router@7.12.0(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(sass-embedded@1.97.3)(sass@1.97.3)(stylus@0.64.0)(terser@5.46.0)(typescript@5.9.3)(vite@8.0.0-beta.16(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(@types/node@24.0.15)(esbuild@0.27.3)(jiti@2.6.1)(less@4.5.1)(sass-embedded@1.97.3)(sass@1.97.3)(stylus@0.64.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)))(typescript@5.9.3)':
     dependencies:
@@ -28019,6 +28053,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
       - typescript
+    optional: true
 
   '@react-three/drei@10.7.7(@react-three/fiber@9.5.0(@types/react@19.0.12)(immer@10.2.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(three@0.179.1))(@types/react@19.0.12)(@types/three@0.178.1)(immer@10.2.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(three@0.179.1)':
     dependencies:
@@ -29173,11 +29208,11 @@ snapshots:
 
   '@tanstack/virtual-core@3.13.19': {}
 
-  '@taucad/assimpjs@file:tarballs/taucad-assimpjs-0.0.18.tgz': {}
+  '@taucad/assimpjs@file:tarballs/taucad-assimpjs-0.0.19.tgz': {}
 
   '@taucad/kcl-wasm-lib@0.1.130(patch_hash=a5113ece295fc5a140b912793b5b08236be48a8ab797e0c981c91cd6cf7bad83)': {}
 
-  '@taucad/opencascade.js@file:tarballs/opencascade.js-3.0.0-beta.d453dbf.tgz(ws@8.19.0)':
+  '@taucad/opencascade.js@file:tarballs/opencascade.js-3.0.0-beta.bae75eb.tgz(ws@8.19.0)':
     dependencies:
       '@gltf-transform/core': 4.3.0
       '@gltf-transform/functions': 4.3.0
@@ -29475,7 +29510,7 @@ snapshots:
 
   '@types/connect-history-api-fallback@1.5.4':
     dependencies:
-      '@types/express-serve-static-core': 4.19.8
+      '@types/express-serve-static-core': 5.1.1
       '@types/node': 25.3.0
 
   '@types/connect@3.4.38':
@@ -29648,12 +29683,18 @@ snapshots:
       '@types/range-parser': 1.2.7
       '@types/send': 1.2.1
 
-  '@types/express@4.17.25':
+  '@types/express-serve-static-core@5.1.1':
+    dependencies:
+      '@types/node': 25.3.0
+      '@types/qs': 6.14.0
+      '@types/range-parser': 1.2.7
+      '@types/send': 1.2.1
+
+  '@types/express@5.0.6':
     dependencies:
       '@types/body-parser': 1.19.6
-      '@types/express-serve-static-core': 4.19.8
-      '@types/qs': 6.14.0
-      '@types/serve-static': 1.15.10
+      '@types/express-serve-static-core': 5.1.1
+      '@types/serve-static': 2.2.0
 
   '@types/geojson@7946.0.16': {}
 
@@ -29818,13 +29859,18 @@ snapshots:
 
   '@types/serve-index@1.9.4':
     dependencies:
-      '@types/express': 4.17.25
+      '@types/express': 5.0.6
 
   '@types/serve-static@1.15.10':
     dependencies:
       '@types/http-errors': 2.0.5
       '@types/node': 25.3.0
       '@types/send': 0.17.6
+
+  '@types/serve-static@2.2.0':
+    dependencies:
+      '@types/http-errors': 2.0.5
+      '@types/node': 25.3.0
 
   '@types/sockjs@0.3.36':
     dependencies:
@@ -34737,7 +34783,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  http-proxy-middleware@2.0.9(@types/express@4.17.25):
+  http-proxy-middleware@2.0.9(@types/express@5.0.6):
     dependencies:
       '@types/http-proxy': 1.17.17
       http-proxy: 1.18.1(debug@4.4.3)
@@ -34745,7 +34791,7 @@ snapshots:
       is-plain-obj: 3.0.0
       micromatch: 4.0.8
     optionalDependencies:
-      '@types/express': 4.17.25
+      '@types/express': 5.0.6
     transitivePeerDependencies:
       - debug
 
@@ -37714,6 +37760,7 @@ snapshots:
       on-headers: 1.1.0
     transitivePeerDependencies:
       - supports-color
+    optional: true
 
   motion-dom@12.34.3:
     dependencies:
@@ -38296,6 +38343,7 @@ snapshots:
   on-finished@2.3.0:
     dependencies:
       ee-first: 1.1.1
+    optional: true
 
   on-finished@2.4.1:
     dependencies:
@@ -40245,9 +40293,9 @@ snapshots:
 
   replace-ext@1.0.1: {}
 
-  replicad-opencascadejs@file:tarballs/replicad-opencascadejs-0.21.0-v8.55.tgz: {}
+  replicad-opencascadejs@file:tarballs/replicad-opencascadejs-0.21.0-v8.57.tgz: {}
 
-  replicad@file:tarballs/replicad-0.21.0-v8.56.tgz(patch_hash=b6ecc1ad0094dab60773fcac8449dfad615b406c272ce575101dbb704a428c39):
+  replicad@file:tarballs/replicad-0.21.0-v8.57.tgz(patch_hash=b6ecc1ad0094dab60773fcac8449dfad615b406c272ce575101dbb704a428c39):
     dependencies:
       '@types/opentype.js': 1.3.4
       flatbush: 4.5.0
@@ -42905,7 +42953,7 @@ snapshots:
     dependencies:
       '@types/bonjour': 3.5.13
       '@types/connect-history-api-fallback': 1.5.4
-      '@types/express': 4.17.25
+      '@types/express': 5.0.6
       '@types/express-serve-static-core': 4.19.8
       '@types/serve-index': 1.9.4
       '@types/serve-static': 1.15.10
@@ -42919,7 +42967,7 @@ snapshots:
       connect-history-api-fallback: 2.0.0
       express: 4.22.1
       graceful-fs: 4.2.11
-      http-proxy-middleware: 2.0.9(@types/express@4.17.25)
+      http-proxy-middleware: 2.0.9(@types/express@5.0.6)
       ipaddr.js: 2.3.0
       launch-editor: 2.13.0
       open: 10.2.0

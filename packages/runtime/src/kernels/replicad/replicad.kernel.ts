@@ -33,22 +33,19 @@ import {
 } from '#kernels/kernel-module-helpers.js';
 import type { RuntimeModuleExports } from '#kernels/kernel-module-helpers.js';
 import type { RuntimeSpanTracer } from '#types/runtime-tracer.types.js';
-import type { KernelIssue, KernelStackFrame, ErrorLocation } from '#types/runtime.types.js';
+import type { KernelIssue, KernelStackFrame } from '#types/runtime.types.js';
 import { createKernelError, createKernelSuccess } from '#kernels/kernel-helpers.js';
-import { named } from '#framework/named.js';
 import { isNode, resolveFileUrl } from '#framework/environment.js';
 import { initOpenCascade } from '#kernels/replicad/init-open-cascade.js';
 import type { OpenCascadeModuleFactory } from '#kernels/replicad/init-open-cascade.js';
 import { resolveCjsDefault } from '#kernels/replicad/utils/resolve-cjs-default.js';
-import { formatRuntimeErrorWithOc } from '#kernels/replicad/oc-exceptions.js';
-import { wrapOcWithTracing, wrapOcForExceptions } from '#kernels/replicad/oc-tracing.js';
-import type { OcTracingSummary } from '#kernels/replicad/oc-tracing.js';
+import { formatOcRuntimeError } from '#kernels/occt/oc-error-formatter.js';
+import type { OcErrorContext } from '#kernels/occt/oc-error-formatter.js';
+import { runOcMain } from '#kernels/occt/oc-run-main.js';
+import { wrapOcWithTracing, wrapOcForExceptions } from '#kernels/occt/oc-tracing.js';
+import type { OcTracingSummary } from '#kernels/occt/oc-tracing.js';
 import {
-  parseStackTrace,
-  createFrameClassifier,
-  deriveLocationFromFrames,
   applyLibrarySourceMaps,
-  resolveSourcePath,
   preserveExportNames,
   demangleStackFrames,
   classifyLibraryFrames,
@@ -132,23 +129,10 @@ type ReplicadContext = {
 
 // eslint-disable-next-line @typescript-eslint/naming-convention -- module-level constant
 const LIBRARY_PATTERNS = [{ pattern: 'node_modules/replicad/', moduleName: 'replicad' }];
-const frameClassifier = createFrameClassifier();
 
 // =============================================================================
 // Error enrichment helpers
 // =============================================================================
-
-function parseError(
-  error: unknown,
-  options?: { sourceMapJson?: string; projectPath?: string; lastEntryName?: string },
-): KernelStackFrame[] {
-  return parseStackTrace(error, {
-    classifyFrame: frameClassifier,
-    sourceMap: options?.sourceMapJson,
-    resolveSourcePath: (s) => resolveSourcePath(s, options?.projectPath),
-    lastEntryName: options?.lastEntryName,
-  });
-}
 
 function resolveLibraryFrames(frames: KernelStackFrame[], context: ReplicadContext): KernelStackFrame[] {
   const mapped = applyLibrarySourceMaps(frames, LIBRARY_PATTERNS, (moduleName) => {
@@ -156,6 +140,18 @@ function resolveLibraryFrames(frames: KernelStackFrame[], context: ReplicadConte
   });
   const demangled = demangleStackFrames(mapped, context.exportNameMap);
   return classifyLibraryFrames(demangled, context.libraryExportNames);
+}
+
+function buildErrorContext(
+  context: ReplicadContext,
+  options: { basePath: string; bundleSourceMap?: string; entryUrl?: string },
+): OcErrorContext {
+  return {
+    basePath: options.basePath,
+    bundleSourceMap: options.bundleSourceMap,
+    entryUrl: options.entryUrl,
+    applySecondarySourceMaps: (frames) => resolveLibraryFrames(frames, context),
+  };
 }
 
 async function loadReplicadSourceMap(): Promise<SourceMapConsumer | undefined> {
@@ -196,14 +192,6 @@ async function loadTextFile(url: string): Promise<string | undefined> {
   }
 }
 
-function deriveLocation(
-  frames: KernelStackFrame[],
-  sourceMapJson?: string,
-  projectPath?: string,
-): ErrorLocation | undefined {
-  return deriveLocationFromFrames(frames, sourceMapJson, (s) => resolveSourcePath(s, projectPath));
-}
-
 // =============================================================================
 // Module registration helpers
 // =============================================================================
@@ -236,51 +224,12 @@ function extractDefaultName(module: unknown): string | undefined {
   return typeof module['defaultName'] === 'string' ? module['defaultName'] : undefined;
 }
 
-type RunMainResult<T> = { success: true; value: T } | { success: false; issues: KernelIssue[] };
+function getReplicadFirstArgument(): unknown {
+  const registry = getModuleRegistry();
+  const first = registry.values().next();
+  return first.done ? undefined : first.value;
+}
 
-const runMainRaw = named(
-  'runMainRaw',
-  async function (module: RuntimeModuleExports, parameters: Record<string, unknown>): Promise<unknown> {
-    const mainFunction = module.default ?? module.main;
-    if (!mainFunction || typeof mainFunction !== 'function') {
-      return undefined;
-    }
-
-    if (mainFunction.length >= 2) {
-      const registry = getModuleRegistry();
-      const first = registry.values().next();
-      return mainFunction(first.done ? undefined : first.value, parameters);
-    }
-
-    return mainFunction(parameters);
-  },
-);
-
-const runMain = named('runMain', async function <
-  T,
->(input: { module: RuntimeModuleExports; parameters: Record<string, unknown>; context: ReplicadContext; sourceMapJson?: string; projectPath?: string; lastEntryName?: string }): Promise<
-  RunMainResult<T>
-> {
-  try {
-    const value = await runMainRaw(input.module, input.parameters);
-    return { success: true, value: value as T };
-  } catch (error) {
-    const issue = formatRuntimeErrorWithOc({
-      error,
-      ocInstance: input.context.openCascade,
-      parseStackTrace: (errorToFormat) =>
-        parseError(errorToFormat, {
-          sourceMapJson: input.sourceMapJson,
-          projectPath: input.projectPath,
-          lastEntryName: input.lastEntryName,
-        }),
-      applySourceMaps: (frames) => resolveLibraryFrames(frames, input.context),
-      deriveLocation: (frames) => deriveLocation(frames, input.sourceMapJson, input.projectPath),
-      sourceMap: input.sourceMapJson,
-    });
-    return { success: false, issues: [issue] };
-  }
-});
 // =============================================================================
 // Options schema
 // =============================================================================
@@ -417,29 +366,31 @@ export default defineKernel({
 
   async getParameters({ filePath, basePath }, runtime, context) {
     const relativeFilePath = resolveToRelative(filePath, basePath);
+    let bundleSourceMap: string | undefined;
+    let entryUrl: string | undefined;
     try {
       const bundleResult = await runtime.bundler.bundle(filePath);
       if (!bundleResult.success) {
         return createKernelError(convertRawIssuesToKernelIssues(bundleResult.issues, relativeFilePath));
       }
+      bundleSourceMap = bundleResult.sourceMap;
 
       const executeResult = await runtime.execute(bundleResult.code);
       if (!executeResult.success) {
         return createKernelError(convertRawIssuesToKernelIssues(executeResult.issues, relativeFilePath));
       }
+      entryUrl = executeResult.entryUrl;
 
       const defaultParameters = extractDefaultParameters(executeResult.value);
       const jsonSchema = await jsonSchemaFromJson(defaultParameters);
 
       return createKernelSuccess({ defaultParameters, jsonSchema });
     } catch (error) {
-      const issue = formatRuntimeErrorWithOc({
+      const issue = formatOcRuntimeError(
         error,
-        ocInstance: context.openCascade,
-        parseStackTrace: (errorToFormat) => parseError(errorToFormat, { projectPath: basePath }),
-        applySourceMaps: (frames) => resolveLibraryFrames(frames, context),
-        deriveLocation: (frames) => deriveLocation(frames, undefined, basePath),
-      });
+        context.openCascade,
+        buildErrorContext(context, { basePath, bundleSourceMap, entryUrl }),
+      );
       return createKernelError([issue]);
     }
   },
@@ -447,29 +398,32 @@ export default defineKernel({
   async createGeometry({ filePath, basePath, parameters, options }, runtime, context) {
     const { tracer } = runtime;
     const relativeFilePath = resolveToRelative(filePath, basePath);
+    let bundleSourceMap: string | undefined;
+    let entryUrl: string | undefined;
 
     try {
       const bundleResult = await runtime.bundler.bundle(filePath);
       if (!bundleResult.success) {
         throw new ReplicadBuildError(convertRawIssuesToKernelIssues(bundleResult.issues, relativeFilePath));
       }
+      bundleSourceMap = bundleResult.sourceMap;
 
       const executeResult = await runtime.execute(bundleResult.code);
       if (!executeResult.success) {
         throw new ReplicadBuildError(convertRawIssuesToKernelIssues(executeResult.issues, relativeFilePath));
       }
+      entryUrl = executeResult.entryUrl;
 
       const module = executeResult.value as RuntimeModuleExports;
       const mainSpan = tracer.startSpan('replicad.run-main', {
         phase: 'computingGeometry',
       });
-      const mainResult = await runMain<MainResultShapes>({
+      const mainResult = await runOcMain<MainResultShapes>({
         module,
         parameters,
-        context,
-        sourceMapJson: bundleResult.sourceMap,
-        projectPath: basePath,
-        lastEntryName: executeResult.entryUrl,
+        ocInstance: context.openCascade,
+        errorContext: buildErrorContext(context, { basePath, bundleSourceMap, entryUrl }),
+        firstArg: getReplicadFirstArgument(),
       });
       mainSpan.end();
 
@@ -541,13 +495,11 @@ export default defineKernel({
         throw error;
       }
 
-      const issue = formatRuntimeErrorWithOc({
+      const issue = formatOcRuntimeError(
         error,
-        ocInstance: context.openCascade,
-        parseStackTrace: (errorToFormat) => parseError(errorToFormat, { projectPath: basePath }),
-        applySourceMaps: (frames) => resolveLibraryFrames(frames, context),
-        deriveLocation: (frames) => deriveLocation(frames, undefined, basePath),
-      });
+        context.openCascade,
+        buildErrorContext(context, { basePath, bundleSourceMap, entryUrl }),
+      );
       throw new ReplicadBuildError([issue]);
     }
   },

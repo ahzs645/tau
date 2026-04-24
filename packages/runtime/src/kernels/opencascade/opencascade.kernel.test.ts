@@ -1,8 +1,9 @@
 // @vitest-environment node
 /* eslint-disable @typescript-eslint/naming-convention -- File names use extensions like 'box.ts' */
+/* oxlint-disable @typescript-eslint/no-unsafe-assignment -- vitest asymmetric matchers return any */
 import { describe, it, expect, beforeAll } from 'vitest';
 import opencascadeKernel from '#kernels/opencascade/opencascade.kernel.js';
-import { assertSuccess, createGeometryFile, createTestWorker } from '#testing/kernel-testing.utils.js';
+import { assertFailure, assertSuccess, createGeometryFile, createTestWorker } from '#testing/kernel-testing.utils.js';
 import { createGeometryTestHelpers } from '#testing/kernel-geometry-testing.utils.js';
 
 // =============================================================================
@@ -152,6 +153,36 @@ export default function main() {
       'empty.ts': `
 import init from 'opencascade.js';
 export default function main() {}`,
+      'bad-call.ts': `
+import { BRepPrimAPI_MakeBox, BRepFilletAPI_MakeFillet, ChFi3d_FilletShape, TopExp_Explorer, TopAbs_ShapeEnum, TopoDS } from 'opencascade.js';
+export default function main() {
+  const box = new BRepPrimAPI_MakeBox(10, 10, 10).Shape();
+  const fillet = new BRepFilletAPI_MakeFillet(box, ChFi3d_FilletShape.ChFi3d_Rational);
+  const explorer = new TopExp_Explorer(box, TopAbs_ShapeEnum.TopAbs_EDGE, TopAbs_ShapeEnum.TopAbs_SHAPE);
+  if (explorer.More()) {
+    const edge = TopoDS.Edge(explorer.Current());
+    fillet.Add(100, edge);
+  }
+  return fillet.Shape();
+}`,
+      'throw-in-params.ts': `
+import 'opencascade.js';
+const trap = {};
+Object.defineProperty(trap, 'badKey', {
+  enumerable: true,
+  get() {
+    throw new Error('boom-in-params-getter');
+  },
+});
+export const defaultParams = trap;
+export default function main() {}
+`,
+      'bad-wedge-arity.ts': `
+import { BRepPrimAPI_MakeWedge, gp_Pnt, gp_Dir, gp_Ax2 } from 'opencascade.js';
+export default function main() {
+  const ax = new gp_Ax2(new gp_Pnt(0, 0, 0), new gp_Dir(0, 0, 1));
+  return new BRepPrimAPI_MakeWedge(ax, 1, 1, 1, 0, 1, 0, 0, 0, 1).Shape();
+}`,
     });
   });
 
@@ -400,6 +431,74 @@ export default function main() {}`,
       const result = await worker.createGeometry({ file: geometryFile, parameters: {} });
       assertSuccess(result, 'Compound shape');
       await geometryHelpers.expectValidGltf(result);
+    });
+  });
+
+  // =============================================================================
+  // Exception decoding
+  // =============================================================================
+
+  describe('exception decoding', () => {
+    it('should decode OC WebAssembly.Exception via getExceptionMessage and capture JS stack frames', async () => {
+      const geometryFile = createGeometryFile('bad-call.ts');
+      const result = await worker.createGeometry({ file: geometryFile, parameters: {} });
+
+      assertFailure(result, 'bad-call createGeometry');
+      const issue = result.issues[0]!;
+      expect(issue).toEqual(
+        expect.objectContaining({
+          type: 'kernel',
+          severity: 'error',
+          message: expect.stringContaining('StdFail_NotDone'),
+        }),
+      );
+      expect(issue.message).not.toContain('undecodable');
+      expect(issue.message).not.toBe('[object WebAssembly.Exception]');
+      expect(issue.stackFrames?.length ?? 0).toBeGreaterThan(0);
+
+      const userFrame = issue.stackFrames!.find((f) => f.context === 'user');
+      expect(userFrame, 'expected at least one user-context stack frame').toBeDefined();
+      expect(userFrame!.fileName, `expected user frame to map to bad-call.ts, got ${userFrame!.fileName}`).not.toMatch(
+        /^blob:/,
+      );
+      expect(userFrame!.fileName).toMatch(/bad-call\.ts$/);
+      expect(userFrame!.lineNumber ?? 0).toBeGreaterThan(0);
+      expect(userFrame!.lineNumber ?? 0).toBeLessThan(20);
+      expect(issue.location?.fileName).toMatch(/bad-call\.ts$/);
+    });
+
+    it('should resolve user source path for getParameters errors via inline source map', async () => {
+      const geometryFile = createGeometryFile('throw-in-params.ts');
+      const result = await worker.getParameters(geometryFile);
+      assertFailure(result, 'throw-in-params getParameters');
+      const issue = result.issues[0]!;
+      expect(issue.stackFrames?.length ?? 0).toBeGreaterThan(0);
+      const userFrame = issue.stackFrames!.find((f) => f.context === 'user');
+      expect(userFrame, 'expected at least one user-context stack frame').toBeDefined();
+      expect(userFrame!.fileName).toMatch(/throw-in-params\.ts$/);
+      expect(userFrame!.fileName).not.toMatch(/^blob:/);
+    });
+
+    it('should map embind invalid-arity errors (BRepPrimAPI_MakeWedge) to the offending user line', async () => {
+      const geometryFile = createGeometryFile('bad-wedge-arity.ts');
+      const result = await worker.createGeometry({ file: geometryFile, parameters: {} });
+
+      assertFailure(result, 'bad-wedge-arity createGeometry');
+      const issue = result.issues[0]!;
+      expect(issue.message).toMatch(/BRepPrimAPI_MakeWedge/);
+      expect(issue.message).toMatch(/invalid number of parameters \(10\)/);
+      expect(issue.message).toMatch(/expected \(4,5,7,8\)/);
+      expect(issue.message).not.toContain('undecodable');
+
+      expect(issue.stackFrames?.length ?? 0).toBeGreaterThan(0);
+      const userFrame = issue.stackFrames!.find((f) => f.context === 'user');
+      expect(userFrame, 'expected at least one user-context stack frame').toBeDefined();
+      expect(userFrame!.fileName).not.toMatch(/^blob:/);
+      expect(userFrame!.fileName).toMatch(/bad-wedge-arity\.ts$/);
+      expect(userFrame!.lineNumber).toBe(5);
+
+      expect(issue.location?.fileName).toMatch(/bad-wedge-arity\.ts$/);
+      expect(issue.location?.startLineNumber).toBe(5);
     });
   });
 

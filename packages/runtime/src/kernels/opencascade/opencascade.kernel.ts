@@ -15,7 +15,6 @@ import { jsonSchemaFromJson } from '@taucad/utils/schema';
 import { asBuffer } from '@taucad/utils/file';
 import { defineKernel } from '#types/runtime-kernel.types.js';
 import type { KernelRuntime } from '#types/runtime-kernel.types.js';
-import type { KernelIssue } from '#types/runtime.types.js';
 import {
   opencascadeOptionsSchema,
   opencascadeRenderSchema,
@@ -35,6 +34,11 @@ import { initOpenCascade } from '#kernels/opencascade/init-opencascade.js';
 import type { OpenCascadeModule } from '#kernels/opencascade/init-opencascade.js';
 import { meshShapesToGltf, parseHexColor } from '#kernels/opencascade/opencascade-mesh.js';
 import type { ShapeEntry } from '#kernels/opencascade/opencascade.types.js';
+import { formatOcRuntimeError } from '#kernels/occt/oc-error-formatter.js';
+import { runOcMain } from '#kernels/occt/oc-run-main.js';
+import { wrapOcForExceptions, wrapOcWithTracing } from '#kernels/occt/oc-tracing.js';
+import type { OcTracingSummary } from '#kernels/occt/oc-tracing.js';
+import type { KernelIssue } from '#types/runtime.types.js';
 
 // eslint-disable-next-line import-x/no-extraneous-dependencies -- internal # imports resolve to self
 import type { OpenCascadeInstance, TopoDS_Shape } from '#kernels/opencascade/wasm/opencascade_full.js';
@@ -59,7 +63,24 @@ export type OpenCascadeWasmConfig = {
  * @public
  */
 export type OpenCascadeOptions = {
+  /**
+   * WASM build variant or custom build configuration.
+   *
+   * - `'full'` (default) -- exceptions-enabled full opencascade.js build
+   * - `OpenCascadeWasmConfig` -- custom WASM/JS URLs for runtime injection
+   */
   wasm?: 'full' | OpenCascadeWasmConfig;
+  /** OC API call tracing mode. `'summary'` (default) emits aggregated stats, `'per-call'` emits individual spans. */
+  ocTracing?: 'off' | 'summary' | 'per-call';
+};
+
+// =============================================================================
+// Context type
+// =============================================================================
+
+type OpenCascadeContext = {
+  oc: OpenCascadeInstance;
+  tracingSummary?: OcTracingSummary;
 };
 
 // =============================================================================
@@ -165,134 +186,156 @@ export default defineKernel({
 
   async initialize(options, runtime) {
     const { logger, tracer } = runtime;
+    const { ocTracing } = options;
     logger.debug(
-      `Initializing OpenCascade kernel (wasm: ${typeof options.wasm === 'string' ? options.wasm : 'custom'})`,
+      `Initializing OpenCascade kernel (wasm: ${typeof options.wasm === 'string' ? options.wasm : 'custom'}, ocTracing: ${ocTracing})`,
     );
 
     const span = tracer.startSpan('opencascade.wasm-init');
     const resolved = await resolveWasm(options.wasm);
-    const oc = (await initOpenCascade(resolved.wasmUrl, resolved.moduleExports, { tracer })) as OpenCascadeInstance;
+    let oc = (await initOpenCascade(resolved.wasmUrl, resolved.moduleExports, { tracer })) as OpenCascadeInstance;
     span.end();
+
+    let tracingSummary: OcTracingSummary | undefined;
+    if (ocTracing === 'summary' || ocTracing === 'per-call') {
+      const traced = wrapOcWithTracing(oc, tracer, { mode: ocTracing });
+      oc = traced.tracedInstance;
+      tracingSummary = traced.summary;
+    } else {
+      oc = wrapOcForExceptions(oc);
+    }
+
     registerOcModule(oc, runtime);
     logger.debug('OpenCascade kernel initialized');
 
-    return { oc };
+    return { oc, tracingSummary } satisfies OpenCascadeContext;
   },
 
   async getDependencies({ filePath }, runtime) {
     return runtime.bundler.resolveDependencies(filePath);
   },
 
-  async getParameters({ filePath, basePath }, runtime) {
+  async getParameters({ filePath, basePath }, runtime, context) {
     const relativeFilePath = resolveToRelative(filePath, basePath);
+    let bundleSourceMap: string | undefined;
+    let entryUrl: string | undefined;
     try {
       const bundleResult = await runtime.bundler.bundle(filePath);
       if (!bundleResult.success) {
         return createKernelError(convertRawIssuesToKernelIssues(bundleResult.issues, relativeFilePath));
       }
+      bundleSourceMap = bundleResult.sourceMap;
 
       const executeResult = await runtime.execute(bundleResult.code);
       if (!executeResult.success) {
         return createKernelError(convertRawIssuesToKernelIssues(executeResult.issues, relativeFilePath));
       }
+      entryUrl = executeResult.entryUrl;
 
       const defaultParameters = extractDefaultParameters(executeResult.value);
       const jsonSchema = await jsonSchemaFromJson(defaultParameters);
 
       return createKernelSuccess({ defaultParameters, jsonSchema });
     } catch (error) {
-      return createKernelError([
-        {
-          message: error instanceof Error ? error.message : String(error),
-          type: 'runtime',
-          severity: 'error',
-          location: { fileName: relativeFilePath, startLineNumber: 1, startColumn: 1 },
-        },
-      ]);
+      const issue = formatOcRuntimeError(error, context.oc, { basePath, bundleSourceMap, entryUrl });
+      return createKernelError([issue]);
     }
   },
 
   async createGeometry({ filePath, basePath, parameters, options }, runtime, context) {
     const { tracer } = runtime;
     const relativeFilePath = resolveToRelative(filePath, basePath);
+    let bundleSourceMap: string | undefined;
+    let entryUrl: string | undefined;
 
-    const bundleResult = await runtime.bundler.bundle(filePath);
-    if (!bundleResult.success) {
-      throw new OcctBuildError(convertRawIssuesToKernelIssues(bundleResult.issues, relativeFilePath));
-    }
-
-    const executeResult = await runtime.execute(bundleResult.code);
-    if (!executeResult.success) {
-      throw new OcctBuildError(convertRawIssuesToKernelIssues(executeResult.issues, relativeFilePath));
-    }
-
-    const module = executeResult.value as RuntimeModuleExports;
-    const mainFunction = module.default ?? module.main;
-
-    if (!mainFunction || typeof mainFunction !== 'function') {
-      return {
-        geometry: [],
-        nativeHandle: [],
-        issues: [
-          {
-            message: 'main() or default export function not found.',
-            type: 'runtime',
-            severity: 'warning',
-            location: { fileName: relativeFilePath, startLineNumber: 1, startColumn: 1 },
-          },
-        ],
-      };
-    }
-
-    const mainSpan = tracer.startSpan('opencascade.run-main', { phase: 'computingGeometry' });
-    let rawResult: unknown;
     try {
-      rawResult =
-        mainFunction.length >= 2 ? await mainFunction(context.oc, parameters) : await mainFunction(parameters);
-    } catch (error) {
+      const bundleResult = await runtime.bundler.bundle(filePath);
+      if (!bundleResult.success) {
+        throw new OcctBuildError(convertRawIssuesToKernelIssues(bundleResult.issues, relativeFilePath));
+      }
+      bundleSourceMap = bundleResult.sourceMap;
+
+      const executeResult = await runtime.execute(bundleResult.code);
+      if (!executeResult.success) {
+        throw new OcctBuildError(convertRawIssuesToKernelIssues(executeResult.issues, relativeFilePath));
+      }
+      entryUrl = executeResult.entryUrl;
+
+      const module = executeResult.value as RuntimeModuleExports;
+      const mainFunction = module.default ?? module.main;
+
+      if (!mainFunction || typeof mainFunction !== 'function') {
+        return {
+          geometry: [],
+          nativeHandle: [],
+          issues: [
+            {
+              message: 'main() or default export function not found.',
+              type: 'runtime',
+              severity: 'warning',
+              location: { fileName: relativeFilePath, startLineNumber: 1, startColumn: 1 },
+            },
+          ],
+        };
+      }
+
+      const mainSpan = tracer.startSpan('opencascade.run-main', { phase: 'computingGeometry' });
+      const mainResult = await runOcMain<unknown>({
+        module,
+        parameters,
+        ocInstance: context.oc,
+        errorContext: { basePath, bundleSourceMap, entryUrl },
+        firstArg: context.oc,
+      });
       mainSpan.end();
-      throw new OcctBuildError([
-        {
-          message: error instanceof Error ? error.message : String(error),
-          type: 'runtime',
-          severity: 'error',
-          location: { fileName: relativeFilePath, startLineNumber: 1, startColumn: 1 },
-        },
-      ]);
+
+      if (context.tracingSummary) {
+        context.tracingSummary.flush();
+      }
+
+      if (!mainResult.success) {
+        throw new OcctBuildError(mainResult.issues);
+      }
+
+      const shapeEntries = normalizeShapes(mainResult.value);
+      if (shapeEntries.length === 0) {
+        return {
+          geometry: [],
+          nativeHandle: [],
+          issues: [
+            {
+              message: 'main() did not return any shapes. Return a TopoDS_Shape or an array of shapes.',
+              type: 'runtime',
+              severity: 'warning',
+              location: { fileName: relativeFilePath, startLineNumber: 1, startColumn: 1 },
+            },
+          ],
+        };
+      }
+
+      const meshSpan = tracer.startSpan('opencascade.mesh-to-gltf', {
+        shapeCount: shapeEntries.length,
+        phase: 'computingGeometry',
+      });
+
+      const { tessellation } = options;
+      const { linearTolerance, angularTolerance } = tessellation;
+      const gltfData = meshShapesToGltf(context.oc, shapeEntries, {
+        linearTolerance,
+        angularTolerance: angularTolerance * (Math.PI / 180),
+      });
+      meshSpan.end();
+
+      const geometry: GeometryGltf[] = [{ format: 'gltf', content: gltfData }];
+      return { geometry, nativeHandle: shapeEntries };
+    } catch (error) {
+      if (error instanceof OcctBuildError) {
+        throw error;
+      }
+
+      const issue = formatOcRuntimeError(error, context.oc, { basePath, bundleSourceMap, entryUrl });
+      throw new OcctBuildError([issue]);
     }
-    mainSpan.end();
-
-    const shapeEntries = normalizeShapes(rawResult);
-    if (shapeEntries.length === 0) {
-      return {
-        geometry: [],
-        nativeHandle: [],
-        issues: [
-          {
-            message: 'main() did not return any shapes. Return a TopoDS_Shape or an array of shapes.',
-            type: 'runtime',
-            severity: 'warning',
-            location: { fileName: relativeFilePath, startLineNumber: 1, startColumn: 1 },
-          },
-        ],
-      };
-    }
-
-    const meshSpan = tracer.startSpan('opencascade.mesh-to-gltf', {
-      shapeCount: shapeEntries.length,
-      phase: 'computingGeometry',
-    });
-
-    const { tessellation } = options;
-    const { linearTolerance, angularTolerance } = tessellation;
-    const gltfData = meshShapesToGltf(context.oc, shapeEntries, {
-      linearTolerance,
-      angularTolerance: angularTolerance * (Math.PI / 180),
-    });
-    meshSpan.end();
-
-    const geometry: GeometryGltf[] = [{ format: 'gltf', content: gltfData }];
-    return { geometry, nativeHandle: shapeEntries };
   },
 
   async exportGeometry(input, _runtime, context) {

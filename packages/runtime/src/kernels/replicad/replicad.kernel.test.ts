@@ -1624,8 +1624,7 @@ export default function main() {
               }),
               expect.objectContaining({ context: 'library' }),
               // Framework: kernel infrastructure
-              expect.objectContaining({ functionName: 'runMainRaw', context: 'framework' }),
-              expect.objectContaining({ functionName: 'runMain', context: 'framework' }),
+              expect.objectContaining({ functionName: 'runOcMain', context: 'framework' }),
               expect.objectContaining({ functionName: 'Object.createGeometry', context: 'framework' }),
             ]),
           }),
@@ -1702,6 +1701,36 @@ export default function main() {
     });
 
     describe('source map stack trace resolution', () => {
+      // Regression guard for shared OCCT error-formatter extraction (oc-error-formatter.ts).
+      // Asserts that a vanilla `throw new Error()` from inside `main()` still resolves
+      // to the user's source path (not a `blob:` URL) after the kernel-level
+      // parseError/runMain helpers were collapsed into the shared OCCT helpers.
+      it('should resolve user source path for thrown Error inside main (shared-helper parity)', async () => {
+        const code = `import {} from 'replicad';
+
+export default function main() {
+  throw new Error('boom-from-main');
+}
+`;
+
+        const result = await createGeometry({
+          files: { 'main.ts': code },
+          mainFile: 'main.ts',
+        });
+        assertFailure(result);
+        const issue = result.issues[0]!;
+        expect(issue.stackFrames?.length ?? 0).toBeGreaterThan(0);
+
+        const userFrame = issue.stackFrames!.find((f) => f.context === 'user');
+        expect(userFrame, 'expected at least one user-context stack frame').toBeDefined();
+        expect(userFrame!.fileName).toMatch(/main\.ts$/);
+        expect(userFrame!.fileName).not.toMatch(/^blob:/);
+        expect(userFrame!.functionName).toBe('main');
+        expect(userFrame!.lineNumber).toBe(4);
+        expect(issue.location?.fileName).toMatch(/main\.ts$/);
+        expect(issue.location?.startLineNumber).toBe(4);
+      });
+
       it('should map stack trace to original source positions (single file)', async () => {
         const code = `import {} from 'replicad';
 
