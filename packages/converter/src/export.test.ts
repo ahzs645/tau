@@ -679,26 +679,26 @@ describe('3MF export options', () => {
 /* eslint-enable @typescript-eslint/naming-convention -- re-enable after 3MF tests */
 
 // ============================================================================
-// 3MF Rendering Artifact Regressions (R6)
+// 3MF Rendering Artifact Regressions
 // ============================================================================
-// Guards the fixes from docs/research/3mf-export-rendering-artifacts.md:
-//   R1 - lib3mf decimal precision raised from 6 to 9 (default) so vertex
-//        truncation no longer creates µm-scale gaps at shared mesh boundaries.
-//   R2 - aiProcess_Triangulate + aiProcess_JoinIdenticalVertices enforced for
-//        the 3MF exporter; vertex welding runs per-aiMesh, so multi-primitive
-//        scenes keep one <object> per primitive and per-material colors stay
-//        intact.
-//   R3 - Lib3MFBridge converts non-triangle aiFaces with push_back, so any
-//        residual N-gon never leaves a zero-initialised degenerate slot that
-//        lib3mf would otherwise reject.
-//   R4 - aiProcess_FindDegenerates + aiProcess_FindInvalidData guard against
-//        malformed input slipping through to the bridge.
+// Pin the 3MF rendering-artifact fixes so they cannot regress:
+//   - lib3mf decimal precision raised from 6 to 9 (default) so vertex
+//     truncation no longer creates µm-scale gaps at shared mesh boundaries.
+//   - aiProcess_Triangulate + aiProcess_JoinIdenticalVertices enforced for
+//     the 3MF exporter; vertex welding runs per-aiMesh, so multi-primitive
+//     scenes keep one <object> per primitive and per-material colors stay
+//     intact.
+//   - Lib3MFBridge converts non-triangle aiFaces with push_back, so any
+//     residual N-gon never leaves a zero-initialised degenerate slot that
+//     lib3mf would otherwise reject.
+//   - aiProcess_FindDegenerates + aiProcess_FindInvalidData guard against
+//     malformed input slipping through to the bridge.
 
 /**
  * Build a minimal, valid multi-primitive GLB in-memory: one mesh with two
  * primitives that reference distinct materials. Vertex coordinates use values
- * that require >= 9 fractional digits to round-trip without loss, which is the
- * R1 precision regression assertion.
+ * that require >= 9 fractional digits to round-trip without loss, which exposes
+ * the precision regression at the heart of the artifact fix.
  */
 const buildMultiPrimitiveGlb = (): Uint8Array<ArrayBuffer> => {
   const triangleA = {
@@ -872,7 +872,7 @@ const maxVertexFractionalDigits = (xml: string): number => {
 };
 
 describe('3MF rendering artifact regressions', () => {
-  it('preserves one <object> per glTF primitive (R2 — JoinIdenticalVertices runs per-aiMesh)', async () => {
+  it('preserves one <object> per glTF primitive (JoinIdenticalVertices runs per-aiMesh)', async () => {
     const multiPrimGlb = buildMultiPrimitiveGlb();
     const files = await exportFiles(multiPrimGlb, '3mf');
     const xml = extract3mfModelXml(files[0]!.bytes);
@@ -881,7 +881,7 @@ describe('3MF rendering artifact regressions', () => {
     expect(objectMatches.length).toBeGreaterThanOrEqual(2);
   });
 
-  it('emits at least 9 fractional digits for vertex coordinates by default (R1)', async () => {
+  it('emits at least 9 fractional digits for vertex coordinates by default', async () => {
     const multiPrimGlb = buildMultiPrimitiveGlb();
     const files = await exportFiles(multiPrimGlb, '3mf');
     const xml = extract3mfModelXml(files[0]!.bytes);
@@ -889,7 +889,7 @@ describe('3MF rendering artifact regressions', () => {
     expect(maxVertexFractionalDigits(xml)).toBeGreaterThanOrEqual(9);
   });
 
-  it('honours an explicit higher precision via 3MF_EXPORT_DECIMAL_PRECISION (R1)', async () => {
+  it('honours an explicit higher precision via 3MF_EXPORT_DECIMAL_PRECISION', async () => {
     const multiPrimGlb = buildMultiPrimitiveGlb();
     const files = await exportFiles(multiPrimGlb, '3mf', {
       // eslint-disable-next-line @typescript-eslint/naming-convention -- Assimp property key uses CONSTANT_CASE
@@ -900,7 +900,7 @@ describe('3MF rendering artifact regressions', () => {
     expect(maxVertexFractionalDigits(xml)).toBeGreaterThanOrEqual(10);
   });
 
-  it('exports a normal cube without polygon-face fallout (R3 + R4)', async () => {
+  it('exports a normal cube without polygon-face fallout (degenerate / invalid-data guards)', async () => {
     const cubeGlb = loadFixture('cube.glb');
     const files = await exportFiles(cubeGlb, '3mf');
     const xml = extract3mfModelXml(files[0]!.bytes);

@@ -511,14 +511,12 @@ const loaderTestCases: LoaderTestCase[] = [
   createCubeTestCase('3mf', {
     // The `cube.3mf` fixture authors a 2 mm cube on the source `−Y` half
     // (vertices `y∈[−2, 0]`, `x,z∈[−1, 1]`) instead of the canonical 3MF
-    // +Z-up build-plate placement (`z∈[0, 2]`). The R10 importer correctly
-    // stamps `(unit=0.001, upAxis=Z)` per 3MF Core Spec §3.3 and the R12
-    // glTF2 exporter correctly bakes scale + Z→Y rotation: source `−Y`
-    // (vertical extent) maps to glTF `+Z`, producing center `[0, 0, 0.001]`.
-    // See `docs/research/import-test-geometry-deviation-audit.md#finding-4`
-    // for the full algebraic derivation. To revert this case to
-    // `standardCubeGeometry`, re-author the fixture with vertices on
-    // `z∈[0, 2]`; the Assimp pipeline needs no changes.
+    // +Z-up build-plate placement (`z∈[0, 2]`). The 3MF importer correctly
+    // stamps `(unit=0.001, upAxis=Z)` per 3MF Core Spec §3.3 and the glTF2
+    // exporter correctly bakes scale + Z→Y rotation: source `−Y` (vertical
+    // extent) maps to glTF `+Z`, producing center `[0, 0, 0.001]`. To revert
+    // this case to `standardCubeGeometry`, re-author the fixture with
+    // vertices on `z∈[0, 2]`; the Assimp pipeline needs no changes.
     geometry: createGeometryVariant(standardCubeGeometry, {
       boundingBox: { center: [0, 0, 0.001] },
     }),
