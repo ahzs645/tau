@@ -285,6 +285,7 @@ export function useChatEditor({
     editorProps: {
       attributes: {
         class: 'outline-none',
+        'aria-label': placeholder,
       },
       handlePaste: (_view: EditorView, event: ClipboardEvent) => {
         const items = event.clipboardData?.items;
