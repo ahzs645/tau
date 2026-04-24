@@ -81,7 +81,7 @@ type EditorStateEvent =
   | { type: 'openFile'; path: string; source: FileOpenSource; lineNumber?: number; column?: number }
   | { type: 'closeFile'; path: string }
   | { type: 'setActiveFile'; path: string }
-  | { type: 'revealFileInTree'; path: string }
+  | { type: 'revealFileInTree'; path: string; expandTarget?: boolean }
   | { type: 'renameFile'; oldPath: string; newPath: string }
   | { type: 'closeAll' }
   // Chat operations
@@ -105,7 +105,7 @@ type EditorStateEvent =
 type EditorStateEmitted =
   | { type: 'editorStateLoaded'; editorState: EditorState | undefined }
   | { type: 'fileOpened'; path: string; lineNumber?: number; column?: number; source?: FileOpenSource }
-  | { type: 'fileRevealRequested'; path: string };
+  | { type: 'fileRevealRequested'; path: string; expandTarget?: boolean };
 
 // Actors to be provided by the consumer
 const loadEditorStateActor = fromSafeAsync<
@@ -342,6 +342,7 @@ export const editorMachine = setup({
       enqueue.emit({
         type: 'fileRevealRequested',
         path: event.path,
+        expandTarget: event.expandTarget,
       });
     }),
 
