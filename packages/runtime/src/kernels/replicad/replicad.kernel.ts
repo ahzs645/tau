@@ -127,15 +127,22 @@ type ReplicadContext = {
   tracingSummary?: OcTracingSummary;
 };
 
-// eslint-disable-next-line @typescript-eslint/naming-convention -- module-level constant
-const LIBRARY_PATTERNS = [{ pattern: 'node_modules/replicad/', moduleName: 'replicad' }];
+// Match both the public package name (`replicad/`) and the aliased pnpm path
+// (`@taucad/replicad/`) — the package.json aliases `replicad: npm:@taucad/replicad`,
+// so the actual on-disk file lives at `node_modules/.pnpm/.../@taucad/replicad/dist/replicad.js`
+// while still being importable as `replicad`. Both patterns map to the `replicad`
+// display name so source-mapped paths render as `replicad/src/...`.
+const libraryPatterns = [
+  { pattern: '@taucad/replicad/', moduleName: 'replicad' },
+  { pattern: 'node_modules/replicad/', moduleName: 'replicad' },
+];
 
 // =============================================================================
 // Error enrichment helpers
 // =============================================================================
 
 function resolveLibraryFrames(frames: KernelStackFrame[], context: ReplicadContext): KernelStackFrame[] {
-  const mapped = applyLibrarySourceMaps(frames, LIBRARY_PATTERNS, (moduleName) => {
+  const mapped = applyLibrarySourceMaps(frames, libraryPatterns, (moduleName) => {
     return context.librarySourceMapCache.get(moduleName);
   });
   const demangled = demangleStackFrames(mapped, context.exportNameMap);
