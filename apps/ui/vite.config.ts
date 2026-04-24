@@ -124,7 +124,7 @@ export default defineConfig(({ mode }) => {
         if (file.endsWith('.wasm')) {
           // WASM must not be inlined to ensure workers can cache the WASM files via Node V8 bytecode cache,
           // thus enabling WASM compilation caching to ensure fast worker startup times.
-          // @see docs/research/dynamic-es-modules.md#42-the-assetsinlinelimit-callback-trap
+          // Do not return `true` for WASM — inlining breaks worker caching.
           return false;
         }
 

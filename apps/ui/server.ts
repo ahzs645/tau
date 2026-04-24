@@ -5,7 +5,7 @@ import process from 'node:process';
 import { createRequestHandler } from '@react-router/express';
 import { coiMiddleware } from '@taucad/runtime/cross-origin-isolation/express';
 
-const port = Number.parseInt(process.env.PORT ?? '3000', 10);
+const port = Number.parseInt(process.env['PORT'] ?? '3000', 10);
 
 export async function createApp(): Promise<Express> {
   // The SSR build is produced by `react-router build` into ./build/server/index.js
@@ -21,6 +21,7 @@ export async function createApp(): Promise<Express> {
   return app;
 }
 
+// oxlint-disable-next-line @typescript-eslint/dot-notation -- noPropertyAccessFromIndexSignature requires bracket notation
 if (process.env['NODE_ENV'] !== 'test' && import.meta.url === `file://${process.argv[1]}`) {
   const app = await createApp();
   app.listen(port, () => {
