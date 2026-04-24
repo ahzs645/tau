@@ -17,6 +17,7 @@ import { noConsecutiveJsdocBlankLinesRule } from './rules/no-consecutive-jsdoc-b
 import { validateMdxCodeblocksRule } from './rules/validate-mdx-codeblocks.js';
 import { validateMdxLinksRule } from './rules/validate-mdx-links.js';
 import { validateMdxExternalLinksRule } from './rules/validate-mdx-external-links.js';
+import { noDeclareInMdxCodeblockRule } from './rules/no-declare-in-mdx-codeblock.js';
 import { noUselessCatchUnknownRule } from './rules/no-useless-catch-unknown.js';
 import { noHardcodedColorRule } from './rules/no-hardcoded-color.js';
 import { noTimeUnitSuffixRule } from './rules/no-time-unit-suffix.js';
@@ -26,7 +27,7 @@ import { noBareTimeIdentifierRule } from './rules/no-bare-time-identifier.js';
 const plugin = {
   meta: {
     name: 'tau-lint',
-    version: '1.11.0',
+    version: '1.12.0',
   },
   rules: {
     'no-abusive-eslint-disable': noAbusiveEslintDisableRule,
@@ -40,6 +41,7 @@ const plugin = {
     'validate-mdx-codeblocks': validateMdxCodeblocksRule,
     'validate-mdx-links': validateMdxLinksRule,
     'validate-mdx-external-links': validateMdxExternalLinksRule,
+    'no-declare-in-mdx-codeblock': noDeclareInMdxCodeblockRule,
     'no-hardcoded-color': noHardcodedColorRule,
     'no-time-unit-suffix': noTimeUnitSuffixRule,
     'no-bare-time-identifier': noBareTimeIdentifierRule,
