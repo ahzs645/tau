@@ -6,7 +6,6 @@
  * for filesystem event pipelines.
  *
  * @public
- * @see docs/research/shared-worker-gate-startup-performance.md R8
  */
 
 const defaultMaxWorkChunkSize = 100;

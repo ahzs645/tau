@@ -9,7 +9,7 @@
  * - Parent directory delete suppresses child delete spam
  * - Rename emits both old and new path invalidation
  *
- * @see docs/policy/filesystem-policy.md Rule 21
+ * @see docs/policy/filesystem-policy.md
  */
 
 import type { ChangeEvent } from '#types.js';

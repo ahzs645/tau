@@ -5,10 +5,6 @@
  * design: paths are keys, file content is the value, directory metadata
  * is derived from key prefixes, and `getAllKeys()` hydrates an in-memory
  * path set on init (~26ms for 10k entries vs ~12s ZenFS full scan).
- *
- * @see docs/research/filesystem-runtime-strategy.md Phase 1
- * @see docs/research/vscode-fs-performance.md Finding 3
- * @see docs/research/shared-worker-gate-startup-performance.md R7, R9
  */
 
 import type { ProviderCapabilities, ProviderFileStat } from '#types.js';

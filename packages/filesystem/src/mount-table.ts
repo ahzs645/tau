@@ -6,7 +6,6 @@
  * at `/`, CDN modules on OPFS at `/node_modules/`.
  *
  * @public
- * @see docs/research/filesystem-mount-overlay-architecture.md
  */
 
 import type { FileSystemBackend } from '@taucad/types';

@@ -4,8 +4,6 @@
  * Deduplicates identical watch requests so multiple consumers share a single
  * ChangeEventBus subscription. Tracks per-owner (port/session) watch sets for
  * lifecycle cleanup on disconnect.
- *
- * @see docs/policy/filesystem-policy.md Rule 20
  */
 
 import type { ChangeEventBus } from '#change-event-bus.js';

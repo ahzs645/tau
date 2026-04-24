@@ -5,9 +5,6 @@
  * `navigator.storage.getDirectory()`. It uses the same `FileSystemDirectoryHandle`
  * API as the File System Access API, so this provider extends
  * {@link FileSystemAccessProvider} and only overrides initialization and identity.
- *
- * @see docs/research/shared-worker-gate-startup-performance.md R18
- * @see docs/research/filesystem-runtime-strategy.md Phase 5
  */
 
 import type { ProviderCapabilities } from '#types.js';

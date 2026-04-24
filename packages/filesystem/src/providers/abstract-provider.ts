@@ -3,8 +3,6 @@
  *
  * Implements shared logic (exists, lstat, readFile with encoding, recursive mkdir,
  * dispose) so concrete providers only implement storage-specific primitives.
- *
- * @see docs/research/filesystem-runtime-strategy.md
  */
 
 import type { FileSystemProvider, ProviderCapabilities, ProviderFileStat } from '#types.js';
@@ -26,7 +24,7 @@ export abstract class AbstractFileSystemProvider implements FileSystemProvider {
 
   // Overloaded readFile satisfying the FileSystemProvider contract.
   // Declared as a method statement so TypeScript applies loose overload
-  // implementation checking (see docs/research/typescript-overloads.md §4).
+  // implementation checking (method-style overload declarations).
   public readFile(path: string): Promise<Uint8Array<ArrayBuffer>>;
   public readFile(path: string, encoding: 'utf8'): Promise<string>;
   public async readFile(path: string, encoding?: 'utf8'): Promise<Uint8Array<ArrayBuffer> | string> {

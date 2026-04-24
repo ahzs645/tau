@@ -3,8 +3,6 @@
  *
  * Replaces the ZenFS `InMemory` backend for ephemeral, non-persistent
  * filesystem operations (tests, scratch spaces).
- *
- * @see docs/research/filesystem-runtime-strategy.md
  */
 
 import type { ProviderCapabilities, ProviderFileStat } from '#types.js';
