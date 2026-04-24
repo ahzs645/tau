@@ -47,7 +47,7 @@ function createSuccessResult(overrides?: Partial<GetParametersData>): GetParamet
 function createErrorResult(): GetParametersResult {
   return {
     success: false,
-    issues: [{ severity: 'error', message: 'Test error' }],
+    issues: [{ severity: 'error', code: 'RUNTIME', message: 'Test error' }],
   };
 }
 

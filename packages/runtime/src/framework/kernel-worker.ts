@@ -337,7 +337,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   /** Per-render dependency computation cache. Cleared at the start of each render cycle. */
   private renderDependencyCache?: { hash: string; dependencies: Dependency[] };
 
-  /** Middleware-registered watch paths with custom debounce tiers (path → debounceMs). */
+  /** Middleware-registered watch paths with custom debounce tiers (path → debounce in ms). */
   private readonly middlewareWatchPaths = new Map<string, number>();
 
   /** Currently watched dependency paths. Used for incremental watch-set diffing. */
@@ -532,7 +532,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    *
    * @param send - callback that transmits collected performance entries to the main thread
    */
-  public setTelemetrySend(send: (entries: PerformanceEntryData[]) => void): void {
+  public setTelemetrySend(send: (entries: TelemetryEntry[]) => void): void {
     this.telemetryCollector?.dispose();
     this.telemetryCollector = new WorkerTelemetryCollector(send);
   }
@@ -599,8 +599,8 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
     clearTimeout(this.paramDebounceTimer);
     this.paramDebounceTimer = undefined;
 
-    // Phase 1: immediately watch the entry file so edits during
-    // a long-running (or failing) first render are never missed.
+    // Watch the entry file immediately so edits during a long-running
+    // (or failing) first render are never missed.
     this.setBasePath(file);
     this.updateWatchSet([this.activeFileAbsolutePath]);
 
@@ -609,8 +609,9 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
 
   /**
    * Handle a setParameters command from the main thread.
-   * Stores the parameters, aborts any in-progress render,
-   * and schedules a render with 50ms debounce.
+   * Stores the parameters, aborts any in-progress render, and schedules a
+   * render after the {@link parameterDebounce} window (configured in
+   * `runtime-framework.constants`).
    *
    * @param parameters - Parameter overrides.
    */
@@ -740,6 +741,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
             return createKernelError([
               {
                 message: `Middleware error in ${middlewareName}: ${errorMessage}`,
+                code: 'MIDDLEWARE_FAILED',
                 type: 'kernel',
                 severity: 'error',
               },
@@ -860,6 +862,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
             return createKernelError([
               {
                 message: `Middleware error in ${middlewareName}: ${errorMessage}`,
+                code: 'MIDDLEWARE_FAILED',
                 type: 'kernel',
                 severity: 'error',
               },
@@ -927,6 +930,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
           success: false,
           issues: parseResult.error.issues.map((issue) => ({
             message: `Export option validation failed: ${issue.path.join('.')} — ${issue.message}`,
+            code: 'RUNTIME',
             type: 'runtime',
             severity: 'error',
           })),
@@ -945,6 +949,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
           issues: [
             {
               message: `No export schema for format "${format}" — options cannot be validated. Declared formats: ${declared}. Register the format schema or use a transcoder.`,
+              code: 'KERNEL_CAPABILITY_MISSING',
               type: 'runtime',
               severity: 'error',
             },
@@ -1030,6 +1035,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
             return createKernelError([
               {
                 message: `Middleware error in ${middlewareName}: ${errorMessage}`,
+                code: 'MIDDLEWARE_FAILED',
                 type: 'kernel',
                 severity: 'error',
               },
@@ -1202,7 +1208,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
           clearExecuteCache();
           this.onFileChanged([]);
           if (this.currentFile) {
-            this.scheduleRender(fileChangeDebounceMs);
+            this.scheduleRender(fileChangeDebounce);
           }
           return;
         }
@@ -1210,11 +1216,11 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
           this._invalidateCachesForPaths(changedPaths);
           this.onFileChanged(changedPaths);
           if (this.currentFile) {
-            let debounceMs = fileChangeDebounceMs;
+            let watchDebounce = fileChangeDebounce;
             for (const p of changedPaths) {
-              debounceMs = Math.min(debounceMs, this.middlewareWatchPaths.get(p) ?? fileChangeDebounceMs);
+              watchDebounce = Math.min(watchDebounce, this.middlewareWatchPaths.get(p) ?? fileChangeDebounce);
             }
-            this.scheduleRender(debounceMs);
+            this.scheduleRender(watchDebounce);
           }
         }
       },
@@ -1606,15 +1612,15 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   /**
    * Schedule a render after a debounce delay. Clears any existing timer.
    *
-   * @param delayMs - Debounce delay in milliseconds.
+   * @param renderDelay - Debounce delay before render fires. Milliseconds.
    */
-  private scheduleRender(delayMs: number): void {
+  private scheduleRender(renderDelay: number): void {
     clearTimeout(this.paramDebounceTimer);
     this.pushState('buffering');
     this.paramDebounceTimer = setTimeout(() => {
       this.paramDebounceTimer = undefined;
       void this.executeRender();
-    }, delayMs);
+    }, renderDelay);
   }
 
   /**
@@ -1709,7 +1715,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
         if (reason === abortReasonEnum.timeout) {
           const timeoutMessage =
             'Render timed out. Increase the timeout in viewer settings or simplify the model geometry.';
-          this.onError?.([{ message: timeoutMessage, type: 'runtime', severity: 'error' }]);
+          this.onError?.([{ message: timeoutMessage, code: 'RENDER_TIMEOUT', type: 'runtime', severity: 'error' }]);
           this.pushState('error');
         } else {
           this.pushState(this.paramDebounceTimer ? 'buffering' : 'idle');
@@ -1718,7 +1724,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       }
 
       const errorMessage = error instanceof Error ? error.message : String(error);
-      this.onError?.([{ message: errorMessage, type: 'runtime', severity: 'error' }]);
+      this.onError?.([{ message: errorMessage, code: 'RUNTIME', type: 'runtime', severity: 'error' }]);
       this.pushState('error');
     } finally {
       clearAbortContext();
@@ -2022,7 +2028,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   }
 
   /**
-   * Execute an export operation using the v5 route planner algorithm:
+   * Execute an export operation using the route planner algorithm:
    * 1. If the active kernel natively supports the format, export directly.
    * 2. Otherwise, filter precomputed manifest routes by active kernelId + targetFormat
    *    and execute the first viable route via the matching transcoder.
@@ -2097,6 +2103,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
           return createKernelError(
             edgeParseResult.error.issues.map((issue) => ({
               message: `Transcoder edge option validation failed (${route.sourceFormat} → ${input.format}): ${issue.path.join('.')} — ${issue.message}`,
+              code: 'RUNTIME',
               severity: 'error',
             })),
           );
@@ -2129,6 +2136,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
             `No export route found for format "${input.format}"` +
             (activeKernelId ? ` from kernel "${activeKernelId}"` : '') +
             `. Native formats: ${nativeFormats}. Register a transcoder that supports this conversion.`,
+          code: 'KERNEL_CAPABILITY_MISSING',
           type: 'runtime',
           severity: 'error',
         },
@@ -2642,9 +2650,12 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * Register a middleware watch path with an optional custom debounce tier.
    * Called by middleware via `runtime.registerWatchPath()`.
    * Idempotent — re-registering the same path updates the debounce value.
+   *
+   * @param absolutePath - The absolute path to register.
+   * @param options - The options for the watch path.
    */
-  private readonly handleRegisterWatchPath = (absolutePath: string, options?: { debounceMs?: number }): void => {
-    this.middlewareWatchPaths.set(absolutePath, options?.debounceMs ?? fileChangeDebounceMs);
+  private readonly handleRegisterWatchPath = (absolutePath: string, options?: { watchDebounce?: number }): void => {
+    this.middlewareWatchPaths.set(absolutePath, options?.watchDebounce ?? fileChangeDebounce);
   };
 
   /**
@@ -2668,6 +2679,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       success: false,
       issues: parseResult.error.issues.map((issue) => ({
         message: `Render option validation failed: ${issue.path.join('.')} — ${issue.message}`,
+        code: 'RUNTIME',
         severity: 'error',
       })),
     };

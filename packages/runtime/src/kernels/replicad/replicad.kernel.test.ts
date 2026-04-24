@@ -19,7 +19,7 @@ import {
   getTestFileSystem,
 } from '#testing/kernel-testing.utils.js';
 import type { CreateTestWorkerOptions } from '#testing/kernel-testing.utils.js';
-import type { PerformanceEntryData } from '#types/index.js';
+import type { TelemetryEntry } from '#types/index.js';
 
 // =============================================================================
 // Test Utilities
@@ -3458,7 +3458,7 @@ describe('OC API Call Tracing', () => {
   });
 
   it('emits an oc.summary span by default (summary mode)', async () => {
-    const telemetryBatches: PerformanceEntryData[][] = [];
+    const telemetryBatches: TelemetryEntry[][] = [];
 
     const worker = await createTestWorker(
       replicadKernel,
@@ -3486,7 +3486,7 @@ describe('OC API Call Tracing', () => {
   });
 
   it('emits individual oc.* spans in per-call mode', async () => {
-    const telemetryBatches: PerformanceEntryData[][] = [];
+    const telemetryBatches: TelemetryEntry[][] = [];
 
     const worker = await createTestWorker(
       replicadKernel,
@@ -3514,7 +3514,7 @@ describe('OC API Call Tracing', () => {
   });
 
   it('emits no oc spans when tracing is off', async () => {
-    const telemetryBatches: PerformanceEntryData[][] = [];
+    const telemetryBatches: TelemetryEntry[][] = [];
 
     const worker = await createTestWorker(
       replicadKernel,
@@ -3539,7 +3539,7 @@ describe('OC API Call Tracing', () => {
   });
 
   it('summary span contains per-class statistics', async () => {
-    const telemetryBatches: PerformanceEntryData[][] = [];
+    const telemetryBatches: TelemetryEntry[][] = [];
 
     const worker = await createTestWorker(
       replicadKernel,

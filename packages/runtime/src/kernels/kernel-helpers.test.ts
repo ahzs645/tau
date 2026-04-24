@@ -14,7 +14,9 @@ describe('createKernelSuccess', () => {
   });
 
   it('should preserve provided issues', () => {
-    const issues: KernelIssue[] = [{ message: 'Degenerate face skipped', type: 'kernel', severity: 'warning' }];
+    const issues: KernelIssue[] = [
+      { message: 'Degenerate face skipped', code: 'RUNTIME', type: 'kernel', severity: 'warning' },
+    ];
     const result = createKernelSuccess('geometry-data', issues);
 
     expect(result.success).toBe(true);
@@ -37,7 +39,9 @@ describe('createKernelSuccess', () => {
 
 describe('createKernelError', () => {
   it('should return failure with provided issues', () => {
-    const issues: KernelIssue[] = [{ message: 'Compilation failed', type: 'compilation', severity: 'error' }];
+    const issues: KernelIssue[] = [
+      { message: 'Compilation failed', code: 'BUNDLER_FAILED', type: 'compilation', severity: 'error' },
+    ];
     const result = createKernelError(issues);
 
     expect(result).toEqual({
@@ -48,8 +52,8 @@ describe('createKernelError', () => {
 
   it('should handle multiple issues', () => {
     const issues: KernelIssue[] = [
-      { message: 'Syntax error on line 5', type: 'compilation', severity: 'error' },
-      { message: 'Unused variable', type: 'compilation', severity: 'warning' },
+      { message: 'Syntax error on line 5', code: 'BUNDLER_FAILED', type: 'compilation', severity: 'error' },
+      { message: 'Unused variable', code: 'BUNDLER_FAILED', type: 'compilation', severity: 'warning' },
     ];
     const result = createKernelError(issues);
 

@@ -124,6 +124,7 @@ export function convertKclErrorToKernelIssue(kclError: KclError, code?: string, 
 
   const kernelIssue: KernelIssue = {
     message: kclError.msg,
+    code: errorType === 'kernel' ? 'KERNEL_BINDING_FAILED' : errorType === 'compilation' ? 'BUNDLER_FAILED' : 'RUNTIME',
     location,
     type: errorType,
     stack,

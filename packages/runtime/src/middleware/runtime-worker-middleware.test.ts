@@ -352,7 +352,7 @@ describe('runtime-worker middleware onion chain', () => {
             // Add a suffix to the issues
             return {
               ...result,
-              issues: [...result.issues, { message: 'M1-processed', severity: 'info' }],
+              issues: [...result.issues, { message: 'M1-processed', code: 'RUNTIME', severity: 'info' }],
             };
           }
 
@@ -368,7 +368,7 @@ describe('runtime-worker middleware onion chain', () => {
           if (result.success) {
             return {
               ...result,
-              issues: [...result.issues, { message: 'M2-processed', severity: 'info' }],
+              issues: [...result.issues, { message: 'M2-processed', code: 'RUNTIME', severity: 'info' }],
             };
           }
 
@@ -379,7 +379,7 @@ describe('runtime-worker middleware onion chain', () => {
       const mainResult: CreateGeometryResult = {
         success: true,
         data: [],
-        issues: [{ message: 'main-issue', severity: 'warning' }],
+        issues: [{ message: 'main-issue', code: 'RUNTIME', severity: 'warning' }],
       };
 
       const worker = new MockKernelWorker({

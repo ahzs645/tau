@@ -60,6 +60,10 @@ export class RenderAbortedError extends Error {
     super('Render aborted by a newer setFile/setParameters call');
     this.name = 'RenderAbortedError';
   }
+
+  public get code(): 'RUNTIME_RENDER_ABORTED' {
+    return 'RUNTIME_RENDER_ABORTED';
+  }
 }
 
 /**
@@ -78,12 +82,19 @@ export function isRenderAbortedError(error: unknown): error is RenderAbortedErro
  * @public
  */
 export class RenderTimeoutError extends Error {
-  public constructor(timeoutMs: number) {
+  /**
+   * @param renderTimeout - Configured wall-clock timeout that was exceeded. Milliseconds.
+   */
+  public constructor(renderTimeout: number) {
     super(
-      `Render timed out after ${timeoutMs / 1000} seconds. ` +
+      `Render timed out after ${renderTimeout / 1000} seconds. ` +
         'Increase the timeout in viewer settings or simplify the model geometry.',
     );
     this.name = 'RenderTimeoutError';
+  }
+
+  public get code(): 'RUNTIME_RENDER_TIMEOUT' {
+    return 'RUNTIME_RENDER_TIMEOUT';
   }
 }
 

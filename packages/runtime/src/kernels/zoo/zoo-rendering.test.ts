@@ -18,8 +18,7 @@
  * file should be expanded with the same `colorParityCases` matrix used by
  * `replicad-rendering.test.ts` etc.
  *
- * See docs/policy/color-space-policy.md and the research doc on color-space
- * convergence.
+ * See docs/policy/color-space-policy.md for sRGB↔linear handling.
  */
 import { describe, expect, it } from 'vitest';
 import zooKernel from '#kernels/zoo/zoo.kernel.js';

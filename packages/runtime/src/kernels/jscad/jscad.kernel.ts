@@ -199,6 +199,7 @@ export default defineKernel({
       return createKernelError([
         {
           message: error instanceof Error ? error.message : 'Failed to extract parameters',
+          code: 'RUNTIME',
           location: {
             fileName: relativeFilePath,
             startLineNumber: 1,
@@ -243,6 +244,7 @@ export default defineKernel({
       throw new JscadBuildError([
         {
           message: error instanceof Error ? error.message : String(error),
+          code: 'RUNTIME',
           type: 'runtime',
           severity: 'error',
           stackFrames,
@@ -321,6 +323,7 @@ export default defineKernel({
       return createKernelError([
         {
           message: 'No geometry available for export.',
+          code: 'RUNTIME',
           type: 'runtime',
           severity: 'error',
         },
@@ -336,6 +339,7 @@ export default defineKernel({
           return createKernelError([
             {
               message: 'Failed to generate GLB from computed geometry',
+              code: 'RUNTIME',
               type: 'runtime',
               severity: 'error',
             },
@@ -350,6 +354,7 @@ export default defineKernel({
         return createKernelError([
           {
             message: `Export format '${_exhaustive as string}' is not supported by JSCAD. Supported formats: glb.`,
+            code: 'KERNEL_CAPABILITY_MISSING',
             type: 'runtime',
             severity: 'error',
           },

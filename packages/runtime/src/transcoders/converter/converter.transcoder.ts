@@ -53,7 +53,9 @@ export default defineTranscoder({
       return {
         success: false,
         data: [],
-        issues: [{ message: 'No input files provided for transcoding', type: 'runtime', severity: 'error' }],
+        issues: [
+          { message: 'No input files provided for transcoding', code: 'RUNTIME', type: 'runtime', severity: 'error' },
+        ],
       };
     }
 
@@ -74,7 +76,7 @@ export default defineTranscoder({
       return {
         success: false,
         data: [],
-        issues: [{ message, type: 'runtime', severity: 'error' }],
+        issues: [{ message, code: 'RUNTIME', type: 'runtime', severity: 'error' }],
       };
     }
   },

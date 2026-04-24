@@ -4,19 +4,11 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 /**
- * R5 (audit) — boundary discipline sentinel for the runtime client surface.
+ * Boundary-discipline sentinel for the runtime client surface.
  *
  * Scans the runtime-client public surface files for `as unknown as` casts and
- * asserts each one is preceded within 5 lines above by a `// SAFETY:` comment
- * block. This catches drive-by escape hatches at PR-review time — a layer
- * type-check cannot enforce, since the cast itself is type-system-legal.
- *
- * Currently the surface contains zero `as unknown as` casts (narrowing at the
- * worker seam is achieved via overload signatures). The test exists to prevent
- * future drive-by additions from being merged without explicit safety
- * justification.
- *
- * See `docs/research/runtime-client-type-preservation-audit.md` (R5).
+ * asserts each is preceded within 5 lines above by a `// SAFETY:` comment.
+ * Catches drive-by escape hatches that the type system alone cannot reject.
  */
 
 const clientDirectory = dirname(fileURLToPath(import.meta.url));
@@ -25,7 +17,7 @@ const safetyLookbackLines = 5;
 const castPattern = /\bas\s+unknown\s+as\b/;
 const safetyPattern = /\/\/\s*SAFETY\b/;
 
-describe('runtime client surface — cast discipline (audit-R5)', () => {
+describe('runtime client surface — cast discipline', () => {
   for (const filename of surfaceFiles) {
     it(`should bound every \`as unknown as\` cast in ${filename} with a // SAFETY: block within ${safetyLookbackLines} lines above`, () => {
       const lines = readFileSync(join(clientDirectory, filename), 'utf8').split('\n');

@@ -140,11 +140,13 @@ describe('geometryCacheMiddleware', () => {
         const cachedIssues: KernelIssue[] = [
           {
             message: 'ignoring unknown variable "size"',
+            code: 'BUNDLER_FAILED',
             severity: 'warning',
             type: 'compilation',
           },
           {
             message: 'undefined operation',
+            code: 'BUNDLER_FAILED',
             severity: 'warning',
             type: 'compilation',
           },
@@ -254,6 +256,7 @@ describe('geometryCacheMiddleware', () => {
         const issues: KernelIssue[] = [
           {
             message: 'ignoring unknown variable "size"',
+            code: 'BUNDLER_FAILED',
             severity: 'warning',
             type: 'compilation',
           },

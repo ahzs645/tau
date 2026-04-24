@@ -12,6 +12,7 @@ import {
   enrichIssueLocation,
   loadBinaryFile,
 } from '#kernels/kernel-module-helpers.js';
+import type { KernelIssue } from '#types/runtime.types.js';
 
 describe('isRecordObject', () => {
   it('should return true for plain objects', () => {
@@ -105,6 +106,7 @@ describe('convertRawIssuesToKernelIssues', () => {
     const result = convertRawIssuesToKernelIssues(raw, 'main.ts');
     expect(result).toEqual([
       {
+        code: 'RUNTIME',
         message: 'syntax error',
         severity: 'error',
         type: 'runtime',
@@ -130,7 +132,9 @@ describe('convertRawIssuesToKernelIssues', () => {
 describe('enrichIssueLocation', () => {
   it('should add fallback location when missing', () => {
     // oxlint-disable-next-line tau-lint/no-literal-const-assertion -- these are necessary
-    const issues = [{ message: 'oops', type: 'runtime' as const, severity: 'error' as const }];
+    const issues = [
+      { message: 'oops', code: 'RUNTIME' as const, type: 'runtime' as const, severity: 'error' as const },
+    ];
     const result = enrichIssueLocation(issues, 'fallback.ts');
     expect(result[0]!.location).toEqual({
       fileName: 'fallback.ts',
@@ -141,8 +145,7 @@ describe('enrichIssueLocation', () => {
 
   it('should preserve existing location', () => {
     const location = { fileName: 'original.ts', startLineNumber: 10, startColumn: 5 };
-    // oxlint-disable-next-line tau-lint/no-literal-const-assertion -- these are necessary
-    const issues = [{ message: 'oops', type: 'runtime' as const, severity: 'error' as const, location }];
+    const issues: KernelIssue[] = [{ message: 'oops', code: 'RUNTIME', type: 'runtime', severity: 'error', location }];
     const result = enrichIssueLocation(issues, 'fallback.ts');
     expect(result[0]!.location).toEqual(location);
   });

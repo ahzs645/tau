@@ -467,6 +467,7 @@ export function createErrorResult(issues?: KernelIssue[]): CreateGeometryResult 
     issues: issues ?? [
       {
         message: 'Test error',
+        code: 'RUNTIME',
         severity: 'error',
         type: 'kernel',
       },
@@ -805,11 +806,11 @@ export function createMockKernelRuntime(options?: { filesystemOverrides?: MockFi
     bundler: noopBundler,
     async execute(): Promise<{
       success: false;
-      issues: Array<{ message: string; severity: 'error' }>;
+      issues: KernelIssue[];
     }> {
       return {
         success: false,
-        issues: [{ message: 'Mock executor', severity: 'error' }],
+        issues: [{ message: 'Mock executor', code: 'RUNTIME', severity: 'error' }],
       };
     },
     tracer: { startSpan: () => ({ end: noopSpanEnd }) },

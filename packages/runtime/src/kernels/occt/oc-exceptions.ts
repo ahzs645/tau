@@ -274,6 +274,7 @@ export function formatRuntimeErrorWithOc({
     const location = deriveLocation(stackFrames, sourceMap);
     return {
       message: error.message,
+      code: 'KERNEL_BINDING_FAILED',
       location,
       type: 'kernel',
       severity: 'error',
@@ -294,6 +295,7 @@ export function formatRuntimeErrorWithOc({
     const location = deriveLocation(stackFrames, sourceMap);
     return {
       message,
+      code: 'KERNEL_BINDING_FAILED',
       location,
       type: 'kernel',
       severity: 'error',
@@ -309,6 +311,7 @@ export function formatRuntimeErrorWithOc({
     const location = deriveLocation(stackFrames, sourceMap);
     return {
       message,
+      code: 'KERNEL_BINDING_FAILED',
       location,
       type: 'kernel',
       severity: 'error',
@@ -321,6 +324,7 @@ export function formatRuntimeErrorWithOc({
   const location = deriveLocation(stackFrames, sourceMap);
   return {
     message: error instanceof Error ? error.message : String(error),
+    code: 'RUNTIME',
     location,
     type: 'runtime',
     severity: 'error',

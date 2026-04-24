@@ -223,7 +223,14 @@ describe('KernelWorker lifecycle', () => {
         code: '',
         dependencies: [],
         unresolvedPaths: [],
-        issues: [{ message: 'Unterminated regular expression', type: 'compilation', severity: 'error' }],
+        issues: [
+          {
+            message: 'Unterminated regular expression',
+            code: 'BUNDLER_FAILED',
+            type: 'compilation',
+            severity: 'error',
+          },
+        ],
         success: false,
       });
 
@@ -244,7 +251,7 @@ describe('KernelWorker lifecycle', () => {
         code: '',
         dependencies: [],
         unresolvedPaths: [],
-        issues: [{ message: 'Syntax error', type: 'compilation', severity: 'error' }],
+        issues: [{ message: 'Syntax error', code: 'BUNDLER_FAILED', type: 'compilation', severity: 'error' }],
         success: false,
       });
 
@@ -451,7 +458,7 @@ describe('KernelWorker lifecycle', () => {
 
       // Simulate middleware registering a watch path
       // @ts-expect-error - accessing private for test verification
-      worker.handleRegisterWatchPath('/projects/test/.tau/parameters/main.ts.json', { debounceMs: 200 });
+      worker.handleRegisterWatchPath('/projects/test/.tau/parameters/main.ts.json', { watchDebounce: 200 });
 
       const spy = vi.spyOn(worker, 'updateWatchSet');
 
@@ -476,7 +483,7 @@ describe('KernelWorker lifecycle', () => {
         worker.onGeometryComputed = vi.fn();
 
         // @ts-expect-error - accessing private for test verification
-        worker.handleRegisterWatchPath('/projects/test/.tau/parameters/main.ts.json', { debounceMs: 200 });
+        worker.handleRegisterWatchPath('/projects/test/.tau/parameters/main.ts.json', { watchDebounce: 200 });
 
         // @ts-expect-error - accessing private for test verification
         worker.currentFile = createGeometryFile('main.ts');
@@ -513,7 +520,7 @@ describe('KernelWorker lifecycle', () => {
       }
     });
 
-    it('should use default fileChangeDebounceMs when non-middleware path changes', async () => {
+    it('should use default fileChangeDebounce when non-middleware path changes', async () => {
       vi.useFakeTimers();
       try {
         const worker = createConfiguredWorker();
@@ -525,7 +532,7 @@ describe('KernelWorker lifecycle', () => {
         worker.onGeometryComputed = vi.fn();
 
         // @ts-expect-error - accessing private for test verification
-        worker.handleRegisterWatchPath('/projects/test/.tau/parameters/main.ts.json', { debounceMs: 200 });
+        worker.handleRegisterWatchPath('/projects/test/.tau/parameters/main.ts.json', { watchDebounce: 200 });
 
         // @ts-expect-error - accessing private for test verification
         worker.currentFile = createGeometryFile('main.ts');
@@ -566,12 +573,12 @@ describe('KernelWorker lifecycle', () => {
       const worker = createConfiguredWorker();
 
       // @ts-expect-error - accessing private for test verification
-      worker.handleRegisterWatchPath('/projects/test/.tau/parameters/main.ts.json', { debounceMs: 100 });
+      worker.handleRegisterWatchPath('/projects/test/.tau/parameters/main.ts.json', { watchDebounce: 100 });
 
       expect(worker.getMiddlewareWatchPaths().get('/projects/test/.tau/parameters/main.ts.json')).toBe(100);
 
       // @ts-expect-error - accessing private for test verification
-      worker.handleRegisterWatchPath('/projects/test/.tau/parameters/main.ts.json', { debounceMs: 200 });
+      worker.handleRegisterWatchPath('/projects/test/.tau/parameters/main.ts.json', { watchDebounce: 200 });
 
       expect(worker.getMiddlewareWatchPaths().get('/projects/test/.tau/parameters/main.ts.json')).toBe(200);
     });
@@ -580,7 +587,7 @@ describe('KernelWorker lifecycle', () => {
       const worker = createConfiguredWorker();
 
       // @ts-expect-error - accessing private for test verification
-      worker.handleRegisterWatchPath('/projects/test/.tau/parameters/main.ts.json', { debounceMs: 200 });
+      worker.handleRegisterWatchPath('/projects/test/.tau/parameters/main.ts.json', { watchDebounce: 200 });
 
       expect(worker.getMiddlewareWatchPaths().size).toBe(1);
 
@@ -701,7 +708,7 @@ describe('KernelWorker lifecycle', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // handleSetFile with optional parameters
+  // handleOpenFile with optional parameters
   // ---------------------------------------------------------------------------
 
   describe('handleSetFile optional parameters', () => {
@@ -787,8 +794,7 @@ describe('KernelWorker lifecycle', () => {
         // Starts executeRender via handleSetFile, which blocks in createGeometry
         worker.handleSetFile(createGeometryFile('main.ts'), {});
 
-        // Should have called updateWatchSet immediately (Phase 1)
-        // BEFORE createGeometry completes
+        // `updateWatchSet` must fire immediately, BEFORE createGeometry completes
         expect(updateWatchSetSpy).toHaveBeenCalled();
         const firstCallArgs = updateWatchSetSpy.mock.calls[0]![0];
         expect(firstCallArgs).toContain('/projects/test/main.ts');
@@ -1384,7 +1390,7 @@ describe('transcoder loading', () => {
     const worker = createConfiguredWorker({
       exportResult: {
         success: false,
-        issues: [{ message: 'No geometry available', type: 'runtime', severity: 'error' }],
+        issues: [{ message: 'No geometry available', code: 'RUNTIME', type: 'runtime', severity: 'error' }],
       },
     });
 
@@ -2105,7 +2111,7 @@ describe('ensureNativeHandle', () => {
 });
 
 // =============================================================================
-// Render option validation (R4)
+// Render option validation
 // =============================================================================
 
 describe('render option validation', () => {
@@ -2148,7 +2154,7 @@ describe('render option validation', () => {
 });
 
 // =============================================================================
-// Export schema hard-fail (R8)
+// Export schema hard-fail
 // =============================================================================
 
 describe('export schema hard-fail', () => {
@@ -2185,7 +2191,7 @@ describe('export schema hard-fail', () => {
 });
 
 // =============================================================================
-// Capabilities Manifest target shape (R1, R2, R5, R7)
+// Capabilities Manifest target shape
 // =============================================================================
 
 describe('CapabilitiesManifest target shape', () => {

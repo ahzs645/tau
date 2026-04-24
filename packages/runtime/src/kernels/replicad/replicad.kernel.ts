@@ -511,6 +511,7 @@ export default defineKernel({
       return createKernelError([
         {
           message: 'No geometry available for export',
+          code: 'RUNTIME',
           type: 'runtime',
           severity: 'error',
         },
@@ -600,7 +601,12 @@ export default defineKernel({
       default: {
         const _exhaustive: never = format;
         return createKernelError([
-          { message: `Unsupported export format: ${_exhaustive as string}`, type: 'runtime', severity: 'error' },
+          {
+            message: `Unsupported export format: ${_exhaustive as string}`,
+            code: 'KERNEL_CAPABILITY_MISSING',
+            type: 'runtime',
+            severity: 'error',
+          },
         ]);
       }
     }

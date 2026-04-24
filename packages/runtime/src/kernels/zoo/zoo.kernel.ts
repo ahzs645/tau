@@ -60,6 +60,7 @@ function mapCompilationErrorsToKernelIssues(errors: CompilationError[], code: st
     const errorPosition = getErrorPosition(error, code);
     return {
       message: error.message,
+      code: 'BUNDLER_FAILED',
       location: {
         fileName,
         startLineNumber: errorPosition.line,
@@ -243,7 +244,7 @@ export default defineKernel({
 
       const gltf = exportResult[0];
       if (!gltf) {
-        throw new KclBuildError([{ message: 'No GLTF file in export result', severity: 'error' }]);
+        throw new KclBuildError([{ message: 'No GLTF file in export result', code: 'RUNTIME', severity: 'error' }]);
       }
 
       const geometry: GeometryGltf = { format: 'gltf', content: gltf.contents };
@@ -266,6 +267,7 @@ export default defineKernel({
       return createKernelError([
         {
           message: 'No geometry available for export. Please build geometries before exporting.',
+          code: 'RUNTIME',
           severity: 'error',
         },
       ]);
@@ -283,7 +285,9 @@ export default defineKernel({
             units: 'mm',
           });
           if (stlResult.length === 0 || !stlResult[0]) {
-            return createKernelError([{ message: 'No STL data received from KCL export', severity: 'error' }]);
+            return createKernelError([
+              { message: 'No STL data received from KCL export', code: 'RUNTIME', severity: 'error' },
+            ]);
           }
           return createKernelSuccess([createExportFile('stl', 'model.stl', asBuffer(stlResult[0].contents))]);
         }
@@ -291,7 +295,9 @@ export default defineKernel({
         case 'step': {
           const stepResult = await utilities.exportFromMemory({ type: 'step' });
           if (stepResult.length === 0 || !stepResult[0]) {
-            return createKernelError([{ message: 'No STEP data received from KCL export', severity: 'error' }]);
+            return createKernelError([
+              { message: 'No STEP data received from KCL export', code: 'RUNTIME', severity: 'error' },
+            ]);
           }
           return createKernelSuccess([createExportFile('step', 'model.step', asBuffer(stepResult[0].contents))]);
         }
@@ -299,7 +305,9 @@ export default defineKernel({
         case 'glb': {
           const glbResult = await utilities.exportFromMemory({ type: 'gltf', storage: 'binary' });
           if (glbResult.length === 0 || !glbResult[0]) {
-            return createKernelError([{ message: 'No GLB data received from KCL export', severity: 'error' }]);
+            return createKernelError([
+              { message: 'No GLB data received from KCL export', code: 'RUNTIME', severity: 'error' },
+            ]);
           }
           return createKernelSuccess([createExportFile('glb', 'model.glb', asBuffer(glbResult[0].contents))]);
         }
@@ -311,7 +319,9 @@ export default defineKernel({
             presentation: 'pretty',
           });
           if (gltfResult.length === 0 || !gltfResult[0]) {
-            return createKernelError([{ message: 'No GLTF data received from KCL export', severity: 'error' }]);
+            return createKernelError([
+              { message: 'No GLTF data received from KCL export', code: 'RUNTIME', severity: 'error' },
+            ]);
           }
           return createKernelSuccess([createExportFile('gltf', 'model.gltf', asBuffer(gltfResult[0].contents))]);
         }
@@ -319,7 +329,11 @@ export default defineKernel({
         default: {
           const _exhaustive: never = format;
           return createKernelError([
-            { message: `Unsupported export format: ${_exhaustive as string}`, severity: 'error' },
+            {
+              message: `Unsupported export format: ${_exhaustive as string}`,
+              code: 'KERNEL_CAPABILITY_MISSING',
+              severity: 'error',
+            },
           ]);
         }
       }

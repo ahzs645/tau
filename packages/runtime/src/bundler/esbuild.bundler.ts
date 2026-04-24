@@ -80,6 +80,7 @@ export default defineBundler({
         for (const errorMessage of buildErrors.errors) {
           issues.push({
             message: errorMessage.text,
+            code: 'BUNDLER_FAILED',
             type: 'compilation',
             severity: 'error',
           });

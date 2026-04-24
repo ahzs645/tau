@@ -76,11 +76,51 @@ export type KernelIssueType = 'compilation' | 'runtime' | 'kernel' | 'connection
 export type IssueSeverity = 'error' | 'warning' | 'info';
 
 /**
- * Diagnostic produced by a kernel operation — displayed in the editor's problem panel and used for error markers.
+ * Discriminator codes for {@link KernelIssue.code}. Consumers use these
+ * verbatim instead of regex-matching `issue.message` to classify failures.
+ *
+ * @public
+ *
+ * @remarks
+ * - `RENDER_TIMEOUT` — render loop exceeded `setRenderTimeout`.
+ * - `RENDER_ABORTED` — cooperative abort fired (supersession or explicit).
+ * - `KERNEL_BINDING_FAILED` — `kernelClass()` constructor threw inside the
+ *   worker (e.g. WASM init failure). Routed through `RuntimeConnectionError`
+ *   with `causeKind: 'kernel-binding'`.
+ * - `KERNEL_CAPABILITY_MISSING` — kernel reports it cannot service the
+ *   requested format/route.
+ * - `BUNDLER_FAILED` — the active bundler rejected the source.
+ * - `MIDDLEWARE_FAILED` — a middleware stage threw.
+ * - `RUNTIME` — generic runtime failure inside user code (default fallback
+ *   for legacy callsites; tests assert it is rare).
+ * - `UNKNOWN` — issue source code did not declare a discriminator.
+ */
+export type KernelIssueCode =
+  | 'RENDER_TIMEOUT'
+  | 'RENDER_ABORTED'
+  | 'KERNEL_BINDING_FAILED'
+  | 'KERNEL_CAPABILITY_MISSING'
+  | 'BUNDLER_FAILED'
+  | 'MIDDLEWARE_FAILED'
+  | 'RUNTIME'
+  | 'UNKNOWN';
+
+/**
+ * Diagnostic produced by a kernel operation — displayed in the editor's
+ * problem panel and used for error markers. The `code` discriminator is
+ * the canonical classification surface; consumers must never inspect
+ * `message` to decide how to handle an issue.
+ *
  * @public
  */
 export type KernelIssue = {
   message: string;
+  /**
+   * Typed discriminator used by every consumer — `RuntimeClient`, the UI,
+   * telemetry — to classify the issue. Replaces all
+   * `issue.message.startsWith(...)` patterns.
+   */
+  code: KernelIssueCode;
   location?: ErrorLocation;
   stack?: string;
   stackFrames?: KernelStackFrame[];
@@ -322,14 +362,12 @@ export type ExportRoute<
 
 /**
  * Pre-computed JSON Schema and defaults for a kernel's render options.
- * Indexed by kernel id in {@link CapabilitiesManifest.renderSchemas}, allowing
- * UI consumers to look up the active kernel's render-option form in O(1).
+ * Indexed by kernel id in {@link CapabilitiesManifest.renderSchemas} for O(1)
+ * lookup of the active kernel's render-option form.
  *
- * The `Kernels` and `Kernel` generics narrow `defaults` to the specific render
- * options inferred from the registered kernel's `renderSchema` via
- * {@link RenderOptionsFor}, eliminating the legacy `Record<string, unknown>`
- * fallback in favour of per-kernel schemas. Wide defaults preserve the
- * legacy shape for the on-wire manifest type.
+ * The `Kernel` generic narrows `defaults` to the specific render options
+ * inferred from the registered kernel's `renderSchema` via
+ * {@link RenderOptionsFor}.
  *
  * @template Kernels - Tuple of registered `KernelPlugin`s
  * @template Kernel - Specific kernel id (defaults to the union of all known kernel ids)
@@ -371,8 +409,9 @@ export type CapabilitiesManifest<
   // Inline the per-kernel schema shape (rather than referencing
   // `KernelRenderSchema<Kernels, K>`) so the mapped-type expansion does not
   // bind the named generic invariantly. This preserves narrow → wide
-  // assignability (R6) at the structural level: every narrow `{ <id>?: { schema; defaults } }`
-  // collapses cleanly into the wide index signature `{ [x: string]?: { schema; defaults } }`.
+  // assignability at the structural level: every narrow
+  // `{ <id>?: { schema; defaults } }` collapses cleanly into the wide
+  // index signature `{ [x: string]?: { schema; defaults } }`.
   renderSchemas: {
     [K in CollectKernelIds<Kernels>]?: {
       schema: JSONSchema7;

@@ -135,6 +135,7 @@ export default defineKernel({
       throw new TauBuildError([
         {
           message: errorMessage,
+          code: 'RUNTIME',
           location: {
             fileName: relativeFilePath,
             startLineNumber: 1,
@@ -154,6 +155,7 @@ export default defineKernel({
       return createKernelError([
         {
           message: 'No geometry available for export. Please build geometries before exporting.',
+          code: 'RUNTIME',
           type: 'runtime',
           severity: 'error',
         },
@@ -174,6 +176,7 @@ export default defineKernel({
         return createKernelError([
           {
             message: `Tau kernel only supports glb and gltf export. Use a transcoder for '${_exhaustive as string}'.`,
+            code: 'KERNEL_CAPABILITY_MISSING',
             type: 'runtime',
             severity: 'error',
           },

@@ -246,6 +246,7 @@ export default defineKernel({
       return createKernelError([
         {
           message: error instanceof Error ? error.message : 'Failed to extract parameters',
+          code: 'RUNTIME',
           location: {
             fileName: relativeFilePath,
             startLineNumber: 1,
@@ -291,6 +292,7 @@ export default defineKernel({
       throw new ManifoldBuildError([
         {
           message: error instanceof Error ? error.message : String(error),
+          code: 'RUNTIME',
           type: 'runtime',
           severity: 'error',
           stackFrames,
@@ -308,6 +310,7 @@ export default defineKernel({
           {
             message:
               'main() did not return any model. Export a Manifold object (or an array of Manifold/GLTFNode objects).',
+            code: 'RUNTIME',
             location: {
               fileName: relativeFilePath,
               startLineNumber: 1,
@@ -338,6 +341,7 @@ export default defineKernel({
       throw new ManifoldBuildError([
         {
           message: error instanceof Error ? error.message : String(error),
+          code: 'RUNTIME',
           type: 'runtime',
           severity: 'error',
           stackFrames,
@@ -356,6 +360,7 @@ export default defineKernel({
       return createKernelError([
         {
           message: 'No geometry available for export.',
+          code: 'RUNTIME',
           type: 'runtime',
           severity: 'error',
         },
@@ -373,6 +378,7 @@ export default defineKernel({
         return createKernelError([
           {
             message: `Export format '${_exhaustive as string}' is not supported by Manifold. Supported formats: glb.`,
+            code: 'KERNEL_CAPABILITY_MISSING',
             type: 'runtime',
             severity: 'error',
           },

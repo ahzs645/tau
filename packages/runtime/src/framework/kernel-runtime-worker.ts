@@ -197,6 +197,7 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
         issues: [
           {
             message,
+            code: 'KERNEL_BINDING_FAILED',
             type: 'kernel',
             severity: 'error',
           },
@@ -215,6 +216,7 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
         issues: [
           {
             message: 'No geometry available for export',
+            code: 'RUNTIME',
             type: 'runtime',
             severity: 'error',
           },

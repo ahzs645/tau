@@ -787,6 +787,7 @@ module.exports = { main, getParameterDefinitions }
         expect(result.success).toBe(false);
         expect(result.issues).toEqual([
           {
+            code: 'BUNDLER_FAILED',
             message: 'Expected ")" but found end of file',
             type: 'compilation',
             severity: 'error',

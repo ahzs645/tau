@@ -7,8 +7,7 @@
  * Tau does not modify this pipeline; instead, these tests **lock down** the
  * current observable behaviour so any regression upstream will be caught.
  *
- * See docs/policy/color-space-policy.md and the research doc on color-space
- * convergence.
+ * See docs/policy/color-space-policy.md for sRGB↔linear handling.
  */
 import { describe, expect, it } from 'vitest';
 import manifoldKernel from '#kernels/manifold/manifold.kernel.js';

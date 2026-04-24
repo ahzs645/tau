@@ -1238,8 +1238,8 @@ describe('capabilities', () => {
 
     handler!({ type: 'capabilitiesUpdated', capabilities: updatedManifest });
 
-    // Late subscribers receive the current manifest immediately (R9 subscribe-anytime),
-    // followed by the new manifest pushed via 'capabilitiesUpdated'.
+    // Late subscribers receive the current manifest immediately, followed
+    // by the new manifest pushed via 'capabilitiesUpdated'.
     expect(receivedManifests).toHaveLength(2);
     expect(receivedManifests[1]).toEqual(updatedManifest);
     expect(client.capabilities).toEqual(updatedManifest);
@@ -1249,7 +1249,7 @@ describe('capabilities', () => {
 });
 
 // =============================================================================
-// Subscribe-anytime capabilities (R9)
+// Subscribe-anytime capabilities
 // =============================================================================
 
 describe('subscribe-anytime capabilities', () => {
@@ -1365,7 +1365,7 @@ describe('subscribe-anytime capabilities', () => {
 });
 
 // =============================================================================
-// routesFor / bestRouteFor helpers (R8)
+// routesFor / bestRouteFor helpers
 // =============================================================================
 
 describe('routesFor', () => {

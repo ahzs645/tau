@@ -585,8 +585,8 @@ describe('RuntimeWorkerClient', () => {
     });
   });
 
-  describe('setRenderTimeout', () => {
-    it('should store timeout locally and not send a command to transport', () => {
+  describe('setOptions({ renderTimeout })', () => {
+    it('should store renderTimeout locally and forward a setOptions command to transport', () => {
       const transport = createMockTransport();
       const client = new RuntimeWorkerClient(transport, vi.fn());
 

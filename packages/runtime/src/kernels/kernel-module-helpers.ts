@@ -87,12 +87,13 @@ export function resolveToRelative(absolutePath: string, basePath: string): strin
  * @public
  */
 export function convertRawIssuesToKernelIssues(
-  issues: Array<{ message: string; severity: string; location?: unknown }>,
+  issues: Array<{ message: string; severity: string; location?: unknown; code?: KernelIssue['code'] }>,
   fallbackFileName: string,
 ): KernelIssue[] {
   return issues.map((issue) => ({
     ...issue,
     message: issue.message,
+    code: issue.code ?? 'RUNTIME',
     type: 'runtime',
     severity: issue.severity === 'warning' ? 'warning' : 'error',
     location: (issue.location as KernelIssue['location']) ?? {

@@ -16,6 +16,7 @@ import { EngineConnection, MockEngineConnection } from '#kernels/zoo/engine-conn
 import type { WasmModule } from '#kernels/zoo/engine-connection.js';
 import type { FileSystemManager } from '#kernels/zoo/filesystem-manager.js';
 import { KclError, KclExportError, KclWasmError, extractWasmKclError } from '#kernels/zoo/kcl-errors.js';
+import { isZooEmptyExportError } from '#kernels/zoo/zoo-error-detection.js';
 import { createZooLogger } from '#kernels/zoo/zoo-logs.js';
 import { compileWasmStreaming } from '#framework/wasm-loader.js';
 
@@ -523,16 +524,14 @@ export class KclUtilities {
 
       return files;
     } catch (error) {
-      // Handle the specific "Nothing to export" case as a valid scenario
-      const errorMessage = error instanceof Error ? error.message : String(error);
-
-      // Check for the "Nothing to export" pattern in various forms
-      if (errorMessage.includes('Nothing to export') || errorMessage.includes('internal_engine: Nothing to export')) {
-        // This is a valid case - return empty array instead of throwing
+      // Zoo SDK boundary — substring detection is encapsulated in
+      // `isZooEmptyExportError`. Replace with a typed `code` check when Zoo
+      // ships structured errors.
+      if (isZooEmptyExportError(error)) {
         return [];
       }
 
-      // For other export errors, re-throw as KCLExportError
+      const errorMessage = error instanceof Error ? error.message : String(error);
       throw new KclExportError(`Export failed: ${errorMessage}`, options.type);
     }
   }

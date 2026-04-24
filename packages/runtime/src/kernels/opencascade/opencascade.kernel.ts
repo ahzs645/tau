@@ -271,6 +271,7 @@ export default defineKernel({
           issues: [
             {
               message: 'main() or default export function not found.',
+              code: 'RUNTIME',
               type: 'runtime',
               severity: 'warning',
               location: { fileName: relativeFilePath, startLineNumber: 1, startColumn: 1 },
@@ -305,6 +306,7 @@ export default defineKernel({
           issues: [
             {
               message: 'main() did not return any shapes. Return a TopoDS_Shape or an array of shapes.',
+              code: 'RUNTIME',
               type: 'runtime',
               severity: 'warning',
               location: { fileName: relativeFilePath, startLineNumber: 1, startColumn: 1 },
@@ -341,7 +343,9 @@ export default defineKernel({
   async exportGeometry(input, _runtime, context) {
     const { format, nativeHandle, options } = input;
     if (nativeHandle.length === 0) {
-      return createKernelError([{ message: 'No geometry available for export', type: 'runtime', severity: 'error' }]);
+      return createKernelError([
+        { message: 'No geometry available for export', code: 'RUNTIME', type: 'runtime', severity: 'error' },
+      ]);
     }
 
     switch (format) {
@@ -508,7 +512,12 @@ export default defineKernel({
       default: {
         const _exhaustive: never = format;
         return createKernelError([
-          { message: `Unsupported export format: ${_exhaustive as string}`, type: 'runtime', severity: 'error' },
+          {
+            message: `Unsupported export format: ${_exhaustive as string}`,
+            code: 'KERNEL_CAPABILITY_MISSING',
+            type: 'runtime',
+            severity: 'error',
+          },
         ]);
       }
     }

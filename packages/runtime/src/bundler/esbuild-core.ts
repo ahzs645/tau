@@ -804,6 +804,7 @@ const module = { exports };
           ...issues,
           {
             message: 'No output generated',
+            code: 'BUNDLER_FAILED',
             type: 'compilation',
             severity: 'error',
           },
@@ -825,6 +826,7 @@ const module = { exports };
       } else {
         issues.push({
           message: error instanceof Error ? error.message : String(error),
+          code: 'BUNDLER_FAILED',
           type: 'compilation',
           severity: 'error',
         });
@@ -892,6 +894,7 @@ const module = { exports };
   private convertEsbuildMessage(message: Message, severity: 'error' | 'warning'): KernelIssue {
     const issue: KernelIssue = {
       message: message.text,
+      code: 'BUNDLER_FAILED',
       type: 'compilation',
       severity,
     };
@@ -1125,6 +1128,7 @@ export async function executeCode(code: string): Promise<ExecuteResult> {
       issues: [
         {
           message: error instanceof Error ? error.message : String(error),
+          code: 'RUNTIME',
           type: 'runtime',
           severity: 'error',
         },

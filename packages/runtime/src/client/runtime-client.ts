@@ -924,13 +924,11 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
     /**
      * Capabilities manifest from the worker, available after initialization.
      *
-     * SAFETY (R7): `_capabilities` stores the wide-default
-     * `CapabilitiesManifest` emitted over the worker boundary. The public
-     * overload of `createRuntimeClient` narrows the return to
-     * `CapabilitiesManifest<Kernels, Transcoders>`. The narrowing is a
-     * structural witness, not a lie — see the SAFETY block on
-     * `createRuntimeClient` and the witness-narrowing tests in
-     * `define-plugin.test-d.ts`.
+     * `_capabilities` stores the wide-default `CapabilitiesManifest` emitted
+     * over the worker boundary. The public overload of `createRuntimeClient`
+     * narrows the return to `CapabilitiesManifest<Kernels, Transcoders>`.
+     * The narrowing is a structural witness — every concrete value the
+     * worker emits is already a member of the narrower carrier.
      *
      * @returns Capabilities manifest from the worker
      */

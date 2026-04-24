@@ -542,6 +542,7 @@ export cube = garbage`,
         expect(result.success).toBe(false);
         expect(result.issues).toEqual([
           {
+            code: 'RUNTIME',
             message: '`garbage` is not defined',
             severity: 'error',
             type: 'unknown',
@@ -583,6 +584,7 @@ export cube = garbage`,
         expect(result.success).toBe(false);
         expect(result.issues).toEqual([
           {
+            code: 'BUNDLER_FAILED',
             message: 'Error loading imported file (bad.kcl). Open it to view more details.\n  `garbage` is not defined',
             severity: 'error',
             type: 'compilation',
@@ -625,6 +627,7 @@ result = makeBadShape()`,
         expect(result.success).toBe(false);
         expect(result.issues).toEqual([
           {
+            code: 'RUNTIME',
             message: '`garbage` is not defined',
             severity: 'error',
             type: 'unknown',
@@ -684,6 +687,7 @@ export badThing = garbage`,
         expect(result.success).toBe(false);
         expect(result.issues).toEqual([
           {
+            code: 'BUNDLER_FAILED',
             message:
               'Error loading imported file (middle.kcl). Open it to view more details.\n  Error loading imported file (bad.kcl). Open it to view more details.\n  `garbage` is not defined',
             severity: 'error',
@@ -738,6 +742,7 @@ cone = startSketchOn(XZ)
         expect(result.success).toBe(false);
         expect(result.issues).toEqual([
           {
+            code: 'BUNDLER_FAILED',
             message: 'There was an unexpected `|>`. Try removing it.',
             severity: 'error',
             type: 'compilation',
