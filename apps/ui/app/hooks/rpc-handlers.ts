@@ -7,8 +7,9 @@
  * The core handler logic lives in libs/chat/src/rpc/handlers/. This module only
  * adapts browser-specific deps into the abstract RpcDependencies interface.
  */
-import { createActor, waitFor } from 'xstate';
+import { createActor } from 'xstate';
 import type { ActorRefFrom, SnapshotFrom } from 'xstate';
+import { awaitFreshRender, AwaitFreshRenderTimeoutError } from '#lib/await-fresh-render.js';
 import type {
   RpcCall,
   GetKernelResultRpcResult,
@@ -175,14 +176,17 @@ function createBrowserRpcFileSystem(
 
 /**
  * Resolves the compilation-unit actor for `targetFile`, bootstrapping it via
- * `createGeometryUnit` if it does not already exist, then awaits the CAD
- * actor reaching a settled state (`idle` or `error`).
+ * `createGeometryUnit` if it does not already exist, then awaits a *fresh*
+ * render to settle (per `awaitFreshRender` in `apps/ui/app/lib/`).
  *
  * Both `getKernelResult` and `fetchGeometry` route through this helper so they
- * share a single bootstrap contract — the agent never sees a missing-geometry unit error
- * for a path it just asked the harness to evaluate.
+ * share a single bootstrap contract — the agent never sees a missing-geometry
+ * unit error for a path it just asked the harness to evaluate, and never sees
+ * a stale geometry from a prior render generation.
+ *
+ * Per docs/research/runtime-event-driven-api-blueprint-v5.md (R9, R27).
  */
-type ResolveGeometryUnitResult =
+type EnsureGeometryUnitResult =
   | {
       ok: true;
       cadUnit: ActorRefFrom<typeof cadMachine>;
@@ -190,14 +194,14 @@ type ResolveGeometryUnitResult =
     }
   | {
       ok: false;
-      errorCode: 'UNKNOWN';
+      errorCode: 'UNKNOWN' | 'RENDER_TIMEOUT';
       message: string;
     };
 
-async function resolveOrCreateGeometryUnit(
+async function ensureGeometryUnit(
   projectRef: ActorRefFrom<typeof projectMachine>,
   targetFile: string,
-): Promise<ResolveGeometryUnitResult> {
+): Promise<EnsureGeometryUnitResult> {
   try {
     const projectSnapshot = projectRef.getSnapshot();
     const { geometryUnits } = projectSnapshot.context;
@@ -220,10 +224,17 @@ async function resolveOrCreateGeometryUnit(
       };
     }
 
-    const cadSnapshot = await waitFor(cadUnit, (state) => state.value === 'idle' || state.value === 'error');
+    const cadSnapshot = await awaitFreshRender(cadUnit);
 
     return { ok: true, cadUnit, cadSnapshot };
   } catch (error) {
+    if (error instanceof AwaitFreshRenderTimeoutError) {
+      return {
+        ok: false,
+        errorCode: 'RENDER_TIMEOUT',
+        message: `Render for ${targetFile} did not settle in time. Try a simpler model or wait and retry.`,
+      };
+    }
     return {
       ok: false,
       errorCode: 'UNKNOWN',
@@ -248,7 +259,7 @@ function isFileNotFoundMessage(message: string, targetFile: string): boolean {
 function createBrowserRuntimeClient(projectRef: ActorRefFrom<typeof projectMachine>): RpcRuntimeClient {
   return {
     async getKernelResult(targetFile: string): Promise<GetKernelResultRpcResult> {
-      const resolved = await resolveOrCreateGeometryUnit(projectRef, targetFile);
+      const resolved = await ensureGeometryUnit(projectRef, targetFile);
       if (!resolved.ok) {
         return { success: false, errorCode: resolved.errorCode, message: resolved.message };
       }
@@ -274,7 +285,7 @@ function createBrowserGraphicsClient(
 ): RpcGraphicsClient {
   return {
     async fetchGeometry({ targetFile }): Promise<FetchGeometryRpcResult> {
-      const resolved = await resolveOrCreateGeometryUnit(projectRef, targetFile);
+      const resolved = await ensureGeometryUnit(projectRef, targetFile);
       if (!resolved.ok) {
         return { success: false, errorCode: resolved.errorCode, message: resolved.message };
       }

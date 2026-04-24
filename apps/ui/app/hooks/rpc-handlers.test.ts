@@ -613,6 +613,25 @@ describe('rpc-handlers', () => {
         }
       });
 
+      it('should map AwaitFreshRenderTimeoutError to errorCode RENDER_TIMEOUT (R9, R27)', async () => {
+        const cadUnit = createMockCadUnit();
+        const geometryUnits = new Map<string, unknown>([['main.scad', cadUnit]]);
+        const projectRef = createMockBuildRef({ geometryUnits });
+        const awaitFreshRenderModule = await import('#lib/await-fresh-render.js');
+        mockWaitFor.mockRejectedValue(new awaitFreshRenderModule.AwaitFreshRenderTimeoutError(5000, 0));
+
+        const deps = buildDeps({ projectRef, resolveGraphicsForFile: stubResolver });
+        const graphics = deps.graphics!;
+
+        const result = await graphics.fetchGeometry({ targetFile: 'main.scad' });
+
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          expect(result.errorCode).toBe('RENDER_TIMEOUT');
+          expect(result.message).toContain('main.scad');
+        }
+      });
+
       it('should return UNKNOWN when waitFor rejects during geometry unit resolution', async () => {
         const cadUnit = createMockCadUnit();
         const geometryUnits = new Map<string, unknown>([['main.scad', cadUnit]]);
