@@ -8,15 +8,14 @@ import { createTokenUsageContextMiddleware } from '#api/chat/middleware/token-us
 import { resolveMiddlewareHook } from '#testing/middleware-testing.utils.js';
 
 // =============================================================================
-// Per docs/research/system-prompt-audit.md R22 — when the model API supplies
-// per-turn token counts (`AIMessage.usage_metadata`), inject a deterministic
-// `<system-reminder>` HumanMessage carrying `used X / total Y / remaining Z`
-// so the agent can self-throttle as it approaches the context window.
+// When the model API supplies per-turn token counts (`AIMessage.usage_metadata`),
+// inject a deterministic `<system-reminder>` HumanMessage carrying
+// `used X / total Y / remaining Z` so the agent can self-throttle as it
+// approaches the context window.
 //
-// Cache-Safety Contract (per agent-loop-safeguards.md):
-//   CS1 — middleware MUST NOT mutate inputs (prepend-only, new instances).
-//   CS3 — for identical inputs the produced byte stream MUST be deterministic
-//         so prompt caches keep hitting.
+// Cache-safety: middleware must not mutate inputs (prepend-only, new
+// instances); for identical inputs the produced byte stream must be
+// deterministic so prompt caches keep hitting.
 // =============================================================================
 
 /* eslint-disable @typescript-eslint/naming-convention -- LangChain API uses snake_case */

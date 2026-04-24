@@ -554,6 +554,7 @@ describe('toolResultTrimmerMiddleware', () => {
         kernelIssues: [
           {
             message: 'Syntax error on line 5',
+            code: 'UNKNOWN',
             location: {
               fileName: 'main.scad',
               startLineNumber: 5,
@@ -591,6 +592,7 @@ describe('toolResultTrimmerMiddleware', () => {
         kernelIssues: [
           {
             message: 'Syntax error on line 5',
+            code: 'UNKNOWN',
             location: {
               fileName: 'main.scad',
               startLineNumber: 5,

@@ -136,7 +136,9 @@ type ContentBlockWithCacheControl = ContentBlock & {
  * (Block 1) and the dynamic prompt (last block).
  *
  * Memory is injected as a HumanMessage prepended to the messages array,
- * wrapped in <system-reminder> tags (R2: two-channel context injection).
+ * wrapped in <system-reminder> tags (two-channel context injection: skills
+ * sit on the system channel for cache reuse, memory rides the user channel
+ * so per-request mutations don't invalidate the prefix cache).
  */
 export const createClientContextMiddleware = (contextPayload?: ContextPayload): AgentMiddleware =>
   createMiddleware({

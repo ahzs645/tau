@@ -10,7 +10,7 @@ import { isImageBlock, countImageBlocks } from '#api/chat/utils/image-block.util
  * Thrown when Morph returns a response that does not contain all 9 expected
  * `<summary>` sections. The compaction middleware catches this and falls back
  * to the truncate-tool-args tier instead of shipping a malformed summary that
- * would silently strip context (R21).
+ * would silently strip context.
  */
 export class CompactSummaryValidationError extends Error {
   public constructor(

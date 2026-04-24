@@ -11,8 +11,7 @@ import { invokeWrapModelCall } from '#testing/middleware-testing.utils.js';
  * End-to-end regression for an interrupted-tool conversation: walks the
  * server pipeline (DTO Zod parse + healing -> @ai-sdk/langchain conversion ->
  * messageContentSanitizerMiddleware) without booting Nest. Mirrors the
- * appendix payload captured in
- * docs/research/interrupted-tool-call-validation-failure.md.
+ * legacy interrupted-tool-call payload shape (partial tool input + error text).
  */
 describe('interrupted-tool-call round-trip', () => {
   const buildLegacyAppendixPayload = (): MyUIMessage[] => [
@@ -122,7 +121,7 @@ describe('interrupted-tool-call round-trip', () => {
     expect(content.errorCode).toBe('USER_INTERRUPTED');
   });
 
-  it('should round-trip a modern post-R2 finalizer payload (rawInput, toolName-bearing errorText)', async () => {
+  it('should round-trip a modern finalizer payload (rawInput, toolName-bearing errorText)', async () => {
     const modernPayload: MyUIMessage[] = [
       { id: 'u_initial', role: 'user', parts: [{ type: 'text', text: 'Open main.ts.' }] },
       {

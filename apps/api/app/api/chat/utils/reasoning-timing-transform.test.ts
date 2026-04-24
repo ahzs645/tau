@@ -120,7 +120,7 @@ describe('createReasoningTimingTransform', () => {
       expect(endedAt).toBeGreaterThanOrEqual(startedAt);
     });
 
-    it('should carry the matching reasoningStartedAtMs forward onto the reasoning-end chunk (Finding 8)', async () => {
+    it('should carry the matching reasoningStartedAtMs forward onto the reasoning-end chunk', async () => {
       // The minimal-state transform must re-stamp reasoningStartedAtMs on
       // reasoning-end (looked up from the per-stream map keyed by chunk id)
       // because the AI SDK's processUIMessageStream reducer replaces
@@ -210,7 +210,7 @@ describe('createReasoningTimingTransform', () => {
   // Minimal-state behaviour: per-stream Map<id, startedAtMs> isolation,
   // drain on reasoning-end, and no cross-block contamination on interleaved
   // streams. The map exists solely to carry reasoningStartedAtMs forward to
-  // the matching reasoning-end (Finding 8); these tests pin its semantics.
+  // the matching reasoning-end; these tests pin its semantics.
   // ===========================================================================
 
   describe('minimal-state behaviour (per-stream Map<id, startedAtMs>)', () => {
@@ -458,7 +458,7 @@ describe('createReasoningTimingTransform', () => {
   });
 
   // ===========================================================================
-  // End-to-end through AI SDK reducer (Finding 8 regression)
+  // End-to-end through AI SDK reducer (replace-on-write regression)
   // ===========================================================================
   //
   // The AI SDK's `processUIMessageStream` reducer REPLACES
@@ -471,7 +471,7 @@ describe('createReasoningTimingTransform', () => {
   // contract is locked in at the layer that was actually broken in
   // production.
 
-  describe('end-to-end through AI SDK reducer (Finding 8 regression)', () => {
+  describe('end-to-end through AI SDK reducer (replace-on-write regression)', () => {
     const collectFinalMessage = async (chunks: UIMessageChunk[]): Promise<UIMessage> => {
       const wire = new ReadableStream<UIMessageChunk>({
         start(controller) {

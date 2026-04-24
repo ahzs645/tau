@@ -17,7 +17,7 @@ import { GeometryAnalysisService } from '#api/analysis/geometry-analysis.service
 // GLB generation helper
 // =============================================================================
 
-async function renderGlb(filename: string, code: string): Promise<Uint8Array<ArrayBuffer>> {
+async function exportGlb(filename: string, code: string): Promise<Uint8Array<ArrayBuffer>> {
   const client = createRuntimeClient({
     kernels: [replicad()],
     bundlers: [esbuild()],
@@ -25,19 +25,14 @@ async function renderGlb(filename: string, code: string): Promise<Uint8Array<Arr
   });
 
   try {
-    const result = await client.render({ code: { [filename]: code }, file: filename });
+    const result = await client.export('glb', { code: { [filename]: code }, file: filename });
 
     if (!result.success) {
-      const messages = result.issues.map((i) => i.message).join('; ');
-      throw new Error(`Render failed: ${messages}`);
+      const messages = result.issues.map((issue) => issue.message).join('; ');
+      throw new Error(`Export failed: ${messages}`);
     }
 
-    const gltf = result.data.find((g) => g.format === 'gltf');
-    if (!gltf) {
-      throw new Error('No GLTF geometry in render result');
-    }
-
-    return gltf.content;
+    return result.data.bytes;
   } finally {
     client.terminate();
   }
@@ -161,11 +156,11 @@ describe('GeometryAnalysisService', () => {
 
     // Render all GLBs in parallel
     [boxGlb, multiShapeGlb, farApartMultiShapeGlb, touchingMultiShapeGlb, fusedGlb] = await Promise.all([
-      renderGlb('box.ts', boxCode),
-      renderGlb('multi.ts', multiShapeCode),
-      renderGlb('far-apart.ts', farApartMultiShapeCode),
-      renderGlb('touching.ts', touchingMultiShapeCode),
-      renderGlb('fused.ts', fusedCode),
+      exportGlb('box.ts', boxCode),
+      exportGlb('multi.ts', multiShapeCode),
+      exportGlb('far-apart.ts', farApartMultiShapeCode),
+      exportGlb('touching.ts', touchingMultiShapeCode),
+      exportGlb('fused.ts', fusedCode),
     ]);
   }, 120_000);
 

@@ -447,7 +447,7 @@ describe('createCompactionMiddleware', () => {
   });
 
   // ===================================================================
-  // R13: Verbatim quote anchoring in post-compaction message
+  // Verbatim quote anchoring in post-compaction message
   // ===================================================================
 
   it('should include continuity instructions in compacted messages', async () => {
@@ -547,7 +547,7 @@ describe('createCompactionMiddleware', () => {
   });
 
   // ===================================================================
-  // R4: Strip images from lastQuery extraction
+  // Strip images from lastQuery extraction
   // ===================================================================
 
   it('should extract only text parts from multimodal lastQuery', async () => {
@@ -651,7 +651,7 @@ describe('createCompactionMiddleware', () => {
   });
 
   // ===================================================================
-  // R8: Multimodal continuity instructions for array content
+  // Multimodal continuity instructions for array content
   // ===================================================================
 
   it('should append continuity text block to array HumanMessage content', async () => {
@@ -794,12 +794,12 @@ describe('createCompactionMiddleware', () => {
     );
   });
 
-  // Per docs/research/system-prompt-audit.md R21 — when the compaction service
-  // throws CompactSummaryValidationError (Morph returned a malformed summary
-  // that fails the 9-section schema), the middleware must transparently fall
-  // through to the truncate-tool-args fallback the same way it does for any
-  // other Morph failure. CompactSummaryValidationError extends Error so the
-  // existing catch path picks it up automatically; this test pins the contract.
+  // When the compaction service throws CompactSummaryValidationError (Morph
+  // returned a malformed summary that fails the 9-section schema), the
+  // middleware must transparently fall through to the truncate-tool-args
+  // fallback the same way it does for any other Morph failure.
+  // CompactSummaryValidationError extends Error so the existing catch path
+  // picks it up automatically; this test pins the contract.
   it('should fall through to truncated args when compaction summary validation fails', async () => {
     const { CompactSummaryValidationError } = await import('#api/chat/compaction.service.js');
     const middleware = createMiddlewareInstance();
@@ -847,7 +847,7 @@ describe('createCompactionMiddleware', () => {
   });
 
   // ===================================================================
-  // R11: Transcript image markers for evicted blocks
+  // Transcript image markers for evicted blocks
   // ===================================================================
 
   it('should write image marker lines to transcript for image blocks', async () => {
@@ -953,7 +953,7 @@ describe('createCompactionMiddleware', () => {
   });
 
   // ===================================================================
-  // R10: Emergency image stripping on ContextOverflowError
+  // Emergency image stripping on ContextOverflowError
   // ===================================================================
 
   it('should strip image blocks from emergency messages on ContextOverflowError', async () => {

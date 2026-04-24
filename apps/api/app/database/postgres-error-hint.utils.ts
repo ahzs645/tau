@@ -7,9 +7,7 @@
  * `error.cause.code` to disambiguate paused-provider, DNS, TCP timeout, role
  * rotation, pooler exhaustion, and permission failures.
  *
- * See `docs/research/staging-cors-coep-safari-rendering-audit.md` (R2) for the
- * source of these mappings — every row corresponds to a real failure mode the
- * migrator otherwise hides.
+ * Every row corresponds to a real failure mode the migrator otherwise hides.
  */
 
 // Keys are Postgres SQLSTATE / Node network error codes — both ecosystems

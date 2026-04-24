@@ -113,9 +113,9 @@ export class ChatService {
       contextWindow,
       knowledgeCutoff,
       gitStatus,
-      // R23: per-section telemetry — record byte size of every non-empty
-      // section so Grafana can show which sections dominate the static
-      // prefix and which dynamic sections invalidate the cache the most.
+      // Per-section telemetry — record byte size of every non-empty section
+      // so Grafana can show which sections dominate the static prefix and
+      // which dynamic sections invalidate the cache the most.
       onSectionResolved: ({ name, cacheBreak, byteSize }) => {
         this.metricsService.genAiPromptSectionSize.record(byteSize, {
           [AttributeKey.GEN_AI_PROMPT_SECTION_NAME]: name,
@@ -147,11 +147,11 @@ export class ChatService {
         // --- Context compaction ---
         createCompactionMiddleware(this.compactionService, this.rpcBackendFactory, this.chatRpcService),
 
-        // --- Token-usage context (R22) ---
+        // --- Token-usage context ---
         // Inserted AFTER compaction so the reported "used" count reflects the
         // post-compaction message set, and BEFORE agent-safeguards / prompt
         // caching so the injected <system-reminder> joins the cacheable prefix
-        // (Cache-Safety Contract CS1/CS3 — see token-usage-context.middleware.ts).
+        // (see the cache-safety contract in token-usage-context.middleware.ts).
         createTokenUsageContextMiddleware(),
 
         // --- Agent loop safeguards (doom-loop detection) ---

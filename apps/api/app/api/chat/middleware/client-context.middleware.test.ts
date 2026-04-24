@@ -163,7 +163,7 @@ describe('createClientContextMiddleware', () => {
   });
 
   // ===================================================================
-  // R1: Skills as Block 2 with workspace cache_control
+  // Skills as Block 2 with workspace cache_control
   // ===================================================================
 
   it('should insert skills as Block 2 between static and dynamic blocks', async () => {
@@ -216,7 +216,7 @@ describe('createClientContextMiddleware', () => {
   });
 
   // ===================================================================
-  // R2: Memory as HumanMessage (not SystemMessage)
+  // Memory as HumanMessage (not SystemMessage)
   // ===================================================================
 
   it('should inject memory as a HumanMessage prepended to messages', async () => {
@@ -316,11 +316,11 @@ describe('createClientContextMiddleware', () => {
     expect(messages[0]!.content as string).toContain('Memory content');
   });
 
-  // Per docs/research/system-prompt-audit.md R20 — verify the implementation matches
-  // claude-code's `prependUserContext` shape so memory injection survives Anthropic
-  // prompt-cache invalidation: a HumanMessage prepended to the user-message channel
-  // (NOT a SystemMessage edit), wrapped in `<system-reminder>` with the
-  // "may or may not be relevant" caveat, and the static system prompt left untouched.
+  // Verify the implementation matches claude-code's `prependUserContext`
+  // shape so memory injection survives Anthropic prompt-cache invalidation:
+  // a HumanMessage prepended to the user-message channel (NOT a SystemMessage
+  // edit), wrapped in `<system-reminder>` with the "may or may not be
+  // relevant" caveat, and the static system prompt left untouched.
   it('should ship the claude-code prependUserContext shape', async () => {
     const agentsKey = '.tau/AGENTS.md';
     const memoryBody = 'Use early returns. Prefer composition over inheritance.';

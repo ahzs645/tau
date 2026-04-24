@@ -92,7 +92,8 @@ export type Detection =
 /**
  * Per-detector evaluator. Pure function over the summarised tool tail and the
  * cumulative middleware state. Implementations must NEVER mutate inputs and
- * MUST produce byte-identical reminder text for byte-identical inputs (CS3).
+ * MUST produce byte-identical reminder text for byte-identical inputs
+ * (deterministic reminder bodies for cache hits).
  */
 export type Detector = {
   pattern: AnomalyPattern;
@@ -113,9 +114,9 @@ export type ThresholdConfig = {
 };
 
 /**
- * Default detector thresholds. These values mirror the recommendations in
- * `docs/research/agent-loop-safeguards.md` (R1, R2, R9). Per-detector overrides
- * can be supplied to {@link createAgentSafeguardsMiddleware} for tests.
+ * Default detector thresholds tuned to catch doom-loops (repeated identical
+ * errors, runaway identical tool calls, ping-pong patterns). Per-detector
+ * overrides can be supplied to {@link createAgentSafeguardsMiddleware} for tests.
  */
 export const defaultThresholds: ThresholdConfig = {
   identicalErrorNudge: 3,
@@ -337,8 +338,8 @@ const summarizeOne = (input: {
  * Projects `state.messages` onto a list of {@link ToolEventSummary}. Each
  * `ToolMessage` is paired with its preceding `AIMessage(tool_calls)` to recover
  * the tool name and arguments. Messages that don't form a complete pair (e.g.
- * an in-flight `AIMessage(tool_calls)` whose `ToolMessage` hasn't arrived yet,
- * which protects CS4) are skipped.
+ * an in-flight `AIMessage(tool_calls)` whose `ToolMessage` hasn't arrived yet)
+ * are skipped.
  */
 export function summarizeMessages(messages: BaseMessage[]): ToolEventSummary[] {
   const toolCallById = indexToolCalls(messages);
@@ -391,7 +392,7 @@ export type SafeguardsState = z.infer<typeof safeguardsStateSchema>;
 
 /**
  * Builds the canonical "doom-loop" reminder message used by AP1 / AP2.
- * The same inputs MUST always produce the same output (CS3) — there are no
+ * The same inputs MUST always produce the same output — there are no
  * timestamps, UUIDs, or run identifiers in the body.
  */
 export function identicalErrorReminder(input: {
@@ -844,10 +845,10 @@ const matchesSignature = (aiMessage: AIMessage | undefined, signature: string): 
 };
 
 /**
- * Creates the agent loop safeguards middleware (R1 / R2 / R4 / R7 / R9 from
- * `docs/research/agent-loop-safeguards.md`).
+ * Creates the agent loop safeguards middleware (doom-loop detection: nudges,
+ * terminations, transcript audit lines).
  *
- * Cache-safety contract (CS1–CS6 in the same research doc):
+ * Cache-safety (prompt prefix stability):
  * - Nudges are emitted via {@link AgentMiddleware.beforeModel} as a state
  *   update `{ messages: [HumanMessage('<system-reminder>...</system-reminder>')] }`
  *   so they are persisted into the canonical message history. The downstream

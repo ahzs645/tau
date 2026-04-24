@@ -38,7 +38,6 @@ describe('createEditTestsToolDefinition', () => {
     const { description } = createEditTestsToolDefinition(kernel);
     const config = getKernelConfig(kernel);
 
-    // Per docs/research/system-prompt-audit.md R19 (revised Apr 2026):
     // edit_tests is one of two tools that retains a trimmed `When NOT to use:`
     // heading (high-overuse-risk: agent could otherwise route arbitrary JSON
     // edits through edit_tests rather than create_file / edit_file).

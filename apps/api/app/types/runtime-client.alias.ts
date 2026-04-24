@@ -4,9 +4,8 @@
  * The API does not statically know which kernels and transcoders it consumes
  * at module load (configured via runtime client options at startup), so this
  * alias intentionally points to the wide-default erasure form
- * `RuntimeClient<KernelPlugin[], TranscoderPlugin[]>`. This is the form
- * documented in `docs/research/runtime-type-bag-propagation.md` (R6) for
- * consumers that need to accept any plugin configuration.
+ * `RuntimeClient<KernelPlugin[], TranscoderPlugin[]>`, matching how the
+ * app accepts any plugin configuration configured at runtime.
  */
 
 import type { KernelPlugin, RuntimeClient, TranscoderPlugin } from '@taucad/runtime';
@@ -18,5 +17,5 @@ import type { KernelPlugin, RuntimeClient, TranscoderPlugin } from '@taucad/runt
  * so that downstream consumers have a single source of truth and can be
  * narrowed in one place if/when the API standardizes on a fixed plugin set.
  */
-// oxlint-disable-next-line @typescript-eslint/no-unnecessary-type-arguments -- intentional: documents the wide-default erasure form per R6
+// oxlint-disable-next-line @typescript-eslint/no-unnecessary-type-arguments -- intentional wide-default `RuntimeClient<KernelPlugin[], TranscoderPlugin[]>` form
 export type ApiRuntimeClient = RuntimeClient<KernelPlugin[], TranscoderPlugin[]>;

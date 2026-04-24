@@ -56,8 +56,8 @@ export function createGeometryRenderer(): ApiRuntimeClient {
 
 /**
  * Eagerly connect a benchmark renderer so its first `openFile` call does not
- * throw `RuntimeNotConnectedError`. Per the v5 blueprint (R34), `connect()` is
- * a hard precondition for `openFile`/`updateParameters`/`setOptions`.
+ * throw `RuntimeNotConnectedError`. `connect()` is a hard precondition for
+ * `openFile`/`updateParameters`/`setOptions`.
  *
  * Reuses the in-memory filesystem registered in `createGeometryRenderer` so
  * file writes flow through the same FS that the worker mounts.
@@ -80,8 +80,8 @@ export async function renderCodeToGlb(
 ): Promise<GeometryRenderResult> {
   try {
     // Subscribe to the geometry event before kicking off the render, so we can
-    // observe the (possibly superseded) settled result. Per the v5 blueprint
-    // (R6, R10, R24), `openFile()` returns a `RenderSettlement` whose
+    // observe the (possibly superseded) settled result. `openFile()` returns a
+    // `RenderOutcome` whose
     // `geometry` field carries the latest hashed result; we defensively also
     // listen on `'geometry'` in case the settlement was superseded by a fresh
     // call (which is unlikely here since this is a one-shot helper).

@@ -46,7 +46,7 @@ ${lines.join('\n')}
 
 /**
  * Middleware that injects a per-turn token-usage `<system-reminder>` so the
- * agent can self-throttle as it approaches the context window (R22).
+ * agent can self-throttle as it approaches the context window.
  *
  * Behaviour:
  *   - Turn 1 (no AIMessage with `usage_metadata`): pass-through, no inject.

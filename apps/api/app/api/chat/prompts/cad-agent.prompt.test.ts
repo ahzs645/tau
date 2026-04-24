@@ -5,10 +5,10 @@ import { getKernelConfig } from '#api/chat/prompts/kernel-prompt-configs/kernel.
 
 describe('getCadSystemPrompt', () => {
   // ===================================================================
-  // R3: Anti-gold-plating rules (Finding 3)
+  // Anti-gold-plating rules
   // ===================================================================
 
-  describe('R3: anti-gold-plating constraints', () => {
+  describe('anti-gold-plating constraints', () => {
     it('should include a <constraints> section', async () => {
       const result = await getCadSystemPrompt('openscad');
       expect(result.static).toContain('<constraints>');
@@ -32,10 +32,10 @@ describe('getCadSystemPrompt', () => {
   });
 
   // ===================================================================
-  // R12: Rationalization inoculation (Finding 12)
+  // Rationalization inoculation
   // ===================================================================
 
-  describe('R12: rationalization inoculation in visual inspection', () => {
+  describe('rationalization inoculation in visual inspection', () => {
     it('should enumerate avoidance patterns in <visual_inspection>', async () => {
       const result = await getCadSystemPrompt('openscad');
       expect(result.static).toContain('approximately right');
@@ -51,10 +51,10 @@ describe('getCadSystemPrompt', () => {
   });
 
   // ===================================================================
-  // R1: Static/dynamic split (Finding 1)
+  // Static/dynamic split
   // ===================================================================
 
-  describe('R1: static/dynamic prompt split', () => {
+  describe('static/dynamic prompt split', () => {
     it('should return an object with static and dynamic properties', async () => {
       const result = await getCadSystemPrompt('openscad');
       expect(result).toHaveProperty('static');
@@ -105,10 +105,10 @@ describe('getCadSystemPrompt', () => {
   });
 
   // ===================================================================
-  // R7: Model self-awareness (Finding 8)
+  // Model self-awareness
   // ===================================================================
 
-  describe('R7: model self-awareness', () => {
+  describe('model self-awareness', () => {
     it('should include model name in dynamic section when modelId provided', async () => {
       const result = await getCadSystemPrompt('openscad', 'agent', true, {
         chatId: 'test',
@@ -156,10 +156,10 @@ describe('getCadSystemPrompt', () => {
   });
 
   // ===================================================================
-  // R6: Git status injection (Finding 6)
+  // Git status injection
   // ===================================================================
 
-  describe('R6: git status injection', () => {
+  describe('git status injection', () => {
     it('should include git status in dynamic section when provided', async () => {
       const result = await getCadSystemPrompt('openscad', 'agent', true, {
         chatId: 'test',
@@ -200,10 +200,10 @@ describe('getCadSystemPrompt', () => {
   });
 
   // ===================================================================
-  // R14: Anti-vague-reference instruction (Finding 9)
+  // Anti-vague-reference instruction
   // ===================================================================
 
-  describe('R14: anti-vague-reference instruction', () => {
+  describe('anti-vague-reference instruction', () => {
     it('should include anti-delegation instruction in dynamic section', async () => {
       const result = await getCadSystemPrompt('openscad');
       expect(result.dynamic).toMatch(/specific file paths|line numbers|never.*vague/i);
@@ -211,10 +211,10 @@ describe('getCadSystemPrompt', () => {
   });
 
   // ===================================================================
-  // R16: Ack-then-work-then-result pattern (Finding 14)
+  // Ack-then-work-then-result pattern
   // ===================================================================
 
-  describe('R16: ack-then-work-then-result pattern', () => {
+  describe('ack-then-work-then-result pattern', () => {
     it('should include ack instruction in dynamic section', async () => {
       const result = await getCadSystemPrompt('openscad');
       expect(result.dynamic).toMatch(/acknowledge the task|progress updates.*information/i);
@@ -222,10 +222,10 @@ describe('getCadSystemPrompt', () => {
   });
 
   // ===================================================================
-  // R5: Golden structural test (Finding 5)
+  // Golden structural test for section registry refactor
   // ===================================================================
 
-  describe('R5: golden structural test for section registry refactor', () => {
+  describe('golden structural test for section registry refactor', () => {
     const goldenOptions = {
       chatId: 'golden-test',
       modelId: 'test-model',
@@ -311,10 +311,10 @@ describe('getCadSystemPrompt', () => {
   });
 
   // ===================================================================
-  // R10: Numeric length anchors (Finding 10)
+  // Numeric length anchors
   // ===================================================================
 
-  describe('R10: numeric length anchors', () => {
+  describe('numeric length anchors', () => {
     it('should include word-count limits in static prompt', async () => {
       const result = await getCadSystemPrompt('openscad');
       expect(result.static).toMatch(/<=\s*25\s*words/i);
@@ -323,11 +323,10 @@ describe('getCadSystemPrompt', () => {
   });
 
   // ===================================================================
-  // R3 (agent-loop-safeguards): <system-reminder> recognition contract
-  //   Cross-ref: docs/research/agent-loop-safeguards.md, recommendation R3
+  // <system-reminder> recognition contract
   // ===================================================================
 
-  describe('R3 (safeguards): <system-reminder> recognition contract', () => {
+  describe('<system-reminder> recognition contract', () => {
     it('should declare a <system_reminder_contract> inside <error_handling>', async () => {
       const result = await getCadSystemPrompt('openscad');
       expect(result.static).toContain('<system_reminder_contract>');
@@ -360,11 +359,10 @@ describe('getCadSystemPrompt', () => {
   });
 
   // ===================================================================
-  // R9: <tone> static section
-  //   Cross-ref: docs/research/system-prompt-audit.md, recommendation R9
+  // <tone> static section
   // ===================================================================
 
-  describe('R9: tone block', () => {
+  describe('tone block', () => {
     it('should include a <tone> static section', async () => {
       const result = await getCadSystemPrompt('openscad');
       expect(result.static).toContain('<tone>');
@@ -406,11 +404,10 @@ describe('getCadSystemPrompt', () => {
   });
 
   // ===================================================================
-  // R8: Library-file pitfall warning in <test_requirements>
-  //   Cross-ref: docs/research/system-prompt-audit.md, recommendation R8
+  // <test_requirements> top-level-export guidance (per-kernel)
   // ===================================================================
 
-  describe('R8: <test_requirements> top-level-export guidance (per-kernel)', () => {
+  describe('<test_requirements> top-level-export guidance (per-kernel)', () => {
     const allKernels: readonly KernelProvider[] = ['openscad', 'replicad', 'jscad', 'manifold', 'opencascadejs', 'zoo'];
 
     const extractTestRequirementsBlock = (prompt: string): string =>
@@ -461,11 +458,10 @@ describe('getCadSystemPrompt', () => {
   });
 
   // ===================================================================
-  // R8 (companion): Multi-shape pattern guidance for Replicad-style kernels
-  //   Cross-ref: docs/research/mesh-continuity-test-semantics.md, R8
+  // Multi-shape pattern guidance for Replicad-style kernels
   // ===================================================================
 
-  describe('R8 companion: <multi_shape_pattern> for kernels with a multi-shape return type', () => {
+  describe('<multi_shape_pattern> for kernels with a multi-shape return type', () => {
     const nonReplicadKernels: readonly KernelProvider[] = ['openscad', 'jscad', 'manifold', 'opencascadejs', 'zoo'];
 
     it('should embed a Multi-shape pattern section in the Replicad prompt showing ShapeConfig[]', async () => {
@@ -494,11 +490,10 @@ describe('getCadSystemPrompt', () => {
   });
 
   // ===================================================================
-  // R7: Screenshot frequency cap in <visual_inspection>
-  //   Cross-ref: docs/research/system-prompt-audit.md, recommendation R7
+  // Screenshot frequency cap in <visual_inspection>
   // ===================================================================
 
-  describe('R7: screenshot budget cap', () => {
+  describe('screenshot budget cap', () => {
     it('should cap screenshots at 2 per inspection cycle inside <visual_inspection>', async () => {
       const result = await getCadSystemPrompt('openscad');
       const block = result.static.slice(
@@ -520,11 +515,10 @@ describe('getCadSystemPrompt', () => {
   });
 
   // ===================================================================
-  // R6: <tool_usage_policy> static section
-  //   Cross-ref: docs/research/system-prompt-audit.md, recommendation R6
+  // <tool_usage_policy> static section
   // ===================================================================
 
-  describe('R6: tool usage policy', () => {
+  describe('tool usage policy', () => {
     it('should include a <tool_usage_policy> static section', async () => {
       const result = await getCadSystemPrompt('openscad');
       expect(result.static).toContain('<tool_usage_policy>');
@@ -557,11 +551,10 @@ describe('getCadSystemPrompt', () => {
   });
 
   // ===================================================================
-  // R5: Faithful-reporting bullet in <constraints>
-  //   Cross-ref: docs/research/system-prompt-audit.md, recommendation R5
+  // Faithful-reporting bullet in <constraints>
   // ===================================================================
 
-  describe('R5: faithful reporting', () => {
+  describe('faithful reporting', () => {
     it('should include a faithful-reporting bullet inside <constraints>', async () => {
       const result = await getCadSystemPrompt('openscad');
       const constraintsBlock = result.static.slice(
@@ -576,12 +569,11 @@ describe('getCadSystemPrompt', () => {
   });
 
   // ===================================================================
-  // R2: Diagnose-before-switching guidance in <error_handling>
-  //   Cross-ref: docs/research/system-prompt-audit.md, recommendation R2
+  // Diagnose-before-switching guidance in <error_handling>
   //   Source: claude-code repos/claude-code/src/constants/prompts.ts:233
   // ===================================================================
 
-  describe('R2: diagnose-before-switching tactics', () => {
+  describe('diagnose-before-switching tactics', () => {
     it('should tell the model to diagnose before switching tactics inside <error_handling>', async () => {
       const result = await getCadSystemPrompt('openscad');
       const errorBlock = result.static.slice(
@@ -630,11 +622,10 @@ describe('getCadSystemPrompt', () => {
   });
 
   // ===================================================================
-  // R17: Destructive-action <safety> static section
-  //   Cross-ref: docs/research/system-prompt-audit.md, recommendation R17
+  // Destructive-action <safety> static section
   // ===================================================================
 
-  describe('R17: <safety> static section', () => {
+  describe('<safety> static section', () => {
     it('should include a <safety> static section', async () => {
       const result = await getCadSystemPrompt('openscad');
       expect(result.static).toContain('<safety>');
@@ -668,18 +659,17 @@ describe('getCadSystemPrompt', () => {
   });
 
   // ===================================================================
-  // R16 + R18: <system_rules> (no-identical-retry on denial, URL guard)
-  //   Cross-ref: docs/research/system-prompt-audit.md, R16 + R18
+  // <system_rules> (no-identical-retry on denial, URL guard)
   // ===================================================================
 
-  describe('R16 + R18: <system_rules> static section', () => {
+  describe('<system_rules> static section', () => {
     it('should include a <system_rules> static section', async () => {
       const result = await getCadSystemPrompt('openscad');
       expect(result.static).toContain('<system_rules>');
       expect(result.static).toContain('</system_rules>');
     });
 
-    it('should forbid re-attempting the identical call after a denial / permission error (R16)', async () => {
+    it('should forbid re-attempting the identical call after a denial / permission error', async () => {
       const result = await getCadSystemPrompt('openscad');
       const block = result.static.slice(
         result.static.indexOf('<system_rules>'),
@@ -689,7 +679,7 @@ describe('getCadSystemPrompt', () => {
       expect(block).toMatch(/identical call/i);
     });
 
-    it('should forbid inventing URLs (R18)', async () => {
+    it('should forbid inventing URLs', async () => {
       const result = await getCadSystemPrompt('openscad');
       const block = result.static.slice(
         result.static.indexOf('<system_rules>'),
@@ -706,11 +696,10 @@ describe('getCadSystemPrompt', () => {
   });
 
   // ===================================================================
-  // R14: Self-grounded verification prepend in <visual_inspection>
-  //   Cross-ref: docs/research/system-prompt-audit.md, recommendation R14
+  // Self-grounded verification prepend in <visual_inspection>
   // ===================================================================
 
-  describe('R14: self-grounded verification', () => {
+  describe('self-grounded verification', () => {
     it('should require predicting expected properties before taking the screenshot', async () => {
       const result = await getCadSystemPrompt('openscad');
       const block = result.static.slice(
@@ -734,11 +723,10 @@ describe('getCadSystemPrompt', () => {
   });
 
   // ===================================================================
-  // R13: Iterative verification loop — universal, no <complex_task> dep
-  //   Cross-ref: docs/research/system-prompt-audit.md, recommendation R13
+  // Iterative verification loop — universal, no <complex_task> dep
   // ===================================================================
 
-  describe('R13: iterative verification loop', () => {
+  describe('iterative verification loop', () => {
     it('should require re-render on any defect found in the inspect step (testing enabled)', async () => {
       const result = await getCadSystemPrompt('openscad', 'agent', true);
       const workflow = result.static.slice(result.static.indexOf('<workflow>'), result.static.indexOf('</workflow>'));
@@ -762,11 +750,10 @@ describe('getCadSystemPrompt', () => {
   });
 
   // ===================================================================
-  // R12: Workflow step 0 (decompose) — universal, no <complex_task> dep
-  //   Cross-ref: docs/research/system-prompt-audit.md, recommendation R12
+  // Workflow step 0 (decompose) — universal, no <complex_task> dep
   // ===================================================================
 
-  describe('R12: workflow step 0 (decompose)', () => {
+  describe('workflow step 0 (decompose)', () => {
     it('should prepend a step 0 (Decompose) to the workflow when testing enabled', async () => {
       const result = await getCadSystemPrompt('openscad', 'agent', true);
       const workflow = result.static.slice(result.static.indexOf('<workflow>'), result.static.indexOf('</workflow>'));
@@ -804,12 +791,11 @@ describe('getCadSystemPrompt', () => {
   });
 
   // ===================================================================
-  // R10: Plan-mode strictness
-  //   Cross-ref: docs/research/system-prompt-audit.md, recommendation R10
+  // Plan-mode strictness
   //   Source: claude-code system-reminder-plan-mode-is-active-iterative.md L12
   // ===================================================================
 
-  describe('R10: plan-mode strictness', () => {
+  describe('plan-mode strictness', () => {
     it('should forbid all non-readonly tool calls except .plan.md edit when in plan mode', async () => {
       const result = await getCadSystemPrompt('openscad', 'plan');
       const block = result.static.slice(result.static.indexOf('<plan_mode>'), result.static.indexOf('</plan_mode>'));
@@ -838,7 +824,7 @@ describe('getCadSystemPrompt', () => {
   });
 
   // ===================================================================
-  // Multi-file test.json migration (R5 of multi-file plan)
+  // Multi-file test.json migration
   // ===================================================================
 
   describe('multi-file test.json shape in <test_requirements>', () => {
@@ -888,10 +874,10 @@ describe('getCadSystemPrompt', () => {
   });
 
   // ===================================================================
-  // R7: <error_handling> guidance for connectedComponents failures
+  // <error_handling> guidance for connectedComponents failures
   // ===================================================================
 
-  describe('R7: <error_handling> stops prescribing screenshots for connectedComponents failures', () => {
+  describe('<error_handling> stops prescribing screenshots for connectedComponents failures', () => {
     const extractErrorHandling = (prompt: string) =>
       /<error_handling>([\S\s]*?)<\/error_handling>/.exec(prompt)?.[1] ?? '';
 
@@ -910,10 +896,10 @@ describe('getCadSystemPrompt', () => {
   });
 
   // ===================================================================
-  // R23: per-section telemetry hook
+  // Per-section telemetry hook
   // ===================================================================
 
-  describe('R23: onSectionResolved telemetry callback', () => {
+  describe('onSectionResolved telemetry callback', () => {
     it('should invoke onSectionResolved for every non-empty static section (incl. role and workflow)', async () => {
       const onSectionResolved = vi.fn();
       await getCadSystemPrompt('openscad', 'agent', true, { onSectionResolved });

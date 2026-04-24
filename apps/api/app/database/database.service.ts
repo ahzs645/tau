@@ -63,8 +63,7 @@ export class DatabaseService implements OnModuleInit, OnModuleDestroy {
    * rotation, pooler exhaustion). The opaque `Failed query: …` error it emits
    * makes it impossible to distinguish "DB unreachable" from "DB rejected my
    * SQL" in Fly logs. A standalone `SELECT 1` probe with structured error
-   * mapping closes that observability gap (see R2 in
-   * docs/research/staging-cors-coep-safari-rendering-audit.md).
+   * mapping closes that observability gap in Fly logs and operator dashboards.
    */
   private async probeDatabaseConnectivity(): Promise<void> {
     this.logger.info('Starting database connectivity probe...');

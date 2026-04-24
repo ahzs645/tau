@@ -30,14 +30,14 @@ describe('WebBrowserTool', () => {
   // =============================================================================
 
   describe('tool description', () => {
-    // Per docs/research/system-prompt-audit.md R19 (revised Apr 2026): a single
-    // positive trailing redirect replaces the universal "When NOT to use" block.
+    // A single positive trailing redirect replaces the universal
+    // "When NOT to use" block.
     it('redirects to web_search for finding URLs', () => {
       const tool = createWebBrowserTool();
       expect(tool.description).toMatch(/use\s+`web_search`/);
     });
 
-    it('does NOT carry a "When NOT to use" block (revised R19)', () => {
+    it('does NOT carry a "When NOT to use" block', () => {
       const tool = createWebBrowserTool();
       expect(tool.description).not.toMatch(/When NOT to use:/);
     });

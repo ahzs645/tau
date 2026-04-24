@@ -319,6 +319,7 @@ const toolResultTrimmers: Record<string, (result: unknown) => unknown> = {
       ...(result.kernelIssues
         ? {
             kernelIssues: result.kernelIssues.map((issue) => ({
+              code: issue.code,
               message: issue.message,
               ...(issue.location ? { location: issue.location } : {}),
               severity: issue.severity,

@@ -657,7 +657,7 @@ describe('createAgentSafeguardsMiddleware', () => {
       );
     });
 
-    it('writes a {role:"safeguard",pattern,action,signature,timestamp} transcript line on each firing (R7)', async () => {
+    it('writes a {role:"safeguard",pattern,action,signature,timestamp} transcript line on each firing', async () => {
       const middleware = createAgentSafeguardsMiddleware(metricsService, chatRpcService);
       const state = { ...baseState(), messages: buildIdenticalErrorMessages(3) };
 

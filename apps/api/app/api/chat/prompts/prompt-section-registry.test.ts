@@ -82,10 +82,10 @@ describe('createSectionRegistry', () => {
   });
 
   // ===================================================================
-  // R23 — `onSectionResolved` callback for per-section telemetry. The
-  // chat service wires this to `MetricsService.genAiPromptSectionSize`
-  // so we can see how many bytes each section contributes to the
-  // assembled system prompt and which sections break the cache.
+  // `onSectionResolved` callback for per-section telemetry. The chat
+  // service wires this to `MetricsService.genAiPromptSectionSize` so we
+  // can see how many bytes each section contributes to the assembled
+  // system prompt and which sections break the cache.
   // ===================================================================
 
   describe('onSectionResolved telemetry callback', () => {

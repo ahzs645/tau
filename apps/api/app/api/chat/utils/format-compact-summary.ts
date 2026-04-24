@@ -56,7 +56,7 @@ export type ParsedCompactSummary =
  * The compaction middleware uses this to decide whether to ship the Morph
  * output as the new conversation seed or fall back to the truncate-tool-args
  * tier — a malformed summary would silently strip large swathes of context
- * from the agent (R21).
+ * from the agent.
  */
 export function parseCompactSummary(content: string): ParsedCompactSummary {
   if (!content.trim()) {

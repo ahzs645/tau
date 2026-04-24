@@ -218,11 +218,10 @@ describe('ChatService', () => {
       expect(latexMiddlewareIndex).toBeGreaterThan(newlineMiddlewareIndex);
     });
 
-    // Per docs/research/system-prompt-audit.md R22 — the token-usage-context
-    // middleware must run AFTER compaction (so the reported counts reflect the
-    // post-compaction message set) and BEFORE agent-safeguards (so its
-    // <system-reminder> joins the cacheable prefix together with the
-    // safeguard nudges, per the Cache-Safety Contract).
+    // The token-usage-context middleware must run AFTER compaction (so the
+    // reported counts reflect the post-compaction message set) and BEFORE
+    // agent-safeguards (so its <system-reminder> joins the cacheable prefix
+    // together with the safeguard nudges, per the cache-safety contract).
     it('should run TokenUsageContext after Compaction and before AgentSafeguards', async () => {
       await service.createAgent({
         chatId: 'test-chat-token-usage',

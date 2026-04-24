@@ -216,18 +216,18 @@ describe.skip(`Middleware Integration: ${modelId}`, () => {
   }, 120_000);
 
   // ===========================================================================
-  // Agent loop safeguards middleware (R5: EVAL integration test)
-  //   Cross-ref: docs/research/agent-loop-safeguards.md, recommendation R5 + C4
+  // Agent loop safeguards — end-to-end integration
   //
   // Drives the screenshot prompt against a deterministic broken `fetchGeometry`
   // RPC handler. The model is forced to repeat `fetch_geometry` -> identical
   // error, and the safeguards middleware MUST fire AP1 (identical_error) within
   // a small bounded number of agent iterations.
   //
-  // Cache-safety invariant CS5 is asserted by reading `cacheReadTokens` from
-  // the usage chunks emitted AFTER the nudge: persisting the reminder via
-  // `beforeModel` (state.messages reducer) keeps the prefix cache-stable so
-  // the post-nudge turn still benefits from the prior turn's cache prefix.
+  // Prompt-cache benefit after the nudge is asserted by reading
+  // `cacheReadTokens` from the usage chunks emitted after the nudge: persisting
+  // the reminder via `beforeModel` (state.messages reducer) keeps the prefix
+  // cache-stable so the post-nudge turn still benefits from the prior turn's
+  // cache prefix.
   // ===========================================================================
 
   it('should fire AP1 (identical_error) within 8 iterations against a deterministic broken fetch_geometry', async () => {
@@ -307,12 +307,12 @@ describe.skip(`Middleware Integration: ${modelId}`, () => {
     const usageData = extractUsageData(chunks);
     expect(usageData.length, 'Expected at least one usage chunk').toBeGreaterThan(0);
 
-    // R5 / R9: bounded iterations. The chat controller emits one usage chunk
-    // per LLM turn; capping at 8 enforces termination well before the LangGraph
+    // Bounded iterations. The chat controller emits one usage chunk per LLM
+    // turn; capping at 8 enforces termination well before the LangGraph
     // recursion limit (2000).
     expect(usageData.length, `Expected < 8 LLM turns, observed ${usageData.length}`).toBeLessThan(8);
 
-    // R9: token budget per repeated failure pattern. Sum input tokens across
+    // Token budget per repeated failure pattern. Sum input tokens across
     // turns and divide by the number of times the same identical_error fired.
     // The safeguard MUST cap rep-cost at <10k input tokens per pattern.
     const totalInputTokens = usageData.reduce((sum, u) => sum + (Number(u['inputTokens']) || 0), 0);

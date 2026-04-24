@@ -10,15 +10,15 @@
 #   pruned  : `pnpm deploy --prod` to materialise a self-contained app dir.
 #   runtime : minimal `node:24-slim` running as non-root `nestjs` (uid 1001).
 #
-# Deviations from research/api-docker-build-optimization.md:
-#   - `pnpm fetch` removed (R9): split deps/build stages already bound the
+# Build choices (see also docs/research/api-docker-build-optimization.md):
+#   - `pnpm fetch` removed: split deps/build stages already bound the
 #     cache key to lockfile + package.jsons; a separate fetch layer adds noise.
 #   - No NODE_OPTIONS=--import otel.js: app/main.ts already side-effect imports
 #     #telemetry/otel.js; doubling it would double-init the SDK.
-#   - Runtime base stays on `node:24-slim` (R10 deferred): @pyroscope/nodejs
+#   - Runtime base stays on `node:24-slim`: @pyroscope/nodejs
 #     is a node-gyp native addon with unverified musl support; alpine swap
 #     should be smoke-tested in staging first.
-#   - `--filter=@taucad/api...` reverted (R7): Nx's project-graph plugins
+#   - `--filter=@taucad/api...` reverted: Nx's project-graph plugins
 #     (`@nx/vite/plugin`, `@nx/vitest`) load every workspace `vite.config.ts`
 #     at startup to build the graph, including `apps/ui/vite.config.ts` which
 #     imports `@taucad/vite`. A filtered install resolves the graph to a

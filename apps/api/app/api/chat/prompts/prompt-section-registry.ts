@@ -16,8 +16,8 @@ export type PromptSection = {
 type CachedSection = PromptSection & { cachedValue?: string };
 
 /**
- * Per-section telemetry observation emitted by `resolve({ onSectionResolved })`
- * (R23). Wired by `chat.service.ts` to the `gen_ai.prompt.section.size`
+ * Per-section telemetry observation emitted by `resolve({ onSectionResolved })`.
+ * Wired by `chat.service.ts` to the `gen_ai.prompt.section.size`
  * histogram so we can see byte budgets per section and which sections break
  * the cache.
  */

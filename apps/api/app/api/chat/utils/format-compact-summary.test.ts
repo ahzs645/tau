@@ -81,7 +81,7 @@ The actual summary content here.
 });
 
 // =============================================================================
-// parseCompactSummary — per docs/research/system-prompt-audit.md R21
+// parseCompactSummary — schema validation for the Morph compaction response
 // =============================================================================
 //
 // The compaction prompt asks Morph for a 9-section summary (Primary Request,

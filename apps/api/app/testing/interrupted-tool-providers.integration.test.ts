@@ -5,17 +5,15 @@ import { collectStreamChunks } from '#testing/stream-consumer.js';
 import { expectChunkTypesInclude, expectNoErrors } from '#testing/stream-assertions.js';
 
 /**
- * Real-LLM integration coverage for Recommendation R6 in
- * `docs/research/interrupted-tool-call-validation-failure.md`.
+ * Real-LLM integration coverage for interrupted tool calls with partial input.
  *
  * Each `it` POSTs to `/v1/chat` with a pre-baked message history that contains a
  * partial-input `output-error` tool part — the shape the AI SDK leaves in
  * `chat.messages` after a user interrupts a tool mid-stream. The fact that the
  * request is accepted (no 400 from `ZodValidationException`) and the provider
- * returns a coherent SSE stream proves end-to-end that the schema relaxation
- * (R1), server-side healing (R3), and synthetic tool-result injection
- * (sanitizer middleware) all behave as specified for each provider's wire
- * format.
+ * returns a coherent SSE stream proves end-to-end that schema relaxation,
+ * server-side healing, and synthetic tool-result injection (sanitizer
+ * middleware) all behave as specified for each provider's wire format.
  *
  * Skipped by default — un-skip locally to re-verify against real provider
  * endpoints. Requires `ANTHROPIC_API_KEY`, `GOOGLE_VERTEX_AI_CREDENTIALS`, and

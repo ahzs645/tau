@@ -6,9 +6,10 @@ type ProviderMetadata = NonNullable<ReasoningStartChunk['providerMetadata']>;
 
 /**
  * `providerMetadata` namespace under which Tau attaches non-provider-specific
- * reasoning metadata (start/end timestamps). See
- * `docs/research/reasoning-duration-display.md` § Finding 7 for why a `common`
- * namespace was preferred over a `taucad`-specific one.
+ * reasoning metadata (start/end timestamps). The `common` namespace is used
+ * (rather than a `taucad`-specific one) because the timing data is
+ * cross-cutting agent UI metadata that is not tied to a specific provider —
+ * any future Tau-agnostic consumer can read it without coupling to our brand.
  */
 const commonMetadataNamespace = 'common';
 
@@ -54,10 +55,7 @@ const stampCommonMetadata = (
  *   reducer's last-writer-wins replacement. Map entries are deleted on
  *   `reasoning-end`, bounding memory by the number of concurrent reasoning
  *   blocks within one HTTP stream (typically 1–2). The map dies with the
- *   stream — no cross-request leakage. See
- *   `docs/research/reasoning-duration-display.md` § Finding 8 for the
- *   replace-on-write source citation and § Finding 7 for the wire-shape
- *   rationale.
+ *   stream — no cross-request leakage.
  * - **Non-blocking** — the `transform` callback is synchronous and the
  *   `reasoning-delta` hot path is a single `controller.enqueue(chunk)` line
  *   with zero metadata mutation. Throughput is identical to a no-op pipe.
@@ -72,8 +70,8 @@ const stampCommonMetadata = (
  * The final reasoning duration is **derived client-side** as
  * `reasoningEndedAtMs - reasoningStartedAtMs` rather than computed here —
  * the wire format stays minimal and the source of truth is a function of
- * the two timestamps. See `docs/research/reasoning-duration-display.md`
- * § Finding 7 for the rationale.
+ * the two timestamps. Keeping derivation client-side also means a clock-skew
+ * compensation policy can evolve in the UI without a server change.
  */
 export function createReasoningTimingTransform(): TransformStream<UIMessageChunk, UIMessageChunk> {
   // Per-stream ledger of reasoning-start timestamps, keyed by chunk id.
@@ -102,7 +100,7 @@ export function createReasoningTimingTransform(): TransformStream<UIMessageChunk
         const startedAtMs = startedAtMsById.get(chunk.id);
         startedAtMsById.delete(chunk.id);
         // Carry the matching start forward so the AI SDK reducer's
-        // replace-on-write doesn't drop it (Finding 8). Omitted (not
+        // replace-on-write replacement doesn't drop it. Omitted (not
         // fabricated) for unmatched ends so getReasoningDurationMs cleanly
         // returns undefined and the UI falls back to "Thought process".
         const patch: Partial<CommonReasoningMetadata> =

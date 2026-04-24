@@ -7,12 +7,12 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 /**
- * Co-located test for `scripts/src/smoke-cors.sh` (R13).
+ * Co-located test for `scripts/src/smoke-cors.sh`.
  *
  * The script is post-deploy plumbing — it will be wired into
  * `.github/workflows/deploy.yml` and `.github/workflows/prod-deploy-ui.yml`.
  * Without a test, the failure path (the only path that matters when chasing
- * a regression like Finding 11) is unverified and the script could rot
+ * a CORS misconfiguration) is unverified and the script could rot
  * silently. Per `docs/policy/testing-policy.md` §1: "if you remove the
  * function under test and the test still passes, the test is broken" — we
  * exercise the script as a black box against canned upstream responses.
@@ -118,7 +118,7 @@ describe('scripts/src/smoke-cors.sh', () => {
     expect(result.stdout).toContain('cross-origin-resource-policy: cross-origin');
   });
 
-  it('should exit 1 when access-control-allow-origin is missing (Finding 11 regression case)', async () => {
+  it('should exit 1 when access-control-allow-origin is missing', async () => {
     const server = await startServer({
       // Cross-Origin-Resource-Policy is present but the ACAO header is not —
       // mirrors what api.taucad.dev returned for four months while it was

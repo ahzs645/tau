@@ -164,7 +164,7 @@ export class ChatController {
         // Stamp reasoning-start / reasoning-end with server-side timestamps
         // BEFORE any other transform that could mutate or wrap chunks. The
         // hot path (reasoning-delta) is a synchronous identity pass-through
-        // — see docs/research/reasoning-duration-display.md § Finding 6.
+        // so streaming throughput is unaffected.
         .pipeThrough(createReasoningTimingTransform())
         .pipeThrough(createStaticToolTransform())
         .pipeThrough(createToolOutputTransform())

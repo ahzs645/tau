@@ -58,7 +58,6 @@ describe('createTestModelToolDefinition', () => {
   describe.each(allKernels)('%s description', (kernel) => {
     const { description } = createTestModelToolDefinition(kernel);
 
-    // Per docs/research/system-prompt-audit.md R19 (revised Apr 2026):
     // test_model is one of two tools that retains a trimmed `When NOT to use:`
     // heading (high-overuse-risk: agents may otherwise call expensive
     // measurement runs when a cheap compile-only check via get_kernel_result is

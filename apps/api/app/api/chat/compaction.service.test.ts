@@ -7,7 +7,7 @@ import { HumanMessage, AIMessage } from '@langchain/core/messages';
 import { CompactionService, CompactSummaryValidationError } from '#api/chat/compaction.service.js';
 
 /**
- * 9-section summary that satisfies `parseCompactSummary` (R21). Existing tests
+ * 9-section summary that satisfies `parseCompactSummary`. Existing tests
  * exercise transport and stats logic, not the summary contract, so they wrap
  * a short body in this template and assert on substrings inside `body`.
  */
@@ -158,7 +158,7 @@ describe('CompactionService', () => {
   });
 
   // ===================================================================
-  // R3: Strip images before Morph (toMorphFormat)
+  // Strip images before Morph (toMorphFormat)
   // ===================================================================
 
   it('should replace image_url blocks with [image] marker in Morph payload', async () => {
@@ -256,7 +256,7 @@ describe('CompactionService', () => {
   });
 
   // ===================================================================
-  // R7: Image markers in compacted summary
+  // Image markers in compacted summary
   // ===================================================================
 
   it('should include image count in compacted summary when images were evicted', async () => {
@@ -330,7 +330,7 @@ describe('CompactionService', () => {
   });
 
   // ===================================================================
-  // R15: Structured summary schema and drift prevention
+  // Structured summary schema and drift prevention
   // ===================================================================
 
   it('should include structured summary schema in compaction prompt', async () => {
@@ -375,8 +375,8 @@ describe('CompactionService', () => {
   });
 
   // ===================================================================
-  // R21: Schema validation — fall through to truncate-tool-args fallback
-  // when the Morph response is missing required sections.
+  // Schema validation — fall through to truncate-tool-args fallback when
+  // the Morph response is missing required sections.
   // ===================================================================
 
   it('should throw CompactSummaryValidationError when Morph response omits required sections', async () => {

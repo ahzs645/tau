@@ -305,10 +305,10 @@ describe('injectSnapshotContext', () => {
   });
 
   // ===================================================================
-  // R11: Universal <system-reminder> container (Finding 11)
+  // Universal <system-reminder> container
   // ===================================================================
 
-  describe('R11: universal system-reminder container', () => {
+  describe('universal system-reminder container', () => {
     it('should wrap editor context in <system-reminder> tags', () => {
       const messages = [createUserMessage('Hello')];
       const result = injectSnapshotContext(messages, fullSnapshot);
