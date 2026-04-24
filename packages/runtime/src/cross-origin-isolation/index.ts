@@ -10,8 +10,6 @@
  * @public
  *
  * @see https://web.dev/articles/coop-coep
- * @see docs/research/safari-cross-origin-isolation.md
- * @see docs/research/runtime-cross-origin-isolation-distribution.md
  *
  * @example <caption>Set headers on a `Response`</caption>
  * ```typescript

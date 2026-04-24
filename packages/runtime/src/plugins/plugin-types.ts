@@ -159,8 +159,7 @@ export type CollectExportFormats<Plugins extends readonly KernelPlugin<any, any,
  * Detects the exact `Record<string, never>` shape that Zod 4 infers from
  * `z.input<z.object({})>`. The `[T[string]] extends [never]` tuple wrap blocks
  * distributive conditional behavior so a union value type does not split
- * the test. See `docs/research/format-map-aggregation-collapse.md` Finding 11
- * for the full verification matrix.
+ * the test.
  *
  * @internal
  */
@@ -205,9 +204,9 @@ type ContributorFor<P, K extends string> =
  * Collects the unified format-to-options map from an array of kernel plugins.
  *
  * For each format key, intersects the option types contributed by every kernel
- * that declares that format (the Finding 2 contract). Empty placeholders that
- * resolve to `Record<string, never>` (typically `z.object({})` in Zod 4) are
- * filtered out via `FilterEmpty<T>` before reaching the union — they would
+ * that declares that format. Empty placeholders that resolve to
+ * `Record<string, never>` (typically `z.object({})` in Zod 4) are filtered
+ * out via `FilterEmpty<T>` before reaching the union — they would
  * otherwise annihilate concrete contributors at the intersection step. When
  * every contributor is the placeholder, the per-key union collapses to `never`
  * and `UnionToIntersection<never>` falls back to `unknown`.
@@ -394,7 +393,7 @@ export type MergeExportMap<
 type UnionToIntersection<U> = (U extends unknown ? (x: U) => void : never) extends (x: infer I) => void ? I : never;
 
 // =============================================================================
-// On-demand projections from the (Kernels, Transcoders) type bag (R2)
+// On-demand projections from the (Kernels, Transcoders) type bag
 // =============================================================================
 
 /**

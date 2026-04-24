@@ -16,7 +16,6 @@
  * @public
  *
  * @see {@link documentHeaders}
- * @see docs/research/safari-localhost-build-coep-worker-loading.md
  *
  * @example <caption>Mount on an Express app before static assets</caption>
  * ```typescript

@@ -1,9 +1,6 @@
 /**
  * Color testing utilities — shared color matrix + glTF material extraction
  * helpers used by per-kernel rendering tests and cross-kernel parity tests.
- *
- * @see docs/policy/color-space-policy.md
- * @see docs/research/kernel-color-space-srgb-conversion.md
  */
 
 import { NodeIO } from '@gltf-transform/core';

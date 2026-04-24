@@ -1,11 +1,8 @@
 /* eslint-disable @typescript-eslint/naming-convention -- file names include extensions */
 /* oxlint-disable no-empty-function -- type-level test bodies are intentionally empty */
 /**
- * Type-level tests for the {@link CapabilitiesManifest} and {@link ExportRoute}
- * target shapes produced by the redesign per the
- * `docs/research/capabilities-manifest-api-audit.md` recommendations R1, R2,
- * R3, R5, R10 and the bag-propagation redesign in
- * `docs/research/runtime-type-bag-propagation.md` R4 and R5.
+ * Type tests for the resolved {@link CapabilitiesManifest},
+ * {@link ExportRoute}, and {@link KernelRenderSchema} bag projections.
  *
  * Statically analysed by the TypeScript compiler via vitest --typecheck.
  */
@@ -46,7 +43,7 @@ describe('CapabilitiesManifest target shape (wide default)', () => {
     expectTypeOf<CapabilitiesManifest['routes']>().toEqualTypeOf<readonly ExportRoute[]>();
   });
 
-  it('should not declare legacy parallel-array fields', () => {
+  it('should not declare parallel-array projection fields', () => {
     type Keys = keyof CapabilitiesManifest;
     expectTypeOf<Keys>().not.toEqualTypeOf<
       Keys | 'kernelExports' | 'transcodeEdges' | 'exportRoutes' | 'renderOptions'
@@ -65,10 +62,10 @@ describe('KernelRenderSchema shape (wide default)', () => {
 });
 
 // =============================================================================
-// Bag-propagated narrowing (R4 + R5)
+// Bag-propagated narrowing
 // =============================================================================
 
-describe('ExportRoute bag propagation (R4)', () => {
+describe('ExportRoute bag propagation', () => {
   /* oxlint-disable @typescript-eslint/no-empty-object-type -- matches plugin defaults */
   type ReplicadLike = KernelPlugin<{ stl: { binary?: boolean }; glb: {} }, { tessellation?: unknown }, 'replicad'>;
   type OpenscadLike = KernelPlugin<{ off: {} }, { tessellation?: unknown }, 'openscad'>;
@@ -98,7 +95,7 @@ describe('ExportRoute bag propagation (R4)', () => {
   });
 });
 
-describe('CapabilitiesManifest bag propagation (R4)', () => {
+describe('CapabilitiesManifest bag propagation', () => {
   /* oxlint-disable @typescript-eslint/no-empty-object-type -- matches plugin defaults */
   type ReplicadLike = KernelPlugin<{ stl: {}; glb: {} }, { tessellation?: unknown }, 'replicad'>;
   type OpenscadLike = KernelPlugin<{ off: {} }, { tessellation?: unknown }, 'openscad'>;
@@ -121,7 +118,7 @@ describe('CapabilitiesManifest bag propagation (R4)', () => {
   });
 });
 
-describe('KernelRenderSchema bag propagation (R5)', () => {
+describe('KernelRenderSchema bag propagation', () => {
   /* oxlint-disable @typescript-eslint/no-empty-object-type -- matches plugin defaults */
   type ReplicadLike = KernelPlugin<
     {},
@@ -160,22 +157,22 @@ describe('KernelRenderSchema bag propagation (R5)', () => {
 });
 
 // =============================================================================
-// Removed legacy capability types
+// Removed capability types
 // =============================================================================
 
-describe('removed legacy capability types', () => {
+describe('removed capability types', () => {
   it('should not export ExportFormatCapability from runtime.types.js', () => {
-    // @ts-expect-error -- ExportFormatCapability has been removed (R10)
+    // @ts-expect-error -- ExportFormatCapability has been removed
     type _Removed = RuntimeTypes.ExportFormatCapability;
   });
 
   it('should not export TranscodeEdgeCapability from runtime.types.js', () => {
-    // @ts-expect-error -- TranscodeEdgeCapability has been removed (R10)
+    // @ts-expect-error -- TranscodeEdgeCapability has been removed
     type _Removed = RuntimeTypes.TranscodeEdgeCapability;
   });
 
   it('should not export RenderOptionCapability from runtime.types.js', () => {
-    // @ts-expect-error -- RenderOptionCapability has been removed (R10)
+    // @ts-expect-error -- RenderOptionCapability has been removed
     type _Removed = RuntimeTypes.RenderOptionCapability;
   });
 });

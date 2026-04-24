@@ -9,9 +9,6 @@
  * convention. Kernels that write `baseColorFactor` MUST convert sRGB inputs to
  * linear at the writer boundary, otherwise Three.js (`outputColorSpace =
  * SRGBColorSpace`) double-encodes the gamma and produces washed-out colors.
- *
- * @see docs/policy/color-space-policy.md
- * @see docs/research/kernel-color-space-srgb-conversion.md
  */
 
 /**
