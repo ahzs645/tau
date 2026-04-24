@@ -8,7 +8,7 @@
 const MAX_DIMENSION = 1568;
 
 /** Maximum base64 data URL length (~1 MB raw after base64 expansion). */
-const MAX_DATA_URL_LENGTH = 1_398_102;
+export const MAX_DATA_URL_LENGTH = 1_398_102;
 
 /** JPEG quality steps tried in order until the output fits. */
 const QUALITY_LADDER = [0.85, 0.7, 0.5, 0.3];

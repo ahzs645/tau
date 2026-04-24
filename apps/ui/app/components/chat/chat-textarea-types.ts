@@ -7,7 +7,6 @@ import type { ResolvedModel } from '#hooks/use-models.js';
 import type { KeyCombination } from '#utils/keys.utils.js';
 import { toast } from '#components/ui/sonner.js';
 import { useKeybinding } from '#hooks/use-keyboard.js';
-import { resizeImageForChat } from '#utils/resize-image.js';
 
 /**
  * Kind of drag currently hovering over the chat textarea.
@@ -208,7 +207,7 @@ export function useChatTextareaLogic({
   handleTextareaKeyDown: (event: React.KeyboardEvent) => void;
   handleDragOver: (event: React.DragEvent) => void;
   handleDragLeave: () => void;
-  handleDrop: (event: React.DragEvent) => void;
+  handleDrop: (event: React.DragEvent) => Promise<void>;
   handleFileSelect: () => void;
   handleFileChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
   handleTextChange: (event: React.ChangeEvent<HTMLTextAreaElement>) => void;
@@ -434,16 +433,18 @@ export function useChatTextareaLogic({
         return;
       }
 
-      // 4. OS files (images) — existing behaviour
+      // 4. OS files (images) — read sequentially and hand the raw data URL
+      // to the draft machine. Resizing + error toast are owned by the
+      // `imageProcessing` chokepoint inside `draftMachine` (see R1 of
+      // `docs/research/chat-image-resize-coverage-audit.md`); the only failure
+      // class we still own here is the file-read step itself.
       if (dataTransfer.files.length > 0) {
         for (const file of dataTransfer.files) {
           if (file.type.startsWith('image/')) {
             try {
               // oxlint-disable-next-line no-await-in-loop -- reading files sequentially
               const dataUrl = await readFileAsDataUrl(file);
-              // oxlint-disable-next-line no-await-in-loop -- must resize before adding
-              const resized = await resizeImageForChat(dataUrl);
-              addImage(resized);
+              addImage(dataUrl);
             } catch {
               toast.error('Failed to read image');
             }
@@ -468,11 +469,9 @@ export function useChatTextareaLogic({
             try {
               // oxlint-disable-next-line no-await-in-loop -- reading files sequentially
               const dataUrl = await readFileAsDataUrl(file);
-              // oxlint-disable-next-line no-await-in-loop -- must resize before adding
-              const resized = await resizeImageForChat(dataUrl);
-              addImage(resized);
+              addImage(dataUrl);
             } catch {
-              toast.error('Failed to process image');
+              toast.error('Failed to read image');
             }
           }
         }
@@ -522,11 +521,9 @@ export function useChatTextareaLogic({
             try {
               // oxlint-disable-next-line no-await-in-loop -- reading files sequentially
               const dataUrl = await readFileAsDataUrl(file);
-              // oxlint-disable-next-line no-await-in-loop -- must resize before adding
-              const resized = await resizeImageForChat(dataUrl);
-              addImage(resized);
+              addImage(dataUrl);
             } catch {
-              toast.error('Failed to process image');
+              toast.error('Failed to read image');
             }
           }
         }

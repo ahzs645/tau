@@ -41,6 +41,7 @@ import { fromSafeAsync } from '#lib/xstate.lib.js';
 import { chatPersistenceMachine } from '#hooks/chat-persistence.machine.js';
 import type { ChatRequest } from '#hooks/chat-persistence.machine.js';
 import { draftMachine } from '#hooks/draft.machine.js';
+import { resizeImageActor } from '#hooks/resize-image.actor.js';
 import { inspect } from '#machines/inspector.js';
 import { ENV } from '#environment.config.js';
 import { parseErrorForPersistence } from '#utils/error.utils.js';
@@ -357,6 +358,7 @@ export class ChatSessionStore {
           clearMessageEditActor: fromSafeAsync<void, { chatId: string; messageId: string }>(async ({ input }) => {
             await depsRef().clearMessageEdit(input.chatId, input.messageId);
           }),
+          resizeImageActor,
         },
       }),
       {

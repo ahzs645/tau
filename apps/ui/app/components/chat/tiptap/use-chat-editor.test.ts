@@ -290,6 +290,81 @@ const createFileTree = (entries: Array<[string, Partial<FileEntry>]>): Map<strin
     ]),
   );
 
+describe('useChatEditor — image paste dispatches raw data URL (F5 / R1)', () => {
+  /**
+   * F5 regression — Tiptap paste used to call `resizeImageForChat` and silently
+   * swallow rejection paths. The chokepoint now lives in the draft machine, so
+   * the editor's `handlePaste` MUST forward the raw data URL into
+   * `onImagePaste` without any pre-processing. If we re-introduce inline
+   * resizing here we both lose the chokepoint contract and re-open the silent
+   * failure mode.
+   */
+  it('should forward the raw FileReader data URL to onImagePaste (no inline resize)', async () => {
+    const onImagePaste = vi.fn();
+    const { result } = renderHook(() => useChatEditor(createDefaultOptions({ onImagePaste })));
+
+    await waitFor(() => {
+      expect(result.current.editor).not.toBeNull();
+    });
+
+    const editor = result.current.editor!;
+    const rawDataUrl = `data:image/png;base64,${'A'.repeat(2_000_000)}`;
+
+    act(() => {
+      editor.commands.focus();
+    });
+
+    const file = new File([new Blob(['stub'])], 'pasted.png', { type: 'image/png' });
+    const items = [
+      {
+        type: 'image/png',
+        getAsFile: () => file,
+      },
+    ];
+    const clipboardData = {
+      items,
+      types: ['Files'],
+      files: [file],
+      getData: () => '',
+    } as unknown as DataTransfer;
+    const event = new Event('paste', { bubbles: true, cancelable: true }) as ClipboardEvent;
+    Object.defineProperty(event, 'clipboardData', { value: clipboardData });
+
+    const originalFileReader = globalThis.FileReader;
+    class StubReader {
+      public result: string | undefined = undefined;
+      private readonly listeners = new Map<string, Array<(event: unknown) => void>>();
+      public addEventListener(name: string, listener: (event: unknown) => void) {
+        const list = this.listeners.get(name) ?? [];
+        list.push(listener);
+        this.listeners.set(name, list);
+      }
+      // oxlint-disable-next-line no-empty-function -- jsdom FileReader stub satisfies interface but has no teardown semantics
+      public removeEventListener(): void {}
+      public readAsDataURL() {
+        queueMicrotask(() => {
+          this.result = rawDataUrl;
+          for (const listener of this.listeners.get('load') ?? []) {
+            listener({ target: { result: rawDataUrl } });
+          }
+        });
+      }
+    }
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- jsdom FileReader stub
+    globalThis.FileReader = StubReader as unknown as typeof FileReader;
+
+    try {
+      editor.view.dom.dispatchEvent(event);
+      await waitFor(() => {
+        expect(onImagePaste).toHaveBeenCalledOnce();
+      });
+      expect(onImagePaste).toHaveBeenCalledWith(rawDataUrl);
+    } finally {
+      globalThis.FileReader = originalFileReader;
+    }
+  });
+});
+
 describe('buildEditorContentJson', () => {
   it('should return undefined when segments contain no chips', () => {
     const segments: PastedContentSegment[] = [{ type: 'text', value: 'Hello world' }];

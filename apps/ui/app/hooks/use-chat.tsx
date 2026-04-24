@@ -331,6 +331,16 @@ export type ChatActions = {
   stop: () => void;
   setMessages: (messages: MyUIMessage[]) => void;
   setDraftText: (text: string) => void;
+  /**
+   * Add a raw image data URL to the new-message draft. Synchronous: the
+   * `draftMachine` enqueues the URL and resizes it through the single
+   * `imageProcessing` chokepoint (see `apps/ui/app/hooks/draft.machine.ts`).
+   * Pass the original (un-resized) data URL — the machine handles
+   * dimension/compression caps via `resizeImageForChat()`. Failures surface
+   * as a single global `toast.error` from `<ActiveChatProvider>`'s
+   * `useDraftImageErrorToast` subscriber, so callers MUST NOT wrap this in
+   * try/catch or await any resize step.
+   */
   addDraftImage: (image: string) => void;
   removeDraftImage: (index: number) => void;
   setDraftToolChoice: (toolChoice: string | string[]) => void;
@@ -339,6 +349,12 @@ export type ChatActions = {
   startEditingMessage: (messageId: string) => void;
   exitEditMode: () => void;
   setEditDraftText: (text: string) => void;
+  /**
+   * Add a raw image data URL to the message-edit draft. Same contract as
+   * {@link ChatActions.addDraftImage} — pass the raw URL synchronously; the
+   * machine resizes via the FIFO chokepoint and surfaces errors via the
+   * `<ActiveChatProvider>` toast subscriber.
+   */
   addEditDraftImage: (image: string) => void;
   removeEditDraftImage: (index: number) => void;
   clearMessageEdit: (messageId: string) => void;

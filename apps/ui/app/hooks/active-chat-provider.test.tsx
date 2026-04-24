@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import type { Chat } from '@taucad/chat';
+import { fromSafeAsync } from '#lib/xstate.lib.js';
 
 // ---------------------------------------------------------------------------
 // Hoisted harness — mocks the project-manager surface that ActiveChatProvider
@@ -15,6 +16,8 @@ const harness = vi.hoisted(() => ({
   setMessageEdit: vi.fn(),
   clearMessageEdit: vi.fn(),
   getChat: vi.fn(),
+  toastError: vi.fn(),
+  resize: vi.fn<(image: string) => Promise<string>>(),
 }));
 
 vi.mock('#hooks/use-project-manager.js', () => ({
@@ -28,6 +31,26 @@ vi.mock('#hooks/use-project-manager.js', () => ({
 
 vi.mock('#machines/inspector.js', () => ({
   inspect: undefined,
+}));
+
+vi.mock('#components/ui/sonner.js', () => ({
+  toast: {
+    error: harness.toastError,
+    success: vi.fn(),
+    info: vi.fn(),
+    warning: vi.fn(),
+  },
+}));
+
+// Override the production resize actor so the active-chat-provider's R1 toast
+// subscriber can be exercised against a controllable fake. The same actor is
+// provided by both `EphemeralActiveChatProvider` and `ChatSessionStore`, so a
+// single mock covers both branches.
+vi.mock('#hooks/resize-image.actor.js', () => ({
+  resizeImageActor: fromSafeAsync<{ type: 'imageResized'; resized: string }, { image: string }>(async ({ input }) => {
+    const resized = await harness.resize(input.image);
+    return { type: 'imageResized', resized };
+  }),
 }));
 
 const { ActiveChatProvider, useActiveChatId, useActiveChat } = await import('#hooks/active-chat-provider.js');
@@ -60,6 +83,8 @@ beforeEach(() => {
   harness.setMessageEdit.mockReset().mockResolvedValue(undefined);
   harness.clearMessageEdit.mockReset().mockResolvedValue(undefined);
   harness.getChat.mockReset().mockResolvedValue(undefined);
+  harness.toastError.mockReset();
+  harness.resize.mockReset().mockImplementation(async (image: string) => image);
   vi.useRealTimers();
 });
 
@@ -221,5 +246,94 @@ describe('ActiveChatProvider', () => {
     });
 
     expect(harness.getChat).not.toHaveBeenCalled();
+  });
+
+  // ===========================================================================
+  // R1 — image-resize toast subscriber (single global error site)
+  // ===========================================================================
+  describe('imageResizeFailed toast subscriber', () => {
+    it('should toast.error when the draft actor emits imageResizeFailed (session-backed)', async () => {
+      harness.resize.mockRejectedValueOnce(new Error('boom'));
+
+      const { result } = renderHook(() => useActiveChat(), {
+        wrapper: createWrapper('chat_toast'),
+      });
+
+      act(() => {
+        result.current.draftActorRef.send({ type: 'addDraftImage', image: 'data:image/png;base64,raw' });
+      });
+
+      await waitFor(() => {
+        expect(harness.toastError).toHaveBeenCalledOnce();
+      });
+      expect(harness.toastError).toHaveBeenCalledWith('Failed to process image', expect.any(Object));
+    });
+
+    it('should toast.error when the draft actor emits imageResizeFailed (ephemeral)', async () => {
+      harness.resize.mockRejectedValueOnce(new Error('boom'));
+
+      const { result } = renderHook(() => useActiveChat(), {
+        wrapper: createWrapper(undefined),
+      });
+
+      act(() => {
+        result.current.draftActorRef.send({ type: 'addDraftImage', image: 'data:image/png;base64,raw' });
+      });
+
+      await waitFor(() => {
+        expect(harness.toastError).toHaveBeenCalledOnce();
+      });
+    });
+
+    it('should not toast on successful resize', async () => {
+      harness.resize.mockResolvedValueOnce('data:image/jpeg;base64,resized');
+
+      const { result } = renderHook(() => useActiveChat(), {
+        wrapper: createWrapper('chat_no_toast'),
+      });
+
+      act(() => {
+        result.current.draftActorRef.send({ type: 'addDraftImage', image: 'data:image/png;base64,raw' });
+      });
+
+      await waitFor(() => {
+        expect(result.current.draftActorRef.getSnapshot().context.draftImages).toEqual([
+          'data:image/jpeg;base64,resized',
+        ]);
+      });
+
+      expect(harness.toastError).not.toHaveBeenCalled();
+    });
+
+    it('should unsubscribe the listener on unmount (no toast after unmount)', async () => {
+      // Block the resize promise so the failure fires AFTER unmount.
+      let rejectResize!: (error: Error) => void;
+      harness.resize.mockImplementationOnce(
+        async () =>
+          new Promise<string>((_resolve, reject) => {
+            rejectResize = reject;
+          }),
+      );
+
+      const { result, unmount } = renderHook(() => useActiveChat(), {
+        wrapper: createWrapper(undefined),
+      });
+
+      const { draftActorRef } = result.current;
+
+      act(() => {
+        draftActorRef.send({ type: 'addDraftImage', image: 'data:image/png;base64,raw' });
+      });
+
+      unmount();
+
+      rejectResize(new Error('post-unmount failure'));
+
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 50);
+      });
+
+      expect(harness.toastError).not.toHaveBeenCalled();
+    });
   });
 });

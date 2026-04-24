@@ -91,26 +91,28 @@ describe('CaptureViewControl', () => {
     expect(call.activeActors).toBeInstanceOf(Set);
   });
 
-  it('adds the resized data URL to the active chat draft when the helper resolves', async () => {
+  it('forwards the raw screenshot data URL to addDraftImage (machine resizes downstream — R1)', async () => {
     const user = userEvent.setup();
     render(<CaptureViewControl />);
 
     await user.click(screen.getByTestId('capture-button'));
 
-    captureCalls[0]!.onImage('data:image/webp;base64,RESIZED');
+    const oversizedRaw = `data:image/webp;base64,${'A'.repeat(2_000_000)}`;
+    captureCalls[0]!.onImage(oversizedRaw);
 
-    expect(mockAddDraftImage).toHaveBeenCalledExactlyOnceWith('data:image/webp;base64,RESIZED');
+    expect(mockAddDraftImage).toHaveBeenCalledExactlyOnceWith(oversizedRaw);
     expect(mockTrigger).toHaveBeenCalledOnce();
   });
 
-  it('overflow variant fires capture via DropdownMenuItem onSelect', async () => {
+  it('overflow variant forwards the raw screenshot data URL to addDraftImage (R1)', async () => {
     const user = userEvent.setup();
     render(<CaptureViewOverflowControl />);
 
     await user.click(screen.getByTestId('capture-overflow-button'));
 
     expect(mockCaptureViewScreenshot).toHaveBeenCalledOnce();
-    captureCalls[0]!.onImage('data:image/webp;base64,FROM_OVERFLOW');
-    expect(mockAddDraftImage).toHaveBeenCalledExactlyOnceWith('data:image/webp;base64,FROM_OVERFLOW');
+    const oversizedRaw = `data:image/webp;base64,${'B'.repeat(2_000_000)}`;
+    captureCalls[0]!.onImage(oversizedRaw);
+    expect(mockAddDraftImage).toHaveBeenCalledExactlyOnceWith(oversizedRaw);
   });
 });

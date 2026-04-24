@@ -2,7 +2,6 @@ import { createActor } from 'xstate';
 import type { ActorRefFrom } from 'xstate';
 import type { graphicsMachine } from '#machines/graphics.machine.js';
 import { screenshotRequestMachine } from '#machines/screenshot-request.machine.js';
-import { resizeImageForChat } from '#utils/resize-image.js';
 
 type GraphicsActorRef = ActorRefFrom<typeof graphicsMachine>;
 
@@ -13,7 +12,12 @@ export type CaptureViewScreenshotOptions = {
   readonly quality: number;
   /** Optional Set used by the host to track active actors for unmount cleanup. */
   readonly activeActors?: Set<{ stop: () => void }>;
-  /** Called with the resized data URL once the screenshot succeeds. */
+  /**
+   * Called with the raw screenshot data URL once the screenshot succeeds.
+   * Resizing for chat upload is owned by the `draftMachine` `imageProcessing`
+   * chokepoint (see R1 of `chat-image-resize-coverage-audit.md`); pass this
+   * raw URL straight to `addDraftImage`/`addEditDraftImage`.
+   */
   readonly onImage: (dataUrl: string) => void;
   /** Called with a human-readable error if the screenshot fails or the capture pipeline reports nothing. */
   readonly onError?: (message: string) => void;
@@ -24,9 +28,10 @@ export type CaptureViewScreenshotOptions = {
  *
  * Owns the {@link screenshotRequestMachine} lifecycle for one request:
  * spawns an actor, sends `requestScreenshot` with the chat textarea's
- * canonical options block (16:9, 1200px, zoom 1.4, WebP), pipes the result
- * through {@link resizeImageForChat}, and stops the actor on completion or
- * failure.
+ * canonical options block (16:9, 1200px, zoom 1.4, WebP), and forwards the
+ * raw data URL to `onImage`. The `draftMachine` `imageProcessing` chokepoint
+ * is responsible for resizing the URL before it lands in the draft surface
+ * (R1 of the chat-image-resize-coverage-audit).
  *
  * Used by:
  *  - the existing single-view branch in `chat-textarea.tsx`
@@ -65,16 +70,8 @@ export function captureViewScreenshot(options: CaptureViewScreenshotOptions): vo
         onError?.('Failed to capture screenshot');
         return;
       }
-      void (async (): Promise<void> => {
-        try {
-          const resized = await resizeImageForChat(dataUrl);
-          onImage(resized);
-        } catch {
-          onError?.('Failed to process screenshot');
-        } finally {
-          cleanup();
-        }
-      })();
+      onImage(dataUrl);
+      cleanup();
     },
     onError(error) {
       cleanup();

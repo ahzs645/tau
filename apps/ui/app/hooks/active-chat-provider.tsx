@@ -27,6 +27,8 @@ import type { ActorRefFrom } from 'xstate';
 import type { MyUIMessage } from '@taucad/chat';
 import { fromSafeAsync } from '#lib/xstate.lib.js';
 import { draftMachine } from '#hooks/draft.machine.js';
+import { resizeImageActor } from '#hooks/resize-image.actor.js';
+import { useDraftImageErrorToast } from '#hooks/use-draft-image-error-toast.js';
 import { inspect } from '#machines/inspector.js';
 import { useChatSession } from '#hooks/use-chat-session.js';
 
@@ -77,6 +79,11 @@ function SessionBackedActiveChatProvider({
 }): React.JSX.Element {
   const session = useChatSession(chatId);
 
+  // Single global toast site for image-resize failures across the chat surface.
+  // Mounted at the provider so the 12 image entry points never need their own
+  // try/catch around the resize step. See `useDraftImageErrorToast` JSDoc.
+  useDraftImageErrorToast(session.draftActorRef);
+
   const value = useMemo<ActiveChatContextValue>(
     () => ({ activeChatId: chatId, draftActorRef: session.draftActorRef }),
     [chatId, session.draftActorRef],
@@ -92,6 +99,7 @@ function EphemeralActiveChatProvider({ children }: { readonly children: React.Re
         persistDraftActor: noopPersistDraftActor,
         persistEditDraftActor: noopPersistEditDraftActor,
         clearMessageEditActor: noopClearMessageEditActor,
+        resizeImageActor,
       },
     }),
     {
@@ -99,6 +107,8 @@ function EphemeralActiveChatProvider({ children }: { readonly children: React.Re
       inspect,
     },
   );
+
+  useDraftImageErrorToast(draftActorRef);
 
   const value = useMemo<ActiveChatContextValue>(() => ({ activeChatId: undefined, draftActorRef }), [draftActorRef]);
 

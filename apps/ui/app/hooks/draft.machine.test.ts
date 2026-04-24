@@ -8,7 +8,7 @@ import { fromSafeAsync } from '#lib/xstate.lib.js';
 
 type PersistDraftInput = { chatId: string; draft: MyUIMessage };
 
-function createTestActor(options?: { chatId?: string }) {
+function createTestActor(options?: { chatId?: string; resize?: (image: string) => Promise<string> }) {
   const machine = draftMachine.provide({
     actors: {
       // oxlint-disable-next-line no-empty-function -- mock stub
@@ -17,6 +17,13 @@ function createTestActor(options?: { chatId?: string }) {
       persistEditDraftActor: fromSafeAsync(async () => {}),
       // oxlint-disable-next-line no-empty-function -- mock stub
       clearMessageEditActor: fromSafeAsync(async () => {}),
+      resizeImageActor: fromSafeAsync<{ type: 'imageResized'; resized: string }, { image: string }>(
+        async ({ input }) => {
+          const resizer = options?.resize ?? (async (image) => image);
+          const resized = await resizer(input.image);
+          return { type: 'imageResized', resized };
+        },
+      ),
     },
   });
 
@@ -35,6 +42,9 @@ function createTestActorWithPersistCapture(options: { chatId: string; onPersist:
       persistEditDraftActor: fromSafeAsync(async () => {}),
       // oxlint-disable-next-line no-empty-function -- mock stub
       clearMessageEditActor: fromSafeAsync(async () => {}),
+      resizeImageActor: fromSafeAsync<{ type: 'imageResized'; resized: string }, { image: string }>(
+        async ({ input }) => ({ type: 'imageResized', resized: input.image }),
+      ),
     },
   });
 
@@ -58,6 +68,9 @@ function createTestActorWithDeferredPersist(options: {
       persistEditDraftActor: fromSafeAsync(async () => {}),
       // oxlint-disable-next-line no-empty-function -- mock stub
       clearMessageEditActor: fromSafeAsync(async () => {}),
+      resizeImageActor: fromSafeAsync<{ type: 'imageResized'; resized: string }, { image: string }>(
+        async ({ input }) => ({ type: 'imageResized', resized: input.image }),
+      ),
     },
   });
 
@@ -103,22 +116,25 @@ describe('draftMachine', () => {
       actor.stop();
     });
 
-    it('should add draft image', () => {
+    it('should add draft image (after resize chokepoint settles)', async () => {
       const actor = createTestActor();
       actor.start();
       actor.send({ type: 'addDraftImage', image: 'data:image/png;base64,abc' });
+      await waitFor(actor, (s) => s.context.draftImages.length === 1);
       expect(actor.getSnapshot().context.draftImages).toEqual(['data:image/png;base64,abc']);
       actor.send({ type: 'addDraftImage', image: 'data:image/png;base64,def' });
+      await waitFor(actor, (s) => s.context.draftImages.length === 2);
       expect(actor.getSnapshot().context.draftImages).toHaveLength(2);
       actor.stop();
     });
 
-    it('should remove draft image by index', () => {
+    it('should remove draft image by index (after resize chokepoint settles)', async () => {
       const actor = createTestActor();
       actor.start();
       actor.send({ type: 'addDraftImage', image: 'img-a' });
       actor.send({ type: 'addDraftImage', image: 'img-b' });
       actor.send({ type: 'addDraftImage', image: 'img-c' });
+      await waitFor(actor, (s) => s.context.draftImages.length === 3);
       actor.send({ type: 'removeDraftImage', index: 1 });
       expect(actor.getSnapshot().context.draftImages).toEqual(['img-a', 'img-c']);
       actor.stop();
@@ -415,6 +431,218 @@ describe('draftMachine', () => {
       actor.send({ type: 'setEditDraftText', text: 'editing...' });
       expect(actor.getSnapshot().matches({ editSaving: 'pending' })).toBe(true);
       actor.stop();
+    });
+  });
+
+  // ===========================================================================
+  // Image resize chokepoint (R1)
+  //
+  // The machine owns image resizing. `addDraftImage` / `addEditDraftImage`
+  // events accept RAW data URLs and enqueue them; the `imageProcessing`
+  // parallel sub-region invokes `resizeImageActor` FIFO and assigns the
+  // resized URL back into `draftImages` / `editDraftImages`. Failures
+  // surface via the typed `imageResizeFailed` emit.
+  //
+  // See docs/research/chat-image-resize-coverage-audit.md.
+  // ===========================================================================
+  describe('image resize chokepoint (R1)', () => {
+    it('should append the resized URL to draftImages once the resize actor settles', async () => {
+      const actor = createTestActor({ resize: async () => 'data:image/jpeg;base64,RESIZED' });
+      actor.start();
+      actor.send({ type: 'addDraftImage', image: 'RAW' });
+      await waitFor(actor, (snap) => snap.context.draftImages.length === 1);
+      const snapshot = actor.getSnapshot();
+      expect(snapshot.context.draftImages).toEqual(['data:image/jpeg;base64,RESIZED']);
+      expect(snapshot.context.imageQueue).toEqual([]);
+      actor.stop();
+    });
+
+    it('should append to editDraftImages when addEditDraftImage triggers the queue', async () => {
+      const actor = createTestActor({ resize: async () => 'data:image/jpeg;base64,EDIT_RESIZED' });
+      actor.start();
+      actor.send({ type: 'addEditDraftImage', image: 'RAW_EDIT' });
+      await waitFor(actor, (snap) => snap.context.editDraftImages.length === 1);
+      const snapshot = actor.getSnapshot();
+      expect(snapshot.context.editDraftImages).toEqual(['data:image/jpeg;base64,EDIT_RESIZED']);
+      expect(snapshot.context.draftImages).toEqual([]);
+      expect(snapshot.context.imageQueue).toEqual([]);
+      actor.stop();
+    });
+
+    it('should preserve FIFO insertion order when multiple images are sent in a burst', async () => {
+      const delayByInput = new Map<string, number>([
+        ['A', 50],
+        ['B', 5],
+        ['C', 10],
+      ]);
+      const actor = createTestActor({
+        resize: async (image) => {
+          const head = image[0] ?? '';
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, delayByInput.get(head) ?? 0);
+          });
+          return `${image}_R`;
+        },
+      });
+      actor.start();
+      actor.send({ type: 'addDraftImage', image: 'A' });
+      actor.send({ type: 'addDraftImage', image: 'B' });
+      actor.send({ type: 'addDraftImage', image: 'C' });
+      await waitFor(actor, (snap) => snap.context.draftImages.length === 3);
+      expect(actor.getSnapshot().context.draftImages).toEqual(['A_R', 'B_R', 'C_R']);
+      actor.stop();
+    });
+
+    it('should preserve FIFO order across N enqueues with mixed targets and adversarial delays', async () => {
+      const delayByInput = new Map<string, number>([
+        ['A', 50],
+        ['B', 40],
+        ['C', 30],
+        ['D', 20],
+        ['E', 10],
+      ]);
+      const callOrder: string[] = [];
+      const actor = createTestActor({
+        resize: async (image) => {
+          callOrder.push(image);
+          const head = image[0] ?? '';
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, delayByInput.get(head) ?? 0);
+          });
+          return `${image}_R`;
+        },
+      });
+      actor.start();
+      actor.send({ type: 'addDraftImage', image: 'A' });
+      actor.send({ type: 'addDraftImage', image: 'B' });
+      actor.send({ type: 'addEditDraftImage', image: 'C' });
+      actor.send({ type: 'addDraftImage', image: 'D' });
+      actor.send({ type: 'addEditDraftImage', image: 'E' });
+      await waitFor(
+        actor,
+        (snap) => snap.context.draftImages.length === 3 && snap.context.editDraftImages.length === 2,
+      );
+      const snapshot = actor.getSnapshot();
+      expect(snapshot.context.draftImages).toEqual(['A_R', 'B_R', 'D_R']);
+      expect(snapshot.context.editDraftImages).toEqual(['C_R', 'E_R']);
+      expect(callOrder).toEqual(['A', 'B', 'C', 'D', 'E']);
+      actor.stop();
+    });
+
+    it('should emit imageResizeFailed when the resize actor rejects', async () => {
+      const actor = createTestActor({
+        resize: async () => {
+          throw new Error('Failed to load image');
+        },
+      });
+      const emitSpy = vi.fn<[{ type: 'imageResizeFailed'; error: Error }], void>();
+      actor.on('imageResizeFailed', (event) => emitSpy(event));
+      actor.start();
+      actor.send({ type: 'addDraftImage', image: 'BAD' });
+      await waitFor(actor, (snap) => snap.context.imageQueue.length === 0);
+      expect(emitSpy).toHaveBeenCalledOnce();
+      const event = emitSpy.mock.calls[0]![0];
+      expect(event.error).toBeInstanceOf(Error);
+      expect(event.error.message).toBe('Failed to load image');
+      expect(event.error.name).toBe('Error');
+      expect(actor.getSnapshot().context.draftImages).toEqual([]);
+      actor.stop();
+    });
+
+    it('should drain the queue past a single failure (subsequent images still process)', async () => {
+      const emitSpy = vi.fn();
+      const actor = createTestActor({
+        resize: async (image) => {
+          if (image === 'BAD') {
+            throw new Error('boom');
+          }
+          return `${image}_R`;
+        },
+      });
+      actor.on('imageResizeFailed', emitSpy);
+      actor.start();
+      actor.send({ type: 'addDraftImage', image: 'BAD' });
+      actor.send({ type: 'addDraftImage', image: 'GOOD' });
+      await waitFor(actor, (snap) => snap.context.draftImages.length === 1);
+      expect(actor.getSnapshot().context.draftImages).toEqual(['GOOD_R']);
+      expect(emitSpy).toHaveBeenCalledOnce();
+      actor.stop();
+    });
+
+    it('should not invoke the resize actor when the queue is empty', async () => {
+      const resizeSpy = vi.fn(async (image: string) => image);
+      const actor = createTestActor({ resize: resizeSpy });
+      actor.start();
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+      expect(resizeSpy).not.toHaveBeenCalled();
+      actor.stop();
+    });
+
+    it('should clear pending queue entries on clearDraft', async () => {
+      const actor = createTestActor({
+        resize: async () =>
+          new Promise<string>(() => {
+            // Never resolves — keeps the in-flight resize pending so we can assert clear behavior.
+          }),
+        chatId: 'chat_abc',
+      });
+      actor.start();
+      actor.send({ type: 'addDraftImage', image: 'A' });
+      actor.send({ type: 'addDraftImage', image: 'B' });
+      expect(actor.getSnapshot().context.imageQueue.length).toBeGreaterThan(0);
+      actor.send({ type: 'clearDraft' });
+      expect(actor.getSnapshot().context.imageQueue).toEqual([]);
+      expect(actor.getSnapshot().context.draftImages).toEqual([]);
+      actor.stop();
+    });
+
+    it('should clear pending edit queue entries on clearEditDraft', () => {
+      const actor = createTestActor({
+        resize: async () =>
+          new Promise<string>(() => {
+            // Never resolves — keeps the edit resize pending so we can assert clear behavior.
+          }),
+      });
+      actor.start();
+      actor.send({ type: 'addEditDraftImage', image: 'A' });
+      actor.send({ type: 'addEditDraftImage', image: 'B' });
+      expect(actor.getSnapshot().context.imageQueue.length).toBeGreaterThan(0);
+      actor.send({ type: 'clearEditDraft' });
+      expect(actor.getSnapshot().context.imageQueue).toEqual([]);
+      expect(actor.getSnapshot().context.editDraftImages).toEqual([]);
+      actor.stop();
+    });
+
+    it('should NOT append directly when addDraftImage event fires (must go through queue + resize)', async () => {
+      const actor = createTestActor({
+        resize: async () =>
+          new Promise<string>(() => {
+            // Never resolves — guarantees the queue entry stays pending so we can assert no direct append.
+          }),
+      });
+      actor.start();
+      actor.send({ type: 'addDraftImage', image: 'RAW' });
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 10);
+      });
+      const snapshot = actor.getSnapshot();
+      expect(snapshot.context.draftImages).toEqual([]);
+      expect(snapshot.context.imageQueue.length).toBe(1);
+      actor.stop();
+    });
+
+    it('should stop the in-flight resize actor without surfacing unhandled rejection when the parent actor stops', () => {
+      const actor = createTestActor({
+        resize: async () =>
+          new Promise<string>(() => {
+            // Never resolves — confirms the parent stop tears down the in-flight resize cleanly.
+          }),
+      });
+      actor.start();
+      actor.send({ type: 'addDraftImage', image: 'RAW' });
+      expect(() => actor.stop()).not.toThrow();
     });
   });
 });

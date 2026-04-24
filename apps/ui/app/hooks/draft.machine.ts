@@ -4,13 +4,40 @@
  * XState machine for managing draft and edit state with debounced persistence.
  * Actors are provided via machine.provide() in the consumer (use-chat.tsx)
  * following the pattern from use-project.tsx.
+ *
+ * ## Image resize chokepoint (R1)
+ *
+ * The `imageProcessing` parallel sub-region is the SINGLE source of truth for
+ * chat-image resizing. `addDraftImage` and `addEditDraftImage` events accept
+ * RAW data URLs (any length) and enqueue them in `context.imageQueue`. The
+ * `resizing` state invokes `resizeImageActor` (provided via `.provide` from
+ * `apps/ui/app/hooks/resize-image.actor.ts`) FIFO. Success appends the resized
+ * URL to `draftImages` / `editDraftImages`. Failure shifts the queue and emits
+ * `imageResizeFailed`, observed by `<ActiveChatProvider>` to surface a toast.
+ *
+ * Callers MUST send raw URLs and MUST NOT pre-resize — pre-sized URLs would
+ * still pass through the queue but waste CPU and confuse the byte-ceiling
+ * contract. See `docs/research/chat-image-resize-coverage-audit.md` for the
+ * audit that motivated this design.
  */
 
-import { setup, assign } from 'xstate';
+import { setup, assign, emit } from 'xstate';
 import { fromSafeAsync } from '#lib/xstate.lib.js';
 import type { Chat, MyUIMessage } from '@taucad/chat';
 import type { ChatMode } from '@taucad/chat/constants';
 import { extractMimeTypeFromDataUrl } from '#utils/chat.utils.js';
+import { generatePrefixedId } from '@taucad/utils/id';
+import { idPrefix } from '@taucad/types/constants';
+
+// FIFO image-resize queue entry. The machine processes one entry at a time
+// via the `imageProcessing.resizing` state, preserving submission order.
+type ImageQueueTarget = 'main' | 'edit';
+type ImageQueueEntry = {
+  /** Stable id for trace/debug; not consumed by the UI. */
+  readonly id: string;
+  readonly raw: string;
+  readonly target: ImageQueueTarget;
+};
 
 // Context for draft state
 export type DraftMachineContext = {
@@ -25,6 +52,18 @@ export type DraftMachineContext = {
   activeEditMessageId?: string;
   editDraftText: string;
   editDraftImages: string[];
+  /** FIFO queue of raw image data URLs awaiting resize via `imageProcessing.resizing`. */
+  imageQueue: readonly ImageQueueEntry[];
+};
+
+/**
+ * Events the machine emits via `emit(...)`. Subscribed to by
+ * `<ActiveChatProvider>` (see `useDraftImageErrorToast`) so resize failures
+ * surface as a single global toast — no per-caller try/catch needed.
+ */
+export type DraftEmittedEvents = {
+  type: 'imageResizeFailed';
+  error: Error;
 };
 
 export type DraftMachineInput = {
@@ -98,7 +137,10 @@ type DraftMachineEvents =
   | { type: 'clearEditDraft' }
   | { type: 'clearMessageEdit'; messageId: string }
   // Flush pending state immediately (bypasses debounce, used on tab close)
-  | { type: 'flushNow' };
+  | { type: 'flushNow' }
+  // Emitted by `resizeImageActor` when a queued image finishes resizing.
+  // Internal — callers must not send this directly.
+  | { type: 'imageResized'; resized: string };
 
 // Placeholder actors - actual implementations provided via machine.provide()
 const persistDraftActor = fromSafeAsync<void, { chatId: string; draft: MyUIMessage }>(async () => {
@@ -115,6 +157,17 @@ const clearMessageEditActor = fromSafeAsync<void, { chatId: string; messageId: s
   throw new Error('clearMessageEditActor not provided');
 });
 
+/**
+ * Placeholder resize actor. The real implementation lives in
+ * `apps/ui/app/hooks/resize-image.actor.ts` and is provided via
+ * `.provide({ actors: { resizeImageActor } })` by both ownership sites
+ * (`EphemeralActiveChatProvider`, `ChatSessionStore`). Tests override with
+ * a deterministic fake.
+ */
+const resizeImageActor = fromSafeAsync<{ type: 'imageResized'; resized: string }, { image: string }>(async () => {
+  throw new Error('resizeImageActor not provided');
+});
+
 export const draftMachine = setup({
   types: {
     // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate types
@@ -123,15 +176,19 @@ export const draftMachine = setup({
     events: {} as DraftMachineEvents,
     // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate types
     input: {} as DraftMachineInput,
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate types
+    emitted: {} as DraftEmittedEvents,
   },
   actors: {
     persistDraftActor,
     persistEditDraftActor,
     clearMessageEditActor,
+    resizeImageActor,
   },
   guards: {
     isValidChatId: ({ context }) => Boolean(context.chatId?.startsWith('chat_')),
     canPersist: ({ context }) => Boolean(context.chatId?.startsWith('chat_')),
+    hasQueuedImage: ({ context }) => context.imageQueue.length > 0,
   },
   delays: {
     saveDebounce: 200,
@@ -149,6 +206,7 @@ export const draftMachine = setup({
       activeEditMessageId: undefined,
       editDraftText: '',
       editDraftImages: [],
+      imageQueue: [],
     };
   },
   type: 'parallel',
@@ -194,12 +252,38 @@ export const draftMachine = setup({
         },
         addDraftImage: {
           actions: assign({
-            draftImages: ({ context, event }) => [...context.draftImages, event.image],
+            imageQueue: ({ context, event }) => [
+              ...context.imageQueue,
+              {
+                id: generatePrefixedId(idPrefix.log),
+                raw: event.image,
+                target: 'main' as ImageQueueTarget,
+              },
+            ],
           }),
         },
         removeDraftImage: {
           actions: assign({
             draftImages: ({ context, event }) => context.draftImages.filter((_, index) => index !== event.index),
+          }),
+        },
+        imageResized: {
+          actions: assign(({ context, event }) => {
+            const head = context.imageQueue[0];
+            if (!head) {
+              return {};
+            }
+            const remaining = context.imageQueue.slice(1);
+            if (head.target === 'main') {
+              return {
+                draftImages: [...context.draftImages, event.resized],
+                imageQueue: remaining,
+              };
+            }
+            return {
+              editDraftImages: [...context.editDraftImages, event.resized],
+              imageQueue: remaining,
+            };
           }),
         },
         setDraftToolChoice: {
@@ -217,6 +301,9 @@ export const draftMachine = setup({
             draftText: '',
             draftImages: [],
             draftToolChoice: 'auto',
+            // Purge any pending main-target resizes so a cleared composer
+            // doesn't sprout images from in-flight uploads.
+            imageQueue: ({ context }) => context.imageQueue.filter((entry) => entry.target !== 'main'),
           }),
         },
         loadDraftFromMessage: {
@@ -300,7 +387,14 @@ export const draftMachine = setup({
         },
         addEditDraftImage: {
           actions: assign({
-            editDraftImages: ({ context, event }) => [...context.editDraftImages, event.image],
+            imageQueue: ({ context, event }) => [
+              ...context.imageQueue,
+              {
+                id: generatePrefixedId(idPrefix.log),
+                raw: event.image,
+                target: 'edit' as ImageQueueTarget,
+              },
+            ],
           }),
         },
         removeEditDraftImage: {
@@ -313,6 +407,7 @@ export const draftMachine = setup({
           actions: assign({
             editDraftText: '',
             editDraftImages: [],
+            imageQueue: ({ context }) => context.imageQueue.filter((entry) => entry.target !== 'edit'),
           }),
         },
         clearMessageEdit: {
@@ -333,7 +428,9 @@ export const draftMachine = setup({
         idle: {
           on: {
             setDraftText: 'pending',
-            addDraftImage: 'pending',
+            // Persist after the resize completes (when draftImages actually changes).
+            // `addDraftImage` no longer mutates visible state; it only enqueues.
+            imageResized: 'pending',
             removeDraftImage: 'pending',
             // Handle draft clearing with immediate persistence
             clearDraft: {
@@ -359,7 +456,7 @@ export const draftMachine = setup({
               target: 'pending',
               reenter: true,
             },
-            addDraftImage: {
+            imageResized: {
               target: 'pending',
               reenter: true,
             },
@@ -392,7 +489,7 @@ export const draftMachine = setup({
           on: {
             // Queue new changes while persisting
             setDraftText: 'pending',
-            addDraftImage: 'pending',
+            imageResized: 'pending',
             removeDraftImage: 'pending',
             // Cancel stale in-flight persist and re-persist with empty draft
             clearDraft: {
@@ -410,7 +507,8 @@ export const draftMachine = setup({
         idle: {
           on: {
             setEditDraftText: 'pending',
-            addEditDraftImage: 'pending',
+            // Persist after the resize completes; addEditDraftImage only enqueues.
+            imageResized: 'pending',
             removeEditDraftImage: 'pending',
           },
         },
@@ -431,7 +529,7 @@ export const draftMachine = setup({
               target: 'pending',
               reenter: true,
             },
-            addEditDraftImage: {
+            imageResized: {
               target: 'pending',
               reenter: true,
             },
@@ -460,8 +558,59 @@ export const draftMachine = setup({
           on: {
             // Queue new changes while persisting
             setEditDraftText: 'pending',
-            addEditDraftImage: 'pending',
+            imageResized: 'pending',
             removeEditDraftImage: 'pending',
+          },
+        },
+      },
+    },
+    /**
+     * Image-resize FIFO chokepoint (R1).
+     *
+     * `addDraftImage` / `addEditDraftImage` events enqueue raw URLs into
+     * `context.imageQueue`. While a queue entry exists, this region invokes
+     * `resizeImageActor` against the queue head. The actor returns an
+     * `imageResized` event consumed by the `events` region (which appends the
+     * resized URL to the appropriate draft images array and shifts the queue)
+     * and by the `inputSaving` / `editSaving` regions (which trigger debounced
+     * persistence).
+     *
+     * Only one image is processed at a time to preserve insertion order under
+     * adversarial actor latency. On failure we shift the queue defensively and
+     * `emit('imageResizeFailed')` so a single global toast subscriber renders
+     * an error — failures never block subsequent images.
+     */
+    imageProcessing: {
+      initial: 'idle',
+      states: {
+        idle: {
+          always: {
+            target: 'resizing',
+            guard: 'hasQueuedImage',
+          },
+        },
+        resizing: {
+          invoke: {
+            src: 'resizeImageActor',
+            input: ({ context }) => ({
+              image: context.imageQueue[0]!.raw,
+            }),
+            onDone: 'idle',
+            onError: {
+              target: 'idle',
+              actions: [
+                emit(({ event }): DraftEmittedEvents => {
+                  const error =
+                    event.error instanceof Error
+                      ? event.error
+                      : new Error(typeof event.error === 'string' ? event.error : 'Image resize failed');
+                  return { type: 'imageResizeFailed', error };
+                }),
+                assign({
+                  imageQueue: ({ context }) => context.imageQueue.slice(1),
+                }),
+              ],
+            },
           },
         },
       },

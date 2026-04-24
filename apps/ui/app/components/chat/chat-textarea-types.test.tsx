@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { tauEditorPanelDragMime, tauFileDragMime, tauViewerPanelDragMime } from '@taucad/types/constants';
 import type { ResolvedModel } from '#hooks/use-models.js';
@@ -32,17 +32,19 @@ const mockUseChatSelector = vi.fn((selector: (state: unknown) => unknown) =>
   }),
 );
 
+const chatActionsMock = {
+  stop: vi.fn<() => void>(),
+  setDraftText: vi.fn<(text: string) => void>(),
+  addDraftImage: vi.fn<(image: string) => void>(),
+  removeDraftImage: vi.fn<(index: number) => void>(),
+  setDraftToolChoice: vi.fn<(choice: string | string[]) => void>(),
+  setEditDraftText: vi.fn<(text: string) => void>(),
+  addEditDraftImage: vi.fn<(image: string) => void>(),
+  removeEditDraftImage: vi.fn<(index: number) => void>(),
+};
+
 vi.mock('#hooks/use-chat.js', () => ({
-  useChatActions: () => ({
-    stop: vi.fn(),
-    setDraftText: vi.fn(),
-    addDraftImage: vi.fn(),
-    removeDraftImage: vi.fn(),
-    setDraftToolChoice: vi.fn(),
-    setEditDraftText: vi.fn(),
-    addEditDraftImage: vi.fn(),
-    removeEditDraftImage: vi.fn(),
-  }),
+  useChatActions: () => chatActionsMock,
   useChatSelector: (selector: (state: unknown) => unknown) => mockUseChatSelector(selector),
 }));
 
@@ -50,8 +52,10 @@ vi.mock('#hooks/use-keyboard.js', () => ({
   useKeybinding: () => ({ formattedKeyCombination: 'Ctrl+Backspace' }),
 }));
 
+const toastErrorMock = vi.fn();
+
 vi.mock('#components/ui/sonner.js', () => ({
-  toast: { error: vi.fn() },
+  toast: { error: toastErrorMock },
 }));
 
 const { useChatTextareaLogic } = await import('#components/chat/chat-textarea-types.js');
@@ -210,7 +214,7 @@ describe('useChatTextareaLogic — dragKind detection + drop routing', () => {
     );
 
     act(() => {
-      result.current.handleDrop(
+      void result.current.handleDrop(
         buildDragEvent({
           types: [tauViewerPanelDragMime],
           data: { [tauViewerPanelDragMime]: JSON.stringify({ entryFile: 'models/part.scad' }) },
@@ -235,7 +239,7 @@ describe('useChatTextareaLogic — dragKind detection + drop routing', () => {
     );
 
     act(() => {
-      result.current.handleDrop(
+      void result.current.handleDrop(
         buildDragEvent({
           types: [tauEditorPanelDragMime],
           data: { [tauEditorPanelDragMime]: JSON.stringify({ filePath: 'lib/head.scad' }) },
@@ -258,7 +262,7 @@ describe('useChatTextareaLogic — dragKind detection + drop routing', () => {
     );
 
     act(() => {
-      result.current.handleDrop(
+      void result.current.handleDrop(
         buildDragEvent({
           types: [tauFileDragMime],
           data: { [tauFileDragMime]: JSON.stringify(['a/one.ts', 'b/two.ts']) },
@@ -282,10 +286,166 @@ describe('useChatTextareaLogic — dragKind detection + drop routing', () => {
     );
 
     act(() => {
-      result.current.handleDrop(buildDragEvent({ types: ['Files'], files: [] }));
+      void result.current.handleDrop(buildDragEvent({ types: ['Files'], files: [] }));
     });
 
     expect(onViewerScreenshotDrop).not.toHaveBeenCalled();
     expect(onAddContextChips).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Multi-image OS drag-drop integration (R1 / Task 7.4b in the chat-image-resize
+ * chokepoint plan). Locks the call sequence and arguments observable from the
+ * hook's perspective: each dropped image is read sequentially and dispatched
+ * synchronously into `addDraftImage` with the **raw** (un-resized) data URL.
+ * The downstream `draftMachine.imageProcessing` chokepoint is responsible for
+ * resizing — these tests make sure the hook never re-introduces an inline
+ * `resizeImageForChat` step that would silently break per-file ordering.
+ */
+describe('useChatTextareaLogic — multi-image OS drag-drop dispatch (R1)', () => {
+  const buildDataTransfer = (files: readonly File[]): DataTransfer =>
+    ({
+      types: ['Files'],
+      files,
+      getData: () => '',
+    }) as unknown as DataTransfer;
+
+  const buildDragEvent = (files: readonly File[]): React.DragEvent =>
+    ({
+      preventDefault: vi.fn(),
+      dataTransfer: buildDataTransfer(files),
+    }) as unknown as React.DragEvent;
+
+  const makeFile = (name: string, type = 'image/png'): File => {
+    return Object.assign(new File([new Blob(['stub'])], name, { type }), { __taggedAs: name });
+  };
+
+  let originalFileReader: typeof FileReader;
+  let readerOutcomes: ReadonlyMap<string, 'ok' | 'error'>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    chatActionsMock.addDraftImage.mockReset();
+    chatActionsMock.addEditDraftImage.mockReset();
+    toastErrorMock.mockReset();
+    mockActiveModel = stableModel;
+    originalFileReader = globalThis.FileReader;
+    readerOutcomes = new Map<string, 'ok' | 'error'>();
+    class StubReader {
+      public result: string | undefined = undefined;
+      private readonly listeners = new Map<string, Array<(event: unknown) => void>>();
+      public addEventListener(name: string, listener: (event: unknown) => void) {
+        const list = this.listeners.get(name) ?? [];
+        list.push(listener);
+        this.listeners.set(name, list);
+      }
+      // oxlint-disable-next-line no-empty-function -- jsdom FileReader stub satisfies interface but has no teardown semantics
+      public removeEventListener(): void {}
+      public readAsDataURL(file: File) {
+        const { name } = file;
+        const outcome = readerOutcomes.get(name) ?? 'ok';
+        queueMicrotask(() => {
+          if (outcome === 'error') {
+            for (const listener of this.listeners.get('error') ?? []) {
+              listener(new Error(`reader-fail-${name}`));
+            }
+            return;
+          }
+          this.result = `data:image/png;base64,RAW_${name}`;
+          for (const listener of this.listeners.get('load') ?? []) {
+            listener({ target: { result: this.result } });
+          }
+        });
+      }
+    }
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- jsdom FileReader stub
+    globalThis.FileReader = StubReader as unknown as typeof FileReader;
+  });
+
+  afterEach(() => {
+    globalThis.FileReader = originalFileReader;
+  });
+
+  it('should dispatch addDraftImage once per dropped image, in drop order, with raw data URLs', async () => {
+    const { result } = renderHook(() =>
+      useChatTextareaLogic({ ref: undefined, onSubmit: vi.fn(async () => undefined) }),
+    );
+
+    const files = ['A.png', 'B.png', 'C.png', 'D.png', 'E.png'].map((n) => makeFile(n));
+
+    await act(async () => {
+      await result.current.handleDrop(buildDragEvent(files));
+    });
+
+    expect(chatActionsMock.addDraftImage).toHaveBeenCalledTimes(5);
+    const args = chatActionsMock.addDraftImage.mock.calls.map((c) => c[0]);
+    expect(args).toEqual([
+      'data:image/png;base64,RAW_A.png',
+      'data:image/png;base64,RAW_B.png',
+      'data:image/png;base64,RAW_C.png',
+      'data:image/png;base64,RAW_D.png',
+      'data:image/png;base64,RAW_E.png',
+    ]);
+    expect(toastErrorMock).not.toHaveBeenCalled();
+  });
+
+  it('should continue dispatching subsequent images when one FileReader fails mid-batch', async () => {
+    readerOutcomes = new Map<string, 'ok' | 'error'>([['B.png', 'error']]);
+
+    const { result } = renderHook(() =>
+      useChatTextareaLogic({ ref: undefined, onSubmit: vi.fn(async () => undefined) }),
+    );
+
+    const files = ['A.png', 'B.png', 'C.png', 'D.png', 'E.png'].map((n) => makeFile(n));
+
+    await act(async () => {
+      await result.current.handleDrop(buildDragEvent(files));
+    });
+
+    expect(chatActionsMock.addDraftImage).toHaveBeenCalledTimes(4);
+    const args = chatActionsMock.addDraftImage.mock.calls.map((c) => c[0]);
+    expect(args).toEqual([
+      'data:image/png;base64,RAW_A.png',
+      'data:image/png;base64,RAW_C.png',
+      'data:image/png;base64,RAW_D.png',
+      'data:image/png;base64,RAW_E.png',
+    ]);
+    expect(toastErrorMock).toHaveBeenCalledTimes(1);
+    expect(toastErrorMock).toHaveBeenCalledWith('Failed to read image');
+  });
+
+  it("should toast 'Only images are supported' for non-image files in a mixed batch but still dispatch the images", async () => {
+    const { result } = renderHook(() =>
+      useChatTextareaLogic({ ref: undefined, onSubmit: vi.fn(async () => undefined) }),
+    );
+
+    const files = [makeFile('A.png'), makeFile('doc.pdf', 'application/pdf'), makeFile('C.png')];
+
+    await act(async () => {
+      await result.current.handleDrop(buildDragEvent(files));
+    });
+
+    expect(chatActionsMock.addDraftImage).toHaveBeenCalledTimes(2);
+    const args = chatActionsMock.addDraftImage.mock.calls.map((c) => c[0]);
+    expect(args).toEqual(['data:image/png;base64,RAW_A.png', 'data:image/png;base64,RAW_C.png']);
+    expect(toastErrorMock).toHaveBeenCalledTimes(1);
+    expect(toastErrorMock).toHaveBeenCalledWith('Only images are supported');
+  });
+
+  it('should never pre-resize: dispatched URLs are exactly the FileReader-returned data URLs (no shrink)', async () => {
+    const { result } = renderHook(() =>
+      useChatTextareaLogic({ ref: undefined, onSubmit: vi.fn(async () => undefined) }),
+    );
+
+    const files = [makeFile('A.png')];
+
+    await act(async () => {
+      await result.current.handleDrop(buildDragEvent(files));
+    });
+
+    const dispatched = chatActionsMock.addDraftImage.mock.calls[0]?.[0];
+    expect(dispatched).toBe('data:image/png;base64,RAW_A.png');
+    expect(dispatched.startsWith('data:image/png;base64,RAW_')).toBe(true);
   });
 });
