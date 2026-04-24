@@ -31,6 +31,7 @@ export const rpcClientErrorCodeSchema = zod.enum([
   'PERMISSION_DENIED',
   'IO_ERROR',
   'PARSE_ERROR',
+  'RENDER_TIMEOUT',
   'UNKNOWN',
   'UNKNOWN_GEOMETRY_UNIT',
 ]);
