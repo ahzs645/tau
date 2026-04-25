@@ -131,10 +131,7 @@ describe('convertRawIssuesToKernelIssues', () => {
 
 describe('enrichIssueLocation', () => {
   it('should add fallback location when missing', () => {
-    // oxlint-disable-next-line tau-lint/no-literal-const-assertion -- these are necessary
-    const issues = [
-      { message: 'oops', code: 'RUNTIME' as const, type: 'runtime' as const, severity: 'error' as const },
-    ];
+    const issues: KernelIssue[] = [{ message: 'oops', code: 'RUNTIME', type: 'runtime', severity: 'error' }];
     const result = enrichIssueLocation(issues, 'fallback.ts');
     expect(result[0]!.location).toEqual({
       fileName: 'fallback.ts',
