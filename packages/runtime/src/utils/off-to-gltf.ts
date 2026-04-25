@@ -9,6 +9,8 @@ import { transformVerticesGltf, transformVerticesZup } from '#framework/common.j
  * @param format - output format: `'glb'` for binary glTF, `'gltf'` for JSON glTF
  * @param coordinateSystem - output coordinate convention: `'y-up'` (glTF spec default) or `'z-up'`
  * @returns the encoded glTF/GLB as a byte array
+ *
+ * @public
  */
 export async function convertOffToGltf(
   offContent: string,
