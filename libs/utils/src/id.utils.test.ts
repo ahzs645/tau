@@ -9,6 +9,11 @@ describe('id.utils', () => {
       expect(id).toMatch(/^msg_/);
     });
 
+    it('should generate an ID with the cmd prefix for transport commands', () => {
+      const id = generatePrefixedId(idPrefix.command);
+      expect(id).toMatch(/^cmd_[\dA-Za-z]{21}$/);
+    });
+
     it('should generate an ID with the expected format', () => {
       const id = generatePrefixedId(idPrefix.chat);
       expect(id).toMatch(/^chat_[\dA-Za-z]{21}$/);

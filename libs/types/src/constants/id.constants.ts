@@ -37,6 +37,12 @@ export const idPrefix = {
    */
   request: 'req',
   /**
+   * A runtime transport command ID. Correlates `RuntimeCommand` requests with
+   * their matching `RuntimeResponse` so multiple in-flight commands on a
+   * single channel can settle independently.
+   */
+  command: 'cmd',
+  /**
    * An account ID.
    */
   account: 'acct',
