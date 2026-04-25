@@ -5,6 +5,9 @@ let counter = 0;
 /**
  * Strip inline source map comments to prevent Node.js `--enable-source-maps`
  * from applying them before our own `parseStackTrace` has a chance to.
+ *
+ * @param code - bundled module source potentially containing an inline `//# sourceMappingURL=data:` comment
+ * @returns the input source with the inline source-map comment removed
  */
 function stripInlineSourceMap(code: string): string {
   return code.replace(/\/\/# sourceMappingURL=data:[^\n]+$/m, '');
