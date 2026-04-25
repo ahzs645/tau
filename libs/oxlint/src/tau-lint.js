@@ -22,6 +22,7 @@ import { noUselessCatchUnknownRule } from './rules/no-useless-catch-unknown.js';
 import { noHardcodedColorRule } from './rules/no-hardcoded-color.js';
 import { noTimeUnitSuffixRule } from './rules/no-time-unit-suffix.js';
 import { noBareTimeIdentifierRule } from './rules/no-bare-time-identifier.js';
+import { noAsyncIifeRule } from './rules/no-async-iife.js';
 
 /** @type {Plugin} */
 const plugin = {
@@ -45,6 +46,7 @@ const plugin = {
     'no-hardcoded-color': noHardcodedColorRule,
     'no-time-unit-suffix': noTimeUnitSuffixRule,
     'no-bare-time-identifier': noBareTimeIdentifierRule,
+    'no-async-iife': noAsyncIifeRule,
   },
 };
 

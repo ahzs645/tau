@@ -93,6 +93,7 @@
     "tau-lint/no-hardcoded-color": "off",
     "tau-lint/no-time-unit-suffix": "error",
     "tau-lint/no-bare-time-identifier": "error",
+    "tau-lint/no-async-iife": "error",
     "unicorn/no-accessor-recursion": "error",
     "unicorn/no-anonymous-default-export": "error",
     "unicorn/no-array-callback-reference": "error",
@@ -454,7 +455,7 @@
       "error",
       "always",
       {
-        "ignorePattern": "pragma|ignore|prettier-ignore|webpack\\w+:|c8|type-coverage:",
+        "ignorePattern": "pragma|ignore|prettier-ignore|webpack\\w+:|c8|type-coverage:|async-iife:",
         "ignoreInlineComments": true,
         "ignoreConsecutiveComments": true
       }
