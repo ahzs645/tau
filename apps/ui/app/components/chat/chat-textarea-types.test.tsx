@@ -446,6 +446,6 @@ describe('useChatTextareaLogic — multi-image OS drag-drop dispatch', () => {
 
     const dispatched = chatActionsMock.addDraftImage.mock.calls[0]?.[0];
     expect(dispatched).toBe('data:image/png;base64,RAW_A.png');
-    expect(dispatched.startsWith('data:image/png;base64,RAW_')).toBe(true);
+    expect(dispatched?.startsWith('data:image/png;base64,RAW_')).toBe(true);
   });
 });

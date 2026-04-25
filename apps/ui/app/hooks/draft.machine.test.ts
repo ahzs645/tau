@@ -533,8 +533,8 @@ describe('draftMachine', () => {
           throw new Error('Failed to load image');
         },
       });
-      const emitSpy = vi.fn<[{ type: 'imageResizeFailed'; error: Error }], void>();
-      actor.on('imageResizeFailed', (event) => emitSpy(event));
+      const emitSpy = vi.fn<(event: { type: 'imageResizeFailed'; error: Error }) => void>();
+      actor.on('imageResizeFailed', emitSpy);
       actor.start();
       actor.send({ type: 'addDraftImage', image: 'BAD' });
       await waitFor(actor, (snap) => snap.context.imageQueue.length === 0);
