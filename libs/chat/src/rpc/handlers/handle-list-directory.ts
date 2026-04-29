@@ -13,7 +13,7 @@ export async function handleListDirectory(
       (entry) =>
         ({
           name: entry.name,
-          type: entry.type === 'directory' ? 'dir' : 'file',
+          type: entry.type,
           size: entry.size,
           ...(entry.modifiedAt ? { modifiedAt: entry.modifiedAt } : {}),
         }) as const,

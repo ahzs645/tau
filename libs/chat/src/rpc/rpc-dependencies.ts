@@ -4,7 +4,7 @@
  * These interfaces decouple the RPC handler logic from its execution
  * environment, enabling the same handlers to run in:
  * - Browser (via fileManager, XState actors, WebGL)
- * - Node.js headless (via RuntimeFileSystem, runtime worker)
+ * - Node.js headless (via enhanced RuntimeFileSystem in the worker, runtime kernel)
  * - Workers or other JS runtimes
  */
 import type {
@@ -17,7 +17,7 @@ import type {
 
 /**
  * Abstract filesystem for RPC handlers.
- * Implementations can wrap browser fileManager, RuntimeFileSystem (fromMemoryFS/fromNodeFS), etc.
+ * Implementations can wrap browser fileManager, `fromMemoryFS()` / `fromNodeFS()` (which yield a `RuntimeFileSystemHandle`), etc.
  * @public
  */
 export type RpcFileSystem = {
@@ -25,9 +25,7 @@ export type RpcFileSystem = {
   writeFile(path: string, content: string): Promise<void>;
   writeBinaryFile(path: string, data: Uint8Array<ArrayBuffer>): Promise<void>;
   deleteFile(path: string): Promise<void>;
-  readdir(
-    path: string,
-  ): Promise<Array<{ name: string; type: 'file' | 'directory'; size: number; modifiedAt?: string }>>;
+  readdir(path: string): Promise<Array<{ name: string; type: 'file' | 'dir'; size: number; modifiedAt?: string }>>;
   exists(path: string): Promise<boolean>;
   appendFile(path: string, content: string): Promise<void>;
   editFile(path: string, oldString: string, newString: string, replaceAll?: boolean): Promise<{ occurrences: number }>;

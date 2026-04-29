@@ -8,7 +8,7 @@ describe('handleListDirectory', () => {
     const fileSystem = mock<RpcFileSystem>();
     fileSystem.readdir.mockResolvedValue([
       { name: 'index.ts', type: 'file', size: 200, modifiedAt: '2026-01-10T08:00:00.000Z' },
-      { name: 'utils', type: 'directory', size: 0, modifiedAt: '2026-02-01T12:00:00.000Z' },
+      { name: 'utils', type: 'dir', size: 0, modifiedAt: '2026-02-01T12:00:00.000Z' },
     ]);
 
     const result = await handleListDirectory({ path: 'src' }, fileSystem);

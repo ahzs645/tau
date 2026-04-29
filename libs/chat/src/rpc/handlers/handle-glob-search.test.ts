@@ -43,7 +43,7 @@ describe('handleGlobSearch', () => {
     const fileSystem = mock<RpcFileSystem>();
     fileSystem.readdir
       .mockResolvedValueOnce([
-        { name: 'src', type: 'directory', size: 0 },
+        { name: 'src', type: 'dir', size: 0 },
         { name: 'package.json', type: 'file', size: 300 },
       ])
       .mockResolvedValueOnce([{ name: 'app.ts', type: 'file', size: 150, modifiedAt: '2026-03-01T00:00:00.000Z' }]);
