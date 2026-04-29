@@ -1,6 +1,6 @@
 ---
 title: Filesystem API
-description: Filesystem constructors, bridge utilities, and RuntimeFileSystem types for kernel I/O.
+description: Filesystem constructors, bridge utilities, and types for connect-time handles plus kernel I/O.
 icon: lucide:folder
 ---
 
@@ -13,6 +13,8 @@ Use the filesystem API when configuring how kernels read and write project files
 <auto-type-table path='./props/filesystem.ts' name='RuntimeFileSystemBase' />
 
 <auto-type-table path='./props/filesystem.ts' name='RuntimeFileSystem' />
+
+<auto-type-table path='./props/filesystem.ts' name='RuntimeFileSystemHandle' />
 
 <auto-type-table path='./props/filesystem.ts' name='FsLike' />
 
@@ -85,18 +87,20 @@ const client = createRuntimeClient({
 
 ### Filesystem Bridge
 
-```typescript @ts-nocheck
+```typescript
 import { createBridgePort } from '@taucad/runtime/filesystem';
 import { fromNodeFS } from '@taucad/runtime/filesystem/node';
 
 const fileSystem = fromNodeFS('/path/to/project');
 const { port, dispose } = createBridgePort(fileSystem);
 
-// Transfer port to a worker for remote filesystem access
+const worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
 worker.postMessage({ fsPort: port }, [port]);
 
-// When done, release resources
-dispose();
+const cleanup = () => {
+  worker.terminate();
+  dispose();
+};
 ```
 
 ## Related
@@ -104,4 +108,4 @@ dispose();
 - [Set Up the Filesystem](../guides/filesystem-setup) -- Practical guide to filesystem configuration
 - [Worker Model](../concepts/worker-model) -- How the filesystem is bridged to the worker
 - [API: Client](./client) -- `createRuntimeClient` filesystem option
-- [API: Types](./types) -- `RuntimeFileSystemBase`, `RuntimeFileSystem`
+- [API: Types](./types) -- `RuntimeFileSystemBase`, `RuntimeFileSystem` (framework view), `RuntimeFileSystemHandle` (connect-time discriminant)

@@ -6,7 +6,7 @@ icon: lucide:triangle-alert
 
 # Handle Errors
 
-Kernel operations return a discriminated union `KernelResult<T>`. Check the `success` field to narrow results, and inspect `KernelIssue` for messages, severity, location, and stack frames. Render cancellation errors (`RenderAbortedError`, `RenderSupersededError`) signal when renders are interrupted.
+Kernel operations return a discriminated union `KernelResult<T>`. Check the `success` field to narrow results, and inspect `KernelIssue` for messages, severity, location, and stack frames. Each `KernelIssue` carries a stable `code: KernelIssueCode` field — branch on it instead of `RegExp`-matching `issue.message`. Lifecycle errors (`RuntimeNotConnectedError`, `RuntimeConnectionError`, `RuntimeReconnectError`, `RuntimeTerminatedError`) and render errors (`RenderTimeoutError`, `RenderAbortedError`, `NoRenderOutcomeError`) signal exceptional flow that callers must handle as Promise rejections — every class exposes a stable `code` getter that is the canonical branch key.
 
 ## Prerequisites
 
@@ -15,7 +15,7 @@ Kernel operations return a discriminated union `KernelResult<T>`. Check the `suc
 
 ## Goal
 
-Handle success and error results from `render`, `export`, and `getParameters` using the `success` discriminant and the `KernelIssue` structure. Handle render cancellation scenarios in autonomous rendering mode.
+Handle success and error results from `openFile`, `export`, and `getParameters` using the `success` discriminant and the `KernelIssue` structure. Handle render supersession via the `RenderOutcome` discriminated union, and surface typed lifecycle/render errors that arrive via Promise rejection.
 
 ## Steps
 
@@ -23,48 +23,50 @@ Handle success and error results from `render`, `export`, and `getParameters` us
 
 `KernelResult<T>` is a union of two shapes:
 
-```typescript @ts-nocheck
-type KernelSuccessResult<T> = {
+```typescript
+import type { KernelIssue } from '@taucad/runtime';
+
+export type KernelSuccessResult<T> = {
   success: true;
   data: T;
   issues: KernelIssue[];
 };
 
-type KernelErrorResult = {
+export type KernelErrorResult = {
   success: false;
   issues: KernelIssue[];
 };
 
-type KernelResult<T> = KernelSuccessResult<T> | KernelErrorResult;
+export type KernelResult<T> = KernelSuccessResult<T> | KernelErrorResult;
 ```
 
 The `success` field is the discriminant. When `success` is `true`, `data` is present. When `success` is `false`, only `issues` is present.
 
 ### 2. Narrow Results with the `success` Field
 
-Check `result.success` to narrow the discriminated union. TypeScript automatically infers the correct type in each branch:
+The discriminated `KernelResult` shape is what `client.export(format, input)`
+resolves with -- the `success` branch narrows `result.data` for you:
 
 ```typescript
-import { createRuntimeClient, fromMemoryFS } from '@taucad/runtime';
-import { replicad } from '@taucad/runtime/kernels';
-import { esbuild } from '@taucad/runtime/bundler';
+import { createRuntimeClient, presets } from '@taucad/runtime';
 
-const client = createRuntimeClient({
-  kernels: [replicad()],
-  bundlers: [esbuild()],
-  fileSystem: fromMemoryFS(),
-});
+const client = createRuntimeClient(presets.all());
 
-const result = await client.render({
+const result = await client.export('glb', {
   code: { 'main.ts': `export default function main() { return null; }` },
+  file: 'main.ts',
 });
 
 if (result.success) {
-  console.log(`Rendered ${result.data.length} geometries`);
+  console.log(`Exported ${result.data.bytes.byteLength} bytes`);
 } else {
-  console.error('Render failed:', result.issues.map((i) => i.message).join('; '));
+  console.error('Export failed:', result.issues.map((i) => i.message).join('; '));
 }
 ```
+
+For UI viewers driving the autonomous render loop, the same `KernelResult`
+shape arrives over the `geometry` event -- see [Live Rendering](./live-rendering)
+for the subscription pattern.
 
 ### 3. Inspect KernelIssue Structure
 
@@ -75,6 +77,7 @@ import type { KernelIssue } from '@taucad/runtime';
 
 const issue: KernelIssue = {
   message: 'Cannot read property "extrude" of undefined',
+  code: 'RUNTIME',
   severity: 'error',
   type: 'runtime',
   location: {
@@ -105,20 +108,30 @@ const issue: KernelIssue = {
 | `stack`       | `string?`                                                             | Raw stack trace                                                  |
 | `stackFrames` | `KernelStackFrame[]?`                                                 | Parsed frames with `context` (user, library, framework, runtime) |
 
-### 4. Handle Errors in Render Calls
+### 4. Handle Errors in Export Calls
 
-Pattern for `client.render`:
+`client.export` resolves with a `KernelResult` whose `success` discriminant
+narrows `result.data`. Iterate `issues` on the failure branch to surface
+structured error information back to your UI or CLI:
 
-```typescript @ts-nocheck
-const result = await client.render({ code: { 'main.ts': userCode } });
+```typescript
+import { createRuntimeClient, presets } from '@taucad/runtime';
+
+const userCode = `
+  import { drawCircle } from 'replicad';
+  export default () => drawCircle(10).sketchOnPlane('XY').extrude(5);
+`;
+
+const client = createRuntimeClient(presets.all());
+const result = await client.export('glb', {
+  code: { 'main.ts': userCode },
+  file: 'main.ts',
+});
 
 if (result.success) {
-  for (const geom of result.data) {
-    // Use geom.blob, geom.format
-  }
-  if (result.issues.length > 0) {
-    console.warn('Warnings:', result.issues);
-  }
+  const { bytes, name, mimeType } = result.data;
+  const blob = new Blob([bytes], { type: mimeType });
+  console.log(`Exported: ${name} (${blob.size} bytes)`);
 } else {
   for (const issue of result.issues) {
     console.error(`[${issue.severity}] ${issue.message}`);
@@ -129,75 +142,103 @@ if (result.success) {
 }
 ```
 
-### 5. Handle Errors in Export Calls
+### 5. Handle Errors over the geometry Event Channel
 
-The same pattern applies to `client.export`:
+For autonomous-loop UIs, the same `KernelResult` shape arrives on the
+`geometry` event. Subscribe with `client.on('geometry', handler)` and
+discriminate on `result.success` -- see [Live Rendering](./live-rendering) for
+the full subscription lifecycle.
 
-```typescript @ts-nocheck
-const result = await client.export('glb');
+### 6. Handle Supersession via RenderOutcome
 
-if (result.success) {
-  const { bytes, name, mimeType } = result.data;
-  const blob = new Blob([bytes], { type: mimeType });
-  console.log(`Exported: ${name} (${blob.size} bytes)`);
+`openFile`, `updateParameters`, and `setOptions` return a `RenderOutcome`
+discriminated union. Supersession is **not** an exception — it is a benign
+outcome that indicates a newer call took ownership of the worker before this
+one settled. The newer call's settlement carries the authoritative geometry.
+
+```typescript
+import { createRuntimeClient, presets } from '@taucad/runtime';
+
+const code =
+  "import { drawCircle } from 'replicad';\nexport default () => drawCircle(10).sketchOnPlane('XY').extrude(5);";
+
+const client = createRuntimeClient(presets.all());
+const settlement = await client.openFile({ code: { 'main.ts': code }, file: 'main.ts' });
+
+if (settlement.superseded) {
+  // Benign — no error; the latest geometry will arrive over `'geometry'`.
+  console.log('Superseded by a newer call');
 } else {
-  console.error('Export failed:', result.issues);
+  // settlement.geometry is HashedGeometryResult — typed and narrowed.
+  console.log(`Settled with ${settlement.geometry.success ? 'data' : 'issues'}`);
 }
 ```
 
-### 6. Handle Render Cancellation Errors
+Real failures still throw via Promise rejection. Use the realm-safe type
+guards rather than `instanceof` for cross-realm checks:
 
-When using `client.render()`, a render can be cancelled if a newer render is requested before the current one completes. Two error types signal cancellation:
+| Error                          | Trigger                                                                                                                                                                          | `code`                          | Type guard                       |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------- | -------------------------------- |
+| `RuntimeNotConnectedError`     | `FileInput` command issued before `connect()` resolved.                                                                                                                          | `'RUNTIME_NOT_CONNECTED'`       | `isRuntimeNotConnectedError`     |
+| `RuntimeConnectionError`       | Transport handshake failed. Carries `cause: 'protocol-mismatch' \| 'transport-failure' \| 'invalid-options' \| 'aborted'`.                                                       | `'RUNTIME_CONNECTION'`          | `isRuntimeConnectionError`       |
+| `RuntimeReconnectError`        | `connect()` called a second time with **different** options. Carries `causeKind: 'fileSystem-mismatch' \| 'filePool-mismatch'`. Same options are idempotent.                     | `'RUNTIME_RECONNECT'`           | `isRuntimeReconnectError`        |
+| `RuntimeTerminatedError`       | Command issued after `terminate()`, or in-flight Promise rejected because `terminate()` happened mid-flight. Carries `cause: 'explicit' \| 'transport-closed' \| 'fatal-error'`. | `'RUNTIME_TERMINATED'`          | `isRuntimeTerminatedError`       |
+| `RenderTimeoutError`           | Render exceeded the configured `renderTimeout` (ms).                                                                                                                             | `'RENDER_TIMEOUT'`              | `isRenderTimeoutError`           |
+| `RenderAbortedError`           | Render aborted (typically because a newer command superseded it).                                                                                                                | `'RENDER_ABORTED'`              | `isRenderAbortedError`           |
+| `NoRenderOutcomeError`         | `client.export(format)` called with no prior render.                                                                                                                             | `'NO_RENDER_OUTCOME'`           | `isNoRenderOutcomeError`         |
+| `SharedPoolEntryNotFoundError` | Worker emitted a pooled geometry key the runtime client could not resolve.                                                                                                       | `'SHARED_POOL_ENTRY_NOT_FOUND'` | `isSharedPoolEntryNotFoundError` |
+| `TransportCapabilityError`     | Transport rejected an unsupported capability (e.g. future remote transports).                                                                                                    | `'TRANSPORT_CAPABILITY'`        | `isTransportCapabilityError`     |
 
-**RenderSupersededError** -- Thrown when a newer `render()` call supersedes the current one. The client rejected the in-flight render in favor of the latest request:
+Branch on `error.code` (or use the realm-safe type guard) — never `Error.message`. Messages are human prose that may change; codes are the contract.
 
-```typescript @ts-nocheck
-import { isRenderSupersededError } from '@taucad/runtime';
+> `RuntimeNotConnectedError` is thrown when a `FileInput` command runs against
+> a client whose host has not yet supplied a filesystem via
+> `client.connect({ fileSystem })`. See [Embedding in a Host](./embedding-in-a-host)
+> for host-wiring patterns.
+
+```typescript
+import { createRuntimeClient, presets, isRenderTimeoutError, isRuntimeTerminatedError } from '@taucad/runtime';
+
+const code =
+  "import { drawCircle } from 'replicad';\nexport default () => drawCircle(10).sketchOnPlane('XY').extrude(5);";
+
+const client = createRuntimeClient(presets.all());
 
 try {
-  const result = await client.render({ code: { 'main.ts': code } });
+  await client.openFile({ code: { 'main.ts': code }, file: 'main.ts' });
 } catch (error) {
-  if (isRenderSupersededError(error)) {
-    console.log('Render was superseded by a newer render call');
+  if (isRenderTimeoutError(error)) {
+    console.warn('Render exceeded its timeout budget');
+  } else if (isRuntimeTerminatedError(error)) {
+    console.warn('Client was terminated while a command was in flight');
   } else {
     throw error;
   }
 }
 ```
-
-**RenderAbortedError** -- Thrown when a render is aborted via the SharedArrayBuffer abort channel. This occurs during autonomous rendering when the worker aborts an in-progress render due to a file change or parameter update:
-
-```typescript @ts-nocheck
-import { isRenderAbortedError } from '@taucad/runtime';
-
-try {
-  const result = await client.render({ code: { 'main.ts': code } });
-} catch (error) {
-  if (isRenderAbortedError(error)) {
-    console.log('Render was aborted (file or parameter changed)');
-  } else {
-    throw error;
-  }
-}
-```
-
-Both errors are normal control flow, not bugs. Use the realm-safe type guards (`isRenderSupersededError`, `isRenderAbortedError`) rather than `instanceof` for reliable cross-realm checks.
 
 ### 7. Error Enrichment (Kernel Authors)
 
 Kernels enrich raw errors into `KernelIssue` with location and stack. Replicad maps OpenCASCADE exceptions; JSCAD and Zoo map their engine errors. When building custom kernels, use `createKernelError`:
 
-```typescript @ts-nocheck
+```typescript
 import { createKernelError } from '@taucad/runtime';
 
-return createKernelError([
-  {
-    message: 'Invalid parameter: width must be positive',
-    severity: 'error',
-    type: 'runtime',
-    location: { fileName: 'main.ts', startLineNumber: 3, startColumn: 5 },
-  },
-]);
+function validateWidth(width: number) {
+  if (width > 0) return undefined;
+  return createKernelError([
+    {
+      message: 'Invalid parameter: width must be positive',
+      code: 'RUNTIME',
+      severity: 'error',
+      type: 'runtime',
+      location: { fileName: 'main.ts', startLineNumber: 3, startColumn: 5 },
+    },
+  ]);
+}
+
+const issue = validateWidth(-1);
+console.log(issue?.success === false ? issue.issues[0]?.message : 'ok');
 ```
 
 ## Variations

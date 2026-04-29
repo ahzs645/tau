@@ -28,3 +28,4 @@ export type {
   GetParametersResult,
   ExportGeometryResult,
 } from '@taucad/runtime/types';
+export type { RuntimeFileSystemHandle } from '@taucad/runtime';

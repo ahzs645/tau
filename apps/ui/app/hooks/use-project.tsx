@@ -6,7 +6,6 @@ import type { ActorRefFrom } from 'xstate';
 import type { Remote } from 'comlink';
 import { useQueryClient } from '@tanstack/react-query';
 import type { FileParameterEntry } from '@taucad/types';
-import type { RuntimeClientOptions } from '@taucad/runtime';
 import { fromSafeAsync } from '#lib/xstate.lib.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import type { ObjectStoreWorker } from '#hooks/object-store.worker.js';
@@ -18,7 +17,8 @@ import type { graphicsMachine } from '#machines/graphics.machine.js';
 import type { logMachine } from '#machines/logs.machine.js';
 import { inspect } from '#machines/inspector.js';
 import { useProjectManager } from '#hooks/use-project-manager.js';
-import { defaultKernelOptions } from '#constants/kernel-worker.constants.js';
+import { createDefaultKernelOptions } from '#constants/kernel-worker.constants.js';
+import type { KernelOptionsFactory } from '#types/runtime-client.alias.js';
 import { joinPath } from '@taucad/utils/path';
 import {
   parseParameterEntry,
@@ -66,16 +66,16 @@ export function ProjectProvider({
   projectId,
   provide,
   input,
-  kernelOptions,
+  kernelOptionsFactory,
 }: {
   readonly children: ReactNode;
   readonly projectId: string;
   readonly provide?: Parameters<typeof projectMachine.provide>[0];
   readonly input?: Omit<
     Parameters<typeof useActorRef<typeof projectMachine>>[1]['input'],
-    'projectId' | 'fileManagerRef' | 'kernelOptions'
+    'projectId' | 'fileManagerRef' | 'kernelOptionsFactory'
   >;
-  readonly kernelOptions?: RuntimeClientOptions;
+  readonly kernelOptionsFactory?: KernelOptionsFactory;
 }): React.JSX.Element {
   const queryClient = useQueryClient();
   // Create the project machine actor - it will auto-load based on projectId
@@ -156,7 +156,7 @@ export function ProjectProvider({
       input: {
         projectId,
         fileManagerRef: fileManager.fileManagerRef,
-        kernelOptions: kernelOptions ?? defaultKernelOptions,
+        kernelOptionsFactory: kernelOptionsFactory ?? createDefaultKernelOptions,
         ...input,
       },
       inspect,

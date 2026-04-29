@@ -54,22 +54,22 @@ import {
 
 ```typescript
 import { describe, it, expect } from 'vitest';
-import { createTestWorker } from '@taucad/runtime/testing';
+import { createTestWorker, createGeometryFile } from '@taucad/runtime/testing';
 import replicadDefinition from '@taucad/runtime/kernels/replicad';
 
 describe('Replicad kernel', () => {
   it('creates geometry from TypeScript', async () => {
     const worker = await createTestWorker(replicadDefinition, {
       'main.ts': `
-          import { drawRoundedRectangle } from 'replicad';
-          export default function main() {
-            return drawRoundedRectangle(30, 50, 5).sketchOnPlane('XY').extrude(10);
-          }
-        `,
+        import { drawRoundedRectangle } from 'replicad';
+        export default function main() {
+          return drawRoundedRectangle(30, 50, 5).sketchOnPlane('XY').extrude(10);
+        }
+      `,
     });
 
     const result = await worker.createGeometry({
-      file: { filename: 'main.ts', path: '/projects/test' },
+      file: createGeometryFile('main.ts'),
       parameters: {},
     });
 
@@ -85,9 +85,10 @@ describe('Replicad kernel', () => {
 
 When you need more control over worker initialization (e.g., custom middleware, telemetry):
 
-```typescript @ts-nocheck
+```typescript
 import { KernelRuntimeWorker } from '@taucad/runtime/worker';
 import { initializeWorkerForTesting, seedTestFileSystem } from '@taucad/runtime/testing';
+import replicadDefinition from '@taucad/runtime/kernels/replicad';
 
 await seedTestFileSystem({
   '/projects/test/main.ts': `export default function main() { return null; }`,
@@ -98,7 +99,12 @@ await initializeWorkerForTesting(worker, {
   onLog: ({ message }) => console.log(message),
   workerOptions: {
     kernelModules: [
-      /* ... */
+      {
+        id: replicadDefinition.name,
+        moduleUrl: 'test://replicad',
+        extensions: ['ts'],
+        definition: replicadDefinition,
+      },
     ],
   },
 });
@@ -108,18 +114,25 @@ await initializeWorkerForTesting(worker, {
 
 `seedTestFileSystem` resets the in-memory filesystem and writes files. `clearTestFileSystem` resets without seeding:
 
-```typescript @ts-nocheck
+```typescript
+import { describe, beforeEach, afterEach, it, expect } from 'vitest';
 import { seedTestFileSystem, clearTestFileSystem } from '@taucad/runtime/testing';
 
-beforeEach(async () => {
-  await seedTestFileSystem({
-    '/projects/test/main.ts': 'export default function main() { return null; }',
-    '/projects/test/lib/utils.ts': 'export const x = 1;',
+describe('my kernel', () => {
+  beforeEach(async () => {
+    await seedTestFileSystem({
+      '/projects/test/main.ts': 'export default function main() { return null; }',
+      '/projects/test/lib/utils.ts': 'export const x = 1;',
+    });
   });
-});
 
-afterEach(async () => {
-  await clearTestFileSystem();
+  afterEach(async () => {
+    await clearTestFileSystem();
+  });
+
+  it('runs against the seeded filesystem', () => {
+    expect(true).toBe(true);
+  });
 });
 ```
 
@@ -127,34 +140,35 @@ afterEach(async () => {
 
 For middleware unit tests, use mocks to avoid a real worker:
 
-```typescript @ts-nocheck
+```typescript
+import { it, expect } from 'vitest';
+import { defineMiddleware } from '@taucad/runtime/middleware';
 import {
-  createMockLogger,
-  createMockFileSystem,
   createMockRuntime,
   createMockInput,
   createMockCreateGeometryHandler,
   createSuccessResult,
-  createErrorResult,
 } from '@taucad/runtime/testing';
 
-const logger = createMockLogger();
-const filesystem = createMockFileSystem({
-  existsResult: true,
-  readFileResult: (path) => Promise.resolve(new TextEncoder().encode('content')),
+const myMiddleware = defineMiddleware({
+  name: 'PassThrough',
+  async wrapCreateGeometry(input, handler) {
+    return handler(input);
+  },
 });
 
-const runtime = createMockRuntime({
-  filesystemOverrides: { existsResult: true },
-  dependencies: [],
-  dependencyHash: 'abc123',
+it('passes geometry through unchanged', async () => {
+  const runtime = createMockRuntime({
+    filesystemOverrides: { existsResult: true },
+    dependencies: [],
+    dependencyHash: 'abc123',
+  });
+  const input = createMockInput({ filePath: '/projects/test/main.ts' });
+  const handler = createMockCreateGeometryHandler(createSuccessResult([]));
+
+  const result = await myMiddleware.wrapCreateGeometry!(input, handler, runtime);
+  expect(result.success).toBe(true);
 });
-
-const input = createMockInput({ filePath: '/projects/test/main.ts' });
-const handler = createMockCreateGeometryHandler(createSuccessResult([]));
-
-const result = await myMiddleware.wrapCreateGeometry(input, handler, runtime);
-expect(result.success).toBe(true);
 ```
 
 **`createMockRuntimeClient()`** -- Returns a [`RuntimeClient`](../api/client) mock for transport-level testing.
@@ -167,50 +181,79 @@ expect(result.success).toBe(true);
 
 Use `validateGlbData` to assert GLB format and `getInspectReport` for detailed geometry stats:
 
-```typescript @ts-nocheck
+```typescript
+import { it, expect } from 'vitest';
 import {
+  createTestWorker,
+  createGeometryFile,
   validateGlbData,
   getInspectReport,
   extractGltfFromResult,
   getGeometryStatsFromInspect,
   getBoundingBoxFromInspect,
 } from '@taucad/runtime/testing';
+import replicadDefinition from '@taucad/runtime/kernels/replicad';
 
-const result = await worker.createGeometry({
-  /* ... */
+it('produces a valid GLB with the expected geometry', async () => {
+  const worker = await createTestWorker(replicadDefinition, {
+    'main.ts': `
+      import { drawRoundedRectangle } from 'replicad';
+      export default function main() {
+        return drawRoundedRectangle(30, 50, 5).sketchOnPlane('XY').extrude(10);
+      }
+    `,
+  });
+
+  const result = await worker.createGeometry({
+    file: createGeometryFile('main.ts'),
+    parameters: {},
+  });
+
+  const glb = extractGltfFromResult(result);
+  expect(glb).toBeDefined();
+  validateGlbData(glb!);
+
+  const report = await getInspectReport(glb!);
+  const stats = getGeometryStatsFromInspect(report);
+  console.log(`Vertices: ${stats.vertexCount}, Faces: ${stats.faceCount}, Meshes: ${stats.meshCount}`);
+
+  const bbox = getBoundingBoxFromInspect(report);
+  if (bbox) {
+    console.log(`Size: ${bbox.size}, Center: ${bbox.center}`);
+  }
 });
-const glb = extractGltfFromResult(result);
-
-expect(glb).toBeDefined();
-validateGlbData(glb!);
-
-const report = await getInspectReport(glb!);
-const stats = getGeometryStatsFromInspect(report);
-console.log(`Vertices: ${stats.vertexCount}, Faces: ${stats.faceCount}, Meshes: ${stats.meshCount}`);
-
-const bbox = getBoundingBoxFromInspect(report);
-if (bbox) {
-  console.log(`Size: ${bbox.size}, Center: ${bbox.center}`);
-}
 ```
 
 ### 7. Use createGeometryTestHelpers for Geometry Assertions
 
 `createGeometryTestHelpers` provides helpers for common geometry assertions:
 
-```typescript @ts-nocheck
-import { createGeometryTestHelpers, createGeometryVariant } from '@taucad/runtime/testing';
+```typescript
+import { it } from 'vitest';
+import { createTestWorker, createGeometryFile, createGeometryTestHelpers } from '@taucad/runtime/testing';
+import replicadDefinition from '@taucad/runtime/kernels/replicad';
 
-const helpers = createGeometryTestHelpers();
+it('matches expected mesh, vertex count, and bounding box', async () => {
+  const worker = await createTestWorker(replicadDefinition, {
+    'main.ts': `
+      import { drawRoundedRectangle } from 'replicad';
+      export default function main() {
+        return drawRoundedRectangle(30, 50, 5).sketchOnPlane('XY').extrude(10);
+      }
+    `,
+  });
 
-const result = await worker.createGeometry({
-  /* ... */
+  const result = await worker.createGeometry({
+    file: createGeometryFile('main.ts'),
+    parameters: {},
+  });
+
+  const helpers = createGeometryTestHelpers();
+  await helpers.expectValidGltf(result);
+  await helpers.expectMeshCount(result, 1);
+  await helpers.expectVertexCount(result, 24);
+  await helpers.expectBoundingBoxSize(result, [30, 50, 10], 0.1);
 });
-
-await helpers.expectValidGltf(result);
-await helpers.expectMeshCount(result, 1);
-await helpers.expectVertexCount(result, 24);
-await helpers.expectBoundingBoxSize(result, [30, 50, 10], 0.1);
 ```
 
 **`createGeometryVariant(base, overrides)`** -- Create variant `GeometryExpectation` objects from a base for parametric testing.

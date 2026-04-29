@@ -24,7 +24,7 @@ Implement a kernel that handles a custom file type, produces geometry, and suppo
 
 Import `defineKernel` and result helpers from `@taucad/runtime`:
 
-```typescript @ts-nocheck
+```typescript
 import { defineKernel, createKernelSuccess, createKernelError } from '@taucad/runtime';
 ```
 
@@ -78,6 +78,7 @@ export default defineKernel<MyContext, MyNativeHandle>({
       return createKernelError([
         {
           message: `Unsupported export format: ${format}`,
+          code: 'RUNTIME',
           type: 'runtime',
           severity: 'error',
         },
@@ -95,12 +96,18 @@ The `KernelRuntime` object (second parameter to lifecycle methods) provides: `fi
 
 Use `createKernelSuccess` for successful operations and `createKernelError` for failures:
 
-```typescript @ts-nocheck
+```typescript
 import { createKernelSuccess, createKernelError } from '@taucad/runtime';
 
-return createKernelSuccess({ defaultParameters: {}, jsonSchema: {} });
+function getParametersResult(found: boolean) {
+  if (!found) {
+    return createKernelError([{ message: 'File not found', code: 'RUNTIME', type: 'runtime', severity: 'error' }]);
+  }
+  return createKernelSuccess({ defaultParameters: {}, jsonSchema: {} });
+}
 
-return createKernelError([{ message: 'File not found', type: 'runtime', severity: 'error' }]);
+const result = getParametersResult(true);
+console.log(result.success ? 'parameters extracted' : result.issues[0]?.message);
 ```
 
 For `createGeometry`, return `{ geometry, nativeHandle }` directly (with optional `issues`). The framework wraps it into a `KernelResult`.
@@ -125,47 +132,113 @@ export function myKernel(): KernelPlugin {
 
 ### 5. Register and Use the Kernel
 
-Pass your kernel factory to `createRuntimeClient`:
+Pass your kernel factory to `createRuntimeClient`, then exercise it via the
+one-shot `client.export(...)` overload, which runs in an in-memory filesystem:
 
-```typescript @ts-nocheck
-import { createRuntimeClient, fromMemoryFS } from '@taucad/runtime';
+```typescript
+import type { KernelPlugin } from '@taucad/runtime';
+import { createRuntimeClient } from '@taucad/runtime';
 import { esbuild } from '@taucad/runtime/bundler';
-import { myKernel } from './my-kernel-plugin.js';
+
+const myKernel = (): KernelPlugin => ({
+  id: 'my-kernel',
+  moduleUrl: new URL('./my-kernel.kernel.js', import.meta.url).href,
+  extensions: ['myformat'],
+  options: {},
+});
 
 const client = createRuntimeClient({
   kernels: [myKernel()],
   bundlers: [esbuild()],
-  fileSystem: fromMemoryFS(),
 });
 
-const result = await client.render({
-  code: { 'model.myformat': '...' },
+const result = await client.export('glb', {
+  code: { 'model.myformat': '/* my custom format */' },
+  file: 'model.myformat',
 });
+
+if (result.success) {
+  console.log(`Custom kernel exported ${result.data.bytes.byteLength} bytes`);
+}
 ```
+
+For UI viewers driving the autonomous render loop against your custom kernel, see [Live Rendering](./live-rendering).
 
 ### 6. Implement getDependencies for Cache Invalidation
 
 Return all file paths that affect the geometry. The framework uses this for change detection, cache keys, and (in autonomous mode) watch subscription scoping:
 
-```typescript @ts-nocheck
-async getDependencies({ filePath, basePath }, { filesystem }, _context) {
+```typescript
+import type { RuntimeFileSystem } from '@taucad/runtime';
+
+function parseImports(code: string): string[] {
+  const out: string[] = [];
+  for (const line of code.split('\n').map((l) => l.trim())) {
+    if (!line.startsWith('import')) continue;
+    const fromIdx = line.indexOf(' from ');
+    if (fromIdx < 0) continue;
+    const tail = line.slice(fromIdx + 6).trim();
+    const quote = tail[0];
+    if (quote !== '"' && quote !== "'") continue;
+    const end = tail.indexOf(quote, 1);
+    if (end < 0) continue;
+    const path = tail.slice(1, end);
+    if (path.startsWith('./') || path.startsWith('../')) out.push(path);
+  }
+  return out;
+}
+
+async function getDependencies(
+  { filePath, basePath }: { filePath: string; basePath: string },
+  { filesystem }: { filesystem: RuntimeFileSystem },
+  _context: unknown,
+): Promise<string[]> {
   const content = await filesystem.readFile(filePath, 'utf8');
   const imports = parseImports(content);
   const baseDir = basePath.endsWith('/') ? basePath : `${basePath}/`;
   return [filePath, ...imports.map((p) => baseDir + p)];
 }
+
+export { getDependencies };
 ```
 
 ### 7. Implement getParameters for Parametric Models
 
 Extract parameters and a JSON Schema for UI generation:
 
-```typescript @ts-nocheck
-async getParameters({ filePath }, { filesystem }, _context) {
+```typescript
+import type { RuntimeFileSystem } from '@taucad/runtime';
+import { createKernelSuccess } from '@taucad/runtime';
+
+const PARAM_RE = /^export\s+const\s+([A-Za-z_$][\w$]*)\s*=\s*(\d+(?:\.\d+)?|true|false|"[^"]*")\s*;?/gm;
+
+function extractParameters(code: string): { defaultParameters: Record<string, unknown>; jsonSchema: object } {
+  const defaultParameters: Record<string, unknown> = {};
+  const properties: Record<string, { type: string }> = {};
+  for (const match of code.matchAll(PARAM_RE)) {
+    const name = match[1] ?? '';
+    const raw = match[2] ?? '';
+    const value =
+      raw === 'true' || raw === 'false' ? raw === 'true' : raw.startsWith('"') ? raw.slice(1, -1) : Number(raw);
+    defaultParameters[name] = value;
+    properties[name] = {
+      type: typeof value === 'boolean' ? 'boolean' : typeof value === 'number' ? 'number' : 'string',
+    };
+  }
+  return { defaultParameters, jsonSchema: { type: 'object', properties } };
+}
+
+async function getParameters(
+  { filePath }: { filePath: string },
+  { filesystem }: { filesystem: RuntimeFileSystem },
+  _context: unknown,
+) {
   const code = await filesystem.readFile(filePath, 'utf8');
   const { defaultParameters, jsonSchema } = extractParameters(code);
   return createKernelSuccess({ defaultParameters, jsonSchema });
 }
+
+export { getParameters };
 ```
 
 ## Variations

@@ -65,16 +65,18 @@ const debug = createRuntimeClientOptions(defaults, {
 
 ## Methods
 
-| Method              | Signature                                                          | Description                                                   |
-| ------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------- |
-| `connect`           | `(options: ConnectOptions) => Promise<void>`                       | Initialize the worker and establish the transport connection. |
-| `render`            | `(input: CodeInput \| FileInput) => Promise<HashedGeometryResult>` | Render geometry from code or a file (request/response).       |
-| `export`            | `(format, input?) => Promise<ExportResult>`                        | Export geometry to STEP, STL, GLB, etc.                       |
-| `setFile`           | `(file, parameters?, options?) => void`                            | Set the active file for autonomous rendering.                 |
-| `setParameters`     | `(parameters) => void`                                             | Update parameters for autonomous re-render (50ms debounce).   |
-| `notifyFileChanged` | `(paths: string[]) => void`                                        | Notify the worker that files changed (for inline code mode).  |
-| `on`                | `(event, handler) => () => void`                                   | Subscribe to worker events. Returns an unsubscribe function.  |
-| `terminate`         | `() => void`                                                       | Shut down the worker and release resources.                   |
+| Method             | Signature                                                      | Description                                                                                                                                              |
+| ------------------ | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `lifecycleState`   | `'unconnected' \| 'connecting' \| 'connected' \| 'terminated'` | Current lifecycle state. Read-only.                                                                                                                      |
+| `activeKernelId`   | `KernelId \| undefined`                                        | Kernel that currently owns the worker. Updated via the `activeKernelChanged` event.                                                                      |
+| `capabilities`     | `CapabilitiesManifest \| undefined`                            | Resolved capabilities manifest. Available after `connect()` completes.                                                                                   |
+| `connect`          | `(options: ConnectOptions) => Promise<void>`                   | Run the transport handshake and resolve the capabilities manifest. Idempotent per options.                                                               |
+| `openFile`         | `(input: CodeInput \| FileInput) => Promise<RenderOutcome>`    | Hand the worker a `(file, parameters)` pair and let it own the autonomous render loop.                                                                   |
+| `updateParameters` | `(parameters) => Promise<RenderOutcome>`                       | Update parameters for the active file. Supersedes any in-flight render.                                                                                  |
+| `setOptions`       | `(options) => Promise<RenderOutcome>`                          | Replace runtime options (e.g. `renderTimeout` in **milliseconds**) for the active file. Full replace, not patch — keys absent from the call are dropped. |
+| `export`           | `(format, input?) => Promise<ExportResult>`                    | Export to STEP/STL/GLB. With `input`, self-renders; without, reuses the latest render.                                                                   |
+| `on`               | `(event, handler) => () => void`                               | Subscribe to a worker event. Returns an unsubscribe function.                                                                                            |
+| `terminate`        | `() => void`                                                   | Tear down the worker, transport, and event subscriptions.                                                                                                |
 
 ## Render Input Types
 
@@ -108,51 +110,142 @@ const client = createRuntimeClient({
 
 ## Filesystem
 
-<auto-type-table path='./props/client.ts' name='RuntimeFileSystem' />
+<auto-type-table path='./props/client.ts' name='RuntimeFileSystemHandle' />
 
-`fromMemoryFS`, `fromNodeFS`, and `fromFsLike` implement `RuntimeFileSystemBase` for in-memory, Node.js, and any fs-compatible backends respectively.
+`fromMemoryFS`, `fromNodeFS`, and `fromFsLike` return a discriminated `RuntimeFileSystemHandle` whose `inline` arm implements `RuntimeFileSystemBase` for in-memory, Node.js, and any fs-compatible backends respectively.
 
 ## Error Types
 
-**`RenderSupersededError`** -- Thrown when a newer `render()` call supersedes the current one. Use `isRenderSupersededError(error)` for realm-safe detection.
+Lifecycle errors:
 
-**`RenderAbortedError`** -- Thrown when a render is aborted via the SharedArrayBuffer abort channel. Use `isRenderAbortedError(error)` for realm-safe detection.
+- **`RuntimeNotConnectedError`** -- a command was issued before `connect()` resolved.
+- **`RuntimeConnectionError`** -- the transport handshake failed. Carries a typed `cause`: `'protocol-mismatch' | 'transport-failure' | 'invalid-options' | 'aborted'`.
+- **`RuntimeReconnectError`** -- `connect()` was called a second time with options that differ from the first call. Carries a typed `causeKind`: `'fileSystem-mismatch' | 'filePool-mismatch'`. A second call with **identical** options is idempotent (resolves immediately).
+- **`RuntimeTerminatedError`** -- a command was issued after `terminate()`, or an in-flight Promise was rejected because `terminate()` happened mid-flight. Carries a typed `cause`: `'explicit' | 'transport-closed' | 'fatal-error'`.
+
+Render errors:
+
+- **`RenderTimeoutError`** -- the render exceeded its configured timeout (`renderTimeout`, milliseconds).
+- **`RenderAbortedError`** -- the render was aborted (typically because a newer command superseded it before settlement).
+- **`NoRenderOutcomeError`** -- `client.export(format)` (single-arg) was called without a prior render result.
+
+Transport errors (uncommon — surface only when the SAB-backed geometry pool returns an unexpected key, or a transport rejects an unsupported capability):
+
+- **`SharedPoolEntryNotFoundError`** -- the worker emitted a `pooled` geometry key the runtime client could not resolve.
+- **`TransportCapabilityError`** -- a transport implementation rejected an operation it does not support (e.g. a future WebSocket transport rejecting `signalAbort` because the wire protocol has not been finalised).
+
+Use the realm-safe `isRuntimeNotConnectedError`, `isRuntimeConnectionError`,
+`isRuntimeReconnectError`, `isRuntimeTerminatedError`, `isRenderTimeoutError`,
+`isRenderAbortedError`, `isNoRenderOutcomeError`, `isSharedPoolEntryNotFoundError`,
+and `isTransportCapabilityError` guards for cross-realm detection.
+
+### Error Code Reference
+
+Every runtime error class exposes a stable `code` getter so callers can branch on the error kind without depending on `Error.message` or `instanceof` (the message is human prose; the code is the contract).
+
+| Error class                    | `code`                          | Notes                                         |
+| ------------------------------ | ------------------------------- | --------------------------------------------- |
+| `RuntimeNotConnectedError`     | `'RUNTIME_NOT_CONNECTED'`       | —                                             |
+| `RuntimeConnectionError`       | `'RUNTIME_CONNECTION'`          | Pair with the `cause` discriminator           |
+| `RuntimeReconnectError`        | `'RUNTIME_RECONNECT'`           | Pair with the `causeKind` discriminator       |
+| `RuntimeTerminatedError`       | `'RUNTIME_TERMINATED'`          | Pair with the `cause` discriminator           |
+| `RenderTimeoutError`           | `'RENDER_TIMEOUT'`              | —                                             |
+| `RenderAbortedError`           | `'RENDER_ABORTED'`              | —                                             |
+| `NoRenderOutcomeError`         | `'NO_RENDER_OUTCOME'`           | Renamed from the legacy `NoRenderResultError` |
+| `SharedPoolEntryNotFoundError` | `'SHARED_POOL_ENTRY_NOT_FOUND'` | —                                             |
+| `TransportCapabilityError`     | `'TRANSPORT_CAPABILITY'`        | —                                             |
+
+`KernelIssue` payloads (delivered via the `error` event and on `Geometry` results) carry a parallel `code: KernelIssueCode` field — use it instead of `RegExp`-matching `issue.message`.
+
+> Supersession is **not** an error. `openFile`/`updateParameters`/`setOptions`
+> resolve a `RenderOutcome` discriminated union — the `superseded: true`
+> branch is the normal outcome when a newer call takes ownership of the
+> worker. See [Handle Errors](../guides/error-handling) for the full pattern.
 
 ## Event Subscription
 
 Subscribe to client events with `client.on(event, handler)`. Returns an unsubscribe function.
 
-| Event                | Handler Signature                                                | When                           |
-| -------------------- | ---------------------------------------------------------------- | ------------------------------ |
-| `geometry`           | `(result: HashedGeometryResult) => void`                         | Render completes (autonomous)  |
-| `state`              | `(state: WorkerState, detail?: string) => void`                  | Worker state changes           |
-| `log`                | `(entry: { level, message, origin?, data? }) => void`            | Kernel/middleware log messages |
-| `progress`           | `(phase: RenderPhase, detail?: Record<string, unknown>) => void` | Render phase transitions       |
-| `telemetry`          | `(entries: PerformanceEntryData[]) => void`                      | Performance entries            |
-| `parametersResolved` | `(result: GetParametersResult) => void`                          | Parameters extracted           |
+| Event                 | Handler Signature                                                | When                              |
+| --------------------- | ---------------------------------------------------------------- | --------------------------------- |
+| `geometry`            | `(result: HashedGeometryResult) => void`                         | Render completes (autonomous)     |
+| `state`               | `(state: WorkerState, detail?: string) => void`                  | Worker state changes              |
+| `log`                 | `(entry: { level, message, origin?, data? }) => void`            | Kernel/middleware log messages    |
+| `progress`            | `(phase: RenderPhase, detail?: Record<string, unknown>) => void` | Render phase transitions          |
+| `telemetry`           | `(entries: TelemetryEntry[]) => void`                            | Performance entries               |
+| `parametersResolved`  | `(result: GetParametersResult) => void`                          | Parameters extracted              |
+| `capabilities`        | `(manifest: CapabilitiesManifest) => void`                       | Capabilities resolved             |
+| `activeKernelChanged` | `(kernelId: KernelId) => void`                                   | A new kernel took over the worker |
+| `error`               | `(issues: KernelIssue[]) => void`                                | Worker emitted a top-level error  |
+
+## When Do I Need `connect()`?
+
+`client.connect(...)` is required when the host owns the filesystem -- worker-hosted FSes via `fromWorker(...)`, externally allocated `filePool` SABs, or deferred FS attachment. Inline `code:` input does not require it.
+
+| Scenario                                      | Use                                                     | See                                                  |
+| --------------------------------------------- | ------------------------------------------------------- | ---------------------------------------------------- |
+| Inline `code:` -- one-shot or live re-renders | in-memory filesystem                                    | [Quick Start](../getting-started/quick-start)        |
+| Filesystem on disk (Node.js)                  | `createRuntimeClient({ fileSystem: fromNodeFS(path) })` | [Set Up the Filesystem](../guides/filesystem-setup)  |
+| Worker-hosted FS bridge                       | `client.connect({ fileSystem: fromWorker(fsWorker) })`  | [Embedding in a Host](../guides/embedding-in-a-host) |
+| Externally allocated `filePool` SAB           | `client.connect({ fileSystem, filePool })`              | [Embedding in a Host](../guides/embedding-in-a-host) |
+| Deferred FS attachment (FS not known at boot) | `client.connect({ fileSystem })` later                  | [Embedding in a Host](../guides/embedding-in-a-host) |
+
+```typescript
+// Auto-connect (the npm-consumer default)
+import { createRuntimeClient, presets } from '@taucad/runtime';
+
+const client = createRuntimeClient(presets.all());
+const result = await client.export('glb', {
+  code: { 'main.ts': 'export default () => {}' },
+  file: 'main.ts',
+});
+```
+
+```typescript
+// Explicit connect (host-wiring scenarios only)
+import { createRuntimeClient, presets, fromWorker } from '@taucad/runtime';
+
+const fsWorker = new Worker(new URL('./fm-worker.ts', import.meta.url));
+const client = createRuntimeClient(presets.all());
+
+// `filePool` is the ONLY SharedArrayBuffer the public API exposes —
+// geometry-pool and abort-channel SABs are allocated and owned internally
+// by the active RuntimeTransport.
+const filePool = new SharedArrayBuffer(64 * 1024 * 1024);
+await client.connect({ fileSystem: fromWorker(fsWorker), filePool });
+
+// ...drive the runtime as usual; on shutdown:
+client.terminate();
+```
 
 ## Usage
 
+`client.export(format, input)` runs a single render-and-export cycle and returns a Promise:
+
 ```typescript
-import { createRuntimeClient, fromMemoryFS } from '@taucad/runtime';
-import { replicad } from '@taucad/runtime/kernels';
-import { esbuild } from '@taucad/runtime/bundler';
+import { createRuntimeClient, presets } from '@taucad/runtime';
 
-const client = createRuntimeClient({
-  kernels: [replicad()],
-  bundlers: [esbuild()],
-  fileSystem: fromMemoryFS(),
-});
+const client = createRuntimeClient(presets.all());
 
-const result = await client.render({
+const result = await client.export('glb', {
   code: { 'main.ts': 'export default () => {}' },
+  file: 'main.ts',
 });
+
+if (result.success) {
+  console.log(`Exported ${result.data.bytes.byteLength} bytes`);
+}
+
 client.terminate();
 ```
+
+For UI viewers that need to react to parameter changes or file edits, use the autonomous render loop documented in [Live Rendering](../guides/live-rendering) -- `client.openFile`, `client.updateParameters`, `client.setOptions`, and the `geometry` event.
 
 ## Related
 
 - [Quick Start](../getting-started/quick-start)
+- [Live Rendering](../guides/live-rendering)
+- [Embedding in a Host](../guides/embedding-in-a-host)
 - [Set Up the Filesystem](../guides/filesystem-setup)
 - [Handle Errors](../guides/error-handling)
 - [Render Lifecycle](../concepts/render-lifecycle)

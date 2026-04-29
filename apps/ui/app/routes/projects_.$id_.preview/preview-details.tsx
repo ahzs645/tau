@@ -3,6 +3,8 @@ import type { Project } from '@taucad/types';
 import { Badge } from '#components/ui/badge.js';
 import { Separator } from '#components/ui/separator.js';
 import { ExportSelector } from '#components/files/export-selector.js';
+import { useFeature } from '#flags/use-feature.js';
+import { PreviewDebugPanel } from '#routes/projects_.$id_.preview/preview-debug-panel.js';
 import type { cadMachine } from '#machines/cad.machine.js';
 
 type PreviewDetailsProps = {
@@ -12,6 +14,8 @@ type PreviewDetailsProps = {
 };
 
 export function PreviewDetails({ project, geometriesCount, cadRef }: PreviewDetailsProps): React.JSX.Element {
+  const isDebugEnabled = useFeature('tauDebug');
+
   return (
     <div className='space-y-6 p-6'>
       {/* About */}
@@ -56,6 +60,8 @@ export function PreviewDetails({ project, geometriesCount, cadRef }: PreviewDeta
           <ExportSelector cadActor={cadRef} filenameBase={project.name} variant='inline' />
         )}
       </div>
+
+      {isDebugEnabled ? <PreviewDebugPanel cadRef={cadRef} /> : null}
     </div>
   );
 }

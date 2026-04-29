@@ -12,7 +12,7 @@ import svgSpriteWrapper from 'vite-svg-sprite-wrapper';
 import { defineConfig } from 'vite';
 // oxlint-disable-next-line no-restricted-imports, import/extensions -- allowed for Fumadocs; .js for ESM
 import * as MdxConfig from './app/lib/fumadocs/source.config.js';
-import { crossOriginIsolation } from '@taucad/runtime/vite';
+import { runtime } from '@taucad/runtime/vite';
 import { tsModuleUrlPlugin } from '@taucad/vite/ts-module-url';
 import { base64Loader } from '@taucad/vite/base64-loader';
 import { largeDepRegexFix } from '@taucad/vite/large-dep-regex-fix';
@@ -39,8 +39,12 @@ export default defineConfig(({ mode }) => {
       // Workaround: Vite 8 beta regex overflow on large pre-bundled deps (Monaco Editor)
       largeDepRegexFix(),
 
-      // Cross-origin isolation headers for SharedArrayBuffer (multi-threaded WASM)
-      crossOriginIsolation(),
+      /*
+       * @taucad/runtime contract: COOP/COEP for SharedArrayBuffer, exclude the
+       * runtime + WASM-bearing deps from optimizeDeps, keep .wasm out of the
+       * inline path, force worker.format to 'es'. See docs/research/runtime-zero-config-bundling.md (R2).
+       */
+      ...runtime(),
 
       // Resolve .ts files referenced via new URL() in both build and serve modes
       ...tsModuleUrlPlugin(),
@@ -116,19 +120,17 @@ export default defineConfig(({ mode }) => {
     },
     build: {
       sourcemap: true,
+      /*
+       * SVGs are forced out of the base64 inline path so the icon sprite
+       * pipeline can fingerprint them. WASM exclusion is the same invariant
+       * shipped by `@taucad/runtime/vite#runtime`; we mirror it here because
+       * Vite's user-config `build.assetsInlineLimit` wins over plugin-level
+       * defaults, and the SVG branch needs to coexist with the WASM rule.
+       * Inlining .wasm breaks worker V8 bytecode caching.
+       */
       assetsInlineLimit(file) {
-        if (file.endsWith('.svg')) {
-          return false;
-        }
-
-        if (file.endsWith('.wasm')) {
-          // WASM must not be inlined to ensure workers can cache the WASM files via Node V8 bytecode cache,
-          // thus enabling WASM compilation caching to ensure fast worker startup times.
-          // Do not return `true` for WASM — inlining breaks worker caching.
-          return false;
-        }
-
-        // Returning `undefined` sets the default 4KB threshold
+        if (file.endsWith('.svg')) return false;
+        if (file.endsWith('.wasm')) return false;
         return undefined;
       },
       target: 'es2022',

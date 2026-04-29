@@ -103,14 +103,14 @@ function createBrowserRpcFileSystem(
     },
     async readdir(
       path: string,
-    ): Promise<Array<{ name: string; type: 'file' | 'directory'; size: number; modifiedAt?: string }>> {
+    ): Promise<Array<{ name: string; type: 'file' | 'dir'; size: number; modifiedAt?: string }>> {
       if (!treeService) {
         return [];
       }
       const nodes = await treeService.readDirectoryEntries(path);
       return nodes.map((node) => ({
         name: node.name,
-        type: node.children === undefined ? 'file' : 'directory',
+        type: node.children === undefined ? 'file' : 'dir',
         size: 0,
       }));
     },

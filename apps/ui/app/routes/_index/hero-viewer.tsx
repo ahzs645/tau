@@ -2,6 +2,8 @@ import { useCallback, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { Download, Check, ChevronDown, ArrowUpRight } from 'lucide-react';
 import { createRuntimeClientOptions } from '@taucad/runtime';
+import { inProcessTransport } from '@taucad/runtime/transport';
+import { fromMemoryFs } from '@taucad/runtime/filesystem';
 import { openscad } from '@taucad/openscad';
 import { parameterCache, geometryCache, gltfCoordinateTransform, gltfEdgeDetection } from '@taucad/runtime/middleware';
 import { esbuild } from '@taucad/runtime/bundler';
@@ -25,13 +27,6 @@ import qrcodeScad from '#routes/_index/qrcode.scad?raw';
 const heroBuildId = 'hero-qrcode-v2';
 const heroMainFile = 'main.scad';
 
-const heroOptions = createRuntimeClientOptions({
-  kernels: [openscad()],
-  middleware: [parameterCache(), geometryCache(), gltfCoordinateTransform(), gltfEdgeDetection()],
-  bundlers: [esbuild()],
-  transcoders: [converterTranscoder()],
-});
-
 const heroCode = { [heroMainFile]: qrcodeScad };
 
 const heroUnits: Units = { length: { symbol: 'mm', factor: 1 } };
@@ -47,6 +42,22 @@ export function HeroViewer(): React.JSX.Element {
   const renderParams = useMemo(
     () => (Object.keys(currentParams).length > 0 ? currentParams : undefined),
     [currentParams],
+  );
+
+  /* The in-process transport allocates a `MessageChannel` and SAB
+   * pools at construction time — defer to a `useMemo` so it only
+   * runs client-side after hydration and remains stable across
+   * re-renders. */
+  const heroOptions = useMemo(
+    () =>
+      createRuntimeClientOptions({
+        transport: inProcessTransport.client({ fileSystem: fromMemoryFs() }),
+        kernels: [openscad()],
+        middleware: [parameterCache(), geometryCache(), gltfCoordinateTransform(), gltfEdgeDetection()],
+        bundlers: [esbuild()],
+        transcoders: [converterTranscoder()],
+      }),
+    [],
   );
 
   const { geometries, status, defaultParameters, jsonSchema, exportGeometry, capabilities } = useRender({

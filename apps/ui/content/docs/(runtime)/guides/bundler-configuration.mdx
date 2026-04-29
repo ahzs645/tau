@@ -71,25 +71,34 @@ Kernels access the bundler through `runtime.bundler` and `runtime.execute`. You 
 
 If you build a custom JS/TS kernel, register built-in modules during `initialize`:
 
-```typescript @ts-nocheck
-import { defineKernel } from '@taucad/runtime';
+```typescript
+import { defineKernel } from '@taucad/runtime/kernel';
 
 export default defineKernel({
   name: 'MyKernel',
   version: '1.0.0',
 
-  async initialize(options, runtime) {
-    const wasmCode = await loadMyLibraryWasm();
+  async initialize(_options, runtime) {
     runtime.bundler.registerModule('my-library', {
-      code: wasmCode,
+      code: 'export const greet = (name) => `hello, ${name}`;',
       version: '1.0.0',
       globalName: 'myLibrary',
     });
-    return {
-      /* context */
-    };
+    return { initialized: true };
   },
-  // ...
+
+  async getDependencies(input) {
+    return { resolved: [input.filePath], unresolved: [] };
+  },
+  async getParameters() {
+    return { success: true, data: { defaultParameters: {}, jsonSchema: {} }, issues: [] };
+  },
+  async createGeometry() {
+    return { geometry: [], nativeHandle: {} };
+  },
+  async exportGeometry() {
+    return { success: true, data: [], issues: [] };
+  },
 });
 ```
 
@@ -99,8 +108,9 @@ See the Replicad and JSCAD kernel source for full examples.
 
 For non-esbuild bundlers (e.g., custom transpiler, different execution model), use [`defineBundler`](../api/bundler). The definition requires: `name`, `version`, `extensions`, `initialize`, `detectImports`, `bundle`, `execute`, and `registerModule`. Optional: `resolveDependencies`, `cleanup`:
 
-```typescript @ts-nocheck
+```typescript
 import { defineBundler } from '@taucad/runtime/bundler';
+import type { BuiltinModule } from '@taucad/runtime';
 
 const myBundler = defineBundler({
   name: 'MyBundler',
@@ -108,23 +118,32 @@ const myBundler = defineBundler({
   extensions: ['ts', 'js'],
 
   async initialize({ filesystem, projectPath }) {
-    return { filesystem, projectPath };
+    const modules = new Map<string, BuiltinModule>();
+    return { filesystem, projectPath, modules };
   },
 
-  async detectImports({ entryPath }, _ctx) {
+  async detectImports({ entryPath }) {
     return { detectedModules: [], dependencies: [entryPath] };
   },
 
-  async bundle({ entryPath }, _ctx) {
-    return { code: '...', success: true, issues: [], dependencies: [] };
+  async bundle({ entryPath }) {
+    return {
+      code: `export default async () => { /* bundled from ${entryPath} */ };`,
+      success: true,
+      issues: [],
+      dependencies: [entryPath],
+      unresolvedPaths: [],
+    };
   },
 
-  async execute(_code, _ctx) {
-    return { success: true, value: {} };
+  async execute(code) {
+    const moduleUrl = `data:text/javascript;base64,${btoa(code)}`;
+    const module = (await import(moduleUrl)) as { default: unknown };
+    return { success: true, value: module.default };
   },
 
-  registerModule(_name, _builtinModule, _ctx) {
-    // Store for resolution during bundle()
+  registerModule(name, builtinModule, context) {
+    context.modules.set(name, builtinModule);
   },
 });
 ```

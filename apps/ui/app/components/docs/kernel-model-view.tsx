@@ -4,6 +4,8 @@ import type { Group } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { createRuntimeClientOptions } from '@taucad/runtime';
+import { inProcessTransport } from '@taucad/runtime/transport';
+import { fromMemoryFs } from '@taucad/runtime/filesystem';
 import { replicad } from '@taucad/runtime/kernels';
 import { esbuild } from '@taucad/runtime/bundler';
 import { Loader } from '#components/ui/loader.js';
@@ -13,11 +15,6 @@ import { cn } from '#utils/ui.utils.js';
 import { gltfCoordinateTransform } from '@taucad/runtime/middleware';
 
 const gltfLoader = new GLTFLoader();
-const defaultClientOptions = createRuntimeClientOptions({
-  kernels: [replicad()],
-  bundlers: [esbuild()],
-  middleware: [gltfCoordinateTransform()],
-});
 
 type KernelModelViewProps = {
   readonly code: string;
@@ -49,8 +46,23 @@ export function KernelModelView({ code, className }: KernelModelViewProps): Reac
   // eslint-disable-next-line @typescript-eslint/naming-convention -- file path key
   const renderCode = useMemo(() => ({ 'main.ts': code }), [code]);
 
+  /* In-process transport client allocates a `MessageChannel` and SAB
+   * pools at construction time — keep it inside `useMemo` so the
+   * allocation only happens client-side after hydration, and is
+   * stable across re-renders. */
+  const clientOptions = useMemo(
+    () =>
+      createRuntimeClientOptions({
+        transport: inProcessTransport.client({ fileSystem: fromMemoryFs() }),
+        kernels: [replicad()],
+        bundlers: [esbuild()],
+        middleware: [gltfCoordinateTransform()],
+      }),
+    [],
+  );
+
   const { geometries, status, error } = useRender({
-    clientOptions: defaultClientOptions,
+    clientOptions,
     code: renderCode,
     enabled: isVisible,
   });

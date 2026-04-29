@@ -13,11 +13,15 @@
 
     "---Guides---",
     "guides/choosing-a-kernel",
+    "guides/live-rendering",
+    "guides/embedding-in-a-host",
     "guides/using-middleware",
     "guides/custom-kernel",
     "guides/custom-middleware",
     "guides/filesystem-setup",
     "guides/bundler-configuration",
+    "guides/cross-origin-isolation",
+    "guides/bundling",
     "guides/error-handling",
     "guides/testing-kernels",
 
@@ -37,7 +41,6 @@
     "api/filesystem",
     "api/types",
     "api/testing",
-    "api/transport",
 
     "---Reference---",
     "reference/replicad"

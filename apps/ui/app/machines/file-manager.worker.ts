@@ -3,7 +3,7 @@
  *
  * Single entry point for all filesystem access. Every connection (main thread,
  * kernel workers, git) receives a MessagePort that is served by the same
- * FileService instance. Writes to the same file are serialized via a per-file
+ * WorkspaceFileService instance. Writes to the same file are serialized via a per-file
  * ResourceQueue (VS Code pattern); writes to different files run in parallel.
  */
 
@@ -14,12 +14,12 @@ import {
   ResourceQueue,
   DirectoryTreeCache,
   ChangeEventBus,
-  FileService,
+  WorkspaceFileService,
   MountTable,
   EventCoalescer,
   ThrottledWorker,
 } from '@taucad/filesystem';
-import { FileSystemAccessProvider } from '@taucad/filesystem/providers';
+import { FileSystemAccessProvider } from '@taucad/filesystem/backend';
 import { SharedPool } from '@taucad/memory';
 import { metaConfig } from '#constants/meta.constants.js';
 
@@ -119,7 +119,7 @@ async function createNodeModulesMount(): Promise<void> {
   }
 }
 
-const fileService = new FileService({
+const fileService = new WorkspaceFileService({
   providerRegistry,
   resourceQueue,
   treeCache,

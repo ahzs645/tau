@@ -1,0 +1,175 @@
+---
+title: Embedding in a Host
+description: Wire @taucad/runtime into an editor host -- typed RuntimeFileSystemHandle values, externally allocated filePool SABs, and deferred FS attachment.
+icon: lucide:plug-zap
+---
+
+# Embedding in a Host
+
+`client.connect(...)` is the explicit entry point for hosts that own the filesystem. This guide covers the three scenarios where it is the right choice:
+
+1. **Worker-hosted filesystems** -- the host owns the filesystem worker and exposes it to the runtime via `fromWorker(worker)`.
+2. **Externally allocated `filePool` SABs** -- the host pre-allocates a `SharedArrayBuffer` for zero-copy file content sharing across workers.
+3. **Deferred FS attachment** -- the runtime client is constructed before the host knows which filesystem it should bind to.
+
+If none of these apply, head back to the [Quick Start](../getting-started/quick-start) or [Live Rendering](./live-rendering) guides -- they are the canonical npm-consumer paths.
+
+## Why a Host Would Wire This Manually
+
+A host (CAD editor, IDE, multi-user platform) typically owns the filesystem and worker explicitly:
+
+- A single shared filesystem worker serving multiple runtime clients (one per chat panel, one per render preview)
+- Externally managed lifecycle (the host already owns "the project filesystem"; the runtime is just a consumer)
+- Cross-worker zero-copy file content via `SharedArrayBuffer`-backed `FilePool`
+- The ability to terminate and re-create runtime clients without losing the underlying filesystem
+
+`client.connect(options)` is the seam where the host hands these primitives to the runtime.
+
+## Typed `RuntimeFileSystemHandle` values
+
+`ConnectOptions.fileSystem` accepts a typed [`RuntimeFileSystemHandle`](../api/filesystem) discriminant. The value carries the kind discriminator (`inline | channel | rpc | host`) so the active transport can construct the underlying bridge primitives — consumers never call `createBridgePort` / `createFileSystemBridge` directly. The bundled factories cover every supported arm:
+
+| Factory                                 | Handle kind | When to use                                  |
+| --------------------------------------- | ----------- | -------------------------------------------- |
+| `fromMemoryFS({ 'main.ts': '...' })`    | `inline`    | Static fixtures, tests, CLI one-shots        |
+| `fromFsLike(myFs)` / `fromInline(myFs)` | `inline`    | Wrap a custom `RuntimeFileSystemBase` impl   |
+| `fromNodeFS('/projects/widget')`        | `inline`    | Headless / Node.js (CLI, benchmarks, server) |
+| `fromWorker(fileManagerWorker)`         | `channel`   | Editor host with a dedicated FS worker       |
+
+### Worker-hosted filesystems
+
+When the host owns a File Manager Worker (the canonical editor pattern), wrap it with `fromWorker(...)` and pass the handle through `connect`:
+
+```typescript
+import { createRuntimeClient, presets, fromWorker } from '@taucad/runtime';
+
+const fileManagerWorker = new Worker(new URL('./fm-worker.ts', import.meta.url));
+
+const client = createRuntimeClient(presets.all());
+await client.connect({ fileSystem: fromWorker(fileManagerWorker) });
+
+const result = await client.export('glb', { file: 'main.ts' });
+if (!result.success) throw new Error(`Export failed: ${result.issues[0]?.message}`);
+
+client.terminate();
+```
+
+The transport constructs the FS bridge `MessagePort` internally and disposes it on `client.terminate()`. The host never sees the port and never needs to call `dispose()` itself.
+
+### In-process filesystems
+
+For tests, CLIs, and other same-thread scenarios, swap the worker handle for an inline arm:
+
+```typescript
+import { createRuntimeClient, presets, fromMemoryFS } from '@taucad/runtime';
+
+const client = createRuntimeClient(presets.all());
+await client.connect({
+  fileSystem: fromMemoryFS({
+    'main.ts':
+      "import { drawCircle } from 'replicad';\nexport default () => drawCircle(10).sketchOnPlane('XY').extrude(20);",
+  }),
+});
+```
+
+The transport detects the `inline` arm and wires an in-process bridge that auto-propagates `watch` events when the wrapped FS exposes a `watch` method — so editor edits flow through the same dependency-invalidation pipeline as worker-hosted FSes.
+
+## Externally Allocated `filePool` SABs
+
+Pair `fileSystem` with `filePool` when the host has pre-allocated a `SharedArrayBuffer` for the runtime's file pool. Sharing the buffer across the FS worker, kernel worker, and runtime client gives you zero-copy reads of file contents -- the kernel reads bytes from shared memory rather than postMessage-ing them through the bridge.
+
+`filePool` is the **only** `SharedArrayBuffer` exposed on the public runtime API. Geometry-pool and cooperative-abort SABs are owned and allocated by the active [transport](../api/transport) — never by the host. The host owns this one because the file pool's lifetime is bound to the file manager (not the runtime), and crossing that boundary requires the host to allocate the buffer.
+
+```typescript
+import { createRuntimeClient, presets, fromWorker } from '@taucad/runtime';
+
+const fileManagerWorker = new Worker(new URL('./fm-worker.ts', import.meta.url));
+const filePool = new SharedArrayBuffer(64 * 1024 * 1024);
+
+const client = createRuntimeClient(presets.all());
+await client.connect({
+  fileSystem: fromWorker(fileManagerWorker),
+  filePool,
+});
+```
+
+The same option is supported on every `RuntimeFileSystemHandle` arm — including in-process scenarios (e.g. tests) where you still want the FilePool zero-copy contract.
+
+> Cross-origin isolation is required for any `SharedArrayBuffer` — both the host-allocated `filePool` and the transport-owned geometry/abort SABs. See [Cross-Origin Isolation](./cross-origin-isolation) for the COOP/COEP headers your host must serve.
+
+## Deferred FS Attachment
+
+When the runtime client is constructed before the host knows which filesystem it should bind to (e.g. you create a client at app boot and learn which project to mount on user navigation), simply omit `fileSystem` from `createRuntimeClient(...)`:
+
+```typescript
+import { createRuntimeClient, presets } from '@taucad/runtime';
+import { fromNodeFS } from '@taucad/runtime/filesystem/node';
+
+const client = createRuntimeClient(presets.all());
+
+// ...later, once the user picks a project:
+const projectPath = '/Users/me/cad-projects/widget';
+await client.connect({ fileSystem: fromNodeFS(projectPath) });
+```
+
+The client stays in the `'unconnected'` lifecycle state until the first `connect()` call -- no worker is spawned, no transport handshake runs. This is the correct pattern for editors that want to instantiate clients eagerly and bind them to a workspace lazily.
+
+## Lifecycle and Re-connection
+
+`client.connect()` is **idempotent for identical option references**: calling it a second time with the same `fileSystem` and `filePool` references resolves immediately without re-running the handshake. Calling it with **different** references rejects with `RuntimeReconnectError` carrying a typed `causeKind` (`'fileSystem-mismatch' | 'filePool-mismatch'`) so the host can render a precise error message and take corrective action. To switch a client to a different project, terminate the existing client and create a fresh one.
+
+```typescript
+import { createRuntimeClient, presets, fromMemoryFS, isRuntimeReconnectError } from '@taucad/runtime';
+
+const client = createRuntimeClient(presets.all());
+const first = fromMemoryFS({ 'main.ts': 'export default () => 1;' });
+const filePool = new SharedArrayBuffer(64 * 1024 * 1024);
+await client.connect({ fileSystem: first, filePool });
+
+// Idempotent: identical references resolve immediately.
+await client.connect({ fileSystem: first, filePool });
+
+// Different references reject with RuntimeReconnectError.
+const second = fromMemoryFS({ 'main.ts': 'export default () => 2;' });
+try {
+  await client.connect({ fileSystem: second, filePool });
+} catch (error) {
+  if (isRuntimeReconnectError(error)) {
+    // error.causeKind === 'fileSystem-mismatch'
+    client.terminate();
+    // ...spin up a fresh client for the new project.
+  }
+}
+```
+
+The lifecycle progression is `'unconnected' -> 'connecting' -> 'connected' -> 'terminated'`. Inspect the current state via `client.lifecycleState` -- helpful for host-level diagnostics and React state derivation.
+
+### Deterministic `terminate()` and graceful `shutdown()`
+
+`client.terminate()` is **synchronous** and observes seven invariants the host can rely on without timing-dependent shutdown choreography:
+
+1. `client.lifecycleState` becomes `'terminated'` synchronously.
+2. The transport's `close()` is invoked exactly once.
+3. Every in-flight `connect()` / `openFile()` / `updateParameters()` / `setOptions()` / `export()` Promise rejects on the next microtask with `RuntimeTerminatedError({ cause: 'explicit' })`.
+4. `client.on(...)` calls made after `terminate()` throw synchronously (subscription is no longer meaningful).
+5. Subsequent commands reject synchronously with `RuntimeTerminatedError({ cause: 'explicit' })`.
+6. A second `terminate()` call is a no-op (idempotent).
+7. Captured connect options are cleared so a fresh client created from the same host primitives starts from a clean slate.
+
+For orderly shutdown paths (`beforeunload`, server graceful-exit, integration test teardown) the asynchronous `shutdown({ drain? })` companion lets the host await in-flight intents before tearing down:
+
+```typescript
+window.addEventListener('beforeunload', () => {
+  void client.shutdown({ drain: true });
+});
+```
+
+`shutdown({ drain: true })` snapshots the in-flight intents, awaits each via `Promise.allSettled`, and then runs the same teardown as `terminate()`. A concurrent `terminate()` cancels the drain — pending intents reject with `RuntimeTerminatedError` and the awaiting `shutdown()` promise still resolves. Both methods are idempotent.
+
+## Further Reading
+
+- [API Reference: Client](../api/client) -- Full documentation for `ConnectOptions`, `RuntimeClient.connect`, and the lifecycle taxonomy
+- [API Reference: Filesystem](../api/filesystem) -- `RuntimeFileSystemHandle` and the `from*` factories
+- [Live Rendering](./live-rendering) -- Drive the autonomous render loop once the host wiring is in place
+- [Cross-Origin Isolation](./cross-origin-isolation) -- COOP/COEP headers required for `SharedArrayBuffer`
+- [Set Up the Filesystem](./filesystem-setup) -- Built-in filesystem implementations (`fromMemoryFS`, `fromNodeFS`, etc.)

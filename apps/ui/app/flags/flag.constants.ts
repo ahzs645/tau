@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ENV } from '#environment.config.js';
 
 /**
  * Feature Flag Registry
@@ -17,11 +18,27 @@ export type FlagDefinition = {
   readonly description: string;
 };
 
+/**
+ * Resolve the boolean default for `tauDebug` from the runtime environment
+ * (`TAU_DEBUG=1|true`). The env var is the source of truth (drives e2e and
+ * deployment toggling); a localStorage override still wins because the
+ * default only fires when no override is stored.
+ *
+ * Defensive cast: tests mock `#environment.config.js` with partial shapes
+ * and `ENV` may not always carry the key during early module init.
+ */
+const tauDebugDefault = Boolean((ENV as { TAU_DEBUG?: boolean }).TAU_DEBUG);
+
 export const flagRegistry = {
   planMode: {
     schema: z.boolean().default(false),
     label: 'Planning Mode',
     description: 'Show mode selector and plan viewer in chat.',
+  },
+  tauDebug: {
+    schema: z.boolean().default(tauDebugDefault),
+    label: 'Tau Debug',
+    description: 'Enable in-app debug surfaces (e2e diagnostic panels, geometry inspectors).',
   },
 } as const satisfies Record<string, FlagDefinition>;
 

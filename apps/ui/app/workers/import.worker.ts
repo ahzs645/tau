@@ -1,5 +1,5 @@
 import JSZip from 'jszip';
-import { DirectIdbProvider } from '@taucad/filesystem/providers';
+import { DirectIdbProvider } from '@taucad/filesystem/backend';
 
 /**
  * Messages sent TO the import worker.

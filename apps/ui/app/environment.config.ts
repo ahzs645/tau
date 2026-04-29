@@ -31,6 +31,18 @@ const environmentSchema = z.preprocess(
     TAU_API_URL: z.url(),
     TAU_WEBSOCKET_URL: z.url().describe('WebSocket URL for the API (e.g., wss://api.tau.new or ws://localhost:4001)'),
     TAU_FRONTEND_URL: z.url(),
+    /**
+     * Toggle in-app debug surfaces (per-route diagnostic panels, e2e
+     * inspectors). Surfaced in the React tree via the `tauDebug` feature
+     * flag (`#flags/feature-flags.ts`). Accepts the canonical truthy
+     * strings `'1'` and `'true'` (case-insensitive) — anything else
+     * resolves to `false`.
+     */
+    TAU_DEBUG: z
+      .string()
+      .optional()
+      .transform((value) => (value === undefined ? false : /^(1|true)$/i.test(value)))
+      .describe('Enable in-app debug surfaces (debug panel, inspectors). Default false.'),
     NODE_ENV: z.enum(['development', 'production', 'test']),
     GITHUB_API_TOKEN: z.string().optional().describe('GitHub API token for the GitHub API client.'),
 

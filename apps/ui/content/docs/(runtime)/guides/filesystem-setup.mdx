@@ -77,14 +77,13 @@ const client = createRuntimeClient({
 
 Use `fromFsLike` when you have an fs-compatible object with a `promises` namespace (e.g., BrowserFS, memfs, or any polyfill). The `FsLike` interface requires `promises.readFile`, `promises.writeFile`, `promises.mkdir`, and the other standard `fs.promises` methods:
 
-```typescript @ts-nocheck
+```typescript
+import nodeFs from 'node:fs';
 import { createRuntimeClient, fromFsLike } from '@taucad/runtime';
 import { replicad } from '@taucad/runtime/kernels';
 import { esbuild } from '@taucad/runtime/bundler';
-import { BFSRequire } from 'browserfs';
 
-const fs = BFSRequire('fs');
-const filesystem = fromFsLike(fs, '/');
+const filesystem = fromFsLike(nodeFs, '/path/to/project');
 
 const client = createRuntimeClient({
   kernels: [replicad()],
@@ -93,13 +92,15 @@ const client = createRuntimeClient({
 });
 ```
 
-### 5. Understand RuntimeFileSystemBase vs RuntimeFileSystem
+### 5. Understand RuntimeFileSystemBase, RuntimeFileSystemHandle, and RuntimeFileSystem
 
-The framework uses two filesystem interfaces:
+The framework uses three related filesystem types:
 
-**`RuntimeFileSystemBase`** -- The 11-method base interface that `fromNodeFS`, `fromMemoryFS`, and `fromFsLike` return. Matches `fs.promises` semantics: `readFile`, `writeFile`, `mkdir`, `readdir`, `unlink`, `rmdir`, `rename`, `stat`, `lstat`, `exists`.
+**`RuntimeFileSystemHandle`** -- The connect-time discriminated value returned by `fromNodeFS`, `fromMemoryFS`, and `fromFsLike` and passed to `client.connect({ fileSystem })` (kinds: `inline | channel | rpc | host`).
 
-**[`RuntimeFileSystem`](../api/filesystem)** -- An enhanced interface that extends the base with convenience methods. The framework wraps the base automatically via `createRuntimeFileSystem(base)`:
+**`RuntimeFileSystemBase`** -- The 11-method contract carried by the `inline` arm (`.fs`) and bridged to the kernel. Matches `fs.promises` semantics: `readFile`, `writeFile`, `mkdir`, `readdir`, `unlink`, `rmdir`, `rename`, `stat`, `lstat`, `exists`.
+
+**[`RuntimeFileSystem`](../api/filesystem)** -- An enhanced interface that extends the base with convenience methods inside the worker. The framework wraps the base automatically via `createRuntimeFileSystem(base)`:
 
 | Method            | Signature                                          | Default Implementation                       |
 | ----------------- | -------------------------------------------------- | -------------------------------------------- |
@@ -112,21 +113,22 @@ All paths are absolute. Backends can supply optimized overrides for any enhanced
 
 ### 6. Use Filesystem Bridges for Cross-Worker Communication
 
-For advanced setups where the filesystem lives in a different worker or the main thread, use the bridge utilities from `@taucad/runtime/filesystem`:
+For advanced setups where the filesystem lives in a different worker or the main thread, use the bridge utilities from `@taucad/runtime/filesystem`. `createBridgePort(fileSystem)` creates a `MessagePort` bridge to a filesystem implementation and returns a `BridgeHandle` with `{ port, dispose() }`. Transfer the port to a worker and call `dispose()` when done:
 
-```typescript @ts-nocheck
-import { createBridgePort, exposeFileSystem, createFileSystemBridge } from '@taucad/runtime/filesystem';
-```
-
-**`createBridgePort(fileSystem)`** -- Creates a `MessagePort` bridge to a filesystem implementation. Returns a `BridgeHandle` with `{ port, dispose() }`. The port can be transferred to a worker:
-
-```typescript @ts-nocheck
+```typescript
 import { createBridgePort } from '@taucad/runtime/filesystem';
 import { fromNodeFS } from '@taucad/runtime/filesystem/node';
 
 const fileSystem = fromNodeFS('/path/to/project');
 const { port, dispose } = createBridgePort(fileSystem);
-// Transfer port to a worker, then call dispose() when done
+
+const worker = new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' });
+worker.postMessage({ port }, [port]);
+
+const cleanup = () => {
+  worker.terminate();
+  dispose();
+};
 ```
 
 **`exposeFileSystem(handlers, options?)`** -- Expose a filesystem to incoming bridge connections. Returns an `ExposeFileSystemHandle`.

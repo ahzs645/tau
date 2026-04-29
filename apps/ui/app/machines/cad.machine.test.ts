@@ -2,13 +2,13 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mock } from 'vitest-mock-extended';
 import { createActor, waitFor } from 'xstate';
-import type { RuntimeClientOptions, KernelIssue, PerformanceEntryData } from '@taucad/runtime';
+import type { RuntimeClientOptions, KernelIssue, TelemetryEntry } from '@taucad/runtime';
 import { createMockRuntimeClient } from '@taucad/runtime/testing';
 import type { Geometry, GeometryFile } from '@taucad/types';
 import { fromSafeAsync } from '#lib/xstate.lib.js';
 import { cadMachine } from '#machines/cad.machine.js';
 import type { CadContext } from '#machines/cad.machine.js';
-import type { AppRuntimeClient } from '#types/runtime-client.alias.js';
+import type { AppRuntimeClient, KernelOptionsFactory } from '#types/runtime-client.alias.js';
 
 const noop = () => {
   /* No-op */
@@ -48,12 +48,12 @@ function createTestActor(options?: {
     },
   });
 
-  const kernelOptions = mock<RuntimeClientOptions>();
+  const kernelOptionsFactory: KernelOptionsFactory = () => mock<RuntimeClientOptions>();
 
   const actor = createActor(machine, {
     input: {
       shouldInitializeKernelOnStart: options?.shouldInitializeKernelOnStart ?? false,
-      kernelOptions,
+      kernelOptionsFactory,
     },
   });
 
@@ -75,7 +75,7 @@ const stubFile: GeometryFile = { path: '/projects/test', filename: 'main.ts' };
 
 const stubGeometries: Geometry[] = [{ format: 'gltf', content: new Uint8Array(0), hash: 'stub' }];
 
-const stubIssues: KernelIssue[] = [{ message: 'test issue', type: 'runtime', severity: 'warning' }];
+const stubIssues: KernelIssue[] = [{ message: 'test issue', code: 'RUNTIME', type: 'runtime', severity: 'warning' }];
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -146,7 +146,7 @@ describe('cadMachine', () => {
       resolveConnect();
       await waitFor(actor, (s) => s.value === 'idle');
 
-      expect(mockClient.setFile).toHaveBeenCalledWith(stubFile);
+      expect(mockClient.openFile).toHaveBeenCalledWith({ file: stubFile, parameters: { width: 10 } });
       actor.stop();
     });
 
@@ -217,25 +217,25 @@ describe('cadMachine', () => {
   // State: idle
   // =========================================================================
   describe('idle', () => {
-    it('should forward setFile to runtime client without parameters', async () => {
+    it('should forward setFile to runtime client as openFile', async () => {
       const { actor, mockClient } = await startAndConnect();
 
       actor.send({ type: 'setFile', file: stubFile });
-      expect(mockClient.setFile).toHaveBeenCalledWith(stubFile);
+      expect(mockClient.openFile).toHaveBeenCalledWith({ file: stubFile, parameters: {} });
       expect(actor.getSnapshot().context.file).toEqual(stubFile);
       actor.stop();
     });
 
-    it('should update context on setParameters without forwarding to kernel', async () => {
+    it('should update context on setParameters without forwarding to kernel from cad.machine', async () => {
       const { actor, mockClient } = await startAndConnect();
 
       actor.send({ type: 'setParameters', parameters: { height: 20 } });
-      expect(mockClient.setParameters).not.toHaveBeenCalled();
+      expect(mockClient.updateParameters).not.toHaveBeenCalled();
       expect(actor.getSnapshot().context.parameters).toEqual({ height: 20 });
       actor.stop();
     });
 
-    it('should forward initializeModel as setFile without parameters', async () => {
+    it('should forward initializeModel as openFile with parameters', async () => {
       const { actor, mockClient } = await startAndConnect();
 
       actor.send({
@@ -243,7 +243,7 @@ describe('cadMachine', () => {
         file: stubFile,
         parameters: { width: 10 },
       });
-      expect(mockClient.setFile).toHaveBeenCalledWith(stubFile);
+      expect(mockClient.openFile).toHaveBeenCalledWith({ file: stubFile, parameters: { width: 10 } });
       expect(actor.getSnapshot().context.file).toEqual(stubFile);
       actor.stop();
     });
@@ -434,11 +434,11 @@ describe('cadMachine', () => {
       actor.stop();
     });
 
-    it('should accept setFile during rendering (forwards to client without parameters)', async () => {
+    it('should accept setFile during rendering (forwards to client as openFile)', async () => {
       const { actor, mockClient } = await enterRendering();
 
       actor.send({ type: 'setFile', file: stubFile });
-      expect(mockClient.setFile).toHaveBeenCalledWith(stubFile);
+      expect(mockClient.openFile).toHaveBeenCalledWith({ file: stubFile, parameters: {} });
       actor.stop();
     });
 
@@ -446,7 +446,7 @@ describe('cadMachine', () => {
       const { actor, mockClient } = await enterRendering();
 
       actor.send({ type: 'setParameters', parameters: { depth: 5 } });
-      expect(mockClient.setParameters).not.toHaveBeenCalled();
+      expect(mockClient.updateParameters).not.toHaveBeenCalled();
       expect(actor.getSnapshot().context.parameters).toEqual({ depth: 5 });
       actor.stop();
     });
@@ -462,9 +462,7 @@ describe('cadMachine', () => {
     it('should store telemetry during rendering', async () => {
       const { actor } = await enterRendering();
 
-      const entries = mock<PerformanceEntryData[]>([
-        { name: 'test', startTime: 0, duration: 100, workerTimeOrigin: 0 },
-      ]);
+      const entries = mock<TelemetryEntry[]>([{ name: 'test', startTime: 0, duration: 100, workerTimeOrigin: 0 }]);
       actor.send({ type: 'kernelTelemetry', entries });
       expect(actor.getSnapshot().context.telemetryEntries).toHaveLength(1);
       actor.stop();
@@ -518,7 +516,7 @@ describe('cadMachine', () => {
       const { actor, mockClient } = await enterBuffering();
 
       actor.send({ type: 'setFile', file: stubFile });
-      expect(mockClient.setFile).toHaveBeenCalledWith(stubFile);
+      expect(mockClient.openFile).toHaveBeenCalledWith({ file: stubFile, parameters: {} });
       actor.stop();
     });
 
@@ -588,7 +586,7 @@ describe('cadMachine', () => {
 
       await waitFor(actor, (s) => s.value === 'idle');
       expect(actor.getSnapshot().context.kernelClient).toBeDefined();
-      expect(mockClient.setFile).toHaveBeenCalledWith(stubFile);
+      expect(mockClient.openFile).toHaveBeenCalledWith({ file: stubFile, parameters: {} });
       actor.stop();
     });
 
@@ -619,7 +617,7 @@ describe('cadMachine', () => {
 
       await waitFor(actor, (s) => s.value === 'idle');
       expect(actor.getSnapshot().context.kernelClient).toBeDefined();
-      expect(mockClient.setFile).toHaveBeenCalledWith(stubFile);
+      expect(mockClient.openFile).toHaveBeenCalledWith({ file: stubFile, parameters: { width: 10 } });
       actor.stop();
     });
 
@@ -745,7 +743,7 @@ describe('cadMachine', () => {
       const mockClient = createMockRuntimeClient();
       vi.mocked(mockClient.export).mockResolvedValue({
         success: false,
-        issues: [{ message: 'Export failed', type: 'runtime', severity: 'error' }],
+        issues: [{ message: 'Export failed', code: 'RUNTIME', type: 'runtime', severity: 'error' }],
       });
 
       const { actor } = await startAndConnect({
@@ -879,7 +877,7 @@ describe('cadMachine', () => {
 
       const newFile: GeometryFile = { path: '/projects/test', filename: 'other.ts' };
       actor.send({ type: 'setFile', file: newFile });
-      expect(mockClient.setFile).toHaveBeenCalledWith(newFile);
+      expect(mockClient.openFile).toHaveBeenCalledWith({ file: newFile, parameters: {} });
       expect(actor.getSnapshot().context.file).toEqual(newFile);
 
       actor.send({ type: 'stateChanged', state: 'idle' });
@@ -916,7 +914,7 @@ describe('cadMachine', () => {
       expect(actor.getSnapshot().value).toBe('connecting');
 
       await waitFor(actor, (s) => s.value === 'idle');
-      expect(mockClient.setFile).toHaveBeenCalledWith(stubFile);
+      expect(mockClient.openFile).toHaveBeenCalledWith({ file: stubFile, parameters: {} });
 
       actor.send({ type: 'stateChanged', state: 'rendering' });
       expect(actor.getSnapshot().value).toBe('rendering');
@@ -955,17 +953,17 @@ describe('cadMachine', () => {
   // ---------------------------------------------------------------------------
 
   describe('render timeout', () => {
-    it('should forward setRenderTimeout to kernel client', async () => {
+    it('should forward setRenderTimeout to kernel client via setOptions', async () => {
       const { actor, mockClient } = await startAndConnect();
 
-      actor.send({ type: 'setRenderTimeout', seconds: 60 });
+      actor.send({ type: 'setRenderTimeout', renderTimeout: 60_000 });
 
-      expect(actor.getSnapshot().context.renderTimeout).toBe(60);
-      expect(mockClient.setRenderTimeout).toHaveBeenCalledWith(60);
+      expect(actor.getSnapshot().context.renderTimeout).toBe(60_000);
+      expect(mockClient.setOptions).toHaveBeenCalledWith({ renderTimeout: 60_000 });
       actor.stop();
     });
 
-    it('should apply stored renderTimeout on kernel connection', async () => {
+    it('should apply stored renderTimeout on kernel connection via setOptions', async () => {
       const mockClient = createMockRuntimeClient();
       let resolveConnect!: () => void;
       const connectGate = new Promise<void>((resolve) => {
@@ -981,19 +979,129 @@ describe('cadMachine', () => {
 
       actor.start();
 
-      actor.send({ type: 'setRenderTimeout', seconds: 120 });
-      expect(actor.getSnapshot().context.renderTimeout).toBe(120);
+      actor.send({ type: 'setRenderTimeout', renderTimeout: 120_000 });
+      expect(actor.getSnapshot().context.renderTimeout).toBe(120_000);
 
       resolveConnect();
       await waitFor(actor, (s) => s.value !== 'connecting');
 
-      expect(mockClient.setRenderTimeout).toHaveBeenCalledWith(120);
+      expect(mockClient.setOptions).toHaveBeenCalledWith({ renderTimeout: 120_000 });
       actor.stop();
     });
 
-    it('should default renderTimeout to 30', async () => {
+    it('should default renderTimeout to 30_000ms (30 seconds)', async () => {
       const { actor } = await startAndConnect();
-      expect(actor.getSnapshot().context.renderTimeout).toBe(30);
+      expect(actor.getSnapshot().context.renderTimeout).toBe(30_000);
+      actor.stop();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Render ID tracking
+  // ---------------------------------------------------------------------------
+
+  describe('render ID tracking', () => {
+    it('should initialize lastRequestedRenderId and lastSettledRenderId to 0', () => {
+      const { actor } = createTestActor();
+      actor.start();
+      const { context } = actor.getSnapshot();
+      expect(context.lastRequestedRenderId).toBe(0);
+      expect(context.lastSettledRenderId).toBe(0);
+      actor.stop();
+    });
+
+    it('should bump lastRequestedRenderId on setFile event', async () => {
+      const { actor } = await startAndConnect();
+      const before = actor.getSnapshot().context.lastRequestedRenderId;
+
+      actor.send({ type: 'setFile', file: stubFile });
+
+      expect(actor.getSnapshot().context.lastRequestedRenderId).toBe(before + 1);
+      actor.stop();
+    });
+
+    it('should bump lastRequestedRenderId on setParameters event', async () => {
+      const { actor } = await startAndConnect();
+      const before = actor.getSnapshot().context.lastRequestedRenderId;
+
+      actor.send({ type: 'setParameters', parameters: { width: 10 } });
+
+      expect(actor.getSnapshot().context.lastRequestedRenderId).toBe(before + 1);
+      actor.stop();
+    });
+
+    it('should bump lastRequestedRenderId on initializeModel event', async () => {
+      const { actor } = await startAndConnect();
+      const before = actor.getSnapshot().context.lastRequestedRenderId;
+
+      actor.send({ type: 'initializeModel', file: stubFile, parameters: { width: 5 } });
+
+      expect(actor.getSnapshot().context.lastRequestedRenderId).toBe(before + 1);
+      actor.stop();
+    });
+
+    it('should advance lastSettledRenderId to lastRequestedRenderId on geometryComputed', async () => {
+      const { actor } = await startAndConnect();
+
+      actor.send({ type: 'setFile', file: stubFile });
+      actor.send({ type: 'setParameters', parameters: { width: 7 } });
+      const requestedAfterTwoBumps = actor.getSnapshot().context.lastRequestedRenderId;
+      expect(requestedAfterTwoBumps).toBeGreaterThan(0);
+
+      actor.send({
+        type: 'geometryComputed',
+        geometries: stubGeometries,
+        issues: [],
+      });
+
+      expect(actor.getSnapshot().context.lastSettledRenderId).toBe(requestedAfterTwoBumps);
+      actor.stop();
+    });
+
+    it('should not regress lastSettledRenderId when subsequent geometryComputed arrives without new request', async () => {
+      const { actor } = await startAndConnect();
+
+      actor.send({ type: 'setFile', file: stubFile });
+      actor.send({
+        type: 'geometryComputed',
+        geometries: stubGeometries,
+        issues: [],
+      });
+      const settledFirst = actor.getSnapshot().context.lastSettledRenderId;
+
+      actor.send({
+        type: 'geometryComputed',
+        geometries: stubGeometries,
+        issues: [],
+      });
+
+      expect(actor.getSnapshot().context.lastSettledRenderId).toBe(settledFirst);
+      actor.stop();
+    });
+
+    it('should buffer setFile during connecting and forward as openFile on connect', async () => {
+      let resolveConnect!: () => void;
+      const mockClient = createMockRuntimeClient();
+
+      const { actor } = createTestActor({
+        connectResult: async () =>
+          new Promise((resolve) => {
+            resolveConnect = () => {
+              resolve({ type: 'kernelConnected', client: mockClient, cleanups: [] as Array<() => void> });
+            };
+          }),
+      });
+      actor.start();
+      expect(actor.getSnapshot().value).toBe('connecting');
+
+      actor.send({ type: 'setFile', file: stubFile });
+      const requestedDuringConnecting = actor.getSnapshot().context.lastRequestedRenderId;
+      expect(requestedDuringConnecting).toBeGreaterThan(0);
+
+      resolveConnect();
+      await waitFor(actor, (s) => s.value === 'idle');
+
+      expect(mockClient.openFile).toHaveBeenCalledWith({ file: stubFile, parameters: {} });
       actor.stop();
     });
   });

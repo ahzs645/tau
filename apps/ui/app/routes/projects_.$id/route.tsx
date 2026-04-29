@@ -20,7 +20,7 @@ import { useBlockBrowserNavigation } from '#hooks/use-block-browser-navigation.j
 // Chat persistence + draft flush is handled centrally by `<GlobalChatFlushGuard>`
 // (see `apps/ui/app/components/global-chat-flush-guard.tsx`). The project
 // route only needs to flush its own project + editor machine state below.
-import { debugKernelOptions } from '#constants/kernel-worker.constants.js';
+import { createDebugKernelOptions } from '#constants/kernel-worker.constants.js';
 import { WebglContextTrackerProvider } from '#hooks/use-webgl-context-tracker.js';
 
 // Define provider component at module level for stable reference across HMR
@@ -31,7 +31,7 @@ function RouteProvider({ children }: { readonly children?: React.ReactNode }): R
       <FileManagerProvider projectId={id} rootDirectory={`/projects/${id}`}>
         <ChatRpcSocketProvider>
           <WebglContextTrackerProvider>
-            <ProjectProvider projectId={id!} kernelOptions={debugKernelOptions}>
+            <ProjectProvider projectId={id!} kernelOptionsFactory={createDebugKernelOptions}>
               <MonacoModelServiceProvider>{children}</MonacoModelServiceProvider>
             </ProjectProvider>
           </WebglContextTrackerProvider>

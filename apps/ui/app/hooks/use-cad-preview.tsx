@@ -4,7 +4,6 @@ import { useActorRef, useSelector } from '@xstate/react';
 import { waitFor } from 'xstate';
 import type { ActorRefFrom } from 'xstate';
 import type { Geometry } from '@taucad/types';
-import type { RuntimeClientOptions } from '@taucad/runtime';
 import type { JSONSchema7 } from '@taucad/json-schema';
 import { fromSafeAsync } from '#lib/xstate.lib.js';
 import { cadMachine } from '#machines/cad.machine.js';
@@ -12,8 +11,9 @@ import { cadPreviewMachine } from '#machines/cad-preview.machine.js';
 import { graphicsMachine } from '#machines/graphics.machine.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import { joinPath } from '@taucad/utils/path';
-import { defaultKernelOptions } from '#constants/kernel-worker.constants.js';
+import { createDefaultKernelOptions } from '#constants/kernel-worker.constants.js';
 import { defaultGraphicsSettings } from '#constants/editor.constants.js';
+import type { KernelOptionsFactory } from '#types/runtime-client.alias.js';
 
 /**
  * Status of the CAD preview.
@@ -47,7 +47,7 @@ export type CadPreviewProviderProps = {
   readonly parameters?: Record<string, unknown>;
   /** Whether the rendering should be triggered (default: true) */
   readonly isEnabled?: boolean;
-  readonly kernelOptions?: RuntimeClientOptions;
+  readonly kernelOptionsFactory?: KernelOptionsFactory;
   readonly children: ReactNode;
 };
 
@@ -101,7 +101,7 @@ export function CadPreviewProvider({
   files,
   parameters,
   isEnabled = true,
-  kernelOptions,
+  kernelOptionsFactory,
   children,
 }: CadPreviewProviderProps): React.JSX.Element {
   const { fileManagerRef } = useFileManager();
@@ -110,7 +110,7 @@ export function CadPreviewProvider({
     input: {
       shouldInitializeKernelOnStart: false,
       fileManagerRef,
-      kernelOptions: kernelOptions ?? defaultKernelOptions,
+      kernelOptionsFactory: kernelOptionsFactory ?? createDefaultKernelOptions,
     },
   });
 

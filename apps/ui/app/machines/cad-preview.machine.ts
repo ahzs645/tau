@@ -61,7 +61,7 @@ const ensureParametersActor = fromSafeAsync<void, EnsureParametersInput>(async (
   const snapshot = await waitFor(cadRef, (s) => s.context.kernelClient !== undefined, { signal });
   const { kernelClient } = snapshot.context;
   if (kernelClient) {
-    kernelClient.setParameters(parameters);
+    void kernelClient.updateParameters(parameters);
   }
 });
 
@@ -113,7 +113,7 @@ export const cadPreviewMachine = setup({
           parameters: event.parameters,
         });
         const { kernelClient } = context.cadRef.getSnapshot().context;
-        kernelClient?.setParameters(event.parameters);
+        void kernelClient?.updateParameters(event.parameters);
       }
     }),
   },

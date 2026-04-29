@@ -12,8 +12,10 @@ Use these types when handling kernel operation results, errors, geometry output,
 
 All kernel operations return a discriminated union: `KernelSuccessResult<T> | KernelErrorResult`. Check the `success` field to narrow the result.
 
-```typescript @ts-nocheck
-type KernelResult<T> = KernelSuccessResult<T> | KernelErrorResult;
+```typescript
+import type { KernelSuccessResult, KernelErrorResult } from '@taucad/runtime';
+
+export type KernelResult<T> = KernelSuccessResult<T> | KernelErrorResult;
 ```
 
 <auto-type-table path='./props/types.ts' name='KernelSuccessResult' />
@@ -58,6 +60,8 @@ Dependencies represent what a kernel's geometry depends on. The `Dependency` uni
 
 <auto-type-table path='./props/types.ts' name='RuntimeFileSystem' />
 
+<auto-type-table path='./props/types.ts' name='RuntimeFileSystemHandle' />
+
 ## Kernel Types
 
 <auto-type-table path='./props/types.ts' name='KernelDefinition' />
@@ -92,11 +96,19 @@ Dependencies represent what a kernel's geometry depends on. The `Dependency` uni
 
 ## Usage
 
-```typescript @ts-nocheck
-const result = await client.render({ file: 'main.ts' });
+The discriminated `KernelResult` shape arrives both from `client.export(format, input)` (Promise resolution) and from `client.on('geometry', handler)` (autonomous loop). Narrow on `result.success` and use `result.data` / `result.issues` accordingly:
+
+```typescript
+import { createRuntimeClient, presets } from '@taucad/runtime';
+
+const client = createRuntimeClient(presets.all());
+const result = await client.export('glb', {
+  code: { 'main.ts': 'export default () => null' },
+  file: 'main.ts',
+});
 
 if (result.success) {
-  console.log(result.data.length);
+  console.log(`Exported ${result.data.bytes.byteLength} bytes`);
 } else {
   console.error(result.issues);
 }
@@ -105,5 +117,6 @@ if (result.success) {
 ## Related
 
 - [Handle Errors](../guides/error-handling)
+- [Live Rendering](../guides/live-rendering) -- subscribe to the same `KernelResult` shape over the `geometry` event
 - [API: Client](./client)
 - [API: Filesystem](./filesystem)

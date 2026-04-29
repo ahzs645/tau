@@ -7,20 +7,19 @@ import type {
   ExportResult,
   GetParametersResult,
   HashedGeometryResult,
-  RuntimeClientOptions,
   KernelIssue,
   RenderPhase,
-  PerformanceEntryData,
+  TelemetryEntry,
   WorkerState,
 } from '@taucad/runtime';
-import { createFileSystemBridge } from '@taucad/runtime/filesystem';
+import { fromWorkerOpaque } from '@taucad/runtime/filesystem';
 import { safeDispose } from '@taucad/utils/dispose';
 import type { JSONSchema7 } from '@taucad/json-schema';
 import type { LengthSymbol } from '@taucad/units';
 import { fromSafeAsync } from '#lib/xstate.lib.js';
 import type { logMachine } from '#machines/logs.machine.js';
 import type { fileManagerMachine } from '#machines/file-manager.machine.js';
-import type { AppRuntimeClient } from '#types/runtime-client.alias.js';
+import type { AppRuntimeClient, KernelOptionsFactory } from '#types/runtime-client.alias.js';
 
 export type CadContext = {
   file: GeometryFile | undefined;
@@ -35,15 +34,29 @@ export type CadContext = {
   shouldInitializeKernelOnStart: boolean;
   logActorRef?: ActorRefFrom<typeof logMachine>;
   fileManagerRef?: ActorRefFrom<typeof fileManagerMachine>;
-  kernelOptions: RuntimeClientOptions;
+  kernelOptionsFactory: KernelOptionsFactory;
   jsonSchema?: JSONSchema7;
   renderPhase: RenderPhase | undefined;
-  telemetryEntries: PerformanceEntryData[];
+  telemetryEntries: TelemetryEntry[];
   renderTimeout: number;
   kernelClient?: AppRuntimeClient;
   capabilities?: CapabilitiesManifest;
   activeKernelId?: string;
   eventCleanups: Array<() => void>;
+  /**
+   * Monotonically increasing render identifier. Bumped whenever the UI
+   * issues a render-triggering event (`setFile`, `setParameters`,
+   * `initializeModel`). Consumed by `awaitFreshRender` to detect when a
+   * settled geometry result corresponds to a request issued at-or-after a
+   * given baseline.
+   */
+  lastRequestedRenderId: number;
+  /**
+   * Highest render identifier that has been observed as settled via a
+   * `geometryComputed` event. Always less-than-or-equal to
+   * `lastRequestedRenderId`.
+   */
+  lastSettledRenderId: number;
 };
 
 type KernelConnectedEvent = {
@@ -62,10 +75,10 @@ type CadEvent =
   | { type: 'parametersParsed'; defaultParameters: Record<string, unknown>; jsonSchema: JSONSchema7 }
   | { type: 'kernelIssue'; errors: KernelIssue[] }
   | { type: 'kernelProgress'; phase: RenderPhase }
-  | { type: 'kernelTelemetry'; entries: PerformanceEntryData[] }
+  | { type: 'kernelTelemetry'; entries: TelemetryEntry[] }
   | { type: 'kernelLog'; level: LogLevel; message: string; origin?: LogOrigin; data?: unknown }
   | { type: 'stateChanged'; state: WorkerState; detail?: string }
-  | { type: 'setRenderTimeout'; seconds: number }
+  | { type: 'setRenderTimeout'; renderTimeout: number }
   | { type: 'geometryExported'; blob: Blob; format: string }
   | { type: 'geometryExportFailed'; errors: KernelIssue[] }
   | { type: 'capabilitiesUpdated'; capabilities: CapabilitiesManifest }
@@ -81,27 +94,23 @@ type CadInput = {
   shouldInitializeKernelOnStart: boolean;
   logRef?: ActorRefFrom<typeof logMachine>;
   fileManagerRef?: ActorRefFrom<typeof fileManagerMachine>;
-  kernelOptions: RuntimeClientOptions;
+  kernelOptionsFactory: KernelOptionsFactory;
 };
 
 type ConnectKernelInput = {
-  kernelOptions: RuntimeClientOptions;
+  kernelOptionsFactory: KernelOptionsFactory;
   fileManagerRef?: ActorRefFrom<typeof fileManagerMachine>;
   machineRef: AnyActorRef;
 };
 
 const connectKernelActor = fromSafeAsync<KernelConnectedEvent, ConnectKernelInput>(async ({ input, signal }) => {
-  const { kernelOptions, fileManagerRef, machineRef } = input;
-
-  console.log('[CadMachine] connectKernelActor: start', { hasFileManagerRef: Boolean(fileManagerRef) });
+  const { kernelOptionsFactory, fileManagerRef, machineRef } = input;
 
   if (!fileManagerRef) {
     throw new Error('File manager not initialized');
   }
 
-  console.log('[CadMachine] connectKernelActor: waiting for fileManager ready...');
   const snapshot = await waitFor(fileManagerRef, (state) => state.matches('ready'), { signal });
-  console.log('[CadMachine] connectKernelActor: fileManager ready', { hasWorker: Boolean(snapshot.context.worker) });
 
   if (!snapshot.context.worker) {
     throw new Error('File manager worker not available');
@@ -109,7 +118,10 @@ const connectKernelActor = fromSafeAsync<KernelConnectedEvent, ConnectKernelInpu
 
   signal.throwIfAborted();
 
-  console.log('[CadMachine] connectKernelActor: creating runtime client...');
+  const kernelOptions = kernelOptionsFactory({
+    fileSystem: fromWorkerOpaque(snapshot.context.worker),
+    filePoolBuffer: snapshot.context.filePoolBuffer,
+  });
   const client = createRuntimeClient(kernelOptions);
   const cleanups: Array<() => void> = [];
 
@@ -125,12 +137,6 @@ const connectKernelActor = fromSafeAsync<KernelConnectedEvent, ConnectKernelInpu
   cleanups.push(
     client.on('geometry', (result: HashedGeometryResult) => {
       if (result.success) {
-        if (result.data.length === 0) {
-          console.warn('[CadMachine] kernel returned success with zero geometries', {
-            issuesLength: result.issues.length,
-            firstIssue: result.issues[0]?.message,
-          });
-        }
         machineRef.send({
           type: 'geometryComputed',
           geometries: result.data,
@@ -164,7 +170,7 @@ const connectKernelActor = fromSafeAsync<KernelConnectedEvent, ConnectKernelInpu
         data: entry.data,
       });
     }),
-    client.on('telemetry', (entries: PerformanceEntryData[]) => {
+    client.on('telemetry', (entries: TelemetryEntry[]) => {
       machineRef.send({ type: 'kernelTelemetry', entries });
     }),
     client.on('error', (issues: KernelIssue[]) => {
@@ -173,20 +179,16 @@ const connectKernelActor = fromSafeAsync<KernelConnectedEvent, ConnectKernelInpu
     client.on('capabilities', (capabilities: CapabilitiesManifest) => {
       machineRef.send({ type: 'capabilitiesUpdated', capabilities });
     }),
-    client.on('activeKernel', (kernelId: string | undefined) => {
+    client.on('activeKernelChanged', (kernelId: string | undefined) => {
       machineRef.send({ type: 'activeKernelChanged', kernelId });
     }),
   );
 
   signal.throwIfAborted();
 
-  const { port, dispose } = createFileSystemBridge(snapshot.context.worker);
-  cleanups.push(dispose);
-  console.log('[CadMachine] connectKernelActor: connecting client...');
-  await client.connect({ port, filePoolBuffer: snapshot.context.filePoolBuffer });
+  await client.connect();
 
   signal.removeEventListener('abort', teardown);
-  console.log('[CadMachine] connectKernelActor: connected successfully');
 
   return { type: 'kernelConnected', client, cleanups };
 });
@@ -262,7 +264,6 @@ export const cadMachine = setup({
     }),
     setGeometries: enqueueActions(({ enqueue, event, context }) => {
       assertEvent(event, 'geometryComputed');
-      console.log('[CadMachine] setGeometries', { count: event.geometries.length, file: context.file?.filename });
       const currentFileName = context.file?.filename;
       enqueue.assign({
         geometries: event.geometries,
@@ -346,26 +347,34 @@ export const cadMachine = setup({
     }),
     forwardSetFile: ({ context, event }) => {
       assertEvent(event, 'setFile');
-      context.kernelClient?.setFile(event.file);
+      void context.kernelClient?.openFile({ file: event.file, parameters: context.parameters });
     },
     forwardInitializeModel: ({ context, event }) => {
       assertEvent(event, 'initializeModel');
-      console.log('[CadMachine] forwardInitializeModel', {
-        file: event.file,
-        hasRuntimeClient: Boolean(context.kernelClient),
-      });
-      context.kernelClient?.setFile(event.file);
+      void context.kernelClient?.openFile({ file: event.file, parameters: event.parameters ?? {} });
     },
     setRenderTimeout: assign({
       renderTimeout({ event }) {
         assertEvent(event, 'setRenderTimeout');
-        return event.seconds;
+        return event.renderTimeout;
       },
     }),
     forwardRenderTimeout: ({ context, event }) => {
       assertEvent(event, 'setRenderTimeout');
-      context.kernelClient?.setRenderTimeout(event.seconds);
+      void context.kernelClient?.setOptions({ renderTimeout: event.renderTimeout });
     },
+    bumpRequestedRenderId: assign({
+      lastRequestedRenderId({ context }) {
+        return context.lastRequestedRenderId + 1;
+      },
+    }),
+    setSettledRenderId: assign({
+      lastSettledRenderId({ context }) {
+        // Geometry result corresponds to the most recently requested render;
+        // settled watermark advances to whatever the UI has asked for.
+        return context.lastRequestedRenderId;
+      },
+    }),
     setCapabilities: assign({
       capabilities({ event }) {
         assertEvent(event, 'capabilitiesUpdated');
@@ -400,6 +409,7 @@ export const cadMachine = setup({
             errors: [
               {
                 message: error instanceof Error ? error.message : 'Export failed',
+                code: 'RUNTIME',
                 type: 'runtime',
                 severity: 'error',
               },
@@ -439,15 +449,17 @@ export const cadMachine = setup({
     shouldInitializeKernelOnStart: input.shouldInitializeKernelOnStart,
     logActorRef: input.logRef,
     fileManagerRef: input.fileManagerRef,
-    kernelOptions: input.kernelOptions,
+    kernelOptionsFactory: input.kernelOptionsFactory,
     jsonSchema: undefined,
     renderPhase: undefined,
     telemetryEntries: [],
-    renderTimeout: 30,
+    renderTimeout: 30_000,
     kernelClient: undefined,
     capabilities: undefined,
     activeKernelId: undefined,
     eventCleanups: [],
+    lastRequestedRenderId: 0,
+    lastSettledRenderId: 0,
   }),
   exit: ['destroyKernel'],
   initial: 'connecting',
@@ -458,7 +470,7 @@ export const cadMachine = setup({
         src: 'connectKernelActor',
         input({ context, self }) {
           return {
-            kernelOptions: context.kernelOptions,
+            kernelOptionsFactory: context.kernelOptionsFactory,
             fileManagerRef: context.fileManagerRef,
             machineRef: self,
           };
@@ -467,7 +479,6 @@ export const cadMachine = setup({
         onError: {
           target: 'error',
           actions: enqueueActions(({ enqueue, event }) => {
-            console.error('[CadMachine] connecting → error', event.error);
             const errorMessage =
               event.error instanceof Error || event.error instanceof DOMException
                 ? event.error.message
@@ -475,7 +486,9 @@ export const cadMachine = setup({
             enqueue.assign({
               kernelIssues({ context }) {
                 const newMap = new Map(context.kernelIssues);
-                newMap.set('__connection__', [{ message: errorMessage, type: 'runtime', severity: 'error' }]);
+                newMap.set('__connection__', [
+                  { message: errorMessage, code: 'RUNTIME', type: 'runtime', severity: 'error' },
+                ]);
                 return newMap;
               },
             });
@@ -485,21 +498,19 @@ export const cadMachine = setup({
       on: {
         kernelConnected: {
           actions: enqueueActions(({ enqueue, context, event }) => {
-            console.log('[CadMachine] kernelConnected', { hasFile: Boolean(context.file) });
             enqueue.assign({
               kernelClient: event.client,
               eventCleanups: event.cleanups,
             });
+            void event.client.setOptions({ renderTimeout: context.renderTimeout });
             if (context.file) {
-              console.log('[CadMachine] forwarding buffered file to kernel', context.file);
-              event.client.setFile(context.file);
+              void event.client.openFile({ file: context.file, parameters: context.parameters });
             }
-            event.client.setRenderTimeout(context.renderTimeout);
           }),
         },
-        initializeModel: { actions: 'initializeModel' },
-        setFile: { actions: 'setFile' },
-        setParameters: { actions: ['setParameters'] },
+        initializeModel: { actions: ['bumpRequestedRenderId', 'initializeModel'] },
+        setFile: { actions: ['bumpRequestedRenderId', 'setFile'] },
+        setParameters: { actions: ['bumpRequestedRenderId', 'setParameters'] },
         setRenderTimeout: { actions: ['setRenderTimeout'] },
         kernelLog: { actions: 'sendKernelLogs' },
         kernelProgress: { actions: 'trackProgress' },
@@ -512,13 +523,13 @@ export const cadMachine = setup({
     idle: {
       on: {
         initializeModel: {
-          actions: ['initializeModel', 'forwardInitializeModel'],
+          actions: ['bumpRequestedRenderId', 'initializeModel', 'forwardInitializeModel'],
         },
         setFile: {
-          actions: ['setFile', 'forwardSetFile'],
+          actions: ['bumpRequestedRenderId', 'setFile', 'forwardSetFile'],
         },
         setParameters: {
-          actions: ['setParameters'],
+          actions: ['bumpRequestedRenderId', 'setParameters'],
         },
         setRenderTimeout: {
           actions: ['setRenderTimeout', 'forwardRenderTimeout'],
@@ -527,7 +538,7 @@ export const cadMachine = setup({
         exportGeometry: { actions: 'dispatchExport' },
         geometryExported: { actions: 'setExportedBlob' },
         geometryExportFailed: { actions: 'setExportError' },
-        geometryComputed: { actions: ['setGeometries'] },
+        geometryComputed: { actions: ['setGeometries', 'setSettledRenderId'] },
         parametersParsed: { actions: 'setDefaultParameters' },
         kernelIssue: { actions: 'setKernelIssue' },
         kernelLog: { actions: 'sendKernelLogs' },
@@ -546,13 +557,13 @@ export const cadMachine = setup({
     buffering: {
       on: {
         initializeModel: {
-          actions: ['initializeModel', 'forwardInitializeModel'],
+          actions: ['bumpRequestedRenderId', 'initializeModel', 'forwardInitializeModel'],
         },
         setFile: {
-          actions: ['setFile', 'forwardSetFile'],
+          actions: ['bumpRequestedRenderId', 'setFile', 'forwardSetFile'],
         },
         setParameters: {
-          actions: ['setParameters'],
+          actions: ['bumpRequestedRenderId', 'setParameters'],
         },
         setRenderTimeout: {
           actions: ['setRenderTimeout', 'forwardRenderTimeout'],
@@ -561,7 +572,7 @@ export const cadMachine = setup({
         exportGeometry: { actions: 'dispatchExport' },
         geometryExported: { actions: 'setExportedBlob' },
         geometryExportFailed: { actions: 'setExportError' },
-        geometryComputed: { actions: ['setGeometries'] },
+        geometryComputed: { actions: ['setGeometries', 'setSettledRenderId'] },
         parametersParsed: { actions: 'setDefaultParameters' },
         kernelIssue: { actions: 'setKernelIssue' },
         kernelLog: { actions: 'sendKernelLogs' },
@@ -581,13 +592,13 @@ export const cadMachine = setup({
       exit: assign({ renderPhase: () => undefined }),
       on: {
         initializeModel: {
-          actions: ['initializeModel', 'forwardInitializeModel'],
+          actions: ['bumpRequestedRenderId', 'initializeModel', 'forwardInitializeModel'],
         },
         setFile: {
-          actions: ['setFile', 'forwardSetFile'],
+          actions: ['bumpRequestedRenderId', 'setFile', 'forwardSetFile'],
         },
         setParameters: {
-          actions: ['setParameters'],
+          actions: ['bumpRequestedRenderId', 'setParameters'],
         },
         setRenderTimeout: {
           actions: ['setRenderTimeout', 'forwardRenderTimeout'],
@@ -596,7 +607,7 @@ export const cadMachine = setup({
         exportGeometry: { actions: 'dispatchExport' },
         geometryExported: { actions: 'setExportedBlob' },
         geometryExportFailed: { actions: 'setExportError' },
-        geometryComputed: { actions: ['setGeometries'] },
+        geometryComputed: { actions: ['setGeometries', 'setSettledRenderId'] },
         parametersParsed: { actions: 'setDefaultParameters' },
         kernelIssue: { actions: 'setKernelIssue' },
         kernelLog: { actions: 'sendKernelLogs' },
@@ -616,14 +627,14 @@ export const cadMachine = setup({
       on: {
         initializeModel: {
           target: 'connecting',
-          actions: ['destroyKernel', 'initializeModel'],
+          actions: ['destroyKernel', 'bumpRequestedRenderId', 'initializeModel'],
         },
         setFile: {
           target: 'connecting',
-          actions: ['destroyKernel', 'setFile'],
+          actions: ['destroyKernel', 'bumpRequestedRenderId', 'setFile'],
         },
         setParameters: {
-          actions: ['setParameters'],
+          actions: ['bumpRequestedRenderId', 'setParameters'],
         },
         setRenderTimeout: {
           actions: ['setRenderTimeout', 'forwardRenderTimeout'],
@@ -632,7 +643,7 @@ export const cadMachine = setup({
         exportGeometry: { actions: 'dispatchExport' },
         geometryExported: { actions: 'setExportedBlob' },
         geometryExportFailed: { actions: 'setExportError' },
-        geometryComputed: { actions: ['setGeometries'] },
+        geometryComputed: { actions: ['setGeometries', 'setSettledRenderId'] },
         parametersParsed: { actions: 'setDefaultParameters' },
         kernelIssue: { actions: 'setKernelIssue' },
         kernelLog: { actions: 'sendKernelLogs' },

@@ -1,9 +1,11 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useActorRef, useSelector } from '@xstate/react';
 import { Check } from 'lucide-react';
 import type { Geometry } from '@taucad/types';
 import { createRuntimeClientOptions } from '@taucad/runtime';
+import { inProcessTransport } from '@taucad/runtime/transport';
+import { fromMemoryFs } from '@taucad/runtime/filesystem';
 import { jscad } from '@taucad/runtime/kernels';
 import { parameterCache, geometryCache, gltfCoordinateTransform } from '@taucad/runtime/middleware';
 import { esbuild } from '@taucad/runtime/bundler';
@@ -19,12 +21,6 @@ import {
   morphPointCount,
   assemblySplitRatio as defaultAssemblySplitRatio,
 } from '#routes/auth.$/splashback/auth-splashback.constants.js';
-
-const splashbackOptions = createRuntimeClientOptions({
-  kernels: [jscad()],
-  middleware: [parameterCache(), geometryCache(), gltfCoordinateTransform()],
-  bundlers: [esbuild()],
-});
 
 // eslint-disable-next-line @typescript-eslint/naming-convention -- file path key
 const gearCode = { 'main.js': gearJscad };
@@ -772,6 +768,21 @@ export function AuthSplashback(): React.JSX.Element {
   const state = useSelector(actorRef, (snapshot) => snapshot);
   const { send } = actorRef;
   const derivedState = useSelector(actorRef, deriveVisibilityState);
+
+  /* The in-process transport allocates a `MessageChannel` and SAB
+   * pools at construction time — defer to a `useMemo` so it only
+   * runs client-side after hydration and remains stable across
+   * re-renders. */
+  const splashbackOptions = useMemo(
+    () =>
+      createRuntimeClientOptions({
+        transport: inProcessTransport.client({ fileSystem: fromMemoryFs() }),
+        kernels: [jscad()],
+        middleware: [parameterCache(), geometryCache(), gltfCoordinateTransform()],
+        bundlers: [esbuild()],
+      }),
+    [],
+  );
 
   const { geometries, status } = useRender({
     clientOptions: splashbackOptions,

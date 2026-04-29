@@ -7,6 +7,7 @@ import { projectMachine } from '#machines/project.machine.js';
 import type { ProjectContext } from '#machines/project.machine.js';
 import { fromSafeAsync } from '#lib/xstate.lib.js';
 import { createDefaultEntry, getActiveGroupValues } from '#utils/parameter-config.utils.js';
+import type { KernelOptionsFactory } from '#types/runtime-client.alias.js';
 
 vi.mock('#constants/browser.constants.js', () => ({
   isBrowser: true,
@@ -85,14 +86,14 @@ function createTestActor(options?: {
   });
 
   const fileManagerRef = mock<ProjectContext['fileManagerRef']>({ send: vi.fn() });
-  const kernelOptions = mock<RuntimeClientOptions>();
+  const kernelOptionsFactory: KernelOptionsFactory = () => mock<RuntimeClientOptions>();
 
   return createActor(machine, {
     input: {
       projectId: options?.projectId ?? 'test-project',
       shouldLoadModelOnStart: options?.shouldLoadModelOnStart ?? false,
       fileManagerRef,
-      kernelOptions,
+      kernelOptionsFactory,
     },
   });
 }
@@ -145,9 +146,9 @@ describe('projectMachine', () => {
         },
       });
       const fileManagerRef = mock<ProjectContext['fileManagerRef']>({ send: vi.fn() });
-      const kernelOptions = mock<RuntimeClientOptions>();
+      const kernelOptionsFactory: KernelOptionsFactory = () => mock<RuntimeClientOptions>();
       const actor = createActor(machine, {
-        input: { projectId: 'b', fileManagerRef, kernelOptions },
+        input: { projectId: 'b', fileManagerRef, kernelOptionsFactory },
       });
       actor.start();
       expect(actor.getSnapshot().value).toBe('ssr');

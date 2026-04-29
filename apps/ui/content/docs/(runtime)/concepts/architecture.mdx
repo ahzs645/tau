@@ -14,7 +14,7 @@ CAD kernels perform heavy computation: WASM-based geometry, bundling, tessellati
 
 ## Thread Topology
 
-The runtime spans three threads connected by MessagePort channels and a SharedArrayBuffer abort signal:
+The runtime spans three threads connected by MessagePort channels and a transport-owned abort signal (backed by `SharedArrayBuffer` on SAB-capable transports):
 
 ```mermaid
 flowchart TB
@@ -39,8 +39,8 @@ flowchart TB
         EventBus["EventBus + WatchRegistry"]
     end
 
-    Editor -->|"setFile / setParameters"| Client
-    Client -->|"MessagePort (kernel protocol)\n+ SharedArrayBuffer (abort)"| RenderLoop
+    Editor -->|"openFile / updateParameters"| Client
+    Client -->|"MessagePort (kernel protocol)\n+ Transport abort channel"| RenderLoop
     RenderLoop --> KRW
     KRW --> MW
     MW --> Kernels
@@ -54,7 +54,7 @@ flowchart TB
     WatchSub -->|"file changed → invalidate + debounce"| RenderLoop
 ```
 
-**Main Thread** -- display and user input. Houses the editor, Three.js renderer, parameter UI, and progress indicators. The editor writes files to the File Manager Worker through a bridge proxy (`createFileSystemBridge` + `createBridgeProxy<FileManagerProtocol>`). The `RuntimeClient` sends `setFile`/`setParameters` to the kernel worker and subscribes to geometry, state, and progress events.
+**Main Thread** -- display and user input. Houses the editor, Three.js renderer, parameter UI, and progress indicators. The editor writes files to the File Manager Worker through a bridge proxy (`createFileSystemBridge` + `createBridgeProxy<FileManagerProtocol>`). The `RuntimeClient` sends `openFile`/`updateParameters`/`setOptions`/`export` commands to the kernel worker and subscribes to geometry, state, and progress events.
 
 **Kernel Worker** -- the autonomous render service. Holds the current file, parameters, watch subscriptions, debounce timers, render generation counter, all caches (file hash, file content, bundle result, kernel selection), and the render loop. Runs middleware and kernel code. Pushes results to the main thread via events.
 
@@ -95,15 +95,17 @@ This topology has two important properties: the editor's file writes reach the f
 
 ## Protocol
 
-The protocol is asymmetric: few commands in, many event types out, plus a shared-memory abort channel.
+The protocol is asymmetric: few commands in, many event types out, plus a transport-owned abort channel.
 
 ### Commands (main thread -> worker)
 
-| Command         | Trigger                   | Worker Behavior                                   |
-| --------------- | ------------------------- | ------------------------------------------------- |
-| `setFile`       | User opens file           | Render immediately, discover deps, start watching |
-| `setParameters` | User adjusts slider/input | Store params, debounce 50ms, re-render            |
-| `export`        | User clicks export        | Export from last native handle                    |
+| Command            | Trigger                          | Worker Behavior                                            |
+| ------------------ | -------------------------------- | ---------------------------------------------------------- |
+| `openFile`         | User opens file                  | Render immediately, discover deps, start watching          |
+| `updateParameters` | User adjusts slider/input        | Store params, debounce 50ms, re-render                     |
+| `setOptions`       | User changes tessellation/format | Store options, re-render                                   |
+| `export`           | User clicks export               | Export from the last native handle (or self-render inline) |
+| `abort`            | Transport without shared memory  | Wire-format equivalent of the transport's abort signal     |
 
 ### Events (worker -> main thread, pushed reactively)
 
@@ -116,17 +118,17 @@ The protocol is asymmetric: few commands in, many event types out, plus a shared
 | `error`              | Render fails         | Diagnostics panel            |
 | `log` / `telemetry`  | Ongoing              | Console, performance panel   |
 
-### SharedArrayBuffer (out-of-band abort)
+### Transport abort channel (out-of-band)
 
-The main thread writes `Atomics.store(abortGeneration, newGeneration)` **before** posting `setFile` or `setParameters`. The worker's OC Proxy reads `Atomics.load` at each WASM call boundary. On mismatch, it throws `RenderAbortedError` and the stale render aborts within microseconds. See [Worker Model](./worker-model) for details.
+The active [transport](../api/transport) owns the abort channel end-to-end. The runtime client calls `transport.signalAbort('superseded')` **before** posting `openFile`/`updateParameters`/`setOptions`; the transport bumps its abort generation (backed by `SharedArrayBuffer` + `Atomics` on SAB-capable transports, or serialised as a wire-format `'abort'` command on SAB-less transports) and the worker's OC Proxy observes the new generation at the next WASM call boundary. The stale render throws an internal abort marker — never surfaced as a consumer-visible error. The runtime client itself never reads `Atomics` or touches a SAB. See [Worker Model](./worker-model) for details.
 
-### Request/Response Mode
+### One-shot Export Mode
 
-For programmatic one-shot rendering, `client.render()` and `client.export()` use a request/response pattern. The client sends a command with a `requestId`, the worker renders, and returns the result. The client resolves the Promise. This mode is useful for scripts, tests, and tooling but is not the primary architecture for interactive editing.
+For programmatic one-shot pipelines, `client.export(format, input)` self-renders and resolves a single `ExportResult`. The client sends the command, the worker renders, exports the geometry, and returns the bytes. The single-argument form `client.export(format)` reuses the most recent render result — calling it without one throws `NoRenderOutcomeError`.
 
 ## Autonomous Data Flow
 
-The primary interaction pattern. After `setFile`, the worker manages its own render lifecycle. When the user edits a file, the editor writes to the filesystem, the kernel worker detects the change via its watch subscription, and re-renders autonomously:
+The primary interaction pattern. After `openFile`, the worker manages its own render lifecycle. When the user edits a file, the editor writes to the filesystem, the kernel worker detects the change via its watch subscription, and re-renders autonomously:
 
 ```mermaid
 sequenceDiagram
@@ -135,9 +137,9 @@ sequenceDiagram
     participant Worker as Kernel Worker
     participant FSW as File Manager Worker
 
-    Editor->>Client: setFile(path, params)
-    Client->>Client: Atomics.store(abortGeneration)
-    Client->>Worker: setFile command
+    Editor->>Client: openFile(path, params)
+    Client->>Client: transport.signalAbort('superseded')
+    Client->>Worker: openFile command
     Worker->>Worker: render immediately
     Worker-->>Editor: geometryComputed event
     Worker->>Worker: discover deps
@@ -152,14 +154,14 @@ sequenceDiagram
     Worker-->>Editor: geometryComputed event
 
     Note over Editor: User adjusts parameter slider
-    Editor->>Client: setParameters(newParams)
-    Client->>Client: Atomics.store(abortGeneration)
-    Client->>Worker: setParameters command
+    Editor->>Client: updateParameters(newParams)
+    Client->>Client: transport.signalAbort('superseded')
+    Client->>Worker: updateParameters command
     Worker->>Worker: debounce 50ms, re-render
     Worker-->>Editor: geometryComputed event
 ```
 
-The main thread sends `setFile` and `setParameters`. File edits flow through the filesystem bridge. Everything else -- scheduling, dependency watching, cache invalidation, abort, and result delivery -- happens inside the worker.
+The main thread sends `openFile` and `updateParameters`. File edits flow through the filesystem bridge. Everything else -- scheduling, dependency watching, cache invalidation, abort, and result delivery -- happens inside the worker.
 
 ## Layer Responsibilities
 
@@ -167,7 +169,7 @@ Within the thread topology, four layers stack vertically. Each layer depends onl
 
 ### Client Layer (RuntimeClient)
 
-The [`RuntimeClient`](../api/client) is the consumer-facing API. It allocates the SharedArrayBuffer, writes abort signals, and multiplexes events to subscribers. The client lazily initializes the worker and transport on first `connect()` or `setFile()`. See [Client API](../api/client) for the full reference.
+The [`RuntimeClient`](../api/client) is the consumer-facing API. `createRuntimeClient(options)` returns an inert client; the first command call (`client.openFile`, `client.updateParameters`, `client.setOptions`, or `client.export`) lazy-spawns the worker and runs the transport handshake. Inline `code:` input runs in an in-memory filesystem. Hosts that own a filesystem (worker-hosted FSes via `fromWorker(...)`, externally allocated `filePool` SABs, deferred FS attachment) call `client.connect({ fileSystem })`; see [Embedding in a Host](../guides/embedding-in-a-host). `client.on(event, handler)` consumes the event stream, and the active transport owns the abort channel and `postMessage` event delivery — the client itself never touches `SharedArrayBuffer` or `Atomics`. See [Client API](../api/client) for the full reference.
 
 ### Transport Layer (MessagePort)
 
@@ -180,8 +182,8 @@ The framework runs inside the kernel worker. [`KernelRuntimeWorker`](./worker-mo
 - **Kernel selection** -- selects the active kernel per file via extension, regex, or bundler-assisted detection. See [Kernel Selection](./kernel-selection).
 - **Middleware chain** -- onion-model wrappers around `createGeometry`, `getParameters`, and `exportGeometry`. See [Middleware Model](./middleware-model).
 - **Bundler** -- lazy-loaded for JS/TS kernels. Bundles entry files and dependencies, executes code.
-- **Autonomous render loop** -- `setFile` renders immediately; file changes debounce at 500ms; parameter changes debounce at 50ms. See [Render Lifecycle](./render-lifecycle).
-- **Abort infrastructure** -- SharedArrayBuffer-based abort for cancelling superseded renders.
+- **Autonomous render loop** -- `openFile` renders immediately; file changes debounce at 500ms; parameter changes debounce at 50ms. See [Render Lifecycle](./render-lifecycle).
+- **Abort infrastructure** -- Cooperative abort delivered via the transport's abort channel (SAB-backed where available, wire-format elsewhere) for cancelling superseded renders. The framework never owns the SAB itself.
 
 ### Kernel Layer (defineKernel)
 
@@ -199,12 +201,12 @@ Kernels are plain objects returned by `defineKernel`. They implement `getDepende
 
 - **Testability**: Each layer can be tested in isolation. Mock transports, in-process workers, and kernel stubs are straightforward.
 - **Extensibility**: New kernels, middleware, and bundlers plug in via factory functions. No core code changes.
-- **Performance**: Transferables avoid copying large geometry buffers. The filesystem bridge eliminates main-thread relay for watch events. SharedArrayBuffer abort avoids wasting CPU on superseded renders.
+- **Performance**: Transferables avoid copying large geometry buffers. The filesystem bridge eliminates main-thread relay for watch events. The transport-owned abort channel avoids wasting CPU on superseded renders.
 - **Single worker**: One `KernelRuntimeWorker` hosts all registered kernels. Selection happens per file; only the matching kernel runs.
 
 ## Further Reading
 
-- [Worker Model](./worker-model) -- Web Workers, SharedArrayBuffer abort channel, and the autonomous render service
+- [Worker Model](./worker-model) -- Web Workers, transport abort channel, and the autonomous render service
 - [Render Lifecycle](./render-lifecycle) -- Detailed render loop, cancellation strategies, and signal channel
 - [Plugin System](./plugin-system) -- How `defineKernel`, `defineMiddleware`, and `defineBundler` compose
 - [API: Client](../api/client) -- `createRuntimeClient` and `RuntimeClient` types

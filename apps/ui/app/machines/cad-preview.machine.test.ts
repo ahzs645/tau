@@ -38,7 +38,7 @@ describe('cadPreviewMachine + cadMachine integration', () => {
     const cadRef = createActor(providedCadMachine, {
       input: {
         shouldInitializeKernelOnStart: false,
-        kernelOptions: mock<RuntimeClientOptions>(),
+        kernelOptionsFactory: () => mock<RuntimeClientOptions>(),
       },
     });
 
@@ -70,8 +70,11 @@ describe('cadPreviewMachine + cadMachine integration', () => {
       setTimeout(resolve, 0);
     });
 
-    expect(mockClient.setFile).toHaveBeenCalledWith({ path: '/projects/proj_test', filename: 'main.ts' });
-    expect(mockClient.setParameters).toHaveBeenCalledWith({ width: 42 });
+    expect(mockClient.openFile).toHaveBeenCalledWith({
+      file: { path: '/projects/proj_test', filename: 'main.ts' },
+      parameters: { width: 42 },
+    });
+    expect(mockClient.updateParameters).toHaveBeenCalledWith({ width: 42 });
 
     cadRef.stop();
     previewRef.stop();
@@ -99,7 +102,7 @@ describe('cadPreviewMachine + cadMachine integration', () => {
     const cadRef = createActor(providedCadMachine, {
       input: {
         shouldInitializeKernelOnStart: false,
-        kernelOptions: mock<RuntimeClientOptions>(),
+        kernelOptionsFactory: () => mock<RuntimeClientOptions>(),
       },
     });
 
@@ -151,8 +154,11 @@ describe('cadPreviewMachine + cadMachine integration', () => {
     const cadSnapshot = cadRef.getSnapshot();
     expect(cadSnapshot.value).toBe('idle');
     expect(cadSnapshot.context.file).toEqual({ path: '/projects/proj_test', filename: 'main.ts' });
-    expect(mockClient.setFile).toHaveBeenCalledWith({ path: '/projects/proj_test', filename: 'main.ts' });
-    expect(mockClient.setParameters).toHaveBeenCalledWith({ width: 42 });
+    expect(mockClient.openFile).toHaveBeenCalledWith({
+      file: { path: '/projects/proj_test', filename: 'main.ts' },
+      parameters: { width: 42 },
+    });
+    expect(mockClient.updateParameters).toHaveBeenCalledWith({ width: 42 });
 
     cadRef.stop();
     previewRef.stop();
@@ -176,7 +182,7 @@ describe('cadPreviewMachine + cadMachine integration', () => {
     const cadRef = createActor(providedCadMachine, {
       input: {
         shouldInitializeKernelOnStart: false,
-        kernelOptions: mock<RuntimeClientOptions>(),
+        kernelOptionsFactory: () => mock<RuntimeClientOptions>(),
       },
     });
 
@@ -228,7 +234,10 @@ describe('cadPreviewMachine + cadMachine integration', () => {
     await waitFor(previewRef, (s) => s.value === 'active', { timeout: 5000 });
 
     // InitializeModel should have been sent to cadRef (now in idle)
-    expect(mockClient.setFile).toHaveBeenCalledWith({ path: '/projects/proj_test', filename: 'main.ts' });
+    expect(mockClient.openFile).toHaveBeenCalledWith({
+      file: { path: '/projects/proj_test', filename: 'main.ts' },
+      parameters: {},
+    });
 
     cadRef.stop();
     previewRef.stop();
@@ -256,7 +265,7 @@ describe('cadPreviewMachine + cadMachine integration', () => {
     const cadRef = createActor(providedCadMachine, {
       input: {
         shouldInitializeKernelOnStart: false,
-        kernelOptions: mock<RuntimeClientOptions>(),
+        kernelOptionsFactory: () => mock<RuntimeClientOptions>(),
       },
     });
 
@@ -319,8 +328,11 @@ describe('cadPreviewMachine + cadMachine integration', () => {
     const cadSnapshot = cadRef.getSnapshot();
     expect(cadSnapshot.value).toBe('idle');
     expect(cadSnapshot.context.file).toEqual({ path: '/projects/proj_test', filename: 'main.ts' });
-    expect(mockClient.setFile).toHaveBeenCalledWith({ path: '/projects/proj_test', filename: 'main.ts' });
-    expect(mockClient.setParameters).toHaveBeenCalledWith({ width: 42 });
+    expect(mockClient.openFile).toHaveBeenCalledWith({
+      file: { path: '/projects/proj_test', filename: 'main.ts' },
+      parameters: { width: 42 },
+    });
+    expect(mockClient.updateParameters).toHaveBeenCalledWith({ width: 42 });
 
     cadRef.stop();
     previewRef.stop();
@@ -348,7 +360,7 @@ describe('cadPreviewMachine + cadMachine integration', () => {
     const cadRef = createActor(providedCadMachine, {
       input: {
         shouldInitializeKernelOnStart: false,
-        kernelOptions: mock<RuntimeClientOptions>(),
+        kernelOptionsFactory: () => mock<RuntimeClientOptions>(),
       },
     });
 
@@ -446,8 +458,11 @@ describe('cadPreviewMachine + cadMachine integration', () => {
 
     // CadRef should have the file and parameters sent directly to kernel
     expect(cadRef.getSnapshot().context.file).toEqual({ path: '/projects/proj_test', filename: 'main.ts' });
-    expect(mockClient.setFile).toHaveBeenCalledWith({ path: '/projects/proj_test', filename: 'main.ts' });
-    expect(mockClient.setParameters).toHaveBeenCalledWith({ width: 42 });
+    expect(mockClient.openFile).toHaveBeenCalledWith({
+      file: { path: '/projects/proj_test', filename: 'main.ts' },
+      parameters: { width: 42 },
+    });
+    expect(mockClient.updateParameters).toHaveBeenCalledWith({ width: 42 });
 
     cadRef.stop();
     previewRef.stop();
@@ -471,7 +486,7 @@ describe('cadPreviewMachine + cadMachine integration', () => {
     const cadRef = createActor(providedCadMachine, {
       input: {
         shouldInitializeKernelOnStart: false,
-        kernelOptions: mock<RuntimeClientOptions>(),
+        kernelOptionsFactory: () => mock<RuntimeClientOptions>(),
       },
     });
 

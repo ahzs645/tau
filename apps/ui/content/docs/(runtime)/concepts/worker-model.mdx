@@ -1,12 +1,12 @@
 ---
 title: Worker Model
-description: How Web Workers provide isolation, the autonomous render service, and the SharedArrayBuffer abort channel.
+description: How Web Workers provide isolation, the autonomous render service, and the transport-owned abort channel.
 icon: lucide:cpu
 ---
 
 # Worker Model
 
-The runtime worker is an **autonomous reactive render service**. It watches file dependencies, debounces changes, renders geometry, and pushes results -- without the main thread telling it when to act. Communication uses MessagePort for commands/events and SharedArrayBuffer for instant render abort. This design mirrors the Language Server Protocol pattern: the worker is a "geometry server" and the main thread is a display client.
+The runtime worker is an **autonomous reactive render service**. It watches file dependencies, debounces changes, renders geometry, and pushes results -- without the main thread telling it when to act. Communication uses MessagePort for commands/events and a transport-owned abort channel (backed by `SharedArrayBuffer` on SAB-capable transports) for instant render abort. This design mirrors the Language Server Protocol pattern: the worker is a "geometry server" and the main thread is a display client.
 
 ## Context and Motivation
 
@@ -37,8 +37,8 @@ flowchart TB
         EventBus["EventBus + WatchRegistry"]
     end
 
-    Editor -->|"setFile / setParameters"| Client
-    Client -->|"MessagePort (kernel protocol)\n+ SharedArrayBuffer (abort)"| RenderLoop
+    Editor -->|"openFile / updateParameters"| Client
+    Client -->|"MessagePort (kernel protocol)\n+ Transport abort channel"| RenderLoop
     RenderLoop --> KernelWorker
     KernelWorker --> Middleware
     Middleware --> Kernels
@@ -64,15 +64,17 @@ A single worker instance hosts all registered kernels. The `KernelRuntimeWorker`
 
 ### Autonomous Render Loop
 
-After receiving `setFile`, the worker manages its own render lifecycle:
+After receiving `openFile`, the worker manages its own render lifecycle:
 
-1. **setFile(file, params)** -- Store file and params. Render immediately (aborting any in-progress render). Discover dependencies. Set up filesystem watch subscription. Push `geometryComputed`.
+1. **openFile(file, params)** -- Store file and params. Render immediately (aborting any in-progress render). Discover dependencies. Set up filesystem watch subscription. Push `geometryComputed`.
 
 2. **Watch event (file in dependency graph changed)** -- Invalidate caches. Start/reset 500ms debounce timer. On timer fire: render (aborting any in-progress render). Discover new deps and diff watch set. Push `geometryComputed`.
 
-3. **setParameters(params)** -- Store new params. Start/reset 50ms debounce timer. On timer fire: render (aborting any in-progress render). Push `geometryComputed`.
+3. **updateParameters(params)** -- Store new params. Start/reset 50ms debounce timer. On timer fire: render (aborting any in-progress render). Push `geometryComputed`.
 
-4. **export(format)** -- Export from the last native handle. Push exported result.
+4. **setOptions(options)** -- Store new render options for the active file (e.g. tessellation tolerances). Re-render with the same supersession semantics as `updateParameters`.
+
+5. **export(format)** -- Export from the last native handle. Push exported result.
 
 ### Filesystem Bridge
 
@@ -80,38 +82,41 @@ The File Manager Worker is the single owner of the virtual filesystem. It accept
 
 **Bridge A (main thread):** The editor and file manager UI use `createFileSystemBridge(fsWorker)` + `createBridgeProxy<FileManagerProtocol>(port)` to write files, read directory trees, and perform file management operations. When a file is written, `FileService` persists it via the active provider and emits a `fileWritten` event on the EventBus.
 
-**Bridge B (kernel worker):** The kernel worker receives its own port as `fileSystemPort` during initialization and creates a `createBridgeProxy<RuntimeFileSystemBase>(port)` for file reads, dependency resolution, and watch subscriptions. The `WatchRegistry` matches EventBus change events against the kernel worker's watch subscriptions and pushes watch events directly over this bridge.
+**Bridge B (kernel worker):** The active [transport](../api/transport) owns the kernel-worker bridge end-to-end. Consumers pass a typed `RuntimeFileSystemHandle` to `client.connect({ fileSystem })` — `fromWorker(fsWorker)` for the worker arm, `fromInline(fs)`/`fromMemoryFS()`/`fromFsLike()`/`fromNodeFS()` for inline arms — and the transport constructs the `MessagePort` internally, transferring it to the kernel worker as part of `initialize`. The kernel worker creates a `createBridgeProxy<RuntimeFileSystemBase>(port)` for file reads, dependency resolution, and watch subscriptions. Bridge ports are disposed automatically when the runtime client terminates; consumers never call `createFileSystemBridge` themselves.
 
 This dual-bridge design means editor writes (Bridge A) trigger watch events to the kernel worker (Bridge B) without any main-thread relay. The main thread never sits on the hot path between a file change and a re-render.
 
-For environments without a separate filesystem worker (e.g., Node.js or testing), `createBridgePort(fileSystem)` provides an in-process bridge that uses the same protocol.
+For environments without a separate filesystem worker (e.g., Node.js or testing), the inline arms wire `createBridgePort(fileSystem)` internally and use the same protocol — `watch` is auto-propagated when the inlined object exposes a `watch` method.
 
-### SharedArrayBuffer Abort Channel
+### Transport Abort Channel
 
-The abort flag must be readable during **synchronous WASM execution**, when the worker's event loop is blocked and cannot process messages. `SharedArrayBuffer` provides a memory region visible to both the main thread and the worker simultaneously:
+The abort signal must be readable during **synchronous WASM execution**, when the worker's event loop is blocked and cannot process messages. The active [transport](../api/transport) owns this channel end-to-end — on SAB-capable transports it backs the channel with a `SharedArrayBuffer` so the kernel can see the abort generation while the event loop is blocked; on transports without shared memory (e.g. a future websocket transport) the same `signalAbort(reason)` API instead serialises a wire-format `'abort'` command. Either way, the runtime client and worker client never read `Atomics` or touch a SAB directly:
 
 ```mermaid
 flowchart LR
-    MainThread["Main Thread"] -->|"Atomics.store"| SAB["SharedArrayBuffer"]
-    SAB -->|"Atomics.load"| KernelProxy["OC Proxy in Worker"]
+    MainThread["Main Thread"] -->|"transport.signalAbort(reason)"| Transport["Active Transport"]
+    Transport -->|"abort generation"| KernelProxy["OC Proxy in Worker"]
 ```
 
-When the main thread calls `setFile()` or `setParameters()`:
+When the main thread calls `openFile()`, `updateParameters()`, or
+`setOptions()`:
 
-1. [`RuntimeClient`](../api/client) writes `Atomics.store(abortFlag, 0, newGeneration)` **before** posting the message.
+1. The active [transport](../api/transport) raises the abort generation via `signalAbort('superseded')` **before** posting the wire-format command.
 2. The worker may be mid-WASM. Its event loop is blocked. The message queues.
-3. The next OC Proxy call reads `Atomics.load(abortFlag, 0)` -- sees mismatch -- throws `RenderAbortedError`.
+3. The next OC Proxy call observes the new abort generation -- throws an internal abort marker (never surfaced to consumers; supersession is observed via `RenderOutcome.superseded`).
 4. The render aborts. The worker's event loop resumes and processes the queued message.
 5. New render starts.
 
-The signal channel carries four `Int32` slots:
+The transport-owned signal channel was shrunk in v5 to two `Int32` slots — every other worker-to-main signal flows through the single ordered `postMessage` event channel. The slot layout is `@internal` to the transport implementations; consumers of `RuntimeTransport` only see the `signalAbort(reason)` API:
 
-| Slot                  | Direction      | Mechanism                              | Purpose                                  |
-| --------------------- | -------------- | -------------------------------------- | ---------------------------------------- |
-| `abortGeneration` (0) | main -> worker | Polled by OC Proxy per WASM call       | Abort in-progress render                 |
-| `workerState` (1)     | worker -> main | `Atomics.notify` / `Atomics.waitAsync` | State transitions (idle/rendering/error) |
-| `progressPercent` (2) | worker -> main | Polled on demand                       | Render progress (cosmetic)               |
-| `renderPhase` (3)     | worker -> main | Polled on demand                       | Current phase (bundling/meshing/etc.)    |
+| Slot                  | Direction      | Owner                  | Purpose                                                              |
+| --------------------- | -------------- | ---------------------- | -------------------------------------------------------------------- |
+| `abortGeneration` (0) | main -> worker | Transport (SAB-backed) | Bumped whenever the main thread supersedes/timeouts the render.      |
+| `abortReason` (1)     | main -> worker | Transport (SAB-backed) | Carries `superseded` vs `timeout` so the worker can route the abort. |
+
+Worker-to-main events (state transitions, progress, geometry, telemetry,
+parameters) are delivered via the transport's `postMessage` channel and
+fanned out by `RuntimeTransport.onWorkerStateChange` and `client.on(...)`.
 
 ### Per-Kernel Abort Capabilities
 
@@ -139,14 +144,14 @@ The filesystem bridge also uses `extractTransferables()` to transfer `Uint8Array
 
 **VS Code Language Server Protocol:**
 
-| Concept         | LSP                           | Tau Runtime                            |
-| --------------- | ----------------------------- | -------------------------------------- |
-| Server role     | Autonomous analysis service   | Autonomous render service              |
-| Client role     | Display + user input          | Display + user input                   |
-| Communication   | JSON-RPC events               | MessagePort events + SharedArrayBuffer |
-| File watching   | Server watches workspace      | Worker watches dependency graph        |
-| Result delivery | Push diagnostics, completions | Push geometry, parameters, errors      |
-| Lifecycle       | Client starts/stops server    | Main thread creates/terminates worker  |
+| Concept         | LSP                           | Tau Runtime                                  |
+| --------------- | ----------------------------- | -------------------------------------------- |
+| Server role     | Autonomous analysis service   | Autonomous render service                    |
+| Client role     | Display + user input          | Display + user input                         |
+| Communication   | JSON-RPC events               | MessagePort events + transport abort channel |
+| File watching   | Server watches workspace      | Worker watches dependency graph              |
+| Result delivery | Push diagnostics, completions | Push geometry, parameters, errors            |
+| Lifecycle       | Client starts/stops server    | Main thread creates/terminates worker        |
 
 **Vite HMR:**
 
@@ -164,12 +169,95 @@ The filesystem bridge also uses `extractTransferables()` to transfer `Uint8Array
 - **Editor and FileSystem** -- The editor writes files to the File Manager Worker through Bridge A. These writes trigger EventBus emissions that feed the kernel worker's watch subscriptions, closing the loop between user edits and autonomous re-renders.
 - **FileSystem and Worker** -- The kernel worker accesses the filesystem through Bridge B. Watch events flow directly between the File Manager Worker and the kernel worker without main-thread relay. In autonomous mode, the kernel worker subscribes to file change events scoped to the current file's dependency graph.
 
+## Topology Recipes
+
+The runtime architecture exposes three orthogonal planes — **transport** (the wire), **runner** (where kernel code executes), and **filesystem** (the source of truth for files). Each topology resolves to one config object on each side; the table below shows the canonical recipes that ship today (T1, T2) plus the Phase 1 / Phase 2 targets (T3, T4) that the same primitives unlock without core changes. Every variation in [Architecture](./architecture) is a re-combination of these three planes.
+
+### T1 — Browser UI (Tau today)
+
+The host page owns a kernel `Worker` and a file-manager `Worker`. The transport runs the wire in the kernel worker; the runner hosts kernel modules in the same worker; the filesystem lives in the FM worker, accessed over a `MessagePort` bridge.
+
+```typescript @ts-nocheck
+import { createRuntimeClient, presets } from '@taucad/runtime';
+import { createWorkerTransport } from '@taucad/runtime/transport';
+import { webWorkerRunner, getDefaultKernelWorkerUrl } from '@taucad/runtime/runner';
+import { fromWorker } from '@taucad/runtime/filesystem';
+
+const fmWorker = new Worker(new URL('./fm-worker.ts', import.meta.url), { type: 'module' });
+
+const client = createRuntimeClient({
+  ...presets.all(),
+  transport: createWorkerTransport(getDefaultKernelWorkerUrl()),
+  runner: webWorkerRunner({ url: getDefaultKernelWorkerUrl() }),
+  fileSystem: fromWorker(fmWorker),
+});
+```
+
+### T2 — In-process Node CLI / tests
+
+A single Node process owns everything. The transport bridges main thread ⇄ in-process dispatcher; the runner hosts the kernel in the same V8 isolate; the filesystem is a `RuntimeFileSystemBase` on a local directory. The TR16 fast path skips the `MessagePort` round-trip and hands the FS to the kernel directly.
+
+```typescript
+import { createNodeClient } from '@taucad/runtime/node';
+
+const client = await createNodeClient('/path/to/project');
+// inferred:
+//   transport: inProcessTransport(),
+//   runner:    inProcessRunner(),
+//   fileSystem: fromNodeFS('/path/to/project'),
+//   cache:     lruCache({ max: 1024 }),
+```
+
+### T3 — Electron renderer + main + worker_thread kernel (Phase 1)
+
+The main process owns the FS authority and a `worker_threads.Worker` kernel host. The renderer is purely a display client — it speaks the kernel protocol over an Electron `MessagePortMain` pair. No kernel code, no FS access, and no bundler ever runs in the renderer.
+
+```typescript @ts-nocheck
+// renderer.ts
+import { createRuntimeClient, presets } from '@taucad/runtime';
+import { createMessagePortTransport } from '@taucad/runtime/transport';
+import { hostRunner } from '@taucad/runtime/runner';
+
+const port = await window.taucad.connectKernel();
+const client = createRuntimeClient({
+  ...presets.all(),
+  transport: createMessagePortTransport(port),
+  runner: hostRunner(),
+  // No fileSystem on the renderer — the host owns it (TR9).
+});
+
+// main.ts
+import { createRuntimeHost } from '@taucad/runtime/host';
+import { nodeWorkerRunner } from '@taucad/runtime/runner';
+import { fromNodeFS } from '@taucad/runtime/filesystem/node';
+import { lruCache } from '@taucad/runtime/cache';
+import { replicad, openscad } from '@taucad/runtime/kernels';
+
+const { port1, port2 } = new MessageChannelMain();
+const host = createRuntimeHost({
+  port: adaptElectronPort(port2),
+  runner: nodeWorkerRunner({ url: kernelWorkerEntryUrl }),
+  fileSystem: fromNodeFS(app.getPath('userData')),
+  kernels: [replicad(), openscad()],
+  cache: lruCache({ max: 1024 }),
+});
+mainWindow.webContents.postMessage('kernel-port', null, [port1]);
+```
+
+### T4 — Multi-window Electron (single source of truth)
+
+Same shape as T3 with one main-process `createRuntimeHost(...)` shared across every window. Each window opens its own `MessageChannelMain` and connects through the renderer recipe above; the host multiplexes on the channel and serves the same `fileSystem` instance. Per-window draft isolation routes through subdirectory mounts in Phase 1 and through a per-window `OverlayFileSystem` in Phase 2 — the runner / transport / FS shape does not change.
+
+### Why three planes (rather than three transports)
+
+A topology is `{ transport, runner, fileSystem }`. The transport knows about the wire. The runner knows about execution location. The FS service knows about authority. Mixing them — for example a `'sharedWorkerTransport'` that also assumes a same-isolate FS — produces N transports instead of `N + M + K` plug points and silently regresses cross-process topologies. T1–T4 share the same primitives; only the bindings change.
+
 ## Implications
 
 - **Async by design** -- All kernel operations are async. The client API is Promise-based or event-driven.
 - **Single-threaded worker** -- The worker runs one render at a time. Abort ensures stale renders are cancelled quickly so the latest render starts with minimal delay.
 - **Transfer semantics** -- Transferred buffers are moved, not copied. The worker must not retain references after transfer.
-- **Cross-origin isolation** -- SharedArrayBuffer requires COOP + COEP headers. This is already a prerequisite for OpenCASCADE's pthread support via `assertCrossOriginIsolated()`.
+- **Cross-origin isolation** -- The default in-process and worker transports back the abort channel and geometry pool with `SharedArrayBuffer`, which requires COOP + COEP headers. This is already a prerequisite for OpenCASCADE's pthread support via `assertCrossOriginIsolated()`. Consumers never touch SAB directly; only the transport sees it.
 
 ## Further Reading
 

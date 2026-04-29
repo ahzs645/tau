@@ -4,17 +4,17 @@
  * `cadMachine.activeKernelChanged`) to the set of Monaco language ids whose
  * contributions should be warmed up.
  *
- * Derived from `defaultKernelOptions.kernels`, since the runtime
+ * Derived from the registered kernel plugin list, since the runtime
  * `CapabilitiesManifest` only carries export-route metadata — it does not
  * expose per-kernel source-file extensions.
  */
 
 import type { MonacoLanguage } from '#lib/monaco.constants.js';
-import { defaultKernelOptions } from '#constants/kernel-worker.constants.js';
+import { defaultKernels } from '#constants/kernel-worker.constants.js';
 import { extensionToMonacoLanguage } from '#lib/monaco.constants.js';
 
 const kernelExtensionsById = new Map<string, readonly string[]>(
-  defaultKernelOptions.kernels.map((kernel) => [kernel.id, kernel.extensions]),
+  defaultKernels.map((kernel) => [kernel.id, kernel.extensions]),
 );
 
 /**

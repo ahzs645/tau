@@ -321,7 +321,7 @@ describe('rpc-handlers', () => {
 
         const entries = await fileSystem.readdir('src');
 
-        expect(entries).toEqual([expect.objectContaining({ name: 'components', type: 'directory' })]);
+        expect(entries).toEqual([expect.objectContaining({ name: 'components', type: 'dir' })]);
       });
 
       it('should map entries without children to file type', async () => {

@@ -53,28 +53,23 @@ Code before `handler()` runs on the way down; code after runs on the way back up
 
 The wrap pattern gives you full control. You can short-circuit (return without calling `handler`), transform input, or transform output:
 
-```typescript @ts-nocheck
+```typescript
 import { defineMiddleware } from '@taucad/runtime/middleware';
+import type { CreateGeometryResult } from '@taucad/runtime';
 
-// Application-specific cache — replace with your storage backend
-const cache = new Map<string, unknown>();
-const checkCache = async (key: string) => cache.get(key) ?? null;
-const writeCache = async (key: string, value: unknown) => {
-  cache.set(key, value);
-};
+const cache = new Map<string, CreateGeometryResult>();
 
 const cacheMiddleware = defineMiddleware({
   name: 'SimpleCache',
   async wrapCreateGeometry(input, handler, { logger, dependencyHash }) {
-    const cached = await checkCache(dependencyHash);
+    const cached = cache.get(dependencyHash);
     if (cached) {
       logger.debug('Cache hit');
       return cached;
     }
 
     const result = await handler(input);
-
-    await writeCache(dependencyHash, result);
+    cache.set(dependencyHash, result);
     return result;
   },
 });
@@ -86,9 +81,12 @@ Short-circuited results still flow through upstream middleware because each laye
 
 Use `stateSchema` (Zod) for type-safe state that persists during the operation. Access `state` from the runtime:
 
-```typescript @ts-nocheck
+```typescript
 import { defineMiddleware } from '@taucad/runtime/middleware';
+import type { CreateGeometryResult } from '@taucad/runtime';
 import { z } from 'zod';
+
+const cache = new Map<string, CreateGeometryResult>();
 
 const statefulCacheMiddleware = defineMiddleware({
   name: 'StatefulCache',
@@ -96,10 +94,10 @@ const statefulCacheMiddleware = defineMiddleware({
     cacheKey: z.string().optional(),
     cacheHit: z.boolean().optional(),
   }),
-  async wrapCreateGeometry(input, handler, { logger, state, dependencyHash }) {
+  async wrapCreateGeometry(input, handler, { state, dependencyHash }) {
     const cacheKey = dependencyHash;
 
-    const cached = await checkCache(cacheKey);
+    const cached = cache.get(cacheKey);
     if (cached) {
       state.update({ cacheKey, cacheHit: true });
       return cached;
@@ -107,7 +105,7 @@ const statefulCacheMiddleware = defineMiddleware({
 
     state.update({ cacheKey, cacheHit: false });
     const result = await handler(input);
-    await writeCache(cacheKey, result);
+    cache.set(cacheKey, result);
     return result;
   },
 });
@@ -119,14 +117,17 @@ const statefulCacheMiddleware = defineMiddleware({
 
 Use `optionsSchema` for configurable middleware. The schema supports `.default()` for optional options:
 
-```typescript @ts-nocheck
+```typescript
 import { defineMiddleware } from '@taucad/runtime/middleware';
+import type { CreateGeometryResult } from '@taucad/runtime';
 import { z } from 'zod';
+
+const cache = new Map<string, { value: CreateGeometryResult; expiresAt: number }>();
 
 const configurableCacheMiddleware = defineMiddleware({
   name: 'ConfigurableCache',
   optionsSchema: z.object({
-    maxAgeMs: z.number().default(60_000),
+    maxAge: z.number().default(60_000),
     enabled: z.boolean().default(true),
   }),
   stateSchema: z.object({
@@ -137,14 +138,14 @@ const configurableCacheMiddleware = defineMiddleware({
       return handler(input);
     }
 
-    const cached = await checkCache(dependencyHash, options.maxAgeMs);
-    if (cached) {
+    const entry = cache.get(dependencyHash);
+    if (entry && entry.expiresAt > Date.now()) {
       state.update({ cacheKey: dependencyHash });
-      return cached;
+      return entry.value;
     }
 
     const result = await handler(input);
-    await writeCache(dependencyHash, result, options.maxAgeMs);
+    cache.set(dependencyHash, { value: result, expiresAt: Date.now() + options.maxAge });
     return result;
   },
 });
@@ -156,19 +157,25 @@ Options are resolved from schema defaults and caller overrides when the middlewa
 
 Middleware runs in the worker and must be loaded as a separate module. Create a module file that exports the middleware (default or named with a `name` property), then a factory that returns a [`MiddlewarePlugin`](../api/middleware):
 
-```typescript @ts-nocheck
+```typescript
 // my-cache.middleware.ts
 import { defineMiddleware } from '@taucad/runtime/middleware';
+import type { CreateGeometryResult } from '@taucad/runtime';
 import { z } from 'zod';
+
+const cache = new Map<string, CreateGeometryResult>();
 
 const myCacheMiddleware = defineMiddleware({
   name: 'MyCache',
   stateSchema: z.object({ cacheKey: z.string().optional() }),
   async wrapCreateGeometry(input, handler, { state, dependencyHash }) {
-    const cached = await checkCache(dependencyHash);
-    if (cached) return cached;
+    const cached = cache.get(dependencyHash);
+    if (cached) {
+      state.update({ cacheKey: dependencyHash });
+      return cached;
+    }
     const result = await handler(input);
-    await writeCache(dependencyHash, result);
+    cache.set(dependencyHash, result);
     return result;
   },
 });
@@ -176,7 +183,7 @@ const myCacheMiddleware = defineMiddleware({
 export default myCacheMiddleware;
 ```
 
-```typescript @ts-nocheck
+```typescript
 // my-cache-plugin.ts
 import type { MiddlewarePlugin } from '@taucad/runtime';
 
@@ -191,17 +198,20 @@ export function myCache(): MiddlewarePlugin {
 
 Pass the factory to [`createRuntimeClient`](../api/client):
 
-```typescript @ts-nocheck
-import { createRuntimeClient } from '@taucad/runtime';
+```typescript
+import { createRuntimeClient, createMiddlewarePlugin } from '@taucad/runtime';
 import { fromNodeFS } from '@taucad/runtime/filesystem/node';
 import { replicad } from '@taucad/runtime/kernels';
 import { esbuild } from '@taucad/runtime/bundler';
-import { myCache } from './my-cache-plugin.js';
+
+const myCache = createMiddlewarePlugin({
+  id: 'my-cache',
+  moduleUrl: new URL('./my-cache.middleware.js', import.meta.url).href,
+});
 
 const client = createRuntimeClient({
   kernels: [replicad()],
   bundlers: [esbuild()],
-  fileSystem: fromNodeFS('/path/to/project'),
   middleware: [myCache()],
 });
 ```
@@ -210,7 +220,9 @@ const client = createRuntimeClient({
 
 Implement `wrapGetParameters` and `wrapExportGeometry` when needed:
 
-```typescript @ts-nocheck
+```typescript
+import { defineMiddleware } from '@taucad/runtime/middleware';
+
 const fullMiddleware = defineMiddleware({
   name: 'FullMiddleware',
   async wrapGetParameters(input, handler, { logger }) {
