@@ -18,7 +18,6 @@ const startPair = (channel: MessageChannel): { server: Port<unknown>; client: Po
 };
 
 const wrapRecording = (port: Port<unknown>, observed: ObservedFrame[]): Port<unknown> => ({
-  capabilities: port.capabilities,
   postMessage(data, transfer) {
     observed.push({ data, transferables: transfer });
     port.postMessage(data, transfer);
@@ -309,7 +308,6 @@ describe('@taucad/rpc Channel server hello handshake (R14, F10)', () => {
     const handlers: Array<(value: unknown) => void> = [];
     let lateDeliver: ((value: unknown) => void) | undefined;
     const queuedPort: Port<unknown> = {
-      capabilities: {},
       postMessage(): void {
         // Drop everything; the test only needs to verify that `ready` doesn't resolve until
         // the late-delivered hello frame arrives.
@@ -342,7 +340,6 @@ describe('@taucad/rpc Channel server hello handshake (R14, F10)', () => {
     const sent: unknown[] = [];
     let deliver: ((value: unknown) => void) | undefined;
     const queuedPort: Port<unknown> = {
-      capabilities: {},
       postMessage(data: unknown): void {
         sent.push(data);
       },
@@ -382,7 +379,6 @@ describe('@taucad/rpc Channel server hello handshake (R14, F10)', () => {
   it('should reject ready with the structured error when the hello reports failure', async () => {
     let deliver: ((value: unknown) => void) | undefined;
     const port: Port<unknown> = {
-      capabilities: {},
       postMessage(): void {
         // No-op
       },
@@ -589,7 +585,6 @@ describe('@taucad/rpc Channel lifecycle bye (R8, F8)', () => {
   it('should accept a "lb" frame with no reason and emit origin remote', async () => {
     const handlers: Array<(value: unknown) => void> = [];
     const port: Port<unknown> = {
-      capabilities: {},
       postMessage(): void {
         // No-op.
       },

@@ -6,7 +6,7 @@
  * {@link ../../../docs/architecture/rpc-wire-spec.md}.
  */
 
-export type { Port, PortCapabilities } from '#port.js';
+export type { Port } from '#port.js';
 export { wrapMessagePort } from '#port.js';
 
 export type {
@@ -51,9 +51,6 @@ export type {
   WireStreamUnsubscribe,
 } from '#wire.js';
 export { isWireMessage, wireVersion } from '#wire.js';
-
-export type { MultiplexedPort, MultiplexOptions, MuxMessage } from '#multiplex.js';
-export { multiplex } from '#multiplex.js';
 
 export { traceFrame, type TraceLogger, type TraceDirection } from '#trace.js';
 

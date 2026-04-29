@@ -2,9 +2,9 @@
 /**
  * Topology conformance harness for `Channel<P>`.
  *
- * Phase 9 of the v5 channel blueprint asserts that the typed RPC layer is
- * topology-invariant — calls, notifies, listens, lifecycle, transferables,
- * and cooperative abort behave identically over every supported port shape.
+ * The typed RPC layer is topology-invariant — calls, notifies, listens,
+ * lifecycle, transferables, and cooperative abort behave identically over
+ * every supported port shape.
  * The harness exercises a synthetic protocol (`EchoProtocol`) so the test
  * never depends on the runtime kernel, only on the wire contract.
  *
@@ -13,8 +13,6 @@
  *   T3  Real `worker_threads.Worker` exercising `createChannelServer` end-to-end
  *   T4  One `ChannelServer` impl fan-served across two independent port pairs
  *       (shared-worker style: two windows, one server)
- *
- * @see docs/research/runtime-channel-blueprint-v5.md
  */
 
 import { afterEach, describe, expect, it } from 'vitest';

@@ -14,7 +14,7 @@
  *    the originating call with WireValidationError;
  *  - inbound notify args that fail validation on the client side are
  *    silently dropped;
- *  - omitting protocolSchemas preserves the v5 trust-the-wire path.
+ *  - omitting protocolSchemas preserves the trust-the-wire fast path.
  */
 
 import { describe, it, expect, vi } from 'vitest';
@@ -244,7 +244,7 @@ describe('Wire-protocol validation (C14)', () => {
     srv.dispose();
   });
 
-  it('omitting protocolSchemas preserves the v5 trust-the-wire path', async () => {
+  it('omitting protocolSchemas preserves the trust-the-wire fast path', async () => {
     const { client, server } = wirePair();
     const srv = createChannelServer<Protocol>({
       port: server,

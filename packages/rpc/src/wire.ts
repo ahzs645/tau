@@ -5,8 +5,7 @@
  * codes for legibility (`r*` RPC, `n*` notify, `s*` stream, `l*` lifecycle, `f*` flow).
  *
  * The full normative specification lives in {@link ../../../docs/architecture/rpc-wire-spec.md},
- * with prior art mapped to LSP, VS Code's `rpcProtocol.ts`, and `kkrpc` in
- * {@link ../../../docs/research/runtime-channel-blueprint-v5.md}.
+ * with prior art mapped to LSP, VS Code's `rpcProtocol.ts`, and `kkrpc`.
  */
 export const wireVersion = 1;
 
@@ -160,13 +159,13 @@ export type WireBye = {
 };
 
 /* ============================================================================ *
- * Flow control family (`f*`) — RESERVED for v6 (R15, Finding 13)               *
+ * Flow control family (`f*`) — RESERVED for a future revision                  *
  * ============================================================================ */
 
 /**
- * Reserved: acknowledge frames up to id `i`. Not implemented in v5; receivers log
- * once and drop. Reserving the kind code prevents wire-format break when flow
- * control lands.
+ * Reserved: acknowledge frames up to id `i`. Not implemented; receivers log once
+ * and drop. Reserving the kind code prevents wire-format break when flow control
+ * lands.
  */
 export type WireFlowAck = {
   readonly v: 1;
@@ -175,8 +174,8 @@ export type WireFlowAck = {
 };
 
 /**
- * Reserved: grant `s` more stream-frame slots for stream id `i`. Not implemented
- * in v5; receivers log once and drop.
+ * Reserved: grant `s` more stream-frame slots for stream id `i`. Not implemented;
+ * receivers log once and drop.
  */
 export type WireFlowWindow = {
   readonly v: 1;

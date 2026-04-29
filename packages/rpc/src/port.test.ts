@@ -7,7 +7,6 @@ describe('wrapMessagePort', () => {
   it('routes postMessage and onMessage with unsubscribe', () => {
     const handlers: Array<(d: string) => void> = [];
     const mock: Port<string> = {
-      capabilities: {},
       postMessage(data) {
         for (const h of handlers) {
           h(data);
@@ -45,15 +44,5 @@ describe('wrapMessagePort', () => {
     expect(() => {
       a.close();
     }).toThrow('P close failed');
-  });
-
-  it('declares { transfer: true } capabilities so the channel layer chooses the transfer tier', () => {
-    const { port1 } = new MessageChannel();
-    const wrapped = wrapMessagePort(port1);
-    try {
-      expect(wrapped.capabilities).toEqual({ transfer: true });
-    } finally {
-      wrapped.close();
-    }
   });
 });

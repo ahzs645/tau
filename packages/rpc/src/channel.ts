@@ -127,16 +127,15 @@ export type Channel<P extends RpcProtocol = EmptyRpcProtocol> = {
   /** Resolves once the channel is fully closed (remote ack or timeout fallback). */
   readonly closed: Promise<void>;
   /**
-   * The bound transport port. Exposed so consumers can read
-   * {@link Port.capabilities} for capability-tiered delivery decisions
-   * (R21 — `pool` / `transfer` / `copy` ladder) without smuggling the port
+   * The bound transport port. Exposed so transport plugins can attach
+   * additional listeners or close hooks without smuggling the port
    * reference around their dependency graph.
    */
   readonly port: Port<unknown>;
   /**
    * Server hello payload (`lh.d`). Populated atomically with `ready` resolution;
    * consumers must `await channel.ready` before reading. Carries the server's
-   * advertised capability set in the v5 handshake (R14 + R21).
+   * advertised capability set in the handshake.
    */
   readonly hello: { readonly payload: unknown };
   /**
@@ -470,14 +469,14 @@ const warnFlowAckOnce = (): void => {
     return;
   }
   flowAckWarned = true;
-  console.warn('[@taucad/rpc] flow-ack frame received; flow control is reserved for v6 and ignored');
+  console.warn('[@taucad/rpc] flow-ack frame received; flow control is reserved for a future revision and ignored');
 };
 const warnFlowWindowOnce = (): void => {
   if (flowWindowWarned) {
     return;
   }
   flowWindowWarned = true;
-  console.warn('[@taucad/rpc] flow-window frame received; flow control is reserved for v6 and ignored');
+  console.warn('[@taucad/rpc] flow-window frame received; flow control is reserved for a future revision and ignored');
 };
 
 /** Test-only: reset the once-warned flags so each test sees a fresh log. @internal */

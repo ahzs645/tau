@@ -19,7 +19,6 @@ const startPair = (channel: MessageChannel): { server: Port<unknown>; client: Po
 };
 
 const wrapRecording = (port: Port<unknown>, observed: ObservedFrame[]): Port<unknown> => ({
-  capabilities: port.capabilities,
   postMessage(data, transfer) {
     observed.push({ data, transferables: transfer });
     port.postMessage(data, transfer);

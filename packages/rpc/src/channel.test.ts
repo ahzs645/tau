@@ -377,13 +377,11 @@ describe('createChannelClient / createChannelServer', () => {
 
   it('server works when port has no start method', () => {
     const mockPort: {
-      capabilities: { readonly transfer?: boolean };
       postMessage: ReturnType<typeof vi.fn>;
       onMessage: (handler: (d: unknown) => void) => () => void;
       close: () => void;
       _h?: (d: unknown) => void;
     } = {
-      capabilities: {},
       postMessage: vi.fn(),
       onMessage: (handler: (d: unknown) => void) => {
         mockPort._h = handler;
@@ -884,7 +882,6 @@ describe('createChannelClient / createChannelServer', () => {
   it('falls back to timeout when the remote port is dropped (no ack)', async () => {
     const handlers: Array<(value: unknown) => void> = [];
     const droppedPort: Port<unknown> = {
-      capabilities: {},
       postMessage(_data: unknown): void {
         // Drop everything; remote never sees the close, never acks.
       },
@@ -919,7 +916,6 @@ describe('createChannelClient / createChannelServer', () => {
 
   it('treats a postClose throw as immediate timeout disposal', async () => {
     const brokenPort: Port<unknown> = {
-      capabilities: {},
       postMessage(): void {
         throw new Error('port detached');
       },
@@ -1068,7 +1064,6 @@ describe('createChannelClient / createChannelServer', () => {
 
   it('late onClose registration after timeout-completed close still fires synchronously', async () => {
     const droppedPort: Port<unknown> = {
-      capabilities: {},
       postMessage(): void {
         // Drop.
       },
@@ -1093,7 +1088,6 @@ describe('createChannelClient / createChannelServer', () => {
 
   it('late onClose handler errors are swallowed', async () => {
     const droppedPort: Port<unknown> = {
-      capabilities: {},
       postMessage(): void {
         // Drop.
       },
@@ -1118,7 +1112,6 @@ describe('createChannelClient / createChannelServer', () => {
 
   it('uses the configured closeTimeout as the upper-bound for the dropped-port fallback', async () => {
     const droppedPort: Port<unknown> = {
-      capabilities: {},
       postMessage(): void {
         // Drop.
       },
@@ -1156,7 +1149,6 @@ describe('createChannelClient / createChannelServer', () => {
   it('finalises with local when postClose synchronously triggers a remote ack', async () => {
     const handlers: Array<(value: unknown) => void> = [];
     const port: Port<unknown> = {
-      capabilities: {},
       postMessage(data: unknown): void {
         // Synchronous loopback: pretend the remote acked immediately.
         if (data && typeof data === 'object' && (data as { k?: string }).k === 'lb') {
@@ -1188,7 +1180,6 @@ describe('createChannelClient / createChannelServer', () => {
     const handlers: Array<(value: unknown) => void> = [];
     const sent: unknown[] = [];
     const port: Port<unknown> = {
-      capabilities: {},
       postMessage(data: unknown): void {
         sent.push(data);
       },
@@ -1223,7 +1214,6 @@ describe('createChannelClient / createChannelServer', () => {
     const handlers: Array<(value: unknown) => void> = [];
     const sent: unknown[] = [];
     const port: Port<unknown> = {
-      capabilities: {},
       postMessage(data: unknown): void {
         sent.push(data);
       },
@@ -1352,7 +1342,6 @@ describe('createChannelClient / createChannelServer', () => {
     portClient.start?.();
     const sent: unknown[] = [];
     const recordingClient: Port<unknown> = {
-      capabilities: {},
       postMessage(data, transfer) {
         sent.push(data);
         portClient.postMessage(data, transfer);
@@ -1402,7 +1391,6 @@ describe('createChannelClient / createChannelServer', () => {
 
     // Wrap the client port so we can detect when `lh` arrives.
     const interceptedClient: Port<unknown> = {
-      capabilities: {},
       postMessage: (data, transfer) => {
         portClient.postMessage(data, transfer);
       },
@@ -1463,7 +1451,6 @@ describe('createChannelClient / createChannelServer', () => {
     const sentByClient: Array<{ frame: unknown; tFromStart: number }> = [];
     const start = Date.now();
     const recordingClient: Port<unknown> = {
-      capabilities: {},
       postMessage: (data, transfer) => {
         sentByClient.push({ frame: data, tFromStart: Date.now() - start });
         portClient.postMessage(data, transfer);
@@ -1547,7 +1534,6 @@ describe('createChannelClient / createChannelServer', () => {
     portClient.start?.();
     const sentByClient: unknown[] = [];
     const recordingClient: Port<unknown> = {
-      capabilities: {},
       postMessage(data, transfer) {
         sentByClient.push(data);
         portClient.postMessage(data, transfer);
@@ -1632,7 +1618,6 @@ describe('createChannelClient / createChannelServer', () => {
     portClient.start?.();
     const sentByClient: unknown[] = [];
     const recordingClient: Port<unknown> = {
-      capabilities: {},
       postMessage(data, transfer) {
         sentByClient.push(data);
         portClient.postMessage(data, transfer);
@@ -1719,7 +1704,6 @@ describe('createChannelClient / createChannelServer', () => {
     portClient.start?.();
     const sent: unknown[] = [];
     const recordingClient: Port<unknown> = {
-      capabilities: {},
       postMessage(data, transfer) {
         sent.push(data);
         portClient.postMessage(data, transfer);
@@ -1762,7 +1746,6 @@ describe('createChannelClient / createChannelServer', () => {
     portClient.start?.();
     const observed: Array<{ data: unknown; transfer?: readonly Transferable[] }> = [];
     const recordingClient: Port<unknown> = {
-      capabilities: {},
       postMessage(data, transfer) {
         observed.push({ data, transfer });
         portClient.postMessage(data, transfer);

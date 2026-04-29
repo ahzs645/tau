@@ -1,36 +1,15 @@
 /**
- * Best-in-class fast-path tiers a {@link Port} adapter declares to the channel layer.
- *
- * The dispatcher walks the ladder `pool → transfer → copy` for binary delivery (geometry,
- * export bytes) and `signalSlot + wire → wire-only` for cooperative abort, gating each
- * faster path on the capability bit. Adapters never lie: `wrapMessagePort` declares
- * `{ transfer: true }`, a `node:worker_threads` adapter declares
- * `{ sab: true, signalSlot: true, transfer: true }`, a `BroadcastChannel` adapter declares `{}`.
- * The `pool` bit is set by the worker after pool construction and exchanged via the `lh`
- * hello payload — never at adapter-construction time.
- *
- * @public
- */
-export type PortCapabilities = {
-  /** Adapter can share `SharedArrayBuffer` references across the boundary. */
-  readonly sab?: boolean;
-  /** Adapter exposes a SAB cancellation slot the producer can `Atomics.store` into. */
-  readonly signalSlot?: boolean;
-  /** Adapter honours the second argument of `postMessage` for zero-copy `Transferable` hoist. */
-  readonly transfer?: boolean;
-  /** Both sides of the adapter share a SAB-backed pool for delivery-by-reference. */
-  readonly pool?: boolean;
-};
-
-/**
  * Minimal bidirectional postMessage port, generic over the message payload shape.
  * Adapters map DOM `MessagePort`, Electron `MessagePortMain`, and similar APIs to this type.
+ *
+ * The adapter surface is deliberately narrow: every transport now declares
+ * its delivery tier through the runtime transport plugin's fat shape
+ * (`host.encodeGeometry` / `host.encodeFile` returns) rather than via a
+ * per-port capability descriptor — channels remain transport-agnostic.
  *
  * @public
  */
 export type Port<T> = {
-  /** Capability set declared by the adapter. Consumers consult this to pick a delivery tier. */
-  readonly capabilities: PortCapabilities;
   postMessage(data: T, transfer?: readonly Transferable[]): void;
   /**
    * Register an inbound message handler. Returns an unsubscribe that is safe to call multiple times.
@@ -65,7 +44,6 @@ type AnyMessagePort = {
 export const wrapMessagePort = <T>(port: AnyMessagePort, options?: { label?: string }): Port<T> => {
   const label = options?.label ?? 'MessagePort';
   return {
-    capabilities: { transfer: true },
     postMessage(data: T, transfer?: readonly Transferable[]): void {
       port.postMessage(data, transfer);
     },

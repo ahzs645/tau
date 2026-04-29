@@ -1,70 +1,33 @@
 /**
- * Type-level conformance tests for {@link PortCapabilities} and the
- * `readonly capabilities: PortCapabilities` field carried by every
- * {@link Port}<T>` adapter (R21, F15).
+ * Type-level conformance: post-`Port.capabilities` removal contract (C3).
  *
- * The capability surface is the contract every transport adapter declares
- * up-front so the channel layer can route binary delivery through the
- * `pool → transfer → copy` ladder and cancellation through the
- * `signalSlot + wire` fast-path without branching on transport-class
- * string checks. Adding/removing a tier requires editing exactly one type
- * and watching this file flip, then walking the resulting fan-out.
+ * The runtime transport architecture removed the per-adapter capability
+ * descriptor: every transport now declares its delivery tier through the
+ * v6 fat shape (`host.encodeGeometry` / `host.encodeFile` returns) and
+ * the channel layer no longer reads `port.capabilities`. The adapter
+ * surface shrank to just the message-passing primitives.
+ *
+ * @see docs/research/runtime-transport-architecture-v6.md (C3)
  */
-import { describe, it } from 'vitest';
-import type { Port, PortCapabilities } from '#index.js';
+import { describe, it, expectTypeOf } from 'vitest';
+import type { Port } from '#index.js';
+import * as rpc from '#index.js';
 
-describe('PortCapabilities — capability-tier vocabulary (R21, F15)', () => {
-  it('is structurally identical to the four-tier readonly-optional record', () => {
-    type Expected = {
-      readonly sab?: boolean;
-      readonly signalSlot?: boolean;
-      readonly transfer?: boolean;
-      readonly pool?: boolean;
-    };
-    const fromCanonical: Expected = undefined as unknown as PortCapabilities;
-    const fromExpected: PortCapabilities = undefined as unknown as Expected;
-    void fromCanonical;
-    void fromExpected;
+describe('Port<T> — adapter surface (C3 — no capabilities)', () => {
+  it('does not expose a `capabilities` field', () => {
+    type HasCapabilities = 'capabilities' extends keyof Port<unknown> ? true : false;
+    expectTypeOf<HasCapabilities>().toEqualTypeOf<false>();
   });
 
-  it('admits `{}` as a no-tier adapter (BroadcastChannel-like)', () => {
-    const empty: PortCapabilities = {};
-    void empty;
+  it('keeps the message-passing primitives required by the channel layer', () => {
+    type RequiredKeys = keyof Port<unknown>;
+    type ExpectsAtLeast = 'postMessage' | 'onMessage' | 'close';
+    expectTypeOf<ExpectsAtLeast>().toExtend<RequiredKeys>();
   });
 
-  it('admits a `worker_threads`-shaped capability set', () => {
-    const wt: PortCapabilities = { sab: true, signalSlot: true, transfer: true };
-    void wt;
-  });
-
-  it('admits a `MessagePort`-shaped capability set', () => {
-    const mp: PortCapabilities = { transfer: true };
-    void mp;
-  });
-
-  it('admits a pool-capable adapter (declared after pool construction in `lh` payload)', () => {
-    const pooled: PortCapabilities = {
-      sab: true,
-      signalSlot: true,
-      transfer: true,
-      pool: true,
-    };
-    void pooled;
-  });
-});
-
-describe('Port<T>.capabilities — required structural field (R21)', () => {
-  it('exposes `capabilities` typed as PortCapabilities', () => {
-    type Caps = Port<unknown>['capabilities'];
-    const fromPort: PortCapabilities = undefined as unknown as Caps;
-    const fromCaps: Caps = undefined as unknown as PortCapabilities;
-    void fromPort;
-    void fromCaps;
-  });
-
-  it('has `capabilities` listed in the structural keyset', () => {
-    type Required = 'capabilities' extends keyof Port<unknown> ? true : false;
-    const isRequired: true = undefined as unknown as Required;
-    void isRequired;
+  it('does not re-export `PortCapabilities` from the @taucad/rpc barrel', () => {
+    type Exports = keyof typeof rpc;
+    type HasPortCapabilities = 'PortCapabilities' extends Exports ? true : false;
+    expectTypeOf<HasPortCapabilities>().toEqualTypeOf<false>();
   });
 });
