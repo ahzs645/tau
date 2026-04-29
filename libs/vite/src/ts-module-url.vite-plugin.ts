@@ -74,7 +74,18 @@ export function tsModuleUrlBuildPlugin(): Plugin {
 
         for (const match of [...matches].reverse()) {
           const tsPath = path.resolve(directory, match.relativePath.replace(/\.js$/, '.ts'));
-          const refId = this.emitFile({ type: 'chunk', id: tsPath });
+          // `preserveSignature: 'strict'` keeps the chunk's `export` statements
+          // intact even when no static `import` consumes them. The chunk is
+          // referenced via `new URL(...)` (asset pattern) and dynamic
+          // `import(moduleUrl)` at runtime; without this option Rollup
+          // (in app-build mode under regular Vite, e.g. electron-vite's
+          // bundled Vite 5) tree-shakes the exports because the static
+          // graph never imports them, leaving the chunk's `default` export
+          // unreachable and breaking the runtime worker dispatcher's
+          // `import(moduleUrl).then(m => m.default)` flow.
+          // (Rolldown-vite preserves signatures by default; vanilla Rollup
+          // does not.)
+          const refId = this.emitFile({ type: 'chunk', id: tsPath, preserveSignature: 'strict' });
 
           const replacement = match.hasHref
             ? `import.meta.ROLLUP_FILE_URL_${refId}`
