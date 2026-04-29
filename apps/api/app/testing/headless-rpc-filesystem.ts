@@ -2,7 +2,8 @@ import type { RuntimeFileSystem } from '@taucad/runtime';
 import type { RpcFileSystem, RpcFileStat } from '@taucad/chat/rpc';
 
 /**
- * Adapts a RuntimeFileSystem (e.g. fromMemoryFS()) to the RpcFileSystem interface.
+ * Adapts a RuntimeFileSystem (built from `createRuntimeFileSystem(...)`) to the
+ * RpcFileSystem interface.
  */
 export function createHeadlessRpcFileSystem(fs: RuntimeFileSystem): RpcFileSystem {
   return {
@@ -20,9 +21,9 @@ export function createHeadlessRpcFileSystem(fs: RuntimeFileSystem): RpcFileSyste
     },
     async readdir(
       path: string,
-    ): Promise<Array<{ name: string; type: 'file' | 'directory'; size: number; modifiedAt?: string }>> {
+    ): Promise<Array<{ name: string; type: 'file' | 'dir'; size: number; modifiedAt?: string }>> {
       const names = await fs.readdir(path);
-      const entries: Array<{ name: string; type: 'file' | 'directory'; size: number; modifiedAt?: string }> = [];
+      const entries: Array<{ name: string; type: 'file' | 'dir'; size: number; modifiedAt?: string }> = [];
 
       for (const name of names) {
         const fullPath = path ? `${path}/${name}` : name;
@@ -31,7 +32,7 @@ export function createHeadlessRpcFileSystem(fs: RuntimeFileSystem): RpcFileSyste
           const info = await fs.stat(fullPath);
           entries.push({
             name,
-            type: info.type === 'dir' ? 'directory' : 'file',
+            type: info.type,
             size: info.size,
             modifiedAt: new Date(info.mtimeMs).toISOString(),
           });

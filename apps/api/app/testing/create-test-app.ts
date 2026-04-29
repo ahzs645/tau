@@ -8,6 +8,7 @@ import { ZodValidationPipe } from 'nestjs-zod';
 import { MemorySaver } from '@langchain/langgraph-checkpoint';
 import { fromMemoryFS } from '@taucad/runtime';
 import { createRuntimeFileSystem } from '@taucad/runtime/filesystem';
+import type { RuntimeFileSystemBase } from '@taucad/runtime';
 import { createRpcDispatcher } from '@taucad/chat/rpc';
 import type { RpcGraphicsClient } from '@taucad/chat/rpc';
 import { getEnvironment } from '#config/environment.config.js';
@@ -89,7 +90,7 @@ class TestChatModule {}
 export type TestApp = {
   app: NestFastifyApplication;
   baseUrl: string;
-  memFs: ReturnType<typeof fromMemoryFS>;
+  memFs: RuntimeFileSystemBase;
   headlessRpc: HeadlessChatRpcService;
 };
 
@@ -141,14 +142,17 @@ export async function createTestApp(options: CreateTestAppOptions = {}): Promise
   logger.log(`Test app listening on ${baseUrl}`);
 
   const memFs = fromMemoryFS();
+  if (memFs.kind !== 'inline') {
+    throw new Error('Internal invariant: fromMemoryFS() must return the inline-kind handle.');
+  }
   const headlessRpc: HeadlessChatRpcService = moduleRef.get(ChatRpcService);
 
   const dispatcher = createRpcDispatcher({
-    fileSystem: createHeadlessRpcFileSystem(createRuntimeFileSystem(memFs)),
+    fileSystem: createHeadlessRpcFileSystem(createRuntimeFileSystem(memFs.fs)),
     kernelClient: createHeadlessRuntimeClient({ createGeometry: async () => ({ success: true, issues: [] }) }),
     ...(options.graphicsStub ? { graphics: options.graphicsStub } : {}),
   });
   headlessRpc.setDispatcher(dispatcher);
 
-  return { app, baseUrl, memFs, headlessRpc };
+  return { app, baseUrl, memFs: memFs.fs, headlessRpc };
 }

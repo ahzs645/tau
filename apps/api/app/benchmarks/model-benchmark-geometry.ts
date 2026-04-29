@@ -1,6 +1,7 @@
-import { createRuntimeClient, fromMemoryFS } from '@taucad/runtime';
+import { createRuntimeClient } from '@taucad/runtime';
 import type { HashedGeometryResult } from '@taucad/runtime';
-import { createInProcessTransport } from '@taucad/runtime/transport';
+import { inProcessTransport } from '@taucad/runtime/transport';
+import { fromMemoryFs } from '@taucad/runtime/filesystem';
 import { openscad } from '@taucad/openscad';
 import { gltfCoordinateTransform } from '@taucad/runtime/middleware';
 import type { MeasurementTestRequirement } from '@taucad/testing';
@@ -40,37 +41,24 @@ export type GeometryValidationResult = {
 
 const defaultGeometryTolerance = 1;
 
-const benchmarkFileSystems = new WeakMap<ApiRuntimeClient, ReturnType<typeof fromMemoryFS>>();
-
 export function createGeometryRenderer(): ApiRuntimeClient {
-  const fileSystem = fromMemoryFS();
-  const client = createRuntimeClient({
+  return createRuntimeClient({
     kernels: [openscad()],
     middleware: [gltfCoordinateTransform()],
-    transport: createInProcessTransport(),
-    fileSystem,
+    transport: inProcessTransport.client({ fileSystem: fromMemoryFs() }),
   });
-  benchmarkFileSystems.set(client, fileSystem);
-  return client;
 }
 
 /**
- * Eagerly connect a benchmark renderer so its first `openFile` call does not
+ * Eagerly open a benchmark renderer so its first `openFile` call does not
  * throw `RuntimeNotConnectedError`. `connect()` is a hard precondition for
  * `openFile`/`updateParameters`/`setOptions`.
- *
- * Reuses the in-memory filesystem registered in `createGeometryRenderer` so
- * file writes flow through the same FS that the worker mounts.
  */
 export async function ensureGeometryRendererConnected(client: ApiRuntimeClient): Promise<void> {
   if (client.lifecycleState === 'connected') {
     return;
   }
-  const fileSystem = benchmarkFileSystems.get(client);
-  if (!fileSystem) {
-    throw new Error('createGeometryRenderer must be used to construct benchmark RuntimeClients');
-  }
-  await client.connect({ fileSystem });
+  await client.connect();
 }
 
 export async function renderCodeToGlb(
@@ -79,12 +67,12 @@ export async function renderCodeToGlb(
   mainFile: string,
 ): Promise<GeometryRenderResult> {
   try {
-    // Subscribe to the geometry event before kicking off the render, so we can
-    // observe the (possibly superseded) settled result. `openFile()` returns a
-    // `RenderOutcome` whose
-    // `geometry` field carries the latest hashed result; we defensively also
-    // listen on `'geometry'` in case the settlement was superseded by a fresh
-    // call (which is unlikely here since this is a one-shot helper).
+    /* Subscribe to the geometry event before kicking off the render, so we can
+     * observe the (possibly superseded) settled result. `openFile()` returns a
+     * `RenderOutcome` whose `geometry` field carries the latest hashed result;
+     * we defensively also listen on `'geometry'` in case the settlement was
+     * superseded by a fresh call (which is unlikely here since this is a
+     * one-shot helper). */
     let lastGeometry: HashedGeometryResult | undefined;
     const off = client.on('geometry', (result) => {
       lastGeometry = result;
@@ -93,21 +81,18 @@ export async function renderCodeToGlb(
     try {
       await ensureGeometryRendererConnected(client);
 
-      // Pre-write inline files into the same memory FS the worker mounts so
-      // openFile() reads them without race / FS-mismatch concerns.
-      const fileSystem = benchmarkFileSystems.get(client);
-      if (!fileSystem) {
-        return { success: false, error: 'Renderer is missing its memory filesystem registration' };
+      /* Stage inline source via `code:` on `openFile` rather than
+       * pre-writing into the FS — the v6 transport plumbs inline code
+       * through the kernel without requiring callers to reach into the
+       * underlying memory store. */
+      const codeMap: Record<string, string> = {};
+      for (const [filename, content] of Object.entries(files)) {
+        const absolutePath = filename.startsWith('/') ? filename : `/${filename}`;
+        codeMap[absolutePath] = content;
       }
-      await Promise.all(
-        Object.entries(files).map(async ([filename, content]) => {
-          const absolutePath = filename.startsWith('/') ? filename : `/${filename}`;
-          await fileSystem.writeFile(absolutePath, content);
-        }),
-      );
       const resolvedMainFile = mainFile.startsWith('/') ? mainFile : `/${mainFile}`;
 
-      const settlement = await client.openFile({ file: resolvedMainFile });
+      const settlement = await client.openFile({ code: codeMap, file: resolvedMainFile });
       const result: HashedGeometryResult | undefined = settlement.superseded ? lastGeometry : settlement.geometry;
 
       if (!result) {
