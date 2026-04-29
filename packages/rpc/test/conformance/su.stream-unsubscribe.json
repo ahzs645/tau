@@ -1,0 +1,5 @@
+{
+  "name": "stream-unsubscribe",
+  "kind": "su",
+  "frame": { "v": 1, "k": "su", "i": "s1" }
+}

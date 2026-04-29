@@ -1,0 +1,5 @@
+{
+  "name": "hello-ok",
+  "kind": "lh",
+  "frame": { "v": 1, "k": "lh", "o": 1, "d": { "version": "1.0.0" } }
+}

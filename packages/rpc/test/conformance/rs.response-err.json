@@ -1,0 +1,5 @@
+{
+  "name": "response-error",
+  "kind": "rs",
+  "frame": { "v": 1, "k": "rs", "i": "r1", "o": 0, "e": { "m": "boom", "c": "EBOOM" } }
+}

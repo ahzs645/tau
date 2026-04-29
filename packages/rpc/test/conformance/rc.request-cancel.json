@@ -1,0 +1,5 @@
+{
+  "name": "request-cancel",
+  "kind": "rc",
+  "frame": { "v": 1, "k": "rc", "i": "r1", "e": { "m": "aborted" } }
+}

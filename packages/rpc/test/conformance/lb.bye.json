@@ -1,0 +1,5 @@
+{
+  "name": "bye",
+  "kind": "lb",
+  "frame": { "v": 1, "k": "lb", "r": "shutdown" }
+}

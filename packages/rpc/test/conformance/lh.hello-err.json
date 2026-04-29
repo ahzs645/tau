@@ -1,0 +1,5 @@
+{
+  "name": "hello-error",
+  "kind": "lh",
+  "frame": { "v": 1, "k": "lh", "o": 0, "e": { "m": "kernel-not-ready" } }
+}

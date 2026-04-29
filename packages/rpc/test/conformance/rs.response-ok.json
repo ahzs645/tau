@@ -1,0 +1,5 @@
+{
+  "name": "response-ok",
+  "kind": "rs",
+  "frame": { "v": 1, "k": "rs", "i": "r1", "o": 1, "d": { "value": 42 } }
+}

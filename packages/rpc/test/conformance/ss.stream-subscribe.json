@@ -1,0 +1,5 @@
+{
+  "name": "stream-subscribe",
+  "kind": "ss",
+  "frame": { "v": 1, "k": "ss", "i": "s1", "n": "ticks", "a": null }
+}

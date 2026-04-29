@@ -1,0 +1,5 @@
+{
+  "name": "stream-error",
+  "kind": "se",
+  "frame": { "v": 1, "k": "se", "i": "s1", "e": { "m": "stream-failed" } }
+}

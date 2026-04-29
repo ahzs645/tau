@@ -1,0 +1,5 @@
+{
+  "name": "notify",
+  "kind": "nt",
+  "frame": { "v": 1, "k": "nt", "n": "progress", "a": { "ratio": 0.5 } }
+}
