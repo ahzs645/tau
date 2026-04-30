@@ -5,6 +5,7 @@ import { remarkAutoTypeTable, createGenerator } from 'fumadocs-typescript';
 import { remarkMdxMermaid } from 'fumadocs-core/mdx-plugins';
 import kclLang from '#lib/kcl-language/kcl-shiki-precompiled.js';
 import openscadLang from '#lib/openscad-language/openscad-shiki-precompiled.js';
+import { internalTagTransform } from '#lib/fumadocs/internal-tag-transform.js';
 
 const generator = createGenerator({
   tsconfigPath: '../../tsconfig.docs.json',
@@ -21,7 +22,10 @@ export const docs: DocsCollection<typeof frontmatterSchema, typeof metaSchema> =
 
 export default defineConfig({
   mdxOptions: {
-    remarkPlugins: [[remarkAutoTypeTable, { generator }], remarkMdxMermaid],
+    remarkPlugins: [
+      [remarkAutoTypeTable, { generator, options: { transform: internalTagTransform } }],
+      remarkMdxMermaid,
+    ],
     remarkCodeTabOptions: {
       parseMdx: true,
     },
