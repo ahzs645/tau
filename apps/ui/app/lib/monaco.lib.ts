@@ -35,7 +35,6 @@ import { jsTsContribution } from '#lib/javascript-contribution.js';
  * `MonacoModelServiceProvider` additionally calls `registry.prefetch(...)`
  * with the active kernel's source-file Monaco ids to mask first-keystroke
  * latency in the dominant code path.
- *
  */
 
 // Register contributions at module load (idempotent -- safe under HMR)
