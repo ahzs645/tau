@@ -56,7 +56,7 @@ const ALLOWED_MS_SUFFIXES = [
 ];
 
 /** Identifiers ending in `Ms` at a PascalCase boundary (preceded by a lowercase letter). */
-const MS_SUFFIX = /(?<![A-Za-z])(?:[a-z][A-Za-z0-9]*?)Ms$/;
+const MS_SUFFIX = /(?<![A-Za-z])[a-z][\dA-Za-z]*?Ms$/;
 
 /**
  * @param {string} name
@@ -64,7 +64,9 @@ const MS_SUFFIX = /(?<![A-Za-z])(?:[a-z][A-Za-z0-9]*?)Ms$/;
  */
 const isAllowlisted = (name) => {
   for (const suffix of ALLOWED_MS_SUFFIXES) {
-    if (name === suffix) return true;
+    if (name === suffix) {
+      return true;
+    }
     // Allow prefixed PascalCase forms (e.g. `oldMtimeMs`, `previousMtimeMs`):
     // capitalise the suffix's first letter and look for it at the end of
     // `name`, requiring a lowercase/digit boundary char immediately before it.
@@ -72,7 +74,7 @@ const isAllowlisted = (name) => {
     if (
       name.length > pascalSuffix.length &&
       name.endsWith(pascalSuffix) &&
-      /[a-z0-9]/.test(name[name.length - pascalSuffix.length - 1] ?? '')
+      /[\da-z]/.test(name[name.length - pascalSuffix.length - 1] ?? '')
     ) {
       return true;
     }
@@ -84,8 +86,11 @@ const isAllowlisted = (name) => {
  * @param {string} name
  * @returns {boolean}
  */
+// oxlint-disable-next-line tau-lint/no-time-unit-suffix -- this is the test for the same rule
 const looksLikeTimeMs = (name) => {
-  if (isAllowlisted(name)) return false;
+  if (isAllowlisted(name)) {
+    return false;
+  }
   return MS_SUFFIX.test(name);
 };
 
@@ -112,9 +117,13 @@ export const noTimeUnitSuffixRule = {
   create(context) {
     /** @param {Node & { name?: string }} node */
     const checkIdentifier = (node) => {
-      const name = node.name;
-      if (typeof name !== 'string') return;
-      if (!looksLikeTimeMs(name)) return;
+      const { name } = node;
+      if (typeof name !== 'string') {
+        return;
+      }
+      if (!looksLikeTimeMs(name)) {
+        return;
+      }
       context.report({ node, messageId: 'msSuffix', data: { name } });
     };
 

@@ -68,9 +68,13 @@ export const noBareTimeIdentifierRule = {
   create(context) {
     /** @param {Node & { name?: string }} node */
     const checkIdentifier = (node) => {
-      const name = node.name;
-      if (typeof name !== 'string') return;
-      if (!isBannedBare(name)) return;
+      const { name } = node;
+      if (typeof name !== 'string') {
+        return;
+      }
+      if (!isBannedBare(name)) {
+        return;
+      }
       const capitalised = name[0].toUpperCase() + name.slice(1);
       context.report({ node, messageId: 'bareTime', data: { name, capitalised } });
     };
@@ -82,11 +86,11 @@ export const noBareTimeIdentifierRule = {
      * @param {Node & { id?: Node; init?: Node | null }} node
      */
     const checkVariableDeclarator = (node) => {
-      const init = node.init;
+      const { init } = node;
       if (init && (init.type === 'ArrowFunctionExpression' || init.type === 'FunctionExpression')) {
         return;
       }
-      const id = node.id;
+      const { id } = node;
       if (id && id.type === 'Identifier') {
         checkIdentifier(/** @type {Node & { name?: string }} */ (id));
       }

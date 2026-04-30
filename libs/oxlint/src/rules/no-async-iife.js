@@ -29,8 +29,10 @@ const isVoidUnary = (node) => node.type === 'UnaryExpression' && node.operator =
  * @returns {boolean}
  */
 const isAsyncIIFE = (node) => {
-  if (node.type !== 'CallExpression') return false;
-  const callee = node.callee;
+  if (node.type !== 'CallExpression') {
+    return false;
+  }
+  const { callee } = node;
   if (callee.type !== 'ArrowFunctionExpression' && callee.type !== 'FunctionExpression') {
     return false;
   }
@@ -44,11 +46,17 @@ const isAsyncIIFE = (node) => {
  * @returns {boolean}
  */
 const isVoidThenChain = (node) => {
-  if (node.type !== 'CallExpression') return false;
-  const callee = node.callee;
-  if (callee.type !== 'MemberExpression') return false;
-  const property = callee.property;
-  if (property.type !== 'Identifier') return false;
+  if (node.type !== 'CallExpression') {
+    return false;
+  }
+  const { callee } = node;
+  if (callee.type !== 'MemberExpression') {
+    return false;
+  }
+  const { property } = callee;
+  if (property.type !== 'Identifier') {
+    return false;
+  }
   return property.name === 'then' || property.name === 'catch' || property.name === 'finally';
 };
 
@@ -58,10 +66,11 @@ const isVoidThenChain = (node) => {
  * @returns {boolean}
  */
 const hasEscapeHatchComment = (context, node) => {
-  const sourceCode = context.sourceCode ?? context.getSourceCode();
-  /** @type {Comment[]} */
+  const { sourceCode } = context;
   const comments = sourceCode.getCommentsBefore(node);
-  if (comments.length === 0) return false;
+  if (comments.length === 0) {
+    return false;
+  }
   return comments.some((comment) => comment.value.includes(ESCAPE_HATCH_TAG));
 };
 
@@ -97,15 +106,21 @@ export const noAsyncIifeRule = {
      * @param {Node} node
      */
     const reportIfVoidAsyncIife = (node) => {
-      if (!isVoidUnary(node)) return;
-      const argument = /** @type {UnaryExpression} */ (node).argument;
+      if (!isVoidUnary(node)) {
+        return;
+      }
+      const { argument } = node;
       if (isAsyncIIFE(argument)) {
-        if (hasEscapeHatchComment(context, node)) return;
+        if (hasEscapeHatchComment(context, node)) {
+          return;
+        }
         context.report({ node, messageId: 'voidAsyncIife' });
         return;
       }
       if (isVoidThenChain(argument)) {
-        if (hasEscapeHatchComment(context, node)) return;
+        if (hasEscapeHatchComment(context, node)) {
+          return;
+        }
         context.report({ node, messageId: 'voidThenChain' });
       }
     };

@@ -31,7 +31,7 @@ describe('no-bare-time-identifier', () => {
         },
         {
           name: 'object-literal key passing to vitest API is exempt',
-          code: 'const cfg = { timeout: 30_000 };', // demonstrates Property key (NOT a TSPropertySignature)
+          code: 'const cfg = { timeout: 30_000 };', // Demonstrates Property key (NOT a TSPropertySignature)
         },
         {
           name: 'duration is descriptive — not banned',

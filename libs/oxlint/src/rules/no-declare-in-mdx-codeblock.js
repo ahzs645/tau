@@ -19,7 +19,7 @@
 const MDX_CODEBLOCK_REGEX = /^```typescript(?<meta>[^\n]*)?\n(?<code>[\s\S]*?)^```$/gm;
 
 const DECLARE_REGEX = /^[\t ]*declare\s+(?<kind>const|let|var|function|class|enum|namespace|module)\b/gm;
-const VOID_NOOP_REGEX = /^[\t ]*void\s+(?<ident>[A-Za-z_$][\w$]*)\s*;?\s*$/gm;
+const VOID_NOOP_REGEX = /^[\t ]*void\s+(?<ident>[$A-Z_a-z][\w$]*)\s*;?\s*$/gm;
 
 /** @type {RuleModule} */
 export const noDeclareInMdxCodeblockRule = {
