@@ -25,11 +25,11 @@ A host (CAD editor, IDE, multi-user platform) typically owns the filesystem and 
 - Cross-worker zero-copy file content via `SharedArrayBuffer`-backed `FilePool`
 - The ability to terminate and re-create runtime clients without losing the underlying filesystem
 
-`createRuntimeClient({ ..., transport: transportPlugin.client({ fileSystem, filePoolBuffer }) })` is the seam where the host hands these primitives to the runtime.
+`createRuntimeClient({ ..., transport: webWorkerTransport({ fileSystem, filePoolBuffer }) })` is the seam where the host hands these primitives to the runtime.
 
 ## Opaque `RuntimeFileSystem` values
 
-The `transport.client({ fileSystem })` option accepts an opaque [`RuntimeFileSystem`](../api/filesystem) value. The value is produced by one of the bundled factory functions — consumers cannot inspect its internals. The transport constructs the underlying bridge primitives from it:
+The **`fileSystem`** field on `webWorkerTransport({ ... })`, `inProcessTransport({ ... })`, and friends accepts an opaque [`RuntimeFileSystem`](../api/filesystem) value. The value is produced by one of the bundled factory functions — consumers cannot inspect its internals. The transport constructs the underlying bridge primitives from it:
 
 | Factory                              | When to use                                  |
 | ------------------------------------ | -------------------------------------------- |
@@ -41,7 +41,7 @@ The `transport.client({ fileSystem })` option accepts an opaque [`RuntimeFileSys
 
 ### Worker-hosted filesystems
 
-When the host owns a File Manager Worker (the canonical editor pattern), wrap it with `fromChannelFs(...)` and pass the handle to `webWorkerTransport.client`:
+When the host owns a File Manager Worker (the canonical editor pattern), wrap it with `fromChannelFs(...)` and pass the handle to `webWorkerTransport`:
 
 ```typescript
 import { createRuntimeClient, presets } from '@taucad/runtime';
@@ -52,7 +52,7 @@ const fileManagerWorker = new Worker(new URL('./fm-worker.ts', import.meta.url))
 
 const client = createRuntimeClient({
   ...presets.all(),
-  transport: webWorkerTransport.client({
+  transport: webWorkerTransport({
     fileSystem: fromChannelFs(fileManagerWorker),
   }),
 });
@@ -70,7 +70,7 @@ The transport constructs the FS bridge `MessagePort` internally and disposes it 
 
 ### In-process filesystems
 
-For tests, CLIs, and other same-thread scenarios, use `inProcessTransport.client` with an inline filesystem:
+For tests, CLIs, and other same-thread scenarios, use `inProcessTransport` with an inline filesystem:
 
 ```typescript
 import { createRuntimeClient, presets, fromMemoryFs } from '@taucad/runtime';
@@ -78,7 +78,7 @@ import { inProcessTransport } from '@taucad/runtime/transport/in-process';
 
 const client = createRuntimeClient({
   ...presets.all(),
-  transport: inProcessTransport.client({
+  transport: inProcessTransport({
     fileSystem: fromMemoryFs({
       'main.ts':
         "import { drawCircle } from 'replicad';\nexport default () => drawCircle(10).sketchOnPlane('XY').extrude(20);",
@@ -106,7 +106,7 @@ const filePoolBuffer = new SharedArrayBuffer(64 * 1024 * 1024);
 
 const client = createRuntimeClient({
   ...presets.all(),
-  transport: webWorkerTransport.client({
+  transport: webWorkerTransport({
     fileSystem: fromChannelFs(fileManagerWorker),
     filePoolBuffer,
   }),
@@ -114,7 +114,7 @@ const client = createRuntimeClient({
 await client.connect();
 ```
 
-The same option is supported on every transport — including `inProcessTransport.client` (e.g. tests) where you still want the FilePool zero-copy contract.
+The same option is supported on every transport — including `inProcessTransport` (e.g. tests) where you still want the FilePool zero-copy contract.
 
 > Cross-origin isolation is required for any `SharedArrayBuffer` — both the host-allocated `filePoolBuffer` and the transport-owned geometry/abort SABs. See [Cross-Origin Isolation](./cross-origin-isolation) for the COOP/COEP headers your host must serve.
 
@@ -131,7 +131,7 @@ import { fromNodeFs } from '@taucad/runtime/filesystem/node';
 const projectPath = '/Users/me/cad-projects/widget';
 const client = createRuntimeClient({
   ...presets.all(),
-  transport: inProcessTransport.client({ fileSystem: fromNodeFs(projectPath) }),
+  transport: inProcessTransport({ fileSystem: fromNodeFs(projectPath) }),
 });
 await client.connect();
 ```
@@ -148,7 +148,7 @@ import { inProcessTransport } from '@taucad/runtime/transport/in-process';
 
 const client = createRuntimeClient({
   ...presets.all(),
-  transport: inProcessTransport.client({
+  transport: inProcessTransport({
     fileSystem: fromMemoryFs({ 'main.ts': 'export default () => 1;' }),
     filePoolBuffer: new SharedArrayBuffer(64 * 1024 * 1024),
   }),

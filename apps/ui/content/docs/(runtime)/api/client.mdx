@@ -110,7 +110,11 @@ const client = createRuntimeClient({
 
 <auto-type-table path='./props/client.ts' name='RuntimeFileSystem' />
 
-`fromMemoryFs`, `fromNodeFs`, `fromFsLike`, `fromBrowserFs`, and `fromChannelFs` all return an opaque `RuntimeFileSystem` value. Hand it to the transport plugin at construction (`transportPlugin.client({ fileSystem })`); the transport constructs the underlying bridge primitives internally. Consumers cannot inspect or branch on the handle's kind.
+`fromMemoryFs`, `fromNodeFs`, `fromFsLike`, `fromBrowserFs`, and `fromChannelFs` all return an opaque `RuntimeFileSystem` value. Pass it into the wired transport callable (`webWorkerTransport({ fileSystem })`, `inProcessTransport({ fileSystem })`, …); the transport constructs the underlying bridge primitives internally. Consumers cannot inspect or branch on the handle's kind.
+
+### Transport plugins vs materialized handles
+
+Bundled transports are **`TransportPlugin`** callables (`webWorkerTransport`, `nodeWorkerTransport`, `inProcessTransport`). `createRuntimeClient` receives the **wired plugin** (the result of `webWorkerTransport({ ... })` — `{ id, describe, materialize }`) and calls **`materialize()` once during client construction** to obtain the fat `RuntimeTransportClient` handle (`open()`, `initialize()`, …). Worker/kernel entries that own the opposing wire import standalone factories such as **`webWorkerHost`** / **`nodeWorkerHost`** directly — never through a `.host` accessor on the plugin callable.
 
 ## Error Types
 
@@ -180,12 +184,12 @@ Subscribe to client events with `client.on(event, handler)`. Returns an unsubscr
 
 `client.connect()` runs the transport handshake. It takes **no arguments** in v6 — every wire concern (filesystem, file pool SAB, abort signalling) is closed over by the transport supplied at construction. Call it explicitly when your host creates the client before the first command; inline `code:` input auto-connects.
 
-| Scenario                                      | Transport construction                                                    | See                                                  |
-| --------------------------------------------- | ------------------------------------------------------------------------- | ---------------------------------------------------- |
-| Inline `code:` -- one-shot or live re-renders | `presets.all()` default (`inProcessTransport`)                            | [Quick Start](../getting-started/quick-start)        |
-| Filesystem on disk (Node.js)                  | `inProcessTransport.client({ fileSystem: fromNodeFs(path) })`             | [Set Up the Filesystem](../guides/filesystem-setup)  |
-| Browser editor with FS worker                 | `webWorkerTransport.client({ url, fileSystem: fromChannelFs(fsWorker) })` | [Embedding in a Host](../guides/embedding-in-a-host) |
-| Zero-copy file content (filePool SAB)         | `transportPlugin.client({ fileSystem, filePoolBuffer })`                  | [Embedding in a Host](../guides/embedding-in-a-host) |
+| Scenario                                      | Transport construction                                                                         | See                                                  |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| Inline `code:` -- one-shot or live re-renders | `presets.all()` default (`inProcessTransport`)                                                 | [Quick Start](../getting-started/quick-start)        |
+| Filesystem on disk (Node.js)                  | `inProcessTransport({ fileSystem: fromNodeFs(path) })`                                         | [Set Up the Filesystem](../guides/filesystem-setup)  |
+| Browser editor with FS worker                 | `webWorkerTransport({ url, fileSystem: fromChannelFs(fsWorker) })`                             | [Embedding in a Host](../guides/embedding-in-a-host) |
+| Zero-copy file content (filePool SAB)         | `webWorkerTransport({ fileSystem, filePoolBuffer })` (same fields on every transport callable) | [Embedding in a Host](../guides/embedding-in-a-host) |
 
 ```typescript
 // Auto-connect (the npm-consumer default)
@@ -212,7 +216,7 @@ const filePool = new SharedArrayBuffer(64 * 1024 * 1024);
 // by the active transport.
 const client = createRuntimeClient({
   ...presets.all(),
-  transport: webWorkerTransport.client({
+  transport: webWorkerTransport({
     fileSystem: fromChannelFs(fsWorker),
     filePoolBuffer: filePool,
   }),

@@ -49,7 +49,7 @@ export const defaultKernels = [
  */
 export const createDefaultKernelOptions: KernelOptionsFactory = ({ fileSystem, filePoolBuffer }) =>
   createRuntimeClientOptions({
-    transport: webWorkerTransport.client({
+    transport: webWorkerTransport({
       fileSystem,
       filePoolBuffer,
       sharedMemory: {

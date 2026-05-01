@@ -186,14 +186,14 @@ const fmWorker = new Worker(new URL('./fm-worker.ts', import.meta.url), { type: 
 
 const client = createRuntimeClient({
   ...presets.all(),
-  transport: webWorkerTransport.client({
+  transport: webWorkerTransport({
     fileSystem: fromChannelFs(fmWorker),
   }),
 });
 await client.connect();
 ```
 
-The transport defaults to its bundled worker entry; pass an explicit `url:` only when hosting a custom worker module that composes `KernelRuntimeWorker` with `webWorkerTransport.host` directly.
+The transport defaults to its bundled worker entry; pass an explicit `url:` only when hosting a custom worker module that composes `KernelRuntimeWorker` with **`webWorkerHost`** (imported from `@taucad/runtime/transport/web-worker-host` or via the bundled worker entry) directly.
 
 ### T2 — In-process Node CLI / tests
 
@@ -204,7 +204,7 @@ import { createNodeClient } from '@taucad/runtime/node';
 
 const client = await createNodeClient('/path/to/project');
 // inferred:
-//   transport: inProcessTransport.client({ fileSystem: fromNodeFs('/path/to/project') }),
+//   transport: inProcessTransport({ fileSystem: fromNodeFs('/path/to/project') }),
 //   cache:     lruCache({ max: 1024 }),
 ```
 
@@ -213,33 +213,25 @@ const client = await createNodeClient('/path/to/project');
 The main process owns the FS authority and a `worker_threads.Worker` kernel host. The renderer is purely a display client — it speaks the kernel protocol over an Electron `MessagePortMain` pair. No kernel code, no FS access, and no bundler ever runs in the renderer.
 
 ```typescript @ts-nocheck
-// renderer.ts
+// renderer.ts — transport is a wired plugin callable supplied by your app
+// package (Electron example: `electronUtilityTransport({ port })` from an
+// app-local module built with defineRuntimeTransport).
 import { createRuntimeClient, presets } from '@taucad/runtime';
-import { defineRuntimeTransport } from '@taucad/runtime/transport';
 
 const port = await window.taucad.connectKernel();
 const client = createRuntimeClient({
   ...presets.all(),
-  transport: defineRuntimeTransport({ port }),
-  // No fileSystem on the renderer — the host owns it (TR9).
+  transport: electronUtilityTransport({ port }),
 });
 
-// main.ts
+// main / utility host — consumes a RuntimeTransportHost from nodeWorkerHost
+// or electronUtilityHost (see `@taucad/runtime/host` + examples/electron-tau).
 import { createRuntimeHost } from '@taucad/runtime/host';
-import { nodeWorkerTransport } from '@taucad/runtime/transport/node';
-import { fromNodeFs } from '@taucad/runtime/filesystem/node';
-import { lruCache } from '@taucad/runtime/cache';
-import { replicad, openscad } from '@taucad/runtime/kernels';
+import { nodeWorkerHost } from '@taucad/runtime/transport/node-worker-host';
 
-const { port1, port2 } = new MessageChannelMain();
 const host = createRuntimeHost({
-  port: adaptElectronPort(port2),
-  transport: nodeWorkerTransport.host({ url: kernelWorkerEntryUrl }),
-  fileSystem: fromNodeFs(app.getPath('userData')),
-  kernels: [replicad(), openscad()],
-  cache: lruCache({ max: 1024 }),
+  transport: nodeWorkerHost({ worker: kernelWorker }),
 });
-mainWindow.webContents.postMessage('kernel-port', null, [port1]);
 ```
 
 ### T4 — Multi-window Electron (single source of truth)

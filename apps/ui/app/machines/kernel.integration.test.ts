@@ -15,8 +15,8 @@
  * `client.connect({ port })`; in v6 the transport owns the FS, so we
  * supply it via the bundled `fromMemoryFs` factory (or any opaque
  * `fromX`). This is the same wiring path the editor uses — only the
- * concrete transport differs (`webWorkerTransport.client` in the
- * browser, `inProcessTransport.client` here for the node test
+ * concrete transport differs (`webWorkerTransport(...)` in the
+ * browser, `inProcessTransport(...)` here for the node test
  * environment).
  *
  * The original L1 (raw bridge round-trip) and L3 (event-driven setFile
@@ -70,7 +70,7 @@ describe('Kernel Integration — v6 zero-arg connect + transport-owned FS', { ti
     client = createRuntimeClient({
       kernels: [replicad({ withBrepEdges: true }), tau()],
       bundlers: [esbuild()],
-      transport: inProcessTransport.client({ fileSystem }),
+      transport: inProcessTransport({ fileSystem }),
     });
 
     await client.connect();
@@ -92,7 +92,7 @@ describe('Kernel Integration — v6 zero-arg connect + transport-owned FS', { ti
     client = createRuntimeClient({
       kernels: [replicad({ withBrepEdges: true }), tau()],
       bundlers: [esbuild()],
-      transport: inProcessTransport.client({ fileSystem: fromMemoryFs() }),
+      transport: inProcessTransport({ fileSystem: fromMemoryFs() }),
     });
 
     await client.connect();
@@ -118,7 +118,7 @@ describe('Kernel Integration — v6 zero-arg connect + transport-owned FS', { ti
     client = createRuntimeClient({
       kernels: [replicad({ withBrepEdges: true }), tau()],
       bundlers: [esbuild()],
-      transport: inProcessTransport.client({ fileSystem }),
+      transport: inProcessTransport({ fileSystem }),
     });
 
     await client.connect();

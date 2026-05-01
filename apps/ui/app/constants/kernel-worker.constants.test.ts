@@ -6,7 +6,7 @@ import {
 } from '#constants/kernel-worker.constants.js';
 import { fromMemoryFs } from '@taucad/runtime/filesystem';
 
-/* `webWorkerTransport.client(...)` validates a `Worker` ctor is in scope at
+/* `webWorkerTransport(...)` validates a `Worker` ctor is in scope at
  * construction time (the actual worker is only spawned on `open()`). jsdom
  * does not expose `Worker` as a global, so install a minimal stub for the
  * duration of the suite — no real `postMessage` traffic happens here, the
@@ -36,17 +36,17 @@ describe('kernel-worker constants', () => {
     }
   });
 
-  it('createDefaultKernelOptions builds RuntimeClientOptions with a constructed transport client', () => {
+  it('createDefaultKernelOptions builds RuntimeClientOptions with a wired TransportPlugin', () => {
     const fileSystem = fromMemoryFs();
     const filePoolBuffer = new SharedArrayBuffer(1024);
     const options = createDefaultKernelOptions({ fileSystem, filePoolBuffer });
 
     expect(options.transport).toBeDefined();
-    /* The transport client is fully fledged (`describe`, `open`, `initialize`,
-     * `abort`, `resolveGeometry`, `close`, `closed`) — assert a representative
-     * subset without binding to internal field names. */
-    expect(typeof options.transport!.open).toBe('function');
-    expect(typeof options.transport!.close).toBe('function');
+    expect(typeof options.transport!.materialize).toBe('function');
+    expect(typeof options.transport!.describe).toBe('function');
+    const transport = options.transport!.materialize();
+    expect(typeof transport.open).toBe('function');
+    expect(typeof transport.close).toBe('function');
     expect(options.kernels.length).toBe(defaultKernels.length);
   });
 
@@ -56,7 +56,10 @@ describe('kernel-worker constants', () => {
     const debugOptions = createDebugKernelOptions({ fileSystem, filePoolBuffer });
 
     expect(debugOptions.transport).toBeDefined();
-    expect(typeof debugOptions.transport!.open).toBe('function');
+    expect(typeof debugOptions.transport!.materialize).toBe('function');
+    expect(debugOptions.transport!.materialize()).toMatchObject({
+      id: debugOptions.transport!.id,
+    });
     expect(debugOptions.kernels.length).toBeGreaterThan(0);
   });
 

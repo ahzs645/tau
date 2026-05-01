@@ -31,6 +31,14 @@ const heroCode = { [heroMainFile]: qrcodeScad };
 
 const heroUnits: Units = { length: { symbol: 'mm', factor: 1 } };
 
+const heroKernelClientOptions = createRuntimeClientOptions({
+  transport: inProcessTransport({ fileSystem: fromMemoryFs() }),
+  kernels: [openscad()],
+  middleware: [parameterCache(), geometryCache(), gltfCoordinateTransform(), gltfEdgeDetection()],
+  bundlers: [esbuild()],
+  transcoders: [converterTranscoder()],
+});
+
 export function HeroViewer(): React.JSX.Element {
   const navigate = useNavigate();
   const projectManager = useProjectManager();
@@ -44,24 +52,8 @@ export function HeroViewer(): React.JSX.Element {
     [currentParams],
   );
 
-  /* The in-process transport allocates a `MessageChannel` and SAB
-   * pools at construction time — defer to a `useMemo` so it only
-   * runs client-side after hydration and remains stable across
-   * re-renders. */
-  const heroOptions = useMemo(
-    () =>
-      createRuntimeClientOptions({
-        transport: inProcessTransport.client({ fileSystem: fromMemoryFs() }),
-        kernels: [openscad()],
-        middleware: [parameterCache(), geometryCache(), gltfCoordinateTransform(), gltfEdgeDetection()],
-        bundlers: [esbuild()],
-        transcoders: [converterTranscoder()],
-      }),
-    [],
-  );
-
   const { geometries, status, defaultParameters, jsonSchema, exportGeometry, capabilities } = useRender({
-    clientOptions: heroOptions,
+    clientOptions: heroKernelClientOptions,
     code: heroCode,
     parameters: renderParams,
   });

@@ -12,8 +12,16 @@ import { Loader } from '#components/ui/loader.js';
 import { useSharedRenderer } from '#components/docs/shared-renderer.js';
 import { useRender } from '@taucad/react';
 import { cn } from '#utils/ui.utils.js';
+import { gltfCoordinateTransform } from '@taucad/runtime/middleware';
 
 const gltfLoader = new GLTFLoader();
+
+const kernelModelViewClientOptions = createRuntimeClientOptions({
+  transport: inProcessTransport({ fileSystem: fromMemoryFs() }),
+  kernels: [replicad()],
+  bundlers: [esbuild()],
+  middleware: [gltfCoordinateTransform()],
+});
 
 type KernelModelViewProps = {
   readonly code: string;
@@ -45,22 +53,8 @@ export function KernelModelView({ code, className }: KernelModelViewProps): Reac
   // eslint-disable-next-line @typescript-eslint/naming-convention -- file path key
   const renderCode = useMemo(() => ({ 'main.ts': code }), [code]);
 
-  /* In-process transport client allocates a `MessageChannel` and SAB
-   * pools at construction time — keep it inside `useMemo` so the
-   * allocation only happens client-side after hydration, and is
-   * stable across re-renders. */
-  const clientOptions = useMemo(
-    () =>
-      createRuntimeClientOptions({
-        transport: inProcessTransport.client({ fileSystem: fromMemoryFs() }),
-        kernels: [replicad()],
-        bundlers: [esbuild()],
-      }),
-    [],
-  );
-
   const { geometries, status, error } = useRender({
-    clientOptions,
+    clientOptions: kernelModelViewClientOptions,
     code: renderCode,
     enabled: isVisible,
   });

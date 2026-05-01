@@ -193,7 +193,7 @@ Branch on `error.code` (or use the realm-safe type guard) — never `Error.messa
 
 > `RuntimeNotConnectedError` is thrown when a `FileInput` command runs against
 > a client whose transport has no filesystem bridge. Pass a filesystem via the
-> transport at construction: `transportPlugin.client({ fileSystem })`. See
+> transport at construction (`inProcessTransport({ fileSystem })` or `webWorkerTransport({ fileSystem })`). See
 > [Embedding in a Host](./embedding-in-a-host) for host-wiring patterns.
 
 ```typescript

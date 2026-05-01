@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useActorRef, useSelector } from '@xstate/react';
 import { Check } from 'lucide-react';
@@ -24,6 +24,13 @@ import {
 
 // eslint-disable-next-line @typescript-eslint/naming-convention -- file path key
 const gearCode = { 'main.js': gearJscad };
+
+const splashbackKernelClientOptions = createRuntimeClientOptions({
+  transport: inProcessTransport({ fileSystem: fromMemoryFs() }),
+  kernels: [jscad()],
+  middleware: [parameterCache(), geometryCache(), gltfCoordinateTransform()],
+  bundlers: [esbuild()],
+});
 
 const prompt1Text = 'Create a gear with 12 teeth';
 const prompt2Text = 'Change it to 8 teeth';
@@ -771,23 +778,8 @@ export function AuthSplashback(): React.JSX.Element {
   const { send } = actorRef;
   const derivedState = useSelector(actorRef, deriveVisibilityState);
 
-  /* The in-process transport allocates a `MessageChannel` and SAB
-   * pools at construction time — defer to a `useMemo` so it only
-   * runs client-side after hydration and remains stable across
-   * re-renders. */
-  const splashbackOptions = useMemo(
-    () =>
-      createRuntimeClientOptions({
-        transport: inProcessTransport.client({ fileSystem: fromMemoryFs() }),
-        kernels: [jscad()],
-        middleware: [parameterCache(), geometryCache(), gltfCoordinateTransform()],
-        bundlers: [esbuild()],
-      }),
-    [],
-  );
-
   const { geometries, status } = useRender({
-    clientOptions: splashbackOptions,
+    clientOptions: splashbackKernelClientOptions,
     code: gearCode,
     enabled: derivedState.showContainer,
   });

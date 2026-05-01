@@ -96,7 +96,7 @@ const client = createRuntimeClient({
 
 The framework uses three related filesystem types:
 
-**`RuntimeFileSystem`** -- The opaque connect-time value returned by `fromNodeFs`, `fromMemoryFs`, `fromFsLike`, `fromBrowserFs`, and `fromChannelFs`. Hand it to the transport plugin at construction (`transportPlugin.client({ fileSystem })`); consumers cannot inspect its internals.
+**`RuntimeFileSystem`** -- The opaque connect-time value returned by `fromNodeFs`, `fromMemoryFs`, `fromFsLike`, `fromBrowserFs`, and `fromChannelFs`. Hand it to the wired transport callable at construction (`webWorkerTransport({ fileSystem })`, `inProcessTransport({ fileSystem })`, …); consumers cannot inspect its internals.
 
 **`RuntimeFileSystemBase`** -- The 11-method contract bridged to the kernel. Matches `fs.promises` semantics: `readFile`, `writeFile`, `mkdir`, `readdir`, `unlink`, `rmdir`, `rename`, `stat`, `lstat`, `exists`.
 
