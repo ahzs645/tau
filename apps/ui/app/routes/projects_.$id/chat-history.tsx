@@ -311,7 +311,7 @@ export const ChatHistory = memo(function (props: {
             totalCount={groups.length}
             itemContent={renderItem}
             followOutput={followOutput}
-            className='mt-1 h-full'
+            className='mt-1 min-h-0 min-w-0 flex-1'
             atBottomStateChange={handleAtBottomStateChange}
             components={{
               Scroller: ChatScroller,
@@ -334,7 +334,7 @@ export const ChatHistory = memo(function (props: {
         <ScrollDownButton hasContent={messageIds.length > 0} isVisible={!atBottom} onScrollToBottom={scrollToBottom} />
 
         {/* Chat input area */}
-        <div className='relative mx-2 mb-2'>
+        <div className='relative mx-2 mb-2 shrink-0'>
           <ChatTextarea
             ref={chatTextareaRef}
             mode='main'

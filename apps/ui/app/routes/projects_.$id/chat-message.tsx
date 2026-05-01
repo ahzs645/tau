@@ -4,6 +4,7 @@ import { Virtuoso } from 'react-virtuoso';
 import { messageRole } from '@taucad/chat/constants';
 import type { MyMessagePart, UsageData } from '@taucad/chat';
 import { useChatActions, useChatSelector } from '#hooks/use-chat.js';
+import type { CombinedChatState } from '#hooks/use-chat.js';
 import { serializeMessage } from '#utils/chat.utils.js';
 import { parseInlineReferences } from '#utils/at-reference.utils.js';
 import type { ActivityGroup, AggregatedGroup } from '#utils/assistant-message-activity.js';
@@ -55,6 +56,9 @@ import { ChatMessagePartUnknown } from '#routes/projects_.$id/chat-message-tool-
 import { ChatMessageToolTransfer } from '#routes/projects_.$id/chat-message-tool-transfer.js';
 import { ChatMessageFile } from '#routes/projects_.$id/chat-message-file.js';
 import { ChatMessagePlanning } from '#routes/projects_.$id/chat-message-planning.js';
+import { ChatStreamingStopButton } from '#components/chat/chat-textarea-submit-button.js';
+import { cancelChatStreamKeyCombination } from '#components/chat/chat-textarea-types.js';
+import { formatKeyCombination } from '#utils/keys.utils.js';
 
 const knownSkillIds = new Set(defaultSkills.map((s) => s.id));
 
@@ -391,6 +395,18 @@ type ChatMessageProperties = {
   readonly messageId: string;
 };
 
+function selectLastUserMessageId(state: CombinedChatState): string | undefined {
+  for (let index = state.messages.length - 1; index >= 0; index--) {
+    const entry = state.messages[index];
+    if (entry?.role === messageRole.user) {
+      return entry.id;
+    }
+  }
+
+  return undefined;
+}
+
+// oxlint-disable-next-line complexity -- split render paths for user collapse/edit vs assistant tools would churn without UX benefit
 export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties): React.JSX.Element {
   const userMessageCollapseRowThreshold = 8;
   const userMessageCollapseCharacterThreshold = 900;
@@ -415,10 +431,18 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
 
     return usageDataParts;
   });
-  const { editMessage, retryMessage, startEditingMessage, exitEditMode } = useChatActions();
+  const { editMessage, retryMessage, startEditingMessage, exitEditMode, stop } = useChatActions();
+  const chatStatus = useChatSelector((state) => state.status);
+  const lastUserMessageId = useChatSelector(selectLastUserMessageId);
+  const formattedCancelKeyCombination = formatKeyCombination(cancelChatStreamKeyCombination);
   const [isEditing, setIsEditing] = useState(false);
 
   const isUser = message?.role === messageRole.user;
+  const showUserBubbleStopShortcut =
+    isUser &&
+    !isEditing &&
+    lastUserMessageId === messageId &&
+    (chatStatus === 'streaming' || chatStatus === 'submitted');
   const isCollapsedUserMessage = isUser && !isEditing;
 
   const collapsedUserRows = useMemo(() => {
@@ -555,6 +579,7 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
               isUser && 'cursor-pointer rounded-sm border bg-background px-3 py-1 hover:border-primary',
               shouldCollapseUserMessage && 'max-h-58.5 overflow-hidden',
               fileParts.length > 0 && 'pt-3',
+              showUserBubbleStopShortcut && 'relative',
             )}
             onClick={handleEditClick}
           >
@@ -579,6 +604,15 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
             ) : (
               <AssistantParts parts={displayMessage.parts} messageId={displayMessage.id} />
             )}
+            {showUserBubbleStopShortcut ? (
+              <div className='absolute right-1 bottom-1 z-10'>
+                <ChatStreamingStopButton
+                  variant='compact'
+                  formattedCancelKeyCombination={formattedCancelKeyCombination}
+                  onCancel={stop}
+                />
+              </div>
+            ) : null}
           </div>
         </When>
         <ChatMessagePlanning messageId={messageId} className='-my-1' />

@@ -5,6 +5,47 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
 import { formatKeyCombination } from '#utils/keys.utils.js';
 import { Loader } from '#components/ui/loader.js';
+import { cn } from '#utils/ui.utils.js';
+
+type ChatStreamingStopButtonProperties = {
+  readonly formattedCancelKeyCombination: string;
+  readonly onCancel: () => void;
+  /** `compact` fits a single-line `text-sm` user bubble without overlapping ascenders. */
+  readonly variant?: 'default' | 'compact';
+};
+
+/**
+ * Circular stop control used while the assistant stream is active (textarea
+ * shortcut affordance and pinned shortcut on the live user bubble).
+ */
+export const ChatStreamingStopButton = memo(function ({
+  formattedCancelKeyCombination,
+  onCancel,
+  variant = 'default',
+}: ChatStreamingStopButtonProperties): React.JSX.Element {
+  const isCompact = variant === 'compact';
+
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          type='button'
+          size='icon'
+          className={cn('rounded-full', isCompact ? 'size-6' : 'size-7')}
+          onClick={(event) => {
+            event.stopPropagation();
+            onCancel();
+          }}
+        >
+          <Square className={cn('fill-primary-foreground', isCompact ? 'size-3' : 'size-4')} />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent className='flex items-center gap-2 align-baseline'>
+        Stop <KeyShortcut variant='tooltip'>{formattedCancelKeyCombination}</KeyShortcut>
+      </TooltipContent>
+    </Tooltip>
+  );
+});
 
 type ChatTextareaSubmitButtonProperties = {
   readonly status: string;
@@ -29,16 +70,7 @@ export const ChatTextareaSubmitButton = memo(function ({
 }: ChatTextareaSubmitButtonProperties): React.JSX.Element {
   if (['streaming', 'submitted'].includes(status)) {
     return (
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button size='icon' className='size-7 rounded-full' onClick={onCancel}>
-            <Square className='size-4 fill-primary-foreground' />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent className='flex items-center gap-2 align-baseline'>
-          Stop <KeyShortcut variant='tooltip'>{formattedCancelKeyCombination}</KeyShortcut>
-        </TooltipContent>
-      </Tooltip>
+      <ChatStreamingStopButton formattedCancelKeyCombination={formattedCancelKeyCombination} onCancel={onCancel} />
     );
   }
 
