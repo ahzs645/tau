@@ -1,11 +1,12 @@
 ---
 title: 'RPC & Filesystem Bridge Policy'
-description: 'MessagePort bridge architecture for connecting filesystem implementations to kernel workers across thread boundaries. Covers RuntimeFileSystem, from* constructors, and Bridge RPC primitives.'
+description: 'MessagePort bridge architecture for connecting filesystem implementations to kernel workers across thread boundaries. Covers RuntimeFileSystemBase, the opaque RuntimeFileSystem, from* constructors, and Bridge RPC primitives.'
 status: active
 created: '2026-03-03'
-updated: '2026-03-05'
+updated: '2026-05-01'
 related:
   - docs/research/comlink-rpc-practices.md
+  - docs/research/fs-bridge-port-migration.md
 ---
 
 # RPC & Filesystem Bridge Policy
@@ -46,8 +47,9 @@ The kernel package has two distinct communication systems, each purpose-built fo
 │ createRuntimeFileSystem(base) adds default helpers             │
 ├───────────────────────────────────────────────────────────────┤
 │ Layer 2: Constructors (from* factories)                       │
-│ Create RuntimeFileSystemBase from various sources:             │
-│ fromNodeFS, fromMemoryFS, fromFsLike                          │
+│ Return the opaque RuntimeFileSystem (transport-ready):        │
+│ fromNodeFs, fromMemoryFs, fromFsLikeOpaque,                   │
+│ fromBrowserFs, fromWorkerOpaque                               │
 ├───────────────────────────────────────────────────────────────┤
 │ Layer 3: Bridge RPC (MessagePort transport)                   │
 │ Serve/consume any object across thread boundaries:            │
@@ -111,23 +113,27 @@ const fs = createRuntimeFileSystem({ ...base, readFiles: optimizedBatchRead }); 
 
 Factory functions that create `RuntimeFileSystemBase` from various sources. Each normalizes a different source API into the 11-primitive contract.
 
-| Constructor                     | Source                         | Use Case                                                   |
-| ------------------------------- | ------------------------------ | ---------------------------------------------------------- |
-| `fromNodeFS(basePath)`          | Node.js `fs.promises`          | CLI tools, benchmarks, SSR, tests                          |
-| `fromMemoryFS(files?)`          | In-memory Map                  | Inline code rendering, unit tests                          |
-| `fromFsLike(fsLike, rootPath?)` | Any `{ promises: ... }` object | ZenFS, BrowserFS, memfs, or any fs.promises-compatible API |
+| Constructor                           | Source                         | Use Case                                                   |
+| ------------------------------------- | ------------------------------ | ---------------------------------------------------------- |
+| `fromNodeFs(basePath)`                | Node.js `fs.promises`          | CLI tools, benchmarks, SSR, tests                          |
+| `fromMemoryFs(files?)`                | In-memory Map                  | Inline code rendering, unit tests                          |
+| `fromFsLikeOpaque(fsLike, rootPath?)` | Any `{ promises: ... }` object | ZenFS, BrowserFS, memfs, or any fs.promises-compatible API |
+| `fromBrowserFs(...)`                  | Browser FileSystem APIs        | OPFS, FS Access, in-memory browser fs                      |
+| `fromWorkerOpaque(worker)`            | Cross-thread `MessagePort`     | Browser editor with a dedicated File Manager worker        |
+
+All constructors return the opaque {@link RuntimeFileSystem} type — consumers cannot inspect or branch on its internals. The transport plugin reads it through internal helpers in `transport/_internal/` to set up the appropriate channel.
 
 **Naming convention:** All constructors use the `from*` prefix per the library API policy. The name describes _what the source is_, not _what library it comes from_.
 
-#### `fromNodeFS` vs `fromFsLike`: why both exist
+#### `fromNodeFs` vs `fromFsLikeOpaque`: why both exist
 
 These serve different environments with different constraints:
 
-- **`fromNodeFS(basePath)`** handles `require('node:fs/promises')` internally via dynamic require, preventing bundlers from including Node.js builtins in browser projects. It uses `path.resolve()` for OS-aware path resolution. This is genuinely Node.js-specific.
+- **`fromNodeFs(basePath)`** handles `require('node:fs/promises')` internally via dynamic require, preventing bundlers from including Node.js builtins in browser projects. It uses `path.resolve()` for OS-aware path resolution. This is genuinely Node.js-specific.
 
-- **`fromFsLike(fsLike, rootPath?)`** accepts any object with a `promises` namespace matching the `FsLike` shape. This covers ZenFS, BrowserFS, memfs, polyfills, and any future fs-compatible library. The caller provides the fs object; the constructor just normalizes return types (Buffer → Uint8Array, stat → simplified shape).
+- **`fromFsLikeOpaque(fsLike, rootPath?)`** accepts any object with a `promises` namespace matching the `FsLike` shape. This covers ZenFS, BrowserFS, memfs, polyfills, and any future fs-compatible library. The caller provides the fs object; the constructor just normalizes return types (Buffer → Uint8Array, stat → simplified shape).
 
-They cannot be collapsed because `fromNodeFS` must do a dynamic `require()` internally to avoid bundler issues, while `fromFsLike` must accept the fs object as a parameter because the caller controls which fs instance to use.
+They cannot be collapsed because `fromNodeFs` must do a dynamic `require()` internally to avoid bundler issues, while `fromFsLikeOpaque` must accept the fs object as a parameter because the caller controls which fs instance to use.
 
 ### Layer 3: Bridge RPC
 
@@ -148,17 +154,19 @@ Every request carries a monotonically increasing `id`. The server dispatches by 
 
 #### Primitives
 
-| Function                                   | Level | Purpose                                                                    |
-| ------------------------------------------ | ----- | -------------------------------------------------------------------------- |
-| `createBridgeServer(handlers, port)`       | Low   | Serve an object's methods over a MessagePort                               |
-| `createBridgePort(handlers)`               | Low   | Convenience: createBridgeServer + MessageChannel                           |
-| `createBridgeCall(port)`                   | Low   | Generic RPC client: `{ call, dispose }`                                    |
-| `createBridgeProxy<T>(port)`               | Low   | Generic `Proxy`-based RPC client for any protocol type                     |
-| `catchMessages(port)`                      | Low   | Buffer incoming messages during initialization, replay on demand           |
-| `extractTransferables(value)`              | Low   | Walk nested values and collect `ArrayBuffer` transferables (de-duplicated) |
-| `createRuntimeFileSystem(base)`            | Mid   | Wrap `RuntimeFileSystemBase` with default enhanced method implementations  |
-| `exposeFileSystem(handlers, options?)`     | High  | Worker-side: listen for incoming bridge ports                              |
-| `createFileSystemBridge(worker, options?)` | High  | Main-thread: create channel + transfer port to worker                      |
+| Function                                   | Level | Purpose                                                                                                                                        |
+| ------------------------------------------ | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createBridgeServer(handlers, port)`       | Low   | Serve an object's methods over an RPC **`Port`** (wrap bare `MessagePort`s with **`wrapMessagePort`**)                                         |
+| `createBridgePort(handlers)`               | Low   | Convenience: **`createBridgeServer`** + **`MessageChannel`**. Returns **`BridgePort`** (raw **`MessagePort`**) for transfer                    |
+| `createBridgeCall(port)`                   | Low   | Generic RPC client: **`{ call, dispose }`** (requires **`Port`**, not a bare **`MessagePort`**)                                                |
+| `createBridgeProxy<T>(port)`               | Low   | Generic **`Proxy`**-based RPC client (**`Port`**-backed wire)                                                                                  |
+| `catchMessages(port)`                      | Low   | Buffer incoming messages during initialization, replay on demand                                                                               |
+| `extractTransferables(value)`              | Low   | Walk nested values and collect **`ArrayBuffer`** transferables (de-duplicated)                                                                 |
+| `createRuntimeFileSystem(base)`            | Mid   | Wrap **`RuntimeFileSystemBase`** with default enhanced method implementations                                                                  |
+| `exposeFileSystem(handlers, options?)`     | High  | Worker-side: listen for incoming bridge ports                                                                                                  |
+| `createFileSystemBridge(worker, options?)` | High  | Client isolate: **`MessageChannel`** + transfer to FS worker — returns **`FileSystemBridge`** (wrapped **`Port`** for **`createBridgeProxy`**) |
+
+See **`docs/research/fs-bridge-port-migration.md`** for why **`createFileSystemBridge`** returns a **`Port`** while forwarding into a kernel worker uses an internal raw-**`MessagePort`** path (`fromChannelFs`), and how that avoids **`Port.onMessage`** mistakes at compile time.
 
 **Naming split:** Generic bridge primitives use the `Bridge` prefix. Filesystem-typed functions use the `FileSystem` prefix. This distinction is intentional: `createBridgeServer` serves _any_ object (generic `<T extends Record<string, unknown>>`), while `createBridgeProxy<RuntimeFileSystemBase>` returns a typed filesystem proxy.
 
@@ -170,58 +178,52 @@ Every request carries a monotonically increasing `id`. The server dispatches by 
 // Worker side (file-manager.worker.ts):
 exposeFileSystem(fileManager);
 
-// Main thread (kernel.machine.ts):
-const port = createFileSystemBridge(fileManagerWorker);
-await client.connect({ port });
+// Main thread (app shell):
+const client = createRuntimeClient({
+  ...presets.all(),
+  transport: webWorkerTransport.client({
+    workerUrl: kernelWorkerUrl,
+    fileSystem: fromWorkerOpaque(fileManagerWorker),
+  }),
+});
+await client.connect();
 ```
 
-The main thread creates a `MessageChannel`, transfers `port1` to the target worker, and returns `port2`. After setup, the runtime worker and filesystem worker communicate directly -- the main thread is not in the hot path.
+The transport creates the FS bridge `MessagePort` internally; the worker-hosted filesystem and the kernel worker communicate without the app passing a raw `MessagePort` anywhere on the public API.
 
 ## Connection Modes
 
-The `RuntimeClient.connect()` method accepts two shapes, representing different abstraction levels:
-
-```typescript
-type ConnectOptions =
-  | { fileSystem: RuntimeFileSystem } // main-thread relay
-  | { port: MessagePort }; // direct bridge
-```
-
-### Main-thread relay: `{ fileSystem }`
-
-The client creates a `MessageChannel` internally, serves the filesystem via `createBridgeServer` on `port1`, and transfers `port2` to the runtime worker. Simple but adds one hop: runtime worker → main thread → filesystem implementation.
+`RuntimeClient.connect()` takes **no arguments**. Every wire concern (filesystem bridge, file pool SAB, abort signal channel) is closed over by the {@link RuntimeTransportPlugin} the consumer hands to `createRuntimeClient({ transport })`.
 
 ```typescript
 const client = createRuntimeClient({
-  kernels: [replicad()],
-  fileSystem: fromMemoryFS(files),
+  ...presets.all(),
+  transport: webWorkerTransport.client({
+    workerUrl: kernelWorkerUrl,
+    fileSystem: fromMemoryFs(files), // or fromNodeFs / fromBrowserFs / fromWorkerOpaque
+    filePoolBuffer, // optional, externally allocated SAB
+  }),
 });
+await client.connect();
 ```
 
-### Direct bridge: `{ port }`
+### Inline and worker-hosted `fileSystem`
 
-The caller creates the bridge externally (via `createFileSystemBridge`) and passes the pre-existing port. This enables worker-to-worker communication without the main thread in the hot path.
+The transport's `client({ fileSystem })` option accepts the opaque `RuntimeFileSystem` returned by any `from*` factory. For inline factories (`fromMemoryFs`, `fromNodeFs`, `fromFsLikeOpaque`, `fromBrowserFs`), the transport creates a `MessageChannel` internally and bridges the in-process or Node-backed `RuntimeFileSystemBase` into the kernel worker. For port-backed factories (`fromWorkerOpaque`), the transport binds the supplied port directly. Cross-process kernel hosts (Electron main, native subprocess) author a custom transport (e.g. `electronUtilityTransport`) and supply their `RuntimeFileSystemBase` inside the host side (`createRuntimeHost({ transport: electronUtilityTransport.host({ fileSystem }) })`).
 
-```typescript
-const port = createFileSystemBridge(fileManagerWorker);
-await client.connect({ port });
-```
-
-**When to use which:**
-
-| Mode             | Latency                    | Setup               | Use Case                             |
-| ---------------- | -------------------------- | ------------------- | ------------------------------------ |
-| `{ fileSystem }` | +1 hop (main thread relay) | Zero config         | CLI, tests, benchmarks, inline code  |
-| `{ port }`       | Direct worker-to-worker    | Manual bridge setup | Browser app with dedicated FS worker |
+| Factory                                                              | When to use                                                                     |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `fromMemoryFs` / `fromNodeFs` / `fromFsLikeOpaque` / `fromBrowserFs` | same-thread or single-process FS source                                         |
+| `fromWorkerOpaque`                                                   | browser editor with a `FileService` / FS worker that speaks the bridge protocol |
+| _(custom transport.host({ fileSystem }))_                            | cross-process kernel host (e.g. Electron main) that owns the real filesystem    |
 
 ## Subpath Export Structure
 
 ```
-@taucad/runtime              → fromNodeFS, fromMemoryFS, fromFsLike (constructors)
-@taucad/runtime/filesystem   → exposeFileSystem, createFileSystemBridge (high-level)
-                               createRuntimeFileSystem (wrapper)
-                               createBridgeServer, createBridgePort, createBridgeCall (low-level)
-                               createBridgeProxy, catchMessages, extractTransferables (low-level)
+@taucad/runtime              → fromNodeFs, fromMemoryFs, fromFsLikeOpaque, fromBrowserFs, fromWorkerOpaque
+@taucad/runtime/filesystem   → opaque RuntimeFileSystem type + same factories
+@taucad/runtime/transport    → defineRuntimeTransport, inProcessTransport, webWorkerTransport, nodeWorkerTransport
+                               (the only place that needs a transport author touchpoint)
 ```
 
 The main entry exports constructors because they're the most common consumer need. The `/filesystem` subpath exports bridge primitives for app integrators who need custom worker topologies.
@@ -230,11 +232,11 @@ The main entry exports constructors because they're the most common consumer nee
 
 The runtime package must be completely decoupled from ZenFS. The package provides a `node:fs`-compatible interface (`RuntimeFileSystem`) and constructors that normalize various fs implementations into that interface. No ZenFS types, imports, or naming should appear in the public API.
 
-**Current state:** Completed. `fromZenFS` and `ZenFSLike` have been renamed to `fromFsLike` and `FsLike` respectively. The function accepts _any_ object with a `promises` namespace -- not just ZenFS. The dead `fromProxy` code from the Comlink era has been removed.
+**Current state:** Completed. `fromZenFS` and `ZenFSLike` have been renamed to `fromFsLikeOpaque` and `FsLike` respectively. The function accepts _any_ object with a `promises` namespace -- not just ZenFS. The dead `fromProxy` code from the Comlink era has been removed.
 
 **Exception:** Test utilities (`kernel-testing.utils.ts`) may import ZenFS directly as a concrete implementation for testing. This is acceptable because test utilities are not consumer-facing API.
 
-**Rationale:** A developer using a different browser filesystem (e.g., BrowserFS, memfs, lightning-fs) can pass it to `fromFsLike()` without confusion about library-specific naming.
+**Rationale:** A developer using a different browser filesystem (e.g., BrowserFS, memfs, lightning-fs) can pass it to `fromFsLikeOpaque()` without confusion about library-specific naming.
 
 ## Architectural Invariants
 
@@ -275,6 +277,6 @@ Currently, `/filesystem` exports both filesystem-typed APIs (`createFileSystemBr
 
 **Current recommendation:** Keep them together. The bridge exists primarily for filesystem communication within Tau. A separate `/bridge` subpath adds complexity without clear consumer benefit. Revisit if the bridge primitives gain non-filesystem consumers.
 
-### Should `fromFsLike` accept Node.js `fs` directly?
+### Should `fromFsLikeOpaque` accept Node.js `fs` directly?
 
-Node.js `fs` has a `.promises` namespace matching `FsLike`. In theory, `fromFsLike(require('fs'))` would work. However, `fromNodeFS` adds `path.resolve()` for OS-aware path resolution, which `fromFsLike` does not (it uses simple string concatenation). Recommend keeping both: `fromNodeFS` for Node.js environments, `fromFsLike` for browser/polyfill environments.
+Node.js `fs` has a `.promises` namespace matching `FsLike`. In theory, `fromFsLikeOpaque(require('fs'))` would work. However, `fromNodeFs` adds `path.resolve()` for OS-aware path resolution, which `fromFsLikeOpaque` does not (it uses simple string concatenation). Recommend keeping both: `fromNodeFs` for Node.js environments, `fromFsLikeOpaque` for browser/polyfill environments.

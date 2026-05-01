@@ -152,7 +152,7 @@ The Replicad kernel supports automatic OpenCASCADE API call tracing via a JavaSc
 
 ### Proxy Architecture
 
-The tracing proxy (`oc-tracing.ts`) intercepts at two levels:
+The tracing proxy (`packages/runtime/src/kernels/occt/oc-tracing.ts`, shared between the Replicad and OpenCascade kernels) intercepts at two levels:
 
 1. **Class resolution** (`get` trap): When `oc.BRepPrimAPI_MakeBox` is accessed, returns a wrapped function proxy for that class. No WASM calls during property access.
 2. **Function invocation** (`apply`/`construct` trap): When a constructor or method is called, wraps the call with timing instrumentation.
@@ -210,13 +210,13 @@ kernel.compute
 
 ## Implementation References
 
-| Component                   | File                                                          | Role                                       |
-| --------------------------- | ------------------------------------------------------------- | ------------------------------------------ |
-| `RuntimeTracer`             | `packages/runtime/src/framework/runtime-tracer.ts`            | Span creation with parent-child hierarchy  |
-| `WorkerTelemetryCollector`  | `packages/runtime/src/framework/worker-telemetry.ts`          | Batched collection via PerformanceObserver |
-| `KernelWorkerDispatcher`    | `packages/runtime/src/framework/runtime-worker-dispatcher.ts` | Telemetry flush on render completion       |
-| `KernelWorker`              | `packages/runtime/src/framework/kernel-worker.ts`             | Framework span instrumentation             |
-| `KernelRuntimeWorker`       | `packages/runtime/src/framework/kernel-runtime-worker.ts`     | Kernel selection spans                     |
-| `wrapOcWithTracing`         | `packages/runtime/src/kernels/replicad/oc-tracing.ts`         | OC API call tracing proxy                  |
-| `buildSpanTree`             | `apps/ui/app/routes/projects_.$id/chat-kernel.tsx`            | UI tree reconstruction                     |
-| `createTelemetryAggregator` | `apps/ui/app/machines/kernel.machine.ts`                      | Main-thread forwarding                     |
+| Component                   | File                                                          | Role                                                         |
+| --------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------ |
+| `RuntimeTracer`             | `packages/runtime/src/framework/runtime-tracer.ts`            | Span creation with parent-child hierarchy                    |
+| `WorkerTelemetryCollector`  | `packages/runtime/src/framework/worker-telemetry.ts`          | Batched collection via PerformanceObserver                   |
+| `KernelWorkerDispatcher`    | `packages/runtime/src/framework/runtime-worker-dispatcher.ts` | Telemetry flush on render completion                         |
+| `KernelWorker`              | `packages/runtime/src/framework/kernel-worker.ts`             | Framework span instrumentation                               |
+| `KernelRuntimeWorker`       | `packages/runtime/src/framework/kernel-runtime-worker.ts`     | Kernel selection spans                                       |
+| `wrapOcWithTracing`         | `packages/runtime/src/kernels/occt/oc-tracing.ts`             | OC API call tracing proxy (shared by Replicad + OpenCascade) |
+| `buildSpanTree`             | `apps/ui/app/routes/projects_.$id/chat-kernel.tsx`            | UI tree reconstruction                                       |
+| `createTelemetryAggregator` | `apps/ui/app/machines/kernel.machine.ts`                      | Main-thread forwarding                                       |

@@ -59,7 +59,7 @@ All filesystem implementations must set `error.code` on thrown errors:
 
 - **ZenFS** (kerium `Exception`): sets `code` automatically via `Errno` enum.
 - **Node.js** (`ErrnoException`): sets `code` natively.
-- **`fromMemoryFS`**: sets `code` via `(error as NodeJS.ErrnoException).code = 'ENOENT'`.
+- **`fromMemoryFs`**: sets `code` via `(error as NodeJS.ErrnoException).code = 'ENOENT'`.
 - **Filesystem bridge**: preserves `error.code` across worker boundaries via `BridgeError`.
 
 When `error.code` is absent or unrecognized, `getErrorCode()` falls back to substring matching on `error.message` (e.g., `'not found'`, `'no such file'`, `'enoent'`). This fallback exists for defense-in-depth but should not be the primary classification path for any known filesystem implementation.

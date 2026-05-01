@@ -3,12 +3,13 @@ title: 'Library API Policy'
 description: 'Design rules for world-class JavaScript/TypeScript library APIs: factories, defineX, flat options, max 3 params, naming, subpath exports, events, plugins, lazy init, escape hatches.'
 status: active
 created: '2026-02-23'
-updated: '2026-03-11'
+updated: '2026-04-22'
 related:
   - docs/policy/api-evolution-policy.md
   - docs/policy/resource-cleanup-policy.md
   - docs/research/typescript-overloads.md
   - docs/research/subpath-export-naming.md
+  - docs/research/runtime-async-event-contract.md
 ---
 
 # Library API Policy
@@ -90,7 +91,7 @@ render(file, parameters, tessellation);
 // CORRECT: clear subject + optional config
 exposeFileSystem(fileSystem, options?)
 on(event, handler)
-fromFsLike(fsLike, rootPath?)
+fromFsLikeOpaque(fsLike, rootPath?)
 ```
 
 **3 params (distinct architectural concerns)** -- Only when each parameter represents a genuinely different concern in a consistent interface contract. All methods on the same interface must use the same positional convention.
@@ -217,7 +218,7 @@ Each naming prefix signals a specific role:
 | `create`\* | Factory function                | `createRuntimeClient`, `createBridgePort`           |
 | `define*`  | Plugin definition               | `defineKernel`, `defineMiddleware`, `defineBundler` |
 | `is*`      | Type guard                      | `isGeometryFile`, `isKernelPlugin`                  |
-| `from*`    | Conversion constructor          | `fromNodeFS`, `fromMemoryFS`, `fromFsLike`          |
+| `from*`    | Conversion constructor          | `fromNodeFs`, `fromMemoryFs`, `fromFsLikeOpaque`    |
 | `on*`      | Framework hook / event callback | `onInitialize`, `onLog`, `onProgress`               |
 
 ### Callback and hook naming
@@ -519,3 +520,286 @@ if (config.future?.unstable_splitModules !== undefined) {
 ```
 
 For advanced error hierarchy patterns with `Symbol.for()` markers and cross-realm `isInstance()` checks, see [API Evolution Policy § Error Hierarchy](api-evolution-policy.md#5-error-hierarchy-with-symbol-markers).
+
+## 20. Discriminated-Union Outcomes for Race-Prone Async APIs
+
+When an async method may be **superseded** by a follow-up call before the
+underlying work completes, do not silently drop the prior Promise or reject it
+with a control-flow exception (a `RenderSupersededError`-style throw on
+supersession is an anti-pattern: every consumer pays the cost of a try/catch
+they do not care about — for context, the runtime previously exported
+`RenderSupersededError` and has since deleted it in favour of the discriminated
+outcome shown below). Instead, return a **discriminated-union outcome** so
+callers can deterministically branch on supersession without ever throwing.
+
+The pattern, distilled from `RuntimeClient.openFile` / `updateParameters` /
+`setOptions` (`packages/runtime/src/client/runtime-client.ts`):
+
+```typescript
+export type RenderOutcome =
+  | { readonly superseded: false; readonly geometry: HashedGeometryResult }
+  | { readonly superseded: true };
+
+const outcome = await client.openFile({ file: '/main.ts', parameters });
+
+if (outcome.superseded) {
+  // A newer openFile / updateParameters / setOptions call took ownership of
+  // the worker before this one settled. The newer call's RenderOutcome
+  // carries the authoritative geometry — this caller can safely no-op.
+  return;
+}
+
+// outcome.geometry is HashedGeometryResult — typed and narrowed.
+renderToScreen(outcome.geometry);
+```
+
+Rules of thumb for outcome-shaped APIs:
+
+- **Do not throw on supersession.** Throwing means every consumer must wrap
+  the call in `try/catch` even when supersession is the expected,
+  benign outcome (e.g. user typing in a parameter slider).
+- **Do throw on real errors.** `RenderTimeoutError`, `RuntimeTerminatedError`,
+  and `RuntimeNotConnectedError` are still surfaced via Promise rejection —
+  they are not normal control flow.
+- **Make the discriminant a literal**, not an enum or symbol. `superseded:
+true | false` lets TypeScript narrow without any runtime helper.
+- **Carry the result on the success branch only.** Putting `geometry?:
+HashedGeometryResult` on both branches forces every caller into a
+  needless null check; the discriminant exists to avoid that.
+- **Document the supersession trigger** in the JSDoc. Consumers need to
+  know which sibling calls invalidate the in-flight outcome so they
+  can reason about ordering without reading the runtime source.
+
+## 21. Temporal Values
+
+All numeric temporal values — durations, timeouts, intervals, delays, debounces, ages, windows, polling cadences — are in **milliseconds**. Never encode the unit in the identifier (no `Ms`, `Sec`, `S`, `Min`, `Seconds`, `Hours` suffixes; no `ms`/`s`/`min` prefixes).
+
+**Why**: A single canonical unit eliminates conversion bugs at module boundaries. Milliseconds is the JavaScript ecosystem's de facto temporal unit (`setTimeout`, `setInterval`, `Date.now`, `performance.now`, `AbortSignal.timeout`, `requestAnimationFrame` callback timestamp), so aligning with it removes ambient cognitive load. Allowing unit suffixes invites divergence — once one module accepts seconds for "human readability", every consumer must read JSDoc to know which unit applies, and every wire-protocol round-trip becomes a conversion-bug surface.
+
+CORRECT:
+
+```typescript
+type CacheOptions = {
+  /** Evict entries older than this. */
+  maxAge: number;
+  /** Delay between retry attempts. */
+  retryDelay: number;
+  /** Reject the render after this duration. */
+  renderTimeout: number;
+};
+
+await sleep(250);
+client.setOptions({ renderTimeout: 30_000 });
+```
+
+INCORRECT:
+
+```typescript
+type CacheOptions = {
+  maxAgeMs: number; // suffix duplicates the canonical unit
+  retryDelaySeconds: number; // breaks the single-unit rule
+  renderTimeoutMin: number; // forces consumer-side conversion
+};
+
+await sleep(0.25); // ambiguous: seconds or milliseconds?
+client.setOptions({ renderTimeoutMs: 30_000 }); // suffix is forbidden
+```
+
+### Documenting the unit
+
+Because the identifier carries no suffix, every public temporal field must declare `Milliseconds.` in its JSDoc — a single word on its own sentence. This is the only acceptable place for the unit to appear in source.
+
+CORRECT:
+
+```typescript
+type RuntimeClientOptions = {
+  /**
+   * Reject the render with `RenderTimeoutError` after this duration. Milliseconds.
+   *
+   * @defaultValue 30000
+   */
+  renderTimeout?: number;
+};
+```
+
+### Allowlisted exceptions
+
+Three narrow categories may retain a `Ms` suffix because the identifier is bound to an external contract that we cannot rename:
+
+| Category                        | Examples                                                             | Why exempt                                            |
+| ------------------------------- | -------------------------------------------------------------------- | ----------------------------------------------------- |
+| Node.js `fs.Stats` time fields  | `mtimeMs`, `atimeMs`, `ctimeMs`, `birthtimeMs` (and prefixed copies) | Stdlib API surface                                    |
+| Persisted JSON contracts        | `responseTimeMs`, `durationMs`, `p95Ms`, `reasoningStartedAtMs`, …   | Wire format read by dashboards / runbooks / consumers |
+| Internal millisecond formatters | `formatMs(n: number): string`                                        | The suffix is the function's purpose, not a unit hint |
+
+The full allowlist lives in `libs/oxlint/src/rules/no-time-unit-suffix.js`. Adding a new entry requires a wire-protocol or stdlib justification — internal renames are never allowlisted.
+
+### Branded duration types
+
+If a future API genuinely needs to accept multiple temporal units (e.g., a CLI surface that takes `--timeout 30s`), introduce a branded `Milliseconds` type and a converter (`seconds(30)` → `Milliseconds`). Do not solve unit ambiguity by reintroducing suffixes.
+
+**Enforced by**: `tau-lint/no-time-unit-suffix` (forbids `Ms`/`Sec`/`Min`/etc. suffixes on identifiers) and `tau-lint/no-bare-time-identifier` (requires the `Milliseconds.` JSDoc tag on temporal fields).
+
+## 22. Async Surface Hygiene (Antipatterns)
+
+Five patterns that signal an async/sync mismatch in your API contract. If you find yourself reaching for any of them, **the contract is wrong** — fix the contract, not the syntax.
+
+For the full root-cause analysis, the eigenquestion that motivates this section, and the recommended transport-layer split, see [Runtime Async-Event Contract Research](../research/runtime-async-event-contract.md).
+
+### Antipattern 1 — `void (async () => { … })()` IIFE inside a sync callback
+
+INCORRECT:
+
+```typescript
+onGeometryComputed(transportResult) {
+  void (async () => {
+    const resolved = await resolveTransportResult(transportResult);
+    emitGeometry(resolved);
+  })();
+},
+```
+
+The callback signature is `(result) => void` but the body needs to `await`. The IIFE is the syntactic glue. A consumer reading this can only conclude the API is wrong, or that there is a load-bearing reason that requires deep familiarity with the dispatcher. Both are bad. **Either** make the callback return `Promise<void>` (and have the dispatcher await it), **or** move the async work upstream so the payload arrives already-resolved at the sync boundary.
+
+CORRECT (pre-resolved payload):
+
+```typescript
+events.on('geometry', (geometry) => {
+  // geometry is already HashedGeometryResult; the transport awaited
+  // resolveGeometry before emitting. Body stays sync.
+  emitGeometry(geometry);
+});
+```
+
+### Antipattern 2 — `void promise.then(…)` to "consume" a promise
+
+INCORRECT:
+
+```typescript
+void resolveTransportResult(transportResult).then((resolved) => {
+  emitGeometry(resolved);
+});
+```
+
+Identical root cause to Antipattern 1. `void` discards the error pipeline (rejected promises become unhandled-rejection warnings) and hides asyncness from any caller that wants to know "is this done yet?". **Fix the contract** so the caller sees the Promise — return it from the function, expose it through the event surface, or pre-resolve before emitting.
+
+### Antipattern 3 — `await Promise.resolve()` to drain microtasks
+
+INCORRECT (in tests _or_ production code):
+
+```typescript
+async function flushMicrotasks(iterations = 100): Promise<void> {
+  for (let i = 0; i < iterations; i++) {
+    await Promise.resolve();
+  }
+}
+
+// Test body:
+pushResponse({ type: 'geometryComputed', result: wireResult });
+await flushMicrotasks();
+await flushMicrotasks();
+expect(eventResult).toBeDefined();
+```
+
+A test that needs this is testing **schedule timing**, not behaviour. The API failed to expose its own asyncness; the test author is reverse-engineering the dispatcher's microtask schedule. A shape change that adds one more `await` in an internal IIFE silently breaks every such test until the iteration count is bumped.
+
+CORRECT — add an awaitable surface to the API:
+
+```typescript
+// Test body:
+await pushResponse({ type: 'geometryComputed', result: wireResult });
+expect(eventResult).toBeDefined();
+```
+
+`pushResponse` returns `Promise<void>` that resolves only after the transport's materialisation step completes. **Library authors must expose the asyncness their API performs.** Forcing consumers to drain microtasks is a contract violation.
+
+### Antipattern 4 — `new Promise((resolve, reject) => { void (async () => {…})() })`
+
+INCORRECT:
+
+```typescript
+return new Promise<void>((resolve, reject) => {
+  pendingConnect = { reject };
+  void (async () => {
+    try {
+      await ensureConnected(connectOptions);
+      resolve();
+    } catch (error) {
+      reject(classifyError(error));
+    }
+  })();
+});
+```
+
+This shape arises when **slot capture must precede the awaited chain** (here, `pendingConnect = { reject }` so `terminate()` can later reject the in-flight call). The author resolves it by writing the Promise constructor by hand and stuffing the body into an IIFE — usually with a `// oxlint-disable @typescript-eslint/promise-function-async` comment ten lines above as a tombstone confession.
+
+CORRECT — use [`Promise.withResolvers()`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Promise/withResolvers) (TC39 Stage 4, Node 22+, all evergreen browsers) and keep the body an `async function`:
+
+```typescript
+async connect(connectOptions: ConnectOptions): Promise<void> {
+  const slot = Promise.withResolvers<void>();
+  pendingConnect = { reject: slot.reject };
+  try {
+    await ensureConnected(connectOptions);
+    slot.resolve();
+  } catch (error) {
+    slot.reject(classifyError(error));
+  }
+  return slot.promise;
+}
+```
+
+For older Node targets, ship an inline shim — eight lines, well-understood Deferred pattern. The lint suppression goes away with the IIFE.
+
+### Antipattern 5 — Wire primitives in public option objects
+
+INCORRECT:
+
+```typescript
+export type ConnectOptions =
+  | { fileSystem: RuntimeFileSystemBase; filePoolBuffer?: SharedArrayBuffer }
+  | { port: MessagePort; filePoolBuffer?: SharedArrayBuffer };
+```
+
+`MessagePort` is a `MessageChannel`-shaped primitive. A WebSocket transport cannot synthesise one. An Electron IPC transport cannot synthesise one. An FFI transport cannot synthesise one. Yet the public surface accepts it — the runtime client therefore advertises a coupling to one specific wire choice.
+
+The same critique applies to any wire-shape primitive in a public option object: `Worker`, `WebSocket`, `ipcRenderer`, `MessagePortMain`, raw `SharedArrayBuffer`. These are channel-specific. A public option type that includes them couples the consumer to a single transport choice and blocks the runtime from being deployed over alternative channels.
+
+CORRECT — accept an opaque transport-ready value and let the transport bind the wire primitive internally:
+
+```typescript
+// The opaque RuntimeFileSystem is produced by from* factories.
+// Consumers cannot inspect or branch on its representation.
+export type RuntimeFileSystem = { readonly [opaqueBrand]: unique symbol };
+
+export const fromMemoryFs: () => RuntimeFileSystem;
+export const fromNodeFs: (basePath: string) => RuntimeFileSystem;
+export const fromBrowserFs: (...) => RuntimeFileSystem;
+export const fromFsLikeOpaque: (fsLike: FsLike, rootPath?: string) => RuntimeFileSystem;
+export const fromWorkerOpaque: (worker: Worker) => RuntimeFileSystem;
+
+// The transport plugin is the only place that touches a wire primitive.
+const client = createRuntimeClient({
+  ...presets.all(),
+  transport: webWorkerTransport.client({
+    workerUrl: kernelWorkerUrl,
+    fileSystem,            // opaque RuntimeFileSystem
+    filePoolBuffer,        // optional SAB allocated upstream
+  }),
+});
+await client.connect();    // no arguments
+```
+
+A Worker / in-process transport binds the FS bridge via `MessagePort` internally; a WebSocket transport multiplexes it over the same socket; an Electron IPC transport binds it via `MessagePortMain`. The runtime client never types against any wire primitive — that responsibility lives entirely inside the {@link RuntimeTransportPlugin}.
+
+### Smell tests
+
+Three signals that one of these antipatterns has crept in:
+
+1. **Lint suppression as a tombstone.** A `// oxlint-disable @typescript-eslint/promise-function-async` (or any comment that explains "the lint rule is correct but the architecture forces us around it") is a code smell at the **architecture** level, not the lint level.
+2. **`flushMicrotasks` helpers in test files.** If a downstream consumer needs to write `flushMicrotasks()` to test your API, you have either Antipattern 1 or Antipattern 2.
+3. **Wire-primitive imports in `package.json`-published types.** `import type { MessagePort } from 'node:worker_threads'` (or the global DOM `MessagePort`) appearing in any `*.d.ts` is a candidate Antipattern 5.
+
+### Why this matters for library DX
+
+Internal callers can usually work around these patterns. **Downstream consumers cannot.** A consumer who imports `RuntimeClient` and writes their own tests inherits every microtask drain, every IIFE schedule, every wire-primitive coupling. The blast radius of a sync-void-callback-with-async-body is the entire ecosystem of consumers who try to test against your API. Fixing the contract once eliminates the class.

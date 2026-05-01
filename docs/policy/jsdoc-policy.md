@@ -169,6 +169,83 @@ INCORRECT:
  */
 ````
 
+## Time Units in JSDoc
+
+All time-valued identifiers across the codebase are **milliseconds** by Node.js convention. Identifier names drop the `Ms`/`ms` suffix; the unit is documented via JSDoc at the declaration site.
+
+### Rule
+
+When declaring any time-valued field, parameter, or constant, add a `/** Milliseconds. */` doc comment (or include the unit in a longer JSDoc block):
+
+```typescript
+/** Milliseconds. */
+export const parameterDebounce = 200;
+
+type RuntimeOptions = {
+  /** Milliseconds. */
+  renderTimeout: number;
+};
+
+/**
+ * Schedule a render after the given delay.
+ *
+ * @param renderDelay - Milliseconds to wait before rendering.
+ */
+export const scheduleRender = (renderDelay: number): void => {
+  // ...
+};
+```
+
+### Bare Time-Classifying Nouns Are Banned
+
+A bare identifier like `timeout`, `debounce`, `delay`, `interval`, `ttl`, `throttle`, `period`,
+`lifetime`, `expiry`, or `expires` fails to answer "X of/for what?" — the reader sees an
+_operation_ or an _opaque timing knob_ without knowing what is being timed. Always add a
+descriptive prefix at the declaration site:
+
+| Banned (bare)                       | Required (prefixed)                                                      |
+| ----------------------------------- | ------------------------------------------------------------------------ |
+| `const timeout = 30_000;`           | `const renderTimeout = 30_000;`                                          |
+| `let debounce: number;`             | `let refreshDebounce: number;`                                           |
+| `function f(delay: number) {}`      | `function f(renderDelay: number) {}`                                     |
+| `type Options = { ttl?: number };`  | `type Options = { entryTtl?: number };`                                  |
+| `const interval = setInterval(...)` | `const refreshIntervalTimer = setInterval(...)`                          |
+| `const timeout = setTimeout(...)`   | `const ackTimeoutTimer = setTimeout(...)` (Timer handle, not a duration) |
+
+Two carve-outs:
+
+- **Object-literal property keys** are exempt — they often mirror an external API's shape
+  (`requestIdleCallback({ timeout: 1000 })`, vitest `it(_, { timeout })`, xstate `waitFor(_, _, { timeout })`).
+- **Function declarations** named after the operation they implement are exempt
+  (`export const debounce = (...) => {...}`, `function throttle(...) {...}`) — the name
+  describes what the function _does_, not a duration value.
+
+Words that read as descriptive _measurements_ on their own — `duration`, `elapsed` — are not
+banned. `window` is also not banned because the DOM `window` global causes unavoidable
+collisions; by convention, prefer `coalescingWindow` / `trackingWindow` regardless.
+
+Enforced by `tau-lint/no-bare-time-identifier` (see `libs/oxlint/src/rules/`).
+
+### Identifier Suffix Allowlist
+
+The `Ms`/`ms` suffix is **banned** on identifiers; the only acceptable explicit unit suffix is `Seconds`, reserved for fields whose unit is mandated by an external boundary:
+
+| Allowed `Seconds` suffix    | Reason                                                                                       |
+| --------------------------- | -------------------------------------------------------------------------------------------- |
+| OTEL histogram inputs       | Prometheus/OTEL convention requires durations in seconds (`*_seconds_bucket`).               |
+| Docker/Fly.io health-checks | TOML `interval`/`timeout` fields take strings like `"30s"` — the field name pairs with that. |
+| CSS strings                 | Animation/transition durations in CSS are `s` or `ms` strings.                               |
+
+The allowlist for `Ms`/`ms` suffixes is restricted to identifiers from external APIs we cannot rename:
+
+| Allowed `Ms` suffix       | Reason                                                                    |
+| ------------------------- | ------------------------------------------------------------------------- |
+| `fs.Stats.mtimeMs`        | Node.js stdlib field name (`atimeMs`, `ctimeMs`, `birthtimeMs` likewise). |
+| `responseTimeMs`          | Persisted health-check JSON contract (do not break dashboards/runbooks).  |
+| `durationMs` (benchmarks) | Persisted benchmark report JSON (`*.json` artifacts on disk and in CI).   |
+
+Any other use of an `Ms` suffix should be renamed and documented via JSDoc instead. Enforced by `tau-lint/no-time-unit-suffix` (see `libs/oxlint/src/rules/`).
+
 ## Scope
 
 ### Applies to
