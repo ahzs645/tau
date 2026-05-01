@@ -1,8 +1,10 @@
 import { useMemo, useState, useEffect } from 'react';
 import { diffLines } from 'diff';
+import type { ShikiTransformer } from 'shiki/types';
+import { addClassToHast } from 'shiki/core';
 import type { HighlighterCore } from 'shiki/core';
 import type { CodeLanguage } from '@taucad/types';
-import { getHighlighter, diffTransformer } from '#lib/shiki.lib.js';
+import { getHighlighter } from '#lib/shiki.lib.js';
 import { cn } from '#utils/ui.utils.js';
 import { useTheme } from '#hooks/use-theme.js';
 
@@ -164,22 +166,32 @@ export function getFirstChangedLine(originalContent: string, modifiedContent: st
 }
 
 /**
- * Convert diff lines to Shiki notation syntax.
+ * Adds `diff add` / `diff remove` classes to each Shiki line element based on
+ * the diff metadata from {@link processDiffWithContext}.
+ *
+ * **Do not** use `transformerNotationDiff` with synthesized `// [!code ++]`
+ * markers here: Shiki only strips those markers when the host grammar
+ * tokenizes the prefix as a comment. Languages without `//` line comments
+ * (USD, bash, JSON, STEP, STL, etc.) leave the marker visible in the output.
+ *
+ * @see `docs/research/diff-viewer-shiki-notation-leak.md`
  */
-function linesToShikiNotation(lines: DiffLine[]): string {
-  return lines
-    .map((line) => {
-      if (line.type === 'added') {
-        return `${line.content} // [!code ++]`;
+function buildDiffLineTransformer(lines: DiffLine[]): ShikiTransformer {
+  return {
+    name: 'tau:diff-line-classes',
+    line(node, lineNumber) {
+      const diffLine = lines[lineNumber - 1];
+      if (diffLine === undefined) {
+        return;
       }
 
-      if (line.type === 'removed') {
-        return `${line.content} // [!code --]`;
+      if (diffLine.type === 'added') {
+        addClassToHast(node, 'diff add');
+      } else if (diffLine.type === 'removed') {
+        addClassToHast(node, 'diff remove');
       }
-
-      return line.content;
-    })
-    .join('\n');
+    },
+  };
 }
 
 type HiddenLinesSeparatorProps = {
@@ -207,8 +219,8 @@ type DiffViewerProps = {
 
 /**
  * Diff viewer with Shiki syntax highlighting.
- * Computes diff using the `diff` package, then uses Shiki's notation
- * transformer (// [!code ++] and // [!code --]) for styling.
+ * Computes diff using the `diff` package, then applies per-line `diff` classes
+ * via a Shiki `line` transformer (language-agnostic).
  * Shows only context lines around changes with hidden line indicators.
  */
 export function DiffViewer({
@@ -243,11 +255,11 @@ export function DiffViewer({
         return <HiddenLinesSeparator key={`hidden-${segmentIndex}`} count={segment.count} />;
       }
 
-      const diffText = linesToShikiNotation(segment.lines);
-      const html = highlighter.codeToHtml(diffText, {
+      const sourceText = segment.lines.map((line) => line.content).join('\n');
+      const html = highlighter.codeToHtml(sourceText, {
         lang: language,
         theme: `github-${theme}`,
-        transformers: [diffTransformer],
+        transformers: [buildDiffLineTransformer(segment.lines)],
       });
 
       return (
@@ -281,5 +293,12 @@ export function DiffViewer({
   }, [segments, language, theme, highlighter]);
 
   // Outer container w-max min-w-full ensures all segments extend to longest line across all groups
-  return <div className={cn('w-max min-w-full text-xs', className)}>{renderedSegments}</div>;
+  return (
+    <div
+      className={cn('w-max min-w-full text-xs', className)}
+      data-shiki-state={highlighter === undefined ? 'loading' : 'ready'}
+    >
+      {renderedSegments}
+    </div>
+  );
 }

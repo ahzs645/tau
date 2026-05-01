@@ -1,6 +1,15 @@
 import type { HighlighterCore } from 'shiki/core';
-import { transformerNotationDiff } from '@shikijs/transformers';
 
+/**
+ * Shiki helpers for the UI.
+ *
+ * Avoid `transformerNotationDiff` / `[!code …]` comment markers for multi-language
+ * editors: those markers are only stripped when the active TextMate grammar
+ * classifies the surrounding token as a comment, so `// [!code ++]` leaks on
+ * grammars without `//` line comments.
+ *
+ * Prefer the `line` transformer in `diff-viewer.tsx` for diff styling.
+ */
 let cachedHighlighter: Promise<HighlighterCore> | undefined;
 
 /**
@@ -37,5 +46,3 @@ export const getHighlighter = async (): Promise<HighlighterCore> => {
   })();
   return cachedHighlighter;
 };
-
-export const diffTransformer = transformerNotationDiff();

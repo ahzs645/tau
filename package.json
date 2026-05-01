@@ -120,7 +120,6 @@
     "@shikijs/langs-precompiled": "^3.22.0",
     "@shikijs/monaco": "^3.22.0",
     "@shikijs/themes": "^3.22.0",
-    "@shikijs/transformers": "^3.22.0",
     "@size-limit/file": "catalog:",
     "@socket.io/redis-streams-adapter": "catalog:",
     "@statelyai/inspect": "^0.4.0",

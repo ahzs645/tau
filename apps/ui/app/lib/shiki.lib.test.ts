@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getHighlighter, diffTransformer } from '#lib/shiki.lib.js';
+import { getHighlighter } from '#lib/shiki.lib.js';
 
 describe('shiki.lib', () => {
   it('should return a highlighter instance on first call', async () => {
@@ -12,10 +12,5 @@ describe('shiki.lib', () => {
     const first = await getHighlighter();
     const second = await getHighlighter();
     expect(first).toBe(second);
-  });
-
-  it('should export diffTransformer as a transformer function', () => {
-    expect(diffTransformer).toBeDefined();
-    expect(typeof diffTransformer.name).toBe('string');
   });
 });
