@@ -121,7 +121,7 @@ describe('getAllFlags', () => {
       'tau:flags': JSON.stringify({ planMode: true }),
     });
     const flags = getAllFlags(storage);
-    expect(flags).toStrictEqual({ planMode: true });
+    expect(flags).toStrictEqual({ ...featureFlagDefaults, planMode: true });
   });
 
   it('should ignore unknown keys in overrides', () => {
@@ -129,7 +129,7 @@ describe('getAllFlags', () => {
       'tau:flags': JSON.stringify({ planMode: true, somethingElse: false }),
     });
     const flags = getAllFlags(storage);
-    expect(flags).toStrictEqual({ planMode: true });
+    expect(flags).toStrictEqual({ ...featureFlagDefaults, planMode: true });
     expect(flags).not.toHaveProperty('somethingElse');
   });
 
