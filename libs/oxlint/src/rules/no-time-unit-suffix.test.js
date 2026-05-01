@@ -43,6 +43,7 @@ describe('no-time-unit-suffix', () => {
         },
         {
           name: 'benchmark formatter formatMs is allowlisted',
+          // oxlint-disable-next-line eslint/no-template-curly-in-string -- code-string fixture intentionally contains a template literal source
           code: 'function formatMs(ms: number): string { return `${ms}ms`; }',
         },
         {

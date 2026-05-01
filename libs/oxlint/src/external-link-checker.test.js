@@ -160,7 +160,7 @@ describe('external-link-checker', () => {
       await checkWithCache({
         urls: ['https://cached.com'],
         cacheFile,
-        ttlMs: 60_000,
+        entryTtl: 60_000,
         fetchFunction,
       });
       expect(fetchFunction).toHaveBeenCalledTimes(1);
@@ -168,7 +168,7 @@ describe('external-link-checker', () => {
       const results = await checkWithCache({
         urls: ['https://cached.com'],
         cacheFile,
-        ttlMs: 60_000,
+        entryTtl: 60_000,
         fetchFunction,
       });
       expect(fetchFunction).toHaveBeenCalledTimes(1);
@@ -183,7 +183,7 @@ describe('external-link-checker', () => {
       await checkWithCache({
         urls: ['https://expired.com'],
         cacheFile,
-        ttlMs: 0,
+        entryTtl: 0,
         fetchFunction,
       });
       expect(fetchFunction).toHaveBeenCalledTimes(1);
@@ -191,7 +191,7 @@ describe('external-link-checker', () => {
       await checkWithCache({
         urls: ['https://expired.com'],
         cacheFile,
-        ttlMs: 0,
+        entryTtl: 0,
         fetchFunction,
       });
       expect(fetchFunction).toHaveBeenCalledTimes(2);
@@ -203,7 +203,7 @@ describe('external-link-checker', () => {
       const results = await checkWithCache({
         urls: [],
         cacheFile,
-        ttlMs: 60_000,
+        entryTtl: 60_000,
       });
       expect(results).toEqual([]);
     });

@@ -91,8 +91,8 @@ export const noBareTimeIdentifierRule = {
         return;
       }
       const { id } = node;
-      if (id && id.type === 'Identifier') {
-        checkIdentifier(/** @type {Node & { name?: string }} */ (id));
+      if (id?.type === 'Identifier') {
+        checkIdentifier(id);
       }
     };
 

@@ -123,10 +123,10 @@ export const writeCache = (cacheFile, cache) => {
 };
 
 /**
- * @param {{ urls: string[]; cacheFile: string; ttlMs: number; fetchFunction?: typeof globalThis.fetch }} options
+ * @param {{ urls: string[]; cacheFile: string; entryTtl: number; fetchFunction?: typeof globalThis.fetch }} options
  * @returns {Promise<CheckResult[]>}
  */
-export const checkWithCache = async ({ urls, cacheFile, ttlMs, fetchFunction }) => {
+export const checkWithCache = async ({ urls, cacheFile, entryTtl, fetchFunction }) => {
   if (urls.length === 0) {
     return [];
   }
@@ -141,7 +141,7 @@ export const checkWithCache = async ({ urls, cacheFile, ttlMs, fetchFunction }) 
 
   for (const url of urls) {
     const cached = cache[url];
-    if (cached && now - cached.checkedAt < ttlMs) {
+    if (cached && now - cached.checkedAt < entryTtl) {
       allResults.push({
         url,
         status: cached.status,
@@ -178,7 +178,7 @@ if (isMainModule) {
   const workspaceRoot = process.env.NX_WORKSPACE_ROOT ?? path.resolve(import.meta.dirname, '..', '..', '..');
   const cacheDirectory = path.join(workspaceRoot, 'node_modules', '.cache', 'tau-lint');
   const cacheFile = path.join(cacheDirectory, 'external-links.json');
-  const ttlMs = Number(process.env.MDX_EXTERNAL_LINK_TTL_MS) || DEFAULT_TTL_MS;
+  const entryTtl = Number(process.env.MDX_EXTERNAL_LINK_TTL_MS) || DEFAULT_TTL_MS;
 
   let input = '';
   for await (const chunk of process.stdin) {
@@ -187,6 +187,6 @@ if (isMainModule) {
 
   /** @type {string[]} */
   const urls = JSON.parse(input);
-  const results = await checkWithCache({ urls, cacheFile, ttlMs });
+  const results = await checkWithCache({ urls, cacheFile, entryTtl });
   process.stdout.write(JSON.stringify(results));
 }
