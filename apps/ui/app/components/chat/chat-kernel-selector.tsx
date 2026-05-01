@@ -2,10 +2,36 @@ import { memo, useCallback } from 'react';
 import type { ReactNode } from 'react';
 import { Check } from 'lucide-react';
 import type { KernelProvider } from '@taucad/runtime';
+import type { KernelConfiguration } from '@taucad/types/constants';
 import { kernelConfigurations } from '@taucad/types/constants';
 import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
 import { SvgIcon } from '#components/icons/svg-icon.js';
+import { HoverCard, HoverCardContent, HoverCardTrigger } from '#components/ui/hover-card.js';
 import { useActiveChatKernel } from '#hooks/use-active-chat-kernel.js';
+
+function formatKernelDimensions(dimensions: KernelConfiguration['dimensions']): string {
+  return dimensions.map((d) => `${d}D`).join(' & ');
+}
+
+function formatKernelLanguage(language: KernelConfiguration['language']): string {
+  switch (language) {
+    case 'kcl': {
+      return 'KCL';
+    }
+
+    case 'openscad': {
+      return 'OpenSCAD';
+    }
+
+    case 'typescript': {
+      return 'TypeScript';
+    }
+
+    default: {
+      return language;
+    }
+  }
+}
 
 type ChatKernelSelectorProps = Omit<React.HTMLAttributes<HTMLDivElement>, 'children' | 'onSelect'> & {
   readonly onSelect?: (kernelId: KernelProvider) => void;
@@ -43,6 +69,7 @@ export const ChatKernelSelector = memo(function ({
   return (
     <ComboBoxResponsive
       {...properties}
+      className="data-[slot='popover-content']:w-[300px]"
       popoverProperties={properties.popoverProperties}
       emptyListMessage='No kernels found.'
       searchPlaceHolder='Search kernels...'
@@ -55,16 +82,33 @@ export const ChatKernelSelector = memo(function ({
         },
       ]}
       renderLabel={(item, selectedItem) => (
-        <span className='flex w-full items-center justify-between'>
-          <div className='flex items-center gap-2'>
-            <SvgIcon id={item.id} />
-            <div className='flex flex-col'>
-              <span>{item.name}</span>
-              <span className='text-xs text-muted-foreground'>{item.description}</span>
+        <HoverCard>
+          <HoverCardTrigger asChild>
+            <span className='flex w-full items-center justify-between'>
+              <div className='flex min-w-0 flex-1 items-center gap-2'>
+                <SvgIcon id={item.id} className='shrink-0' />
+                <div className='flex min-w-0 flex-col'>
+                  <span className='truncate'>{item.name}</span>
+                  <span className='truncate text-xs text-muted-foreground'>{item.description}</span>
+                </div>
+              </div>
+              {selectedItem?.id === item.id ? <Check className='shrink-0' /> : null}
+            </span>
+          </HoverCardTrigger>
+          <HoverCardContent side='right' align='start' sideOffset={12} alignOffset={-4} className='w-72'>
+            <div className='space-y-2'>
+              <div className='flex items-center gap-2'>
+                <SvgIcon id={item.id} className='size-5 shrink-0' />
+                <h4 className='text-sm font-semibold'>{item.name}</h4>
+              </div>
+              <p className='text-sm text-muted-foreground'>{item.longDescription}</p>
+              <p className='text-xs text-muted-foreground'>Best for: {item.recommended}</p>
+              <p className='text-xs text-muted-foreground'>
+                {formatKernelDimensions(item.dimensions)} · {formatKernelLanguage(item.language)}
+              </p>
             </div>
-          </div>
-          {selectedItem?.id === item.id ? <Check /> : null}
-        </span>
+          </HoverCardContent>
+        </HoverCard>
       )}
       getValue={(item) => item.id}
       placeholder='Select a kernel'
