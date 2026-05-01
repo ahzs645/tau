@@ -1220,6 +1220,12 @@
       }
     },
     {
+      "files": ["examples/electron-tau/src/renderer/app.tsx"],
+      "rules": {
+        "@typescript-eslint/consistent-type-definitions": "off"
+      }
+    },
+    {
       /*
        * CJS compatibility shims deliberately check globals like `globalThis.__dirname === undefined`
        * where TypeScript types say the value is always `string`. The types are wrong — at runtime

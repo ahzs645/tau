@@ -335,6 +335,18 @@ const config = [
 
   {
     /*
+     * Electron PoC renderer: `declare global { interface Window { … } }` is the
+     * correct TypeScript merge pattern; ESLint `consistent-type-definitions`
+     * would force `type` and breaks augmentation.
+     */
+    files: ['examples/electron-tau/src/renderer/app.tsx'],
+    rules: {
+      '@typescript-eslint/consistent-type-definitions': 'off',
+    },
+  },
+
+  {
+    /*
      * Electron PoC example: a small standalone app shell that mixes
      * SCREAMING_SNAKE_CASE constants (glTF magic numbers) with React
      * components, making the workspace's strict naming-convention contract
@@ -373,6 +385,33 @@ const config = [
     plugins: { 'tau-lint': tauLintPlugin },
     rules: {
       'tau-lint/static-import-meta-url': 'error',
+    },
+  },
+
+  {
+    files: ['**/*.{ts,tsx,mts,cts}'],
+    ignores: [
+      '**/*.test.ts',
+      '**/*.test.tsx',
+      '**/*.spec.ts',
+      '**/*.spec.tsx',
+      '**/*.test-d.ts',
+      '**/__tests__/**',
+      'packages/runtime/src/testing/**',
+    ],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: '@taucad/runtime/testing',
+              message:
+                'Do not import `@taucad/runtime/testing` from non-test sources (it pulls Vitest into unrelated bundles). Prefer `@taucad/runtime/transport-internals` (`extractInlineFileSystem`) and opaque filesystem factories (`fromNodeFs`, `fromMemoryFs`, …).',
+            },
+          ],
+        },
+      ],
     },
   },
 ];

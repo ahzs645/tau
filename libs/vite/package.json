@@ -35,6 +35,7 @@
     }
   },
   "dependencies": {
+    "strip-literal": "catalog:",
     "vite": "catalog:"
   }
 }
