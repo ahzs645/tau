@@ -356,7 +356,7 @@ describe('rpc-handlers', () => {
     const stubResolver: ResolveGraphicsForFile = vi.fn();
 
     describe('fetchGeometry', () => {
-      // fetchGeometry routes through the same `resolveOrCreateGeometryUnit`
+      // FetchGeometry routes through the same `resolveOrCreateGeometryUnit`
       // helper as getKernelResult. Every test must therefore mock `waitFor`
       // with the settled cad snapshot, not just rely on `cadUnit.getSnapshot()`
       // being read synchronously.

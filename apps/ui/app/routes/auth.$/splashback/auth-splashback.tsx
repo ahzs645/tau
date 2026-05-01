@@ -4,7 +4,7 @@ import { useActorRef, useSelector } from '@xstate/react';
 import { Check } from 'lucide-react';
 import type { Geometry } from '@taucad/types';
 import { createRuntimeClientOptions } from '@taucad/runtime';
-import { inProcessTransport } from '@taucad/runtime/transport';
+import { inProcessTransport } from '@taucad/runtime/transport/in-process';
 import { fromMemoryFs } from '@taucad/runtime/filesystem';
 import { jscad } from '@taucad/runtime/kernels';
 import { parameterCache, geometryCache, gltfCoordinateTransform } from '@taucad/runtime/middleware';
@@ -317,6 +317,7 @@ type AuthSplashbackState = ReturnType<typeof authSplashbackMachine.transition>;
  * Derives all visibility and phase state from the XState machine state.
  * This centralizes state derivation to avoid repeated state.matches() calls in the component.
  */
+// oxlint-disable-next-line complexity -- refactor
 function deriveVisibilityState(state: AuthSplashbackState): DerivedState {
   // === Morph transition states ===
   const isPreparingMorph = state.matches('preparingMorph');
@@ -513,6 +514,7 @@ type AuthSplashbackContentProperties = {
   readonly cadStatus: RenderStatus;
 };
 
+// oxlint-disable-next-line complexity -- refactor
 function AuthSplashbackContent({
   state,
   send,

@@ -31,14 +31,14 @@ Use the bundler API when configuring how JS/TS kernel inputs are bundled and exe
 ## Usage
 
 ```typescript
-import { createRuntimeClient, fromMemoryFS } from '@taucad/runtime';
+import { createRuntimeClient, fromMemoryFs } from '@taucad/runtime';
 import { replicad } from '@taucad/runtime/kernels';
 import { esbuild } from '@taucad/runtime/bundler';
 
 const client = createRuntimeClient({
   kernels: [replicad()],
   bundlers: [esbuild()],
-  fileSystem: fromMemoryFS(),
+  fileSystem: fromMemoryFs(),
 });
 ```
 

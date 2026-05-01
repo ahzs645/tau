@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createActor } from 'xstate';
 import { SharedPool } from '@taucad/memory';
+import type * as TransportInternals from '@taucad/runtime/transport-internals';
 import { fileManagerMachine } from '#machines/file-manager.machine.js';
 
 const workerTestState = vi.hoisted(() => {
@@ -44,11 +45,15 @@ const mockMount = vi.fn<(prefix: string, backend: string, options?: unknown) => 
 const mockUnmount = vi.fn<(prefix: string) => void>();
 const mockWaitForWorkerReady = vi.fn<() => Promise<void>>();
 const mockCreateFileSystemBridge = vi.fn(() => ({
-  port: new MessageChannel().port1,
+  port: {
+    postMessage: vi.fn(),
+    onMessage: vi.fn((_handler: (data: unknown) => void) => vi.fn()),
+    close: vi.fn(),
+  },
   dispose: vi.fn(),
 }));
 
-vi.mock('@taucad/runtime/filesystem', () => ({
+vi.mock('@taucad/runtime/transport-internals', () => ({
   createFileSystemBridge: () => mockCreateFileSystemBridge(),
   waitForWorkerReady: async () => mockWaitForWorkerReady(),
   createBridgeProxy: vi.fn(() => ({
@@ -995,4 +1000,26 @@ describe('fileManagerMachine', () => {
       actor.stop();
     });
   });
+
+  /* oxlint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access -- Vitest importActual resolves to loosely typed loader output */
+  describe('createFileSystemBridge + createBridgeProxy (actual transport-internals)', () => {
+    it('initializes bridge proxy synchronously without `Port.onMessage` TypeError', async () => {
+      const unsafeModule = await vi.importActual('@taucad/runtime/transport-internals');
+      /* oxlint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- tsgo vs ESLint inference skew for Vitest stub typing */
+      const actualModule = unsafeModule as typeof TransportInternals;
+      const fakeWorker = {
+        postMessage: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        terminate: vi.fn(),
+      } as unknown as Worker;
+
+      const bridge = actualModule.createFileSystemBridge(fakeWorker);
+
+      expect(() => {
+        actualModule.createBridgeProxy<Record<string, never>>(bridge.port);
+      }).not.toThrow();
+    });
+  });
+  /* oxlint-enable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access */
 });

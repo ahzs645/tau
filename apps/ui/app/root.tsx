@@ -130,7 +130,7 @@ function LayoutDocument({
   ssrTheme,
 }: {
   readonly children: ReactNode;
-  readonly env: Record<string, string>;
+  readonly env: Record<string, string | boolean | undefined>;
   readonly ssrTheme: ThemeWithSystem;
 }): React.JSX.Element {
   // Use ssrTheme (the raw resolved theme) for the HTML className.

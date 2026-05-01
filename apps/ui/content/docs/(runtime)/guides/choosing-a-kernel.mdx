@@ -62,14 +62,14 @@ Use Replicad when you need:
 - Professional mechanical design
 
 ```typescript
-import { createRuntimeClient, fromMemoryFS } from '@taucad/runtime';
+import { createRuntimeClient, fromMemoryFs } from '@taucad/runtime';
 import { replicad } from '@taucad/runtime/kernels';
 import { esbuild } from '@taucad/runtime/bundler';
 
 const client = createRuntimeClient({
   kernels: [replicad()],
   bundlers: [esbuild()],
-  fileSystem: fromMemoryFS(),
+  fileSystem: fromMemoryFs(),
 });
 ```
 
@@ -82,14 +82,14 @@ Use OpenCASCADE when you need:
 - Advanced geometry construction beyond Replicad's API
 
 ```typescript
-import { createRuntimeClient, fromMemoryFS } from '@taucad/runtime';
+import { createRuntimeClient, fromMemoryFs } from '@taucad/runtime';
 import { opencascade } from '@taucad/runtime/kernels';
 import { esbuild } from '@taucad/runtime/bundler';
 
 const client = createRuntimeClient({
   kernels: [opencascade()],
   bundlers: [esbuild()],
-  fileSystem: fromMemoryFS(),
+  fileSystem: fromMemoryFs(),
 });
 ```
 
@@ -104,12 +104,12 @@ Use OpenSCAD when you have:
 > **Note:** OpenSCAD ships as the standalone `@taucad/openscad` package (GPL-2.0-or-later) so it stays isolated from the MIT-licensed runtime. Install it explicitly: `pnpm add @taucad/openscad`.
 
 ```typescript
-import { createRuntimeClient, fromMemoryFS } from '@taucad/runtime';
+import { createRuntimeClient, fromMemoryFs } from '@taucad/runtime';
 import { openscad } from '@taucad/openscad';
 
 const client = createRuntimeClient({
   kernels: [openscad()],
-  fileSystem: fromMemoryFS(),
+  fileSystem: fromMemoryFs(),
 });
 ```
 
@@ -122,14 +122,14 @@ Use Manifold when you need:
 - Browser-friendly WASM performance with robust topology
 
 ```typescript
-import { createRuntimeClient, fromMemoryFS } from '@taucad/runtime';
+import { createRuntimeClient, fromMemoryFs } from '@taucad/runtime';
 import { manifold } from '@taucad/runtime/kernels';
 import { esbuild } from '@taucad/runtime/bundler';
 
 const client = createRuntimeClient({
   kernels: [manifold()],
   bundlers: [esbuild()],
-  fileSystem: fromMemoryFS(),
+  fileSystem: fromMemoryFs(),
 });
 ```
 
@@ -142,14 +142,14 @@ Use JSCAD when you need:
 - No STEP or STL export (glTF/GLB only)
 
 ```typescript
-import { createRuntimeClient, fromMemoryFS } from '@taucad/runtime';
+import { createRuntimeClient, fromMemoryFs } from '@taucad/runtime';
 import { jscad } from '@taucad/runtime/kernels';
 import { esbuild } from '@taucad/runtime/bundler';
 
 const client = createRuntimeClient({
   kernels: [jscad()],
   bundlers: [esbuild()],
-  fileSystem: fromMemoryFS(),
+  fileSystem: fromMemoryFs(),
 });
 ```
 
@@ -162,12 +162,12 @@ Use Zoo when you need:
 - KCL language with remote engine
 
 ```typescript
-import { createRuntimeClient, fromMemoryFS } from '@taucad/runtime';
+import { createRuntimeClient, fromMemoryFs } from '@taucad/runtime';
 import { zoo } from '@taucad/runtime/kernels';
 
 const client = createRuntimeClient({
   kernels: [zoo({ baseUrl: 'wss://your-zoo-server/v1/kernels/zoo' })],
-  fileSystem: fromMemoryFS(),
+  fileSystem: fromMemoryFs(),
 });
 ```
 
@@ -180,12 +180,12 @@ Use Tau when you need:
 - A catch-all fallback for file formats not handled by other kernels
 
 ```typescript
-import { createRuntimeClient, fromMemoryFS } from '@taucad/runtime';
+import { createRuntimeClient, fromMemoryFs } from '@taucad/runtime';
 import { tau } from '@taucad/runtime/kernels';
 
 const client = createRuntimeClient({
   kernels: [tau()],
-  fileSystem: fromMemoryFS(),
+  fileSystem: fromMemoryFs(),
 });
 ```
 
@@ -202,7 +202,7 @@ const client = createRuntimeClient(presets.all());
 Or configure kernels individually for tree-shaking:
 
 ```typescript
-import { createRuntimeClient, fromMemoryFS } from '@taucad/runtime';
+import { createRuntimeClient, fromMemoryFs } from '@taucad/runtime';
 import { replicad, opencascade, manifold, jscad, tau } from '@taucad/runtime/kernels';
 import { openscad } from '@taucad/openscad';
 import { esbuild } from '@taucad/runtime/bundler';
@@ -210,7 +210,7 @@ import { esbuild } from '@taucad/runtime/bundler';
 const client = createRuntimeClient({
   kernels: [replicad(), opencascade(), manifold(), openscad(), jscad(), tau()],
   bundlers: [esbuild()],
-  fileSystem: fromMemoryFS(),
+  fileSystem: fromMemoryFs(),
 });
 ```
 

@@ -1,6 +1,6 @@
 import { assign, assertEvent, setup, enqueueActions } from 'xstate';
 import type { ChangeEvent, FileEntry, FileSystemBackend } from '@taucad/types';
-import { createBridgeProxy, createFileSystemBridge, waitForWorkerReady } from '@taucad/runtime/filesystem';
+import { createBridgeProxy, createFileSystemBridge, waitForWorkerReady } from '@taucad/runtime/transport-internals';
 import { safeDispose } from '@taucad/utils/dispose';
 import FileManagerWorker from '#machines/file-manager.worker.js?worker';
 import {

@@ -28,7 +28,7 @@ export type AppRuntimeClient = RuntimeClient<KernelPlugin[], TranscoderPlugin[]>
  * time, but both are owned by the file-manager machine and only
  * become available after it reaches `ready`. UI surfaces accept this
  * factory and invoke it inside the cad-machine's `connectKernelActor`
- * once the snapshot is in scope, keeping the v6 invariant that
+ * once the snapshot is in scope, keeping the runtime invariant that
  * `client.connect()` takes no arguments.
  */
 export type KernelOptionsFactory = (deps: {

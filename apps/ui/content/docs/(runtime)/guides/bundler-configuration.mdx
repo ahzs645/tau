@@ -33,14 +33,14 @@ import { esbuild } from '@taucad/runtime/bundler';
 Pass the bundler in the `bundlers` array. JS/TS kernels (Replicad, OpenCASCADE, Manifold, JSCAD) require a bundler to resolve imports and execute code:
 
 ```typescript
-import { createRuntimeClient, fromMemoryFS } from '@taucad/runtime';
+import { createRuntimeClient, fromMemoryFs } from '@taucad/runtime';
 import { replicad } from '@taucad/runtime/kernels';
 import { esbuild } from '@taucad/runtime/bundler';
 
 const client = createRuntimeClient({
   kernels: [replicad()],
   bundlers: [esbuild()],
-  fileSystem: fromMemoryFS(),
+  fileSystem: fromMemoryFs(),
 });
 ```
 

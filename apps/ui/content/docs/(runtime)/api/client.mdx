@@ -12,8 +12,6 @@ Use the client API when you need to create a kernel runtime, configure filesyste
 
 <auto-type-table path='./props/client.ts' name='RuntimeClientOptions' />
 
-<auto-type-table path='./props/client.ts' name='ConnectOptions' />
-
 <auto-type-table path='./props/client.ts' name='RuntimeClient' />
 
 ## createRuntimeClientOptions
@@ -70,7 +68,7 @@ const debug = createRuntimeClientOptions(defaults, {
 | `lifecycleState`   | `'unconnected' \| 'connecting' \| 'connected' \| 'terminated'` | Current lifecycle state. Read-only.                                                                                                                      |
 | `activeKernelId`   | `KernelId \| undefined`                                        | Kernel that currently owns the worker. Updated via the `activeKernelChanged` event.                                                                      |
 | `capabilities`     | `CapabilitiesManifest \| undefined`                            | Resolved capabilities manifest. Available after `connect()` completes.                                                                                   |
-| `connect`          | `(options: ConnectOptions) => Promise<void>`                   | Run the transport handshake and resolve the capabilities manifest. Idempotent per options.                                                               |
+| `connect`          | `() => Promise<void>`                                          | Run the transport handshake and resolve the capabilities manifest. Idempotent.                                                                           |
 | `openFile`         | `(input: CodeInput \| FileInput) => Promise<RenderOutcome>`    | Hand the worker a `(file, parameters)` pair and let it own the autonomous render loop.                                                                   |
 | `updateParameters` | `(parameters) => Promise<RenderOutcome>`                       | Update parameters for the active file. Supersedes any in-flight render.                                                                                  |
 | `setOptions`       | `(options) => Promise<RenderOutcome>`                          | Replace runtime options (e.g. `renderTimeout` in **milliseconds**) for the active file. Full replace, not patch — keys absent from the call are dropped. |
@@ -100,19 +98,19 @@ Merge with additional options:
 
 ```typescript
 import { createRuntimeClient, presets } from '@taucad/runtime';
-import { fromNodeFS } from '@taucad/runtime/filesystem/node';
+import { fromNodeFs } from '@taucad/runtime/filesystem/node';
 
 const client = createRuntimeClient({
   ...presets.all(),
-  fileSystem: fromNodeFS('/path/to/project'),
+  fileSystem: fromNodeFs('/path/to/project'),
 });
 ```
 
 ## Filesystem
 
-<auto-type-table path='./props/client.ts' name='RuntimeFileSystemHandle' />
+<auto-type-table path='./props/client.ts' name='RuntimeFileSystem' />
 
-`fromMemoryFS`, `fromNodeFS`, and `fromFsLike` return a discriminated `RuntimeFileSystemHandle` whose `inline` arm implements `RuntimeFileSystemBase` for in-memory, Node.js, and any fs-compatible backends respectively.
+`fromMemoryFs`, `fromNodeFs`, `fromFsLike`, `fromBrowserFs`, and `fromChannelFs` all return an opaque `RuntimeFileSystem` value. Hand it to the transport plugin at construction (`transportPlugin.client({ fileSystem })`); the transport constructs the underlying bridge primitives internally. Consumers cannot inspect or branch on the handle's kind.
 
 ## Error Types
 
@@ -180,15 +178,14 @@ Subscribe to client events with `client.on(event, handler)`. Returns an unsubscr
 
 ## When Do I Need `connect()`?
 
-`client.connect(...)` is required when the host owns the filesystem -- worker-hosted FSes via `fromWorker(...)`, externally allocated `filePool` SABs, or deferred FS attachment. Inline `code:` input does not require it.
+`client.connect()` runs the transport handshake. It takes **no arguments** in v6 — every wire concern (filesystem, file pool SAB, abort signalling) is closed over by the transport supplied at construction. Call it explicitly when your host creates the client before the first command; inline `code:` input auto-connects.
 
-| Scenario                                      | Use                                                     | See                                                  |
-| --------------------------------------------- | ------------------------------------------------------- | ---------------------------------------------------- |
-| Inline `code:` -- one-shot or live re-renders | in-memory filesystem                                    | [Quick Start](../getting-started/quick-start)        |
-| Filesystem on disk (Node.js)                  | `createRuntimeClient({ fileSystem: fromNodeFS(path) })` | [Set Up the Filesystem](../guides/filesystem-setup)  |
-| Worker-hosted FS bridge                       | `client.connect({ fileSystem: fromWorker(fsWorker) })`  | [Embedding in a Host](../guides/embedding-in-a-host) |
-| Externally allocated `filePool` SAB           | `client.connect({ fileSystem, filePool })`              | [Embedding in a Host](../guides/embedding-in-a-host) |
-| Deferred FS attachment (FS not known at boot) | `client.connect({ fileSystem })` later                  | [Embedding in a Host](../guides/embedding-in-a-host) |
+| Scenario                                      | Transport construction                                                    | See                                                  |
+| --------------------------------------------- | ------------------------------------------------------------------------- | ---------------------------------------------------- |
+| Inline `code:` -- one-shot or live re-renders | `presets.all()` default (`inProcessTransport`)                            | [Quick Start](../getting-started/quick-start)        |
+| Filesystem on disk (Node.js)                  | `inProcessTransport.client({ fileSystem: fromNodeFs(path) })`             | [Set Up the Filesystem](../guides/filesystem-setup)  |
+| Browser editor with FS worker                 | `webWorkerTransport.client({ url, fileSystem: fromChannelFs(fsWorker) })` | [Embedding in a Host](../guides/embedding-in-a-host) |
+| Zero-copy file content (filePool SAB)         | `transportPlugin.client({ fileSystem, filePoolBuffer })`                  | [Embedding in a Host](../guides/embedding-in-a-host) |
 
 ```typescript
 // Auto-connect (the npm-consumer default)
@@ -202,17 +199,25 @@ const result = await client.export('glb', {
 ```
 
 ```typescript
-// Explicit connect (host-wiring scenarios only)
-import { createRuntimeClient, presets, fromWorker } from '@taucad/runtime';
+// Explicit connect (host-wiring scenarios)
+import { createRuntimeClient, presets } from '@taucad/runtime';
+import { webWorkerTransport } from '@taucad/runtime/transport/web';
+import { fromChannelFs } from '@taucad/runtime/filesystem';
 
 const fsWorker = new Worker(new URL('./fm-worker.ts', import.meta.url));
-const client = createRuntimeClient(presets.all());
-
-// `filePool` is the ONLY SharedArrayBuffer the public API exposes —
-// geometry-pool and abort-channel SABs are allocated and owned internally
-// by the active RuntimeTransport.
 const filePool = new SharedArrayBuffer(64 * 1024 * 1024);
-await client.connect({ fileSystem: fromWorker(fsWorker), filePool });
+
+// `filePoolBuffer` is the ONLY SharedArrayBuffer the public API exposes —
+// geometry-pool and abort-channel SABs are allocated and owned internally
+// by the active transport.
+const client = createRuntimeClient({
+  ...presets.all(),
+  transport: webWorkerTransport.client({
+    fileSystem: fromChannelFs(fsWorker),
+    filePoolBuffer: filePool,
+  }),
+});
+await client.connect();
 
 // ...drive the runtime as usual; on shutdown:
 client.terminate();

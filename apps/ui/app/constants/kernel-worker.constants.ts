@@ -4,22 +4,11 @@ import { parameterCache, geometryCache, gltfCoordinateTransform, gltfEdgeDetecti
 import { esbuild } from '@taucad/runtime/bundler';
 import { converterTranscoder } from '@taucad/runtime/transcoder';
 import { createRuntimeClientOptions } from '@taucad/runtime';
-import { webWorkerTransport } from '@taucad/runtime/transport';
+import { webWorkerTransport } from '@taucad/runtime/transport/web';
 import { observability } from '@taucad/telemetry/middleware';
 import { parameterFileResolver } from '#middleware/parameter-file-resolver.factory.js';
 import { ENV } from '#environment.config.js';
 import type { KernelOptionsFactory } from '#types/runtime-client.alias.js';
-
-/**
- * Browser kernel-runtime worker URL.
- *
- * Vite analyses the literal `new URL('@taucad/runtime/worker',
- * import.meta.url)` at build time and emits the runtime worker as a
- * hashed renderer asset. The constant lives in module scope so the
- * URL resolves once per page-load and the resulting `URL` instance is
- * stable across kernel-option construction.
- */
-const kernelWorkerUrl = new URL('@taucad/runtime/worker', import.meta.url);
 
 /**
  * Default kernel array for the editor.
@@ -45,8 +34,10 @@ export const defaultKernels = [
  * file-content pool.
  *
  * Wire topology — `webWorkerTransport`: the kernel runs in a dedicated
- * `Worker` spawned from `kernelWorkerUrl`. Cooperative abort is
- * SAB-backed (`Atomics.notify`); geometry transports as pooled SAB
+ * `Worker` spawned from the runtime package's bundled
+ * `@taucad/runtime/worker/web` entry (defaulted inside the transport
+ * client — the consumer no longer wires the URL). Cooperative abort
+ * is SAB-backed (`Atomics.notify`); geometry transports as pooled SAB
  * delivery (declared via `sharedMemory.geometry`); the filesystem
  * bridges through a `MessagePort` to the FM worker.
  *
@@ -54,12 +45,11 @@ export const defaultKernels = [
  * owned by the file-manager machine and only available after it
  * reaches `ready`. They are passed in here so the transport client
  * is constructed with everything it needs up-front, preserving the
- * v6 invariant that `client.connect()` takes no arguments.
+ * runtime invariant that `client.connect()` takes no arguments.
  */
 export const createDefaultKernelOptions: KernelOptionsFactory = ({ fileSystem, filePoolBuffer }) =>
   createRuntimeClientOptions({
     transport: webWorkerTransport.client({
-      url: kernelWorkerUrl,
       fileSystem,
       filePoolBuffer,
       sharedMemory: {

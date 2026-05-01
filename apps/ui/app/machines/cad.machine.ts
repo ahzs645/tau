@@ -12,7 +12,7 @@ import type {
   TelemetryEntry,
   WorkerState,
 } from '@taucad/runtime';
-import { fromWorkerOpaque } from '@taucad/runtime/filesystem';
+import { fromChannelFs } from '@taucad/runtime/filesystem';
 import { safeDispose } from '@taucad/utils/dispose';
 import type { JSONSchema7 } from '@taucad/json-schema';
 import type { LengthSymbol } from '@taucad/units';
@@ -119,7 +119,7 @@ const connectKernelActor = fromSafeAsync<KernelConnectedEvent, ConnectKernelInpu
   signal.throwIfAborted();
 
   const kernelOptions = kernelOptionsFactory({
-    fileSystem: fromWorkerOpaque(snapshot.context.worker),
+    fileSystem: fromChannelFs(snapshot.context.worker),
     filePoolBuffer: snapshot.context.filePoolBuffer,
   });
   const client = createRuntimeClient(kernelOptions);

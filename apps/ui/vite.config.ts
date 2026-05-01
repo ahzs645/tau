@@ -129,8 +129,12 @@ export default defineConfig(({ mode }) => {
        * Inlining .wasm breaks worker V8 bytecode caching.
        */
       assetsInlineLimit(file) {
-        if (file.endsWith('.svg')) return false;
-        if (file.endsWith('.wasm')) return false;
+        if (file.endsWith('.svg')) {
+          return false;
+        }
+        if (file.endsWith('.wasm')) {
+          return false;
+        }
         return undefined;
       },
       target: 'es2022',

@@ -7,7 +7,7 @@
  * ResourceQueue (VS Code pattern); writes to different files run in parallel.
  */
 
-import { exposeFileSystem, workerReadyMessageType } from '@taucad/runtime/filesystem';
+import { exposeFileSystem, workerReadyMessageType } from '@taucad/runtime/transport-internals';
 
 import {
   ProviderRegistry,

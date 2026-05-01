@@ -58,11 +58,11 @@ client.terminate();
 
 A `RuntimeClient` is composed of three orthogonal plug points:
 
-| Plane          | What it owns                                                                             | Default in this snippet                |
-| -------------- | ---------------------------------------------------------------------------------------- | -------------------------------------- |
-| **Transport**  | The wire (`MessagePort` / in-process channel / Electron `MessagePortMain`)               | `inProcessTransport()`                 |
-| **Runner**     | Where kernel code executes (this isolate / `Worker` / `worker_thread` / remote)          | `inProcessRunner()`                    |
-| **Filesystem** | The source of truth for files (`fromInline`, `fromMemoryFS`, `fromNodeFS`, `fromWorker`) | inline memory FS, derived from `code:` |
+| Plane          | What it owns                                                                    | Default in this snippet                |
+| -------------- | ------------------------------------------------------------------------------- | -------------------------------------- |
+| **Transport**  | The wire (`MessagePort` / in-process channel / Electron `MessagePortMain`)      | `inProcessTransport`                   |
+| **Runner**     | Where kernel code executes (this isolate / `Worker` / `worker_thread` / remote) | in-process (same isolate)              |
+| **Filesystem** | The source of truth for files (`fromMemoryFs`, `fromNodeFs`, `fromChannelFs`)   | inline memory FS, derived from `code:` |
 
 The same three plug points compose every supported topology — browser UI, in-process Node, Electron renderer + main, multi-window Electron — without core changes. See [Worker Model → Topology Recipes](../concepts/worker-model#topology-recipes) for the canonical T1–T4 configs.
 

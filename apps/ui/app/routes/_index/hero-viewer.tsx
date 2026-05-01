@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 import { Download, Check, ChevronDown, ArrowUpRight } from 'lucide-react';
 import { createRuntimeClientOptions } from '@taucad/runtime';
-import { inProcessTransport } from '@taucad/runtime/transport';
+import { inProcessTransport } from '@taucad/runtime/transport/in-process';
 import { fromMemoryFs } from '@taucad/runtime/filesystem';
 import { openscad } from '@taucad/openscad';
 import { parameterCache, geometryCache, gltfCoordinateTransform, gltfEdgeDetection } from '@taucad/runtime/middleware';
@@ -87,6 +87,7 @@ export function HeroViewer(): React.JSX.Element {
     }
     setIsExporting(true);
 
+    // oxlint-disable-next-line tau-lint/no-async-iife -- export is async.
     void (async () => {
       try {
         const result = await exportGeometry(activeFormat.format);

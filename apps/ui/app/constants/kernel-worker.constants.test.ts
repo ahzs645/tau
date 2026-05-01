@@ -17,10 +17,10 @@ const noop = (): void => {
 const originalWorker = (globalThis as { Worker?: unknown }).Worker;
 beforeAll(() => {
   (globalThis as { Worker?: unknown }).Worker = class StubWorker {
-    postMessage = noop;
-    addEventListener = noop;
-    removeEventListener = noop;
-    terminate = noop;
+    public postMessage = noop;
+    public addEventListener = noop;
+    public removeEventListener = noop;
+    public terminate = noop;
   };
 });
 afterAll(() => {
@@ -42,11 +42,11 @@ describe('kernel-worker constants', () => {
     const options = createDefaultKernelOptions({ fileSystem, filePoolBuffer });
 
     expect(options.transport).toBeDefined();
-    /* The v6 transport client is fully fledged (`describe`, `open`, `initialize`,
+    /* The transport client is fully fledged (`describe`, `open`, `initialize`,
      * `abort`, `resolveGeometry`, `close`, `closed`) — assert a representative
      * subset without binding to internal field names. */
-    expect(typeof options.transport.open).toBe('function');
-    expect(typeof options.transport.close).toBe('function');
+    expect(typeof options.transport!.open).toBe('function');
+    expect(typeof options.transport!.close).toBe('function');
     expect(options.kernels.length).toBe(defaultKernels.length);
   });
 
@@ -56,7 +56,7 @@ describe('kernel-worker constants', () => {
     const debugOptions = createDebugKernelOptions({ fileSystem, filePoolBuffer });
 
     expect(debugOptions.transport).toBeDefined();
-    expect(typeof debugOptions.transport.open).toBe('function');
+    expect(typeof debugOptions.transport!.open).toBe('function');
     expect(debugOptions.kernels.length).toBeGreaterThan(0);
   });
 

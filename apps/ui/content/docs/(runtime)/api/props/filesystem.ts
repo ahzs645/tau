@@ -1,9 +1,10 @@
-export type { RuntimeFileSystemBase, RuntimeFileSystem } from '@taucad/runtime/types';
-export type { RuntimeFileSystemHandle } from '@taucad/runtime';
+export type { RuntimeFileSystemBase } from '@taucad/runtime/types';
+export type { RuntimeFileSystem } from '@taucad/runtime';
 export type { FsLike } from '@taucad/runtime/filesystem';
 export type {
-  BridgeHandle,
+  FileSystemBridge,
+  BridgePort,
   BridgeServerHandle,
   FileSystemBridgeOptions,
   ExposeFileSystemHandle,
-} from '@taucad/runtime/filesystem';
+} from '@taucad/runtime/transport-internals';

@@ -4,7 +4,7 @@ import type { Group } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { createRuntimeClientOptions } from '@taucad/runtime';
-import { inProcessTransport } from '@taucad/runtime/transport';
+import { inProcessTransport } from '@taucad/runtime/transport/in-process';
 import { fromMemoryFs } from '@taucad/runtime/filesystem';
 import { replicad } from '@taucad/runtime/kernels';
 import { esbuild } from '@taucad/runtime/bundler';
@@ -12,7 +12,6 @@ import { Loader } from '#components/ui/loader.js';
 import { useSharedRenderer } from '#components/docs/shared-renderer.js';
 import { useRender } from '@taucad/react';
 import { cn } from '#utils/ui.utils.js';
-import { gltfCoordinateTransform } from '@taucad/runtime/middleware';
 
 const gltfLoader = new GLTFLoader();
 
@@ -56,7 +55,6 @@ export function KernelModelView({ code, className }: KernelModelViewProps): Reac
         transport: inProcessTransport.client({ fileSystem: fromMemoryFs() }),
         kernels: [replicad()],
         bundlers: [esbuild()],
-        middleware: [gltfCoordinateTransform()],
       }),
     [],
   );
@@ -150,6 +148,7 @@ export function KernelModelView({ code, className }: KernelModelViewProps): Reac
 
     let cancelled = false;
 
+    // oxlint-disable-next-line tau-lint/no-async-iife -- async IIFE is unavoidable here
     void (async () => {
       const gltf = await gltfLoader.parseAsync(gltfGeometry.content.buffer, '');
 

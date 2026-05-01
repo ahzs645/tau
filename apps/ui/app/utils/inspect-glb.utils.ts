@@ -11,10 +11,10 @@
  * @see https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#binary-gltf-layout
  */
 
-const GLB_MAGIC = 0x46_54_6c_67;
-const GLB_HEADER_BYTES = 12;
-const CHUNK_HEADER_BYTES = 8;
-const CHUNK_TYPE_JSON = 0x4e_4f_53_4a;
+const glbMagic = 0x46_54_6c_67;
+const glbHeaderBytes = 12;
+const chunkHeaderBytes = 8;
+const chunkTypeJson = 0x4e_4f_53_4a;
 
 export type GltfJson = {
   asset: { version: string; generator?: string };
@@ -30,7 +30,7 @@ export type GltfJson = {
   }>;
   meshes?: Array<{
     primitives: Array<{
-      attributes: { POSITION?: number; [key: string]: number | undefined };
+      attributes: { [key: string]: number | undefined; POSITION?: number };
       indices?: number;
       mode?: number;
     }>;
@@ -64,7 +64,7 @@ export type GltfInspection = {
   };
 };
 
-export function inspectGlb(glb: ArrayBuffer | Uint8Array): GltfInspection {
+export function inspectGlb(glb: ArrayBuffer | Uint8Array<ArrayBuffer>): GltfInspection {
   const json = parseGlbJson(glb instanceof Uint8Array ? toArrayBuffer(glb) : glb);
   return inspectGltfJson(json);
 }
@@ -81,7 +81,7 @@ export function inspectGltfJson(json: GltfJson): GltfInspection {
   return { asset, counts, bbox };
 }
 
-const toArrayBuffer = (view: Uint8Array): ArrayBuffer => {
+const toArrayBuffer = (view: Uint8Array<ArrayBuffer>): ArrayBuffer => {
   /* WASM heap detachment guard (matches the runtime's pooled-geometry
    * boundary copy): always slice into a fresh, aligned ArrayBuffer so
    * downstream `DataView` reads can't trip on a `SharedArrayBuffer` or
@@ -92,20 +92,20 @@ const toArrayBuffer = (view: Uint8Array): ArrayBuffer => {
 };
 
 function parseGlbJson(glb: ArrayBuffer): GltfJson {
-  if (glb.byteLength < GLB_HEADER_BYTES + CHUNK_HEADER_BYTES) {
+  if (glb.byteLength < glbHeaderBytes + chunkHeaderBytes) {
     throw new Error('Invalid glTF magic — buffer too short for header.');
   }
   const view = new DataView(glb);
   const magic = view.getUint32(0, true);
-  if (magic !== GLB_MAGIC) {
+  if (magic !== glbMagic) {
     throw new Error(`Invalid glTF magic — expected 0x46546C67, got 0x${magic.toString(16).padStart(8, '0')}.`);
   }
-  const chunkLength = view.getUint32(GLB_HEADER_BYTES, true);
-  const chunkType = view.getUint32(GLB_HEADER_BYTES + 4, true);
-  if (chunkType !== CHUNK_TYPE_JSON) {
+  const chunkLength = view.getUint32(glbHeaderBytes, true);
+  const chunkType = view.getUint32(glbHeaderBytes + 4, true);
+  if (chunkType !== chunkTypeJson) {
     throw new Error('Invalid glTF chunk — first chunk must be JSON.');
   }
-  const jsonBytes = new Uint8Array(glb, GLB_HEADER_BYTES + CHUNK_HEADER_BYTES, chunkLength);
+  const jsonBytes = new Uint8Array(glb, glbHeaderBytes + chunkHeaderBytes, chunkLength);
   const decoder = new TextDecoder();
   return JSON.parse(decoder.decode(jsonBytes)) as GltfJson;
 }
@@ -120,14 +120,14 @@ function countGeometry(json: GltfJson): GltfInspection['counts'] {
     meshes++;
     for (const primitive of mesh.primitives) {
       primitives++;
-      const positionIdx = primitive.attributes.POSITION;
-      if (positionIdx !== undefined && json.accessors?.[positionIdx]) {
-        vertices += json.accessors[positionIdx].count;
+      const positionIndex = primitive.attributes.POSITION;
+      if (positionIndex !== undefined && json.accessors?.[positionIndex]) {
+        vertices += json.accessors[positionIndex].count;
       }
       const mode = primitive.mode ?? 4;
       if (mode === 4) {
         const indexAccessor = primitive.indices === undefined ? undefined : json.accessors?.[primitive.indices];
-        const positionAccessor = positionIdx === undefined ? undefined : json.accessors?.[positionIdx];
+        const positionAccessor = positionIndex === undefined ? undefined : json.accessors?.[positionIndex];
         if (indexAccessor) {
           triangles += indexAccessor.count / 3;
         } else if (positionAccessor) {
@@ -144,15 +144,15 @@ type Vec3 = readonly [number, number, number];
 type Mat4 = readonly number[];
 
 function computeSceneBbox(json: GltfJson): GltfInspection['bbox'] {
-  const sceneIdx = json.scene ?? 0;
-  const scene = json.scenes?.[sceneIdx];
+  const sceneIndex = json.scene ?? 0;
+  const scene = json.scenes?.[sceneIndex];
   const rootNodes = scene?.nodes ?? [];
 
   let min: Vec3 = [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY];
   let max: Vec3 = [Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY];
 
-  for (const nodeIdx of rootNodes) {
-    const result = walkNode(json, nodeIdx, identity());
+  for (const nodeIndex of rootNodes) {
+    const result = walkNode(json, nodeIndex, identity());
     if (result) {
       min = vec3Min(min, result.min);
       max = vec3Max(max, result.max);
@@ -173,9 +173,11 @@ function computeSceneBbox(json: GltfJson): GltfInspection['bbox'] {
   return { min, max, size, center };
 }
 
-function walkNode(json: GltfJson, nodeIdx: number, parentMatrix: Mat4): { min: Vec3; max: Vec3 } | undefined {
-  const node = json.nodes?.[nodeIdx];
-  if (!node) return undefined;
+function walkNode(json: GltfJson, nodeIndex: number, parentMatrix: Mat4): { min: Vec3; max: Vec3 } | undefined {
+  const node = json.nodes?.[nodeIndex];
+  if (!node) {
+    return undefined;
+  }
   const localMatrix = nodeMatrix(node);
   const worldMatrix = mat4Multiply(parentMatrix, localMatrix);
 
@@ -193,8 +195,8 @@ function walkNode(json: GltfJson, nodeIdx: number, parentMatrix: Mat4): { min: V
     }
   }
 
-  for (const childIdx of node.children ?? []) {
-    const childBox = walkNode(json, childIdx, worldMatrix);
+  for (const childIndex of node.children ?? []) {
+    const childBox = walkNode(json, childIndex, worldMatrix);
     if (childBox) {
       hasGeometry = true;
       min = vec3Min(min, childBox.min);
@@ -205,17 +207,23 @@ function walkNode(json: GltfJson, nodeIdx: number, parentMatrix: Mat4): { min: V
   return hasGeometry ? { min, max } : undefined;
 }
 
-function meshBboxFromAccessors(json: GltfJson, meshIdx: number): { min: Vec3; max: Vec3 } | undefined {
-  const mesh = json.meshes?.[meshIdx];
-  if (!mesh) return undefined;
+function meshBboxFromAccessors(json: GltfJson, meshIndex: number): { min: Vec3; max: Vec3 } | undefined {
+  const mesh = json.meshes?.[meshIndex];
+  if (!mesh) {
+    return undefined;
+  }
   let min: Vec3 = [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY];
   let max: Vec3 = [Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY];
   let any = false;
   for (const primitive of mesh.primitives) {
-    const positionIdx = primitive.attributes.POSITION;
-    if (positionIdx === undefined) continue;
-    const accessor = json.accessors?.[positionIdx];
-    if (!accessor?.min || !accessor.max || accessor.min.length < 3 || accessor.max.length < 3) continue;
+    const positionIndex = primitive.attributes.POSITION;
+    if (positionIndex === undefined) {
+      continue;
+    }
+    const accessor = json.accessors?.[positionIndex];
+    if (!accessor?.min || !accessor.max || accessor.min.length < 3 || accessor.max.length < 3) {
+      continue;
+    }
     any = true;
     min = vec3Min(min, [accessor.min[0]!, accessor.min[1]!, accessor.min[2]!]);
     max = vec3Max(max, [accessor.max[0]!, accessor.max[1]!, accessor.max[2]!]);
@@ -224,14 +232,16 @@ function meshBboxFromAccessors(json: GltfJson, meshIdx: number): { min: Vec3; ma
 }
 
 function nodeMatrix(node: NonNullable<GltfJson['nodes']>[number]): Mat4 {
-  if (node.matrix?.length === 16) return node.matrix;
+  if (node.matrix?.length === 16) {
+    return node.matrix;
+  }
   const t = node.translation ?? ([0, 0, 0] as const);
   const r = node.rotation ?? ([0, 0, 0, 1] as const);
   const s = node.scale ?? ([1, 1, 1] as const);
-  return composeTRS(t, r, s);
+  return composeTrs(t, r, s);
 }
 
-function composeTRS(t: Vec3, r: readonly [number, number, number, number], s: Vec3): Mat4 {
+function composeTrs(t: Vec3, r: readonly [number, number, number, number], s: Vec3): Mat4 {
   const [x, y, z, w] = r;
   const [sx, sy, sz] = s;
   const [tx, ty, tz] = t;

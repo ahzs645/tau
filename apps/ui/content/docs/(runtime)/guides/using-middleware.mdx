@@ -44,13 +44,13 @@ const client = createRuntimeClient({
 });
 ```
 
-Inline `code:` calls run in an in-memory filesystem. Pass `fromNodeFS(...)` (see step 4) when geometry/parameter caches should persist on disk.
+Inline `code:` calls run in an in-memory filesystem. Pass `fromNodeFs(...)` (see step 4) when geometry/parameter caches should persist on disk.
 
 ### 3. Understand Each Middleware
 
 **parameterCache()** -- Caches `getParameters` results. Avoids redundant parameter parsing when the same file is analyzed multiple times. Uses the dependency hash as the cache key and stores results under `.tau/cache/parameters/`.
 
-**geometryCache()** -- Caches `createGeometry` results. Skips kernel computation when code and parameters are unchanged. Stores MessagePack-serialized geometry under `.tau/cache/geometry/`. Requires a filesystem that supports writing (e.g., `fromNodeFS`, not `fromMemoryFS` for persistent cache).
+**geometryCache()** -- Caches `createGeometry` results. Skips kernel computation when code and parameters are unchanged. Stores MessagePack-serialized geometry under `.tau/cache/geometry/`. Requires a filesystem that supports writing (e.g., `fromNodeFs`, not `fromMemoryFs` for persistent cache).
 
 **gltfCoordinateTransform()** -- Transforms glTF from Y-up/meters (common in CAD) to Z-up/millimeters for web viewers like Three.js. Applies to geometry produced by `createGeometry`.
 
@@ -58,11 +58,11 @@ Inline `code:` calls run in an in-memory filesystem. Pass `fromNodeFS(...)` (see
 
 ### 4. Use a Writable Filesystem for Caching
 
-Geometry and parameter caches require a writable filesystem. Use `fromNodeFS` in Node.js or a writable filesystem in the browser:
+Geometry and parameter caches require a writable filesystem. Use `fromNodeFs` in Node.js or a writable filesystem in the browser:
 
 ```typescript
 import { createRuntimeClient } from '@taucad/runtime';
-import { fromNodeFS } from '@taucad/runtime/filesystem/node';
+import { fromNodeFs } from '@taucad/runtime/filesystem/node';
 import { replicad } from '@taucad/runtime/kernels';
 import { esbuild } from '@taucad/runtime/bundler';
 import { geometryCache, parameterCache } from '@taucad/runtime/middleware';
@@ -70,12 +70,12 @@ import { geometryCache, parameterCache } from '@taucad/runtime/middleware';
 const client = createRuntimeClient({
   kernels: [replicad()],
   bundlers: [esbuild()],
-  fileSystem: fromNodeFS('/path/to/project'),
+  fileSystem: fromNodeFs('/path/to/project'),
   middleware: [parameterCache(), geometryCache()],
 });
 ```
 
-With `fromMemoryFS()`, caches are not persisted; geometry and parameter caches will still run but will not survive across sessions.
+With `fromMemoryFs()`, caches are not persisted; geometry and parameter caches will still run but will not survive across sessions.
 
 ### 5. Render with Middleware Active
 
@@ -112,11 +112,11 @@ For UI viewers driving the autonomous render loop, see [Live Rendering](./live-r
 
 ```typescript
 import { createRuntimeClient, presets } from '@taucad/runtime';
-import { fromNodeFS } from '@taucad/runtime/filesystem/node';
+import { fromNodeFs } from '@taucad/runtime/filesystem/node';
 
 const client = createRuntimeClient({
   ...presets.all(),
-  fileSystem: fromNodeFS('/path/to/project'),
+  fileSystem: fromNodeFs('/path/to/project'),
 });
 ```
 
