@@ -1,6 +1,23 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { stripLiteral } from 'strip-literal';
 import type { Plugin } from 'vite';
+
+/**
+ * Optional debug channel for the chunk-emit pipeline. Enable by setting
+ * `VITE_TS_MODULE_URL_DEBUG=1` in the env when reproducing build-stall or
+ * chunk-graph regressions. Quiet by default — production builds and CI
+ * never emit through this writer.
+ *
+ * @internal
+ */
+const debugEnabled = process.env['VITE_TS_MODULE_URL_DEBUG'] === '1';
+let seqCounter = 0;
+const log = (message: string): void => {
+  if (debugEnabled) {
+    process.stderr.write(`[ts-mod-url] ${message}\n`);
+  }
+};
 
 /**
  * Shared regex for `new URL('<spec>', import.meta.url)` patterns.
@@ -31,13 +48,37 @@ type UrlMatchWithTsPath = UrlMatch & { tsPath: string };
  */
 const isExternalLikeSpec = (spec: string): boolean => /^[a-z][\d+.a-z-]*:/i.test(spec) || spec.startsWith('/');
 
-const collectMatches = (code: string): UrlMatch[] =>
-  [...code.matchAll(urlPattern)].map((m) => ({
-    full: m[0],
-    specifier: m[1]!,
-    hasHref: Boolean(m[2]),
-    index: m.index,
-  }));
+/**
+ * Collect every real `new URL(spec, import.meta.url)` call site in `code`.
+ *
+ * @remarks
+ * The regex alone treats source as flat text, so any `new URL(...)`
+ * appearing inside a JSDoc block, `//` comment, or string literal would
+ * historically materialise as a real `emitFile()` edge in Rolldown's
+ * chunk graph. When the same spec resolved to a chunk that statically
+ * imported the file containing the prose, the resulting cycle deadlocked
+ * Rolldown's chunk planner during `pnpm nx build ui` — see
+ * `docs/research/runtime-transport-authoring-simplification.md`.
+ *
+ * `strip-literal` replaces comment / string-literal interiors with
+ * **same-length spaces**, preserving every character index. We keep a
+ * regex match only when the same position in the stripped view still
+ * starts with `new ` — i.e., the call site survived stripping (was real
+ * code), not just text inside a comment or string.
+ *
+ * @internal
+ */
+const collectMatches = (code: string): UrlMatch[] => {
+  const stripped = stripLiteral(code);
+  return [...code.matchAll(urlPattern)]
+    .filter((m) => stripped.startsWith('new ', m.index))
+    .map((m) => ({
+      full: m[0],
+      specifier: m[1]!,
+      hasHref: Boolean(m[2]),
+      index: m.index,
+    }));
+};
 
 type RollupLikeContext = {
   resolve?: (specifier: string, importer?: string) => Promise<{ id: string } | undefined> | { id: string } | undefined;
@@ -61,8 +102,10 @@ const findTsSourceMatches = async (
   directory: string,
   importer: string,
   context: RollupLikeContext,
+  seq: number,
 ): Promise<UrlMatchWithTsPath[]> => {
   const out: UrlMatchWithTsPath[] = [];
+  let subSeq = 0;
 
   for (const match of matches) {
     if (isExternalLikeSpec(match.specifier)) {
@@ -72,14 +115,20 @@ const findTsSourceMatches = async (
     if (match.specifier.endsWith('.js')) {
       const tsPath = path.resolve(directory, match.specifier.replace(/\.js$/, '.ts'));
       if (fs.existsSync(tsPath)) {
+        log(`fast     seq=${seq} spec=${match.specifier} -> ${tsPath}`);
         out.push({ ...match, tsPath });
         continue;
       }
     }
 
     if (typeof context.resolve === 'function') {
+      subSeq += 1;
+      const tag = `${seq}.${subSeq}`;
+      log(`resolve> seq=${tag} spec=${match.specifier} importer=${importer}`);
+      const t0 = Date.now();
       // oxlint-disable-next-line no-await-in-loop -- sequential resolve calls
       const resolved = await context.resolve(match.specifier, importer);
+      log(`resolve< seq=${tag} elapsed=${Date.now() - t0}ms id=${resolved?.id ?? '<none>'}`);
       if (resolved && typeof resolved.id === 'string' && resolved.id.endsWith('.ts')) {
         out.push({ ...match, tsPath: resolved.id });
       }
@@ -125,15 +174,33 @@ export function tsModuleUrlBuildPlugin(): Plugin {
           return;
         }
 
+        seqCounter += 1;
+        const seq = seqCounter;
+        const t0 = Date.now();
+        log(`start    seq=${seq} id=${id}`);
+
         const directory = path.dirname(id);
-        const matches = await findTsSourceMatches(
-          collectMatches(code),
-          directory,
-          id,
-          this as unknown as RollupLikeContext,
+        const rawMatches = collectMatches(code);
+        log(
+          `matches  seq=${seq} count=${rawMatches.length} specs=${JSON.stringify(rawMatches.map((m) => m.specifier))}`,
         );
 
+        if (rawMatches.length === 0) {
+          log(`end      seq=${seq} elapsed=${Date.now() - t0}ms (no real matches)`);
+          return;
+        }
+
+        let matches: UrlMatchWithTsPath[];
+        try {
+          matches = await findTsSourceMatches(rawMatches, directory, id, this as unknown as RollupLikeContext, seq);
+        } catch (error) {
+          log(`THROW    seq=${seq} elapsed=${Date.now() - t0}ms err=${(error as Error).message}`);
+          throw error;
+        }
+        log(`resolved seq=${seq} elapsed=${Date.now() - t0}ms ts-matches=${matches.length}`);
+
         if (matches.length === 0) {
+          log(`end      seq=${seq} elapsed=${Date.now() - t0}ms (no-op)`);
           return;
         }
 
@@ -151,11 +218,13 @@ export function tsModuleUrlBuildPlugin(): Plugin {
            * `import(moduleUrl).then(m => m.default)` flow.
            * (Rolldown-vite preserves signatures by default; vanilla Rollup
            * does not.) */
+          log(`emitFile seq=${seq} ts=${match.tsPath}`);
           const refId = this.emitFile({
             type: 'chunk',
             id: match.tsPath,
             preserveSignature: 'strict',
           });
+          log(`emitted  seq=${seq} ref=${refId}`);
 
           const replacement = match.hasHref
             ? `import.meta.ROLLUP_FILE_URL_${refId}`
@@ -164,6 +233,7 @@ export function tsModuleUrlBuildPlugin(): Plugin {
           result = result.slice(0, match.index) + replacement + result.slice(match.index + match.full.length);
         }
 
+        log(`end      seq=${seq} elapsed=${Date.now() - t0}ms`);
         return { code: result, map: null, moduleType: 'js' };
       },
     },

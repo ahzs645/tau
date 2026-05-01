@@ -247,6 +247,109 @@ describe('tsModuleUrlBuildPlugin', () => {
     expect(resolve).not.toHaveBeenCalled();
     expect(result).toBeUndefined();
   });
+
+  /* Comment / literal poisoning regression suite.
+   *
+   * Pre-fix: the regex scanned raw source, so any `new URL(spec, import.meta.url)`
+   * appearing inside JSDoc / `//` / string literals materialised as a real
+   * `emitFile()` edge in Rolldown's chunk graph. When the same spec also resolved
+   * to a chunk that statically imported the file containing the JSDoc, the cycle
+   * deadlocked Rolldown's chunk planner during `pnpm nx build ui`.
+   *
+   * Post-fix: matches whose position falls inside a comment or string literal
+   * are filtered out via `strip-literal`. Real call sites still emit chunks
+   * exactly as before.
+   */
+  describe('comment + string-literal isolation', () => {
+    it('should ignore `new URL(...)` appearing in a block comment', async () => {
+      mockExistsSync.mockReturnValue(true);
+      const emitFile = vi.fn();
+      const code = `/* see new URL('../bundler/esbuild.bundler.js', import.meta.url) for the pattern */`;
+      const result = await callTransform({ plugin, code, id: fakeId, context: { emitFile } });
+      expect(emitFile).not.toHaveBeenCalled();
+      expect(result).toBeUndefined();
+    });
+
+    it('should ignore `new URL(...)` appearing in a line comment', async () => {
+      mockExistsSync.mockReturnValue(true);
+      const emitFile = vi.fn();
+      const code = `// const x = new URL('../bundler/esbuild.bundler.js', import.meta.url);`;
+      const result = await callTransform({ plugin, code, id: fakeId, context: { emitFile } });
+      expect(emitFile).not.toHaveBeenCalled();
+      expect(result).toBeUndefined();
+    });
+
+    it('should ignore `new URL(...)` appearing inside a JSDoc block', async () => {
+      mockExistsSync.mockReturnValue(true);
+      const emitFile = vi.fn();
+      const code = [
+        `/**`,
+        ` * Uses \`new URL('../bundler/esbuild.bundler.js', import.meta.url)\` to`,
+        ` * locate the bundled worker entry.`,
+        ` */`,
+        `export const noop = () => {};`,
+      ].join('\n');
+      const result = await callTransform({ plugin, code, id: fakeId, context: { emitFile } });
+      expect(emitFile).not.toHaveBeenCalled();
+      expect(result).toBeUndefined();
+    });
+
+    it('should ignore `new URL(...)` appearing inside a double-quoted string literal', async () => {
+      mockExistsSync.mockReturnValue(true);
+      const emitFile = vi.fn();
+      const code = `const msg = "new URL('../bundler/esbuild.bundler.js', import.meta.url)";`;
+      const result = await callTransform({ plugin, code, id: fakeId, context: { emitFile } });
+      expect(emitFile).not.toHaveBeenCalled();
+      expect(result).toBeUndefined();
+    });
+
+    it('should ignore `new URL(...)` appearing inside a template literal', async () => {
+      mockExistsSync.mockReturnValue(true);
+      const emitFile = vi.fn();
+      const code = "const msg = `try new URL('../bundler/esbuild.bundler.js', import.meta.url)`;";
+      const result = await callTransform({ plugin, code, id: fakeId, context: { emitFile } });
+      expect(emitFile).not.toHaveBeenCalled();
+      expect(result).toBeUndefined();
+    });
+
+    it('should emit only the real call when a JSDoc reference precedes a real `new URL(...)`', async () => {
+      mockExistsSync.mockReturnValue(true);
+      const emitFile = vi.fn().mockReturnValue('mixed1');
+      const code = [
+        `/**`,
+        ` * @example new URL('../bundler/esbuild.bundler.js', import.meta.url)`,
+        ` */`,
+        `const url = new URL('../bundler/esbuild.bundler.js', import.meta.url).href;`,
+      ].join('\n');
+      const result = await callTransform({ plugin, code, id: fakeId, context: { emitFile } });
+      expect(emitFile).toHaveBeenCalledTimes(1);
+      /* JSDoc text is preserved verbatim; only the real call site is rewritten. */
+      expect(result!.code).toContain(`@example new URL('../bundler/esbuild.bundler.js', import.meta.url)`);
+      expect(result!.code).toContain(`const url = import.meta.ROLLUP_FILE_URL_mixed1;`);
+    });
+
+    it('should emit exactly N chunks for N real calls when interleaved with M commented references', async () => {
+      mockExistsSync.mockReturnValue(true);
+      let counter = 0;
+      const emitFile = vi.fn().mockImplementation(() => `chunk${++counter}`);
+      const code = [
+        `/* new URL('../a.js', import.meta.url) — DOC */`,
+        `const real1 = new URL('../b.js', import.meta.url);`,
+        `// new URL('../c.js', import.meta.url) — DOC`,
+        `const real2 = new URL('../d.js', import.meta.url).href;`,
+      ].join('\n');
+      const result = await callTransform({ plugin, code, id: fakeId, context: { emitFile } });
+      expect(emitFile).toHaveBeenCalledTimes(2);
+      expect(result!.code).toContain('chunk1');
+      expect(result!.code).toContain('chunk2');
+      /* Spec-level proof: the only paths emitted are the REAL call sites. */
+      const emittedIds = emitFile.mock.calls.map((call) => (call[0] as { id: string }).id);
+      expect(emittedIds).toEqual([
+        path.resolve(fakeDirectory, '../d.js'.replace('.js', '.ts')),
+        path.resolve(fakeDirectory, '../b.js'.replace('.js', '.ts')),
+      ]);
+    });
+  });
 });
 
 // =============================================================================
@@ -361,6 +464,59 @@ describe('tsModuleUrlServePlugin', () => {
     const code = `const url = new URL('@taucad/runtime/worker', import.meta.url);`;
     const result = await callTransform({ plugin, code, id: fakeId, context: { emitFile: vi.fn(), resolve } });
     expect(result).toBeUndefined();
+  });
+
+  /* Mirror of the build-plugin comment-isolation suite. The serve plugin
+   * never deadlocks Rolldown (it runs in dev only), but a stray rewrite
+   * inside a JSDoc / string literal would still corrupt the source map and
+   * confuse downstream Vite plugins. */
+  describe('comment + string-literal isolation', () => {
+    it('should not rewrite `new URL(...)` inside a block comment', async () => {
+      mockExistsSync.mockReturnValue(true);
+      const code = `/* see new URL('../bundler/esbuild.bundler.js', import.meta.url) */`;
+      const result = await callTransform({ plugin, code, id: fakeId });
+      expect(result).toBeUndefined();
+    });
+
+    it('should not rewrite `new URL(...)` inside a line comment', async () => {
+      mockExistsSync.mockReturnValue(true);
+      const code = `// const x = new URL('../bundler/esbuild.bundler.js', import.meta.url);`;
+      const result = await callTransform({ plugin, code, id: fakeId });
+      expect(result).toBeUndefined();
+    });
+
+    it('should not rewrite `new URL(...)` inside a JSDoc block', async () => {
+      mockExistsSync.mockReturnValue(true);
+      const code = [
+        `/**`,
+        ` * Example: \`new URL('../bundler/esbuild.bundler.js', import.meta.url)\``,
+        ` */`,
+        `export const noop = () => {};`,
+      ].join('\n');
+      const result = await callTransform({ plugin, code, id: fakeId });
+      expect(result).toBeUndefined();
+    });
+
+    it('should not rewrite `new URL(...)` inside a string literal', async () => {
+      mockExistsSync.mockReturnValue(true);
+      const code = `const msg = "new URL('../bundler/esbuild.bundler.js', import.meta.url)";`;
+      const result = await callTransform({ plugin, code, id: fakeId });
+      expect(result).toBeUndefined();
+    });
+
+    it('should rewrite real call sites while leaving JSDoc references untouched', async () => {
+      mockExistsSync.mockReturnValue(true);
+      const code = [
+        `/**`,
+        ` * @example new URL('../bundler/esbuild.bundler.js', import.meta.url)`,
+        ` */`,
+        `const url = new URL('../bundler/esbuild.bundler.js', import.meta.url).href;`,
+      ].join('\n');
+      const result = await callTransform({ plugin, code, id: fakeId });
+      /* JSDoc verbatim, real call site rewritten. */
+      expect(result!.code).toContain(`@example new URL('../bundler/esbuild.bundler.js', import.meta.url)`);
+      expect(result!.code).toContain(`const url = new URL('../bundler/esbuild.bundler.ts', import.meta.url).href;`);
+    });
   });
 });
 
