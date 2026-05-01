@@ -12,8 +12,8 @@ const resolved: Promise<void> = Promise.resolve();
  * path-keyed IDB).
  *
  * @public
- * @see repos/vscode/src/vs/base/common/async.ts ResourceQueue
- * @see repos/vscode/src/vs/platform/files/common/fileService.ts writeQueue
+ * @see {@link https://github.com/microsoft/vscode | VS Code's} `ResourceQueue` in `src/vs/base/common/async.ts`.
+ * @see {@link https://github.com/microsoft/vscode | VS Code's} `writeQueue` in `src/vs/platform/files/common/fileService.ts`.
  */
 export class ResourceQueue {
   private readonly _queues = new Map<string, Promise<void>>();
@@ -60,7 +60,8 @@ export class ResourceQueue {
 
     this._queues.set(path, next);
 
-    // Auto-cleanup when the queue empties for this path
+    // async-iife: bootstrap — auto-cleanup runs in the background after the
+    // operation settles; the public promise above already surfaces errors.
     // oxlint-disable-next-line eslint-plugin-promise/prefer-await-to-then -- Intentional promise chaining for queue cleanup
     void next.then(() => {
       if (this._queues.get(path) === next) {
@@ -73,6 +74,7 @@ export class ResourceQueue {
 
   /**
    * Total number of operations queued or in-flight across all paths.
+   * @returns The aggregate queue depth.
    */
   public get depth(): number {
     return this._totalDepth;
@@ -80,6 +82,7 @@ export class ResourceQueue {
 
   /**
    * Resolves when all queues are empty (no in-flight or pending operations).
+   * @returns A promise that settles once every per-path queue has drained.
    */
   public async whenDrained(): Promise<void> {
     if (this._totalDepth === 0) {

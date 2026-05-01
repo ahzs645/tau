@@ -20,6 +20,10 @@ const handleCacheMaxEntries = 10_000;
  * @public
  */
 export class FileSystemAccessProvider extends AbstractFileSystemProvider {
+  /**
+   * Backend identifier; always `'webaccess'`.
+   * @returns The literal string `'webaccess'`.
+   */
   public get id(): string {
     return 'webaccess';
   }
@@ -43,6 +47,12 @@ export class FileSystemAccessProvider extends AbstractFileSystemProvider {
   // Public instance methods
   // ---------------------------------------------------------------------------
 
+  /**
+   * Persist `data` at `path`, creating the file when missing.
+   *
+   * @param path - Absolute file path to write.
+   * @param data - Bytes or UTF-8 string to store.
+   */
   public async writeFile(path: string, data: Uint8Array<ArrayBuffer> | string): Promise<void> {
     const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data;
     const fileHandle = await this._resolveFileHandle(path, { create: true });
@@ -54,6 +64,12 @@ export class FileSystemAccessProvider extends AbstractFileSystemProvider {
     }
   }
 
+  /**
+   * List immediate child names under `path`.
+   *
+   * @param path - Absolute directory path to enumerate.
+   * @returns The names of files and subdirectories directly inside `path`.
+   */
   public async readdir(path: string): Promise<string[]> {
     const directoryHandle = await this._resolveDirectoryHandle(path);
     const entries: string[] = [];
@@ -63,6 +79,12 @@ export class FileSystemAccessProvider extends AbstractFileSystemProvider {
     return entries;
   }
 
+  /**
+   * Batched readdir + stat — eliminates the N+1 stat round-trips per directory listing.
+   *
+   * @param path - Absolute directory path to enumerate.
+   * @returns Each entry's name paired with its stat metadata.
+   */
   public async readdirWithStats(path: string): Promise<Array<{ name: string } & FileStat>> {
     const directoryHandle = await this._resolveDirectoryHandle(path);
     const result: Array<{ name: string } & FileStat> = [];
@@ -78,6 +100,12 @@ export class FileSystemAccessProvider extends AbstractFileSystemProvider {
     return result;
   }
 
+  /**
+   * Resolve metadata for `path`. Throws `ENOENT` when neither a file nor directory entry matches.
+   *
+   * @param path - Absolute path to stat.
+   * @returns Type/size/mtime for the entry at `path`.
+   */
   public async stat(path: string): Promise<FileStat> {
     const segments = this._splitPath(path);
 
@@ -102,6 +130,11 @@ export class FileSystemAccessProvider extends AbstractFileSystemProvider {
     }
   }
 
+  /**
+   * Delete the regular file at `path`.
+   *
+   * @param path - Absolute file path to remove.
+   */
   public async unlink(path: string): Promise<void> {
     const segments = this._splitPath(path);
     if (segments.length === 0) {
@@ -113,6 +146,11 @@ export class FileSystemAccessProvider extends AbstractFileSystemProvider {
     await parentHandle.removeEntry(name);
   }
 
+  /**
+   * Delete the directory at `path` (non-recursive).
+   *
+   * @param path - Absolute directory path to remove.
+   */
   public async rmdir(path: string): Promise<void> {
     const segments = this._splitPath(path);
     if (segments.length === 0) {
@@ -125,6 +163,12 @@ export class FileSystemAccessProvider extends AbstractFileSystemProvider {
     this._invalidateHandleCachePrefix(path);
   }
 
+  /**
+   * Move the file at `from` to `to` via copy + unlink (the FS Access API has no native rename).
+   *
+   * @param from - Source absolute path.
+   * @param to - Destination absolute path.
+   */
   public async rename(from: string, to: string): Promise<void> {
     const data = await this.readFileRaw(from);
     await this.writeFile(to, data);
@@ -132,6 +176,13 @@ export class FileSystemAccessProvider extends AbstractFileSystemProvider {
     this._invalidateHandleCachePrefix(from);
   }
 
+  /**
+   * Stream the contents of `path` with optional positional/length slicing and abort support.
+   *
+   * @param path - Absolute file path to read.
+   * @param options - Optional `position`, `length`, and `signal` for partial reads.
+   * @returns A `ReadableStream` of byte chunks.
+   */
   public readFileStream(path: string, options?: FileReadStreamOptions): ReadableStream<Uint8Array<ArrayBuffer>> {
     const resolveHandle = async () => this._resolveFileHandle(path);
     let reader: ReadableStreamDefaultReader<Uint8Array<ArrayBuffer>> | undefined;
@@ -304,7 +355,11 @@ export class FileSystemAccessProvider extends AbstractFileSystemProvider {
     this._handleCache.set(key, handle);
   }
 
-  /** Move entry to end of Map iteration order (most recently used). */
+  /**
+   * Move the entry for `key` to the end of the Map iteration order (most recently used).
+   *
+   * @param key - Cache key whose recency should be bumped.
+   */
   private _touchHandleCache(key: string): void {
     const value = this._handleCache.get(key);
     if (value) {

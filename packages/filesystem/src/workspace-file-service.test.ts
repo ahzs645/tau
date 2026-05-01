@@ -91,7 +91,7 @@ describe('WorkspaceFileService', () => {
 
       service.fileSystem.publishChangeEvent({ type: 'fileWritten', path: '/probe.txt', backend: 'memory' });
 
-      expect(events.some((e) => e.type === 'fileWritten' && e.path === '/probe.txt')).toBe(true);
+      expect(events.some((event) => event.type === 'fileWritten' && event.path === '/probe.txt')).toBe(true);
       off();
     });
   });

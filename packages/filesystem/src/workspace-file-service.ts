@@ -1,5 +1,12 @@
 import type { FileStat, FileStatEntry, FileSystemBackend } from '@taucad/types';
-import type { FileTreeNode, TreeEntry, WatchRequest, WatchEvent, FileReadStreamOptions } from '#types.js';
+import type {
+  FileSystemProvider,
+  FileTreeNode,
+  TreeEntry,
+  WatchRequest,
+  WatchEvent,
+  FileReadStreamOptions,
+} from '#types.js';
 import type { ProviderRegistry } from '#provider-registry.js';
 import type { ResourceQueue } from '#resource-queue.js';
 import type { DirectoryTreeCache } from '#directory-tree-cache.js';
@@ -720,16 +727,10 @@ export class WorkspaceFileService {
         const entries = await provider.readdir(path);
         for (const entry of entries) {
           const fullPath = path === '/' ? `/${entry}` : `${path}/${entry}`;
-          try {
-            // oxlint-disable-next-line no-await-in-loop -- Sequential stat required for tree building
-            const stat = await provider.stat(fullPath);
-            if (stat.type === 'dir') {
-              nodes.push({ id: fullPath, name: entry, children: [] });
-            } else {
-              nodes.push({ id: fullPath, name: entry });
-            }
-          } catch {
-            // Skip entries that can't be stat'd
+          // oxlint-disable-next-line no-await-in-loop -- Sequential stat required for tree building
+          const node = await this._statToTreeNode(provider, fullPath, entry);
+          if (node) {
+            nodes.push(node);
           }
         }
       }
@@ -875,6 +876,19 @@ export class WorkspaceFileService {
     }
 
     return undefined;
+  }
+
+  private async _statToTreeNode(
+    provider: FileSystemProvider,
+    fullPath: string,
+    name: string,
+  ): Promise<FileTreeNode | undefined> {
+    try {
+      const stat = await provider.stat(fullPath);
+      return stat.type === 'dir' ? { id: fullPath, name, children: [] } : { id: fullPath, name };
+    } catch {
+      return undefined;
+    }
   }
 
   private async _collectDirectoryStatsFromProvider(

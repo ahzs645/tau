@@ -93,7 +93,8 @@ export class ResourceWriteQueue {
 
     this._queues.set(key, next);
 
-    // Auto-cleanup when the queue empties for this key
+    // async-iife: bootstrap — auto-cleanup runs in the background after the
+    // operation settles; the caller-facing promise above already surfaces errors.
     // oxlint-disable-next-line eslint-plugin-promise/prefer-await-to-then -- Intentional promise chaining for queue cleanup
     void next.then(() => {
       if (this._queues.get(key) === next) {

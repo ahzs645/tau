@@ -61,5 +61,8 @@
     "@taucad/types": "workspace:*",
     "@taucad/utils": "workspace:*",
     "jszip": "^3.10.1"
+  },
+  "devDependencies": {
+    "vitest": "catalog:"
   }
 }

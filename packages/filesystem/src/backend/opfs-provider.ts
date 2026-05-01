@@ -16,6 +16,10 @@ import { FileSystemAccessProvider } from '#backend/fs-access-provider.js';
  * @public
  */
 export class OPFSProvider extends FileSystemAccessProvider {
+  /**
+   * Backend identifier; always `'opfs'`.
+   * @returns The literal string `'opfs'`.
+   */
   public override get id(): string {
     return 'opfs';
   }
@@ -47,11 +51,24 @@ export class OPFSProvider extends FileSystemAccessProvider {
     this._initialized = true;
   }
 
+  /**
+   * Persist `data` at `path`, after asserting that the OPFS root has been initialized.
+   *
+   * @param path - Absolute file path to write.
+   * @param data - Bytes or UTF-8 string to store.
+   * @returns Resolves once the inherited write is complete.
+   */
   public override async writeFile(path: string, data: Uint8Array<ArrayBuffer> | string): Promise<void> {
     this._ensureInitialized();
     return super.writeFile(path, data);
   }
 
+  /**
+   * List immediate child names under `path`, after asserting that the OPFS root has been initialized.
+   *
+   * @param path - Absolute directory path to enumerate.
+   * @returns The names of files and subdirectories directly inside `path`.
+   */
   public override async readdir(path: string): Promise<string[]> {
     this._ensureInitialized();
     return super.readdir(path);

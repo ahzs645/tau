@@ -14,6 +14,10 @@ import { AbstractFileSystemProvider } from '#backend/abstract-provider.js';
  * @public
  */
 export class MemoryProvider extends AbstractFileSystemProvider {
+  /**
+   * Backend identifier; always `'memory'`.
+   * @returns The literal string `'memory'`.
+   */
   public get id(): string {
     return 'memory';
   }
@@ -32,6 +36,12 @@ export class MemoryProvider extends AbstractFileSystemProvider {
   // Public instance methods
   // ---------------------------------------------------------------------------
 
+  /**
+   * Persist `data` at `path`, creating any missing parent directories.
+   *
+   * @param path - Absolute file path to write.
+   * @param data - Bytes or UTF-8 string to store.
+   */
   public async writeFile(path: string, data: Uint8Array<ArrayBuffer> | string): Promise<void> {
     const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data;
     this._ensureParentDirs(path);
@@ -39,6 +49,12 @@ export class MemoryProvider extends AbstractFileSystemProvider {
     this._mtimes.set(path, Date.now());
   }
 
+  /**
+   * List immediate child names under `path`.
+   *
+   * @param path - Absolute directory path to enumerate.
+   * @returns The names of files and subdirectories directly inside `path`.
+   */
   public async readdir(path: string): Promise<string[]> {
     const normalizedPath = path === '/' ? '/' : path;
     if (!this._dirs.has(normalizedPath) && !this._files.has(normalizedPath)) {
@@ -71,6 +87,12 @@ export class MemoryProvider extends AbstractFileSystemProvider {
     return [...entries];
   }
 
+  /**
+   * Batched readdir + stat — eliminates the N+1 stat round-trips per directory listing.
+   *
+   * @param path - Absolute directory path to enumerate.
+   * @returns Each entry's name paired with its stat metadata.
+   */
   public async readdirWithStats(path: string): Promise<Array<{ name: string } & FileStat>> {
     const names = await this.readdir(path);
     const prefix = path === '/' ? '/' : `${path}/`;
@@ -97,6 +119,12 @@ export class MemoryProvider extends AbstractFileSystemProvider {
     return result;
   }
 
+  /**
+   * Resolve metadata for `path`. Throws `ENOENT` when the entry is unknown.
+   *
+   * @param path - Absolute path to stat.
+   * @returns Type/size/mtime for the entry at `path`.
+   */
   public async stat(path: string): Promise<FileStat> {
     if (this._dirs.has(path)) {
       return { type: 'dir', size: 0, mtimeMs: this._mtimes.get(path) ?? Date.now() };
@@ -108,6 +136,11 @@ export class MemoryProvider extends AbstractFileSystemProvider {
     throw this._enoent(path);
   }
 
+  /**
+   * Delete the regular file at `path`.
+   *
+   * @param path - Absolute file path to remove.
+   */
   public async unlink(path: string): Promise<void> {
     if (!this._files.has(path)) {
       throw this._enoent(path);
@@ -116,6 +149,11 @@ export class MemoryProvider extends AbstractFileSystemProvider {
     this._mtimes.delete(path);
   }
 
+  /**
+   * Delete the empty directory at `path`. Refuses to remove the root or non-empty directories.
+   *
+   * @param path - Absolute directory path to remove.
+   */
   public async rmdir(path: string): Promise<void> {
     if (!this._dirs.has(path) || path === '/') {
       throw this._enoent(path);
@@ -132,6 +170,12 @@ export class MemoryProvider extends AbstractFileSystemProvider {
     this._mtimes.delete(path);
   }
 
+  /**
+   * Move the file or directory at `from` to `to`, recursively rewriting child paths.
+   *
+   * @param from - Source absolute path.
+   * @param to - Destination absolute path.
+   */
   public async rename(from: string, to: string): Promise<void> {
     if (this._dirs.has(from)) {
       this._ensureParentDirs(to);

@@ -22,16 +22,43 @@ export abstract class AbstractFileSystemProvider implements FileSystemProvider {
 
   // -- Public instance methods (readFile, mkdir, exists, lstat, dispose) -------
 
-  // Overloaded readFile satisfying the FileSystemProvider contract.
-  // Declared as a method statement so TypeScript applies loose overload
-  // implementation checking (method-style overload declarations).
+  /**
+   * Read the entire contents of `path` as raw bytes.
+   *
+   * @param path - Absolute file path to read.
+   * @returns The file contents as a `Uint8Array`.
+   */
   public readFile(path: string): Promise<Uint8Array<ArrayBuffer>>;
+  /**
+   * Read the entire contents of `path` decoded as a UTF-8 string.
+   *
+   * @param path - Absolute file path to read.
+   * @param encoding - Must be `'utf8'`; selects the string-returning overload.
+   * @returns The decoded string contents.
+   */
   public readFile(path: string, encoding: 'utf8'): Promise<string>;
+  /**
+   * Implementation signature for the {@link readFile} overloads.
+   *
+   * Declared as method-style overloads so TypeScript applies the loose overload
+   * implementation check that the {@link FileSystemProvider} contract relies on.
+   *
+   * @param path - Absolute file path to read.
+   * @param encoding - Optional encoding selector; only `'utf8'` is supported.
+   * @returns Either the raw bytes or, when `encoding` is supplied, the decoded string.
+   */
   public async readFile(path: string, encoding?: 'utf8'): Promise<Uint8Array<ArrayBuffer> | string> {
     const raw = await this.readFileRaw(path);
     return encoding === 'utf8' ? new TextDecoder().decode(raw) : raw;
   }
 
+  /**
+   * Create the directory at `path`. With `{ recursive: true }`, missing ancestors are
+   * created and `EEXIST` is swallowed.
+   *
+   * @param path - Absolute directory path to create.
+   * @param options - When `recursive` is `true`, ancestors are auto-created.
+   */
   public async mkdir(path: string, options?: { recursive?: boolean }): Promise<void> {
     if (!options?.recursive) {
       await this.mkdirSingle(path);
@@ -53,6 +80,12 @@ export abstract class AbstractFileSystemProvider implements FileSystemProvider {
     }
   }
 
+  /**
+   * Test whether `path` resolves to any filesystem entry.
+   *
+   * @param path - Absolute path to probe.
+   * @returns `true` when {@link stat} succeeds for `path`, `false` otherwise.
+   */
   public async exists(path: string): Promise<boolean> {
     try {
       await this.stat(path);
@@ -62,10 +95,18 @@ export abstract class AbstractFileSystemProvider implements FileSystemProvider {
     }
   }
 
+  /**
+   * Stat `path` without following symbolic links. Browser backends have no
+   * symlinks, so this delegates to {@link stat}.
+   *
+   * @param path - Absolute path to stat.
+   * @returns Metadata for `path`.
+   */
   public async lstat(path: string): Promise<FileStat> {
     return this.stat(path);
   }
 
+  /** Default no-op disposer; subclasses override when teardown is required. */
   // oxlint-disable-next-line no-empty-function -- Default no-op; subclasses override when cleanup is needed
   public dispose(): void {}
 

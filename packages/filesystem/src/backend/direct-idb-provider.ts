@@ -25,6 +25,10 @@ function parentDirectory(path: string): string {
  * @public
  */
 export class DirectIdbProvider extends AbstractFileSystemProvider {
+  /**
+   * Backend identifier; always `'indexeddb'`.
+   * @returns The literal string `'indexeddb'`.
+   */
   public get id(): string {
     return 'indexeddb';
   }
@@ -76,6 +80,13 @@ export class DirectIdbProvider extends AbstractFileSystemProvider {
     await this._hydratePathIndex();
   }
 
+  /**
+   * Persist `data` at `path`, creating any missing parent directories.
+   * Writes are batched into a single IDB transaction.
+   *
+   * @param path - Absolute file path to write.
+   * @param data - Bytes or UTF-8 string to store.
+   */
   public async writeFile(path: string, data: Uint8Array<ArrayBuffer> | string): Promise<void> {
     this._ensureOpen();
     const bytes = typeof data === 'string' ? new TextEncoder().encode(data) : data;
@@ -88,6 +99,12 @@ export class DirectIdbProvider extends AbstractFileSystemProvider {
     await this._throttledFlush();
   }
 
+  /**
+   * List immediate child names under `path` (resolved from the in-memory path index).
+   *
+   * @param path - Absolute directory path to enumerate.
+   * @returns The names of files and subdirectories directly inside `path`.
+   */
   public async readdir(path: string): Promise<string[]> {
     const normalizedPath = path === '/' ? '/' : path;
     if (!this._dirs.has(normalizedPath)) {
@@ -120,6 +137,12 @@ export class DirectIdbProvider extends AbstractFileSystemProvider {
     return [...entries];
   }
 
+  /**
+   * Batched readdir + stat — eliminates the N+1 stat round-trips per directory listing.
+   *
+   * @param path - Absolute directory path to enumerate.
+   * @returns Each entry's name paired with its stat metadata.
+   */
   public async readdirWithStats(path: string): Promise<Array<{ name: string } & FileStat>> {
     const names = await this.readdir(path);
     const prefix = path === '/' ? '/' : `${path}/`;
@@ -186,6 +209,12 @@ export class DirectIdbProvider extends AbstractFileSystemProvider {
     return result;
   }
 
+  /**
+   * Resolve metadata for `path`. File sizes are cached after first read to avoid IDB round-trips.
+   *
+   * @param path - Absolute path to stat.
+   * @returns Type/size/mtime for the entry at `path`.
+   */
   public async stat(path: string): Promise<FileStat> {
     if (this._dirs.has(path)) {
       return { type: 'dir', size: 0, mtimeMs: this._mtimes.get(path) ?? Date.now() };
@@ -203,6 +232,11 @@ export class DirectIdbProvider extends AbstractFileSystemProvider {
     throw this._enoent(path);
   }
 
+  /**
+   * Delete the regular file at `path` from IDB and the in-memory index.
+   *
+   * @param path - Absolute file path to remove.
+   */
   public async unlink(path: string): Promise<void> {
     this._ensureOpen();
     if (!this._paths.has(path)) {
@@ -214,6 +248,11 @@ export class DirectIdbProvider extends AbstractFileSystemProvider {
     this._fileSizes.delete(path);
   }
 
+  /**
+   * Drop the directory entry for `path`. Refuses to remove the root.
+   *
+   * @param path - Absolute directory path to remove.
+   */
   public async rmdir(path: string): Promise<void> {
     if (!this._dirs.has(path) || path === '/') {
       throw this._enoent(path);
@@ -222,6 +261,12 @@ export class DirectIdbProvider extends AbstractFileSystemProvider {
     this._mtimes.delete(path);
   }
 
+  /**
+   * Move the file at `from` to `to` via copy + delete (IDB has no atomic rename).
+   *
+   * @param from - Source absolute path.
+   * @param to - Destination absolute path.
+   */
   public async rename(from: string, to: string): Promise<void> {
     this._ensureOpen();
     if (!this._paths.has(from)) {
@@ -280,6 +325,7 @@ export class DirectIdbProvider extends AbstractFileSystemProvider {
     });
   }
 
+  /** Close the underlying IDB connection. Subsequent operations throw until {@link initialize} is called again. */
   public override dispose(): void {
     this._db?.close();
     this._db = undefined;
@@ -324,6 +370,9 @@ export class DirectIdbProvider extends AbstractFileSystemProvider {
    * Throttled flush: at most one active flush + one queued. Multiple writes
    * arriving while a flush is active accumulate in `_writeBatch` and are
    * flushed together in the next `_flushBatch` call.
+   *
+   * @returns Resolves once the caller's write has been durably committed (either
+   *   by the active flush or by the next queued flush).
    */
   private async _throttledFlush(): Promise<void> {
     if (this._flushActive) {
@@ -351,6 +400,8 @@ export class DirectIdbProvider extends AbstractFileSystemProvider {
       this._flushQueuedReject = undefined;
 
       this._flushActive = this._flushBatch();
+      // async-iife: bootstrap — settlement is observed via the queued resolver/rejecter,
+      // not via this fire-and-forget chain; awaiting here would block the caller's flush.
       // oxlint-disable-next-line eslint-plugin-promise/prefer-await-to-then -- Intentional: resolve/reject the queued promise without awaiting (fires the follow-up flush)
       void this._flushActive
         // oxlint-disable-next-line eslint-plugin-promise/prefer-await-to-then -- Intentional chaining for throttle handoff

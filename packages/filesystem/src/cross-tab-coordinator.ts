@@ -21,6 +21,8 @@ type ChangeNotification = {
 
 /**
  * Whether `navigator.locks` is available in the current environment.
+ *
+ * @returns `true` when the Web Locks API is wired into `navigator`, `false` otherwise.
  * @public
  */
 export function isNavigatorLocksSupported(): boolean {
