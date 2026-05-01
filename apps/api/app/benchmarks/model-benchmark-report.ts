@@ -101,6 +101,71 @@ function generateSummaryCards(run: ModelBenchmarkRunResult): string {
 // Results Table
 // =============================================================================
 
+function renderCheckCells(result: ModelBenchmarkResult, allCheckNames: string[]): string {
+  let checkCells = '';
+  for (const checkName of allCheckNames) {
+    const check = result.checks.find((c) => c.name === checkName);
+    checkCells += check
+      ? `<td class="check-cell ${check.passed ? 'check-pass' : 'check-fail'}">${check.passed ? '✓' : '✗'}</td>`
+      : '<td class="check-cell">—</td>';
+  }
+  return checkCells;
+}
+
+function renderDeltaCells(result: ModelBenchmarkResult, comparison: ModelBenchmarkRunResult | undefined): string {
+  if (!comparison) {
+    return '';
+  }
+  const comp = comparison.results.find((cr) => cr.modelId === result.modelId && cr.caseName === result.caseName);
+  if (!comp || comp.status === 'skipped') {
+    return '<td>—</td><td>—</td>';
+  }
+
+  const durationDelta = result.durationMs - comp.durationMs;
+  const durationPct = comp.durationMs > 0 ? (durationDelta / comp.durationMs) * 100 : 0;
+  const dColor = durationDelta > 0 ? '#EF4444' : '#10B981';
+  const dLabel = durationDelta > 0 ? 'SLOWER' : 'FASTER';
+  const durationCell = `<td style="color:${dColor}">${durationDelta > 0 ? '+' : ''}${durationPct.toFixed(0)}% ${dLabel}</td>`;
+
+  const costA = result.cost?.totalCost ?? 0;
+  const costB = comp.cost?.totalCost ?? 0;
+  const costDelta = costA - costB;
+  const cColor = costDelta > 0 ? '#EF4444' : '#10B981';
+  const costCell = `<td style="color:${cColor}">${costDelta > 0 ? '+' : ''}${formatCost(costDelta)}</td>`;
+
+  return durationCell + costCell;
+}
+
+function renderResultRow(
+  result: ModelBenchmarkResult,
+  allCheckNames: string[],
+  comparison: ModelBenchmarkRunResult | undefined,
+): string {
+  const statusBadge = `<span class="status-badge" style="background:${getStatusColor(result.status)}">${result.status}</span>`;
+  const providerBadge = `<span class="provider-badge" style="background:${getProviderColor(result.provider)}">${escapeHtml(result.provider)}</span>`;
+  const scoreBar = `<div class="score-bar"><div class="score-fill" style="width:${result.score * 100}%;background:${getScoreColor(result.score)}"></div><span class="score-text">${(result.score * 100).toFixed(0)}%</span></div>`;
+
+  const checkCells = renderCheckCells(result, allCheckNames);
+  const deltaCells = renderDeltaCells(result, comparison);
+
+  const inputTokens = result.usage?.inputTokens ?? 0;
+  const outputTokens = result.usage?.outputTokens ?? 0;
+
+  return `<tr>
+    <td>${providerBadge} ${escapeHtml(result.modelName)}</td>
+    <td>${escapeHtml(result.caseName)}</td>
+    <td>${statusBadge}</td>
+    <td>${scoreBar}</td>
+    <td>${formatMs(result.durationMs)}</td>
+    <td>${result.timeToFirstToken ? formatMs(result.timeToFirstToken) : '—'}</td>
+    <td>${inputTokens.toLocaleString()}</td>
+    <td>${outputTokens.toLocaleString()}</td>
+    <td>${result.cost ? formatCost(result.cost.totalCost) : '—'}</td>
+    ${checkCells}
+    ${deltaCells}
+  </tr>`;
+}
+
 function generateResultsTable(results: ModelBenchmarkResult[], comparison?: ModelBenchmarkRunResult): string {
   const activeResults = results.filter((r) => r.status !== 'skipped');
   if (activeResults.length === 0) {
@@ -114,57 +179,7 @@ function generateResultsTable(results: ModelBenchmarkResult[], comparison?: Mode
     .join('');
   const deltaHeader = comparison ? '<th>Δ Duration</th><th>Δ Cost</th>' : '';
 
-  let rows = '';
-  for (const r of activeResults) {
-    const statusBadge = `<span class="status-badge" style="background:${getStatusColor(r.status)}">${r.status}</span>`;
-    const providerBadge = `<span class="provider-badge" style="background:${getProviderColor(r.provider)}">${escapeHtml(r.provider)}</span>`;
-    const scoreBar = `<div class="score-bar"><div class="score-fill" style="width:${r.score * 100}%;background:${getScoreColor(r.score)}"></div><span class="score-text">${(r.score * 100).toFixed(0)}%</span></div>`;
-
-    let checkCells = '';
-    for (const checkName of allCheckNames) {
-      const check = r.checks.find((c) => c.name === checkName);
-      checkCells += check
-        ? `<td class="check-cell ${check.passed ? 'check-pass' : 'check-fail'}">${check.passed ? '✓' : '✗'}</td>`
-        : '<td class="check-cell">—</td>';
-    }
-
-    let deltaCells = '';
-    if (comparison) {
-      const comp = comparison.results.find((cr) => cr.modelId === r.modelId && cr.caseName === r.caseName);
-      if (comp && comp.status !== 'skipped') {
-        const durationDelta = r.durationMs - comp.durationMs;
-        const durationPct = comp.durationMs > 0 ? (durationDelta / comp.durationMs) * 100 : 0;
-        const dColor = durationDelta > 0 ? '#EF4444' : '#10B981';
-        const dLabel = durationDelta > 0 ? 'SLOWER' : 'FASTER';
-        deltaCells += `<td style="color:${dColor}">${durationDelta > 0 ? '+' : ''}${durationPct.toFixed(0)}% ${dLabel}</td>`;
-
-        const costA = r.cost?.totalCost ?? 0;
-        const costB = comp.cost?.totalCost ?? 0;
-        const costDelta = costA - costB;
-        const cColor = costDelta > 0 ? '#EF4444' : '#10B981';
-        deltaCells += `<td style="color:${cColor}">${costDelta > 0 ? '+' : ''}${formatCost(costDelta)}</td>`;
-      } else {
-        deltaCells += '<td>—</td><td>—</td>';
-      }
-    }
-
-    const inputTokens = r.usage?.inputTokens ?? 0;
-    const outputTokens = r.usage?.outputTokens ?? 0;
-
-    rows += `<tr>
-      <td>${providerBadge} ${escapeHtml(r.modelName)}</td>
-      <td>${escapeHtml(r.caseName)}</td>
-      <td>${statusBadge}</td>
-      <td>${scoreBar}</td>
-      <td>${formatMs(r.durationMs)}</td>
-      <td>${r.timeToFirstToken ? formatMs(r.timeToFirstToken) : '—'}</td>
-      <td>${inputTokens.toLocaleString()}</td>
-      <td>${outputTokens.toLocaleString()}</td>
-      <td>${r.cost ? formatCost(r.cost.totalCost) : '—'}</td>
-      ${checkCells}
-      ${deltaCells}
-    </tr>`;
-  }
+  const rows = activeResults.map((r) => renderResultRow(r, allCheckNames, comparison)).join('');
 
   return `<div class="table-scroll"><table>
     <thead><tr>

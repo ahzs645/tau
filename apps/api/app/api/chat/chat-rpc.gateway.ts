@@ -117,11 +117,9 @@ export class ChatRpcGateway
   private handleDevConnection(client: Socket): void {
     this.logger.debug(`[Dev] Client connected: ${client.id}`);
 
-    client.on('join', (data: { chatId: string }, callback?: (ack: { success: boolean }) => void) => {
-      void (async () => {
-        const result = await this.handleJoinMessage(client, data);
-        callback?.(result);
-      })();
+    client.on('join', async (data: { chatId: string }, callback?: (ack: { success: boolean }) => void) => {
+      const result = await this.handleJoinMessage(client, data);
+      callback?.(result);
     });
 
     client.on('leave', (data: { chatId: string }) => {

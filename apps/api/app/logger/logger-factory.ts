@@ -210,7 +210,7 @@ const customErrorObject = (
 };
 
 function cloudwatchLoggingConfig(): Options {
-  // FIXME: Implement AWS CloudWatch logging configuration
+  // AWS CloudWatch logging configuration is not yet implemented; default messageKey only.
   return {
     messageKey: 'message',
   };

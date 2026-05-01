@@ -1,6 +1,7 @@
 /* oxlint-disable new-cap -- NestJS decorators use PascalCase */
 import { Body, Controller, Post, HttpCode, UseGuards } from '@nestjs/common';
 import { IngestEntryName, AttributeKey } from '@taucad/telemetry';
+import type { ClientMetricEntry } from '@taucad/telemetry';
 import { AuthGuard } from '#auth/auth.guard.js';
 import { MetricsService } from '#telemetry/metrics.js';
 import { IngestPayloadDto } from '#api/telemetry/telemetry.dto.js';
@@ -18,54 +19,98 @@ export class TelemetryController {
   @HttpCode(204)
   public ingest(@Body() body: IngestPayloadDto): void {
     for (const entry of body.entries) {
-      const durationSeconds = entry.duration / 1000;
+      this.recordEntry(entry, entry.duration / 1000);
+    }
+  }
 
-      switch (entry.name) {
-        case IngestEntryName.KERNEL_CREATE_GEOMETRY: {
-          const status = entry.detail?.status ?? 'unknown';
-          this.metrics.kernelExecutionDuration.record(durationSeconds, { [AttributeKey.KERNEL_STATUS]: status });
-          this.metrics.kernelExecutions.add(1, { [AttributeKey.KERNEL_STATUS]: status });
-          break;
-        }
-        case IngestEntryName.KERNEL_EXPORT_GEOMETRY: {
-          const status = entry.detail?.status ?? 'unknown';
-          const format = entry.detail?.exportFormat ?? 'unknown';
-          this.metrics.kernelExportDuration.record(durationSeconds, {
-            [AttributeKey.KERNEL_STATUS]: status,
-            [AttributeKey.EXPORT_FORMAT]: format,
-          });
-          break;
-        }
-        case IngestEntryName.WEBSOCKET_RECONNECTION: {
-          this.metrics.wsReconnectionDuration.record(durationSeconds, {
-            [AttributeKey.WS_RECONNECTION_ATTEMPT]: entry.detail?.attempt ?? 0,
-          });
-          break;
-        }
-        case IngestEntryName.EDITOR_LOAD: {
-          this.metrics.editorLoadDuration.record(durationSeconds, {
-            [AttributeKey.EDITOR_KERNEL]: entry.detail?.kernel ?? 'unknown',
-          });
-          break;
-        }
-        case IngestEntryName.WASM_MODULE_LOAD: {
-          this.metrics.wasmModuleLoadDuration.record(durationSeconds, {
-            [AttributeKey.WASM_MODULE]: entry.detail?.module ?? 'unknown',
-          });
-          break;
-        }
-        case IngestEntryName.INDEXEDDB_OPERATION: {
-          this.metrics.indexeddbOperationDuration.record(durationSeconds, {
-            [AttributeKey.INDEXEDDB_OPERATION]: entry.detail?.operation ?? 'unknown',
-            [AttributeKey.INDEXEDDB_STORE]: entry.detail?.store ?? 'unknown',
-          });
-          break;
-        }
-        default: {
-          const _exhaustive: never = entry;
-          throw new Error(`Unhandled ingest entry: ${(_exhaustive as { name: string }).name}`);
-        }
+  private recordEntry(entry: ClientMetricEntry, durationSeconds: number): void {
+    switch (entry.name) {
+      case IngestEntryName.KERNEL_CREATE_GEOMETRY: {
+        this.recordKernelCreate(entry, durationSeconds);
+        return;
+      }
+      case IngestEntryName.KERNEL_EXPORT_GEOMETRY: {
+        this.recordKernelExport(entry, durationSeconds);
+        return;
+      }
+      case IngestEntryName.WEBSOCKET_RECONNECTION: {
+        this.recordWebsocketReconnection(entry, durationSeconds);
+        return;
+      }
+      case IngestEntryName.EDITOR_LOAD: {
+        this.recordEditorLoad(entry, durationSeconds);
+        return;
+      }
+      case IngestEntryName.WASM_MODULE_LOAD: {
+        this.recordWasmModuleLoad(entry, durationSeconds);
+        return;
+      }
+      case IngestEntryName.INDEXEDDB_OPERATION: {
+        this.recordIndexedDbOperation(entry, durationSeconds);
+        return;
+      }
+      default: {
+        const exhaustive: never = entry;
+        throw new Error(`Unhandled ingest entry: ${(exhaustive as { name: string }).name}`);
       }
     }
+  }
+
+  private recordKernelCreate(
+    entry: Extract<ClientMetricEntry, { name: typeof IngestEntryName.KERNEL_CREATE_GEOMETRY }>,
+    durationSeconds: number,
+  ): void {
+    const status = entry.detail?.status ?? 'unknown';
+    this.metrics.kernelExecutionDuration.record(durationSeconds, { [AttributeKey.KERNEL_STATUS]: status });
+    this.metrics.kernelExecutions.add(1, { [AttributeKey.KERNEL_STATUS]: status });
+  }
+
+  private recordKernelExport(
+    entry: Extract<ClientMetricEntry, { name: typeof IngestEntryName.KERNEL_EXPORT_GEOMETRY }>,
+    durationSeconds: number,
+  ): void {
+    const status = entry.detail?.status ?? 'unknown';
+    const format = entry.detail?.exportFormat ?? 'unknown';
+    this.metrics.kernelExportDuration.record(durationSeconds, {
+      [AttributeKey.KERNEL_STATUS]: status,
+      [AttributeKey.EXPORT_FORMAT]: format,
+    });
+  }
+
+  private recordWebsocketReconnection(
+    entry: Extract<ClientMetricEntry, { name: typeof IngestEntryName.WEBSOCKET_RECONNECTION }>,
+    durationSeconds: number,
+  ): void {
+    this.metrics.wsReconnectionDuration.record(durationSeconds, {
+      [AttributeKey.WS_RECONNECTION_ATTEMPT]: entry.detail?.attempt ?? 0,
+    });
+  }
+
+  private recordEditorLoad(
+    entry: Extract<ClientMetricEntry, { name: typeof IngestEntryName.EDITOR_LOAD }>,
+    durationSeconds: number,
+  ): void {
+    this.metrics.editorLoadDuration.record(durationSeconds, {
+      [AttributeKey.EDITOR_KERNEL]: entry.detail?.kernel ?? 'unknown',
+    });
+  }
+
+  private recordWasmModuleLoad(
+    entry: Extract<ClientMetricEntry, { name: typeof IngestEntryName.WASM_MODULE_LOAD }>,
+    durationSeconds: number,
+  ): void {
+    this.metrics.wasmModuleLoadDuration.record(durationSeconds, {
+      [AttributeKey.WASM_MODULE]: entry.detail?.module ?? 'unknown',
+    });
+  }
+
+  private recordIndexedDbOperation(
+    entry: Extract<ClientMetricEntry, { name: typeof IngestEntryName.INDEXEDDB_OPERATION }>,
+    durationSeconds: number,
+  ): void {
+    this.metrics.indexeddbOperationDuration.record(durationSeconds, {
+      [AttributeKey.INDEXEDDB_OPERATION]: entry.detail?.operation ?? 'unknown',
+      [AttributeKey.INDEXEDDB_STORE]: entry.detail?.store ?? 'unknown',
+    });
   }
 }
