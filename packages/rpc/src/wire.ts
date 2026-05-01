@@ -6,6 +6,8 @@
  *
  * The full normative specification lives in {@link ../../../docs/architecture/rpc-wire-spec.md},
  * with prior art mapped to LSP, VS Code's `rpcProtocol.ts`, and `kkrpc`.
+ *
+ * @public
  */
 export const wireVersion = 1;
 
@@ -25,7 +27,11 @@ export type WireError = {
  * RPC family (`r*`)                                                            *
  * ============================================================================ */
 
-/** Client → server: invoke a one-shot call by name. */
+/**
+ * Client → server: invoke a one-shot call by name.
+ *
+ * @public
+ */
 export type WireRequest = {
   readonly v: 1;
   readonly k: 'rq';
@@ -34,7 +40,11 @@ export type WireRequest = {
   readonly a: unknown;
 };
 
-/** Server → client: successful reply for a {@link WireRequest}. */
+/**
+ * Server → client: successful reply for a {@link WireRequest}.
+ *
+ * @public
+ */
 export type WireResponseOk = {
   readonly v: 1;
   readonly k: 'rs';
@@ -43,7 +53,11 @@ export type WireResponseOk = {
   readonly d: unknown;
 };
 
-/** Server → client: error reply for a {@link WireRequest}. */
+/**
+ * Server → client: error reply for a {@link WireRequest}.
+ *
+ * @public
+ */
 export type WireResponseError = {
   readonly v: 1;
   readonly k: 'rs';
@@ -52,12 +66,18 @@ export type WireResponseError = {
   readonly e: WireError;
 };
 
-/** Server → client: union of {@link WireResponseOk} and {@link WireResponseError}. */
+/**
+ * Server → client: union of {@link WireResponseOk} and {@link WireResponseError}.
+ *
+ * @public
+ */
 export type WireResponse = WireResponseOk | WireResponseError;
 
 /**
  * Client → server: cooperatively cancel a pending {@link WireRequest}.
  * Mirrors LSP `$/cancelRequest`. Server piping the request observes `signal.aborted`.
+ *
+ * @public
  */
 export type WireRequestCancel = {
   readonly v: 1;
@@ -74,6 +94,8 @@ export type WireRequestCancel = {
  * Bidirectional fire-and-forget notification. No correlation id, no reply.
  * Used for autonomous server events (e.g. `progress`, `geometry`) and client-to-server
  * commands without return values (e.g. `openFile`, `updateParameters`).
+ *
+ * @public
  */
 export type WireNotify = {
   readonly v: 1;
@@ -86,7 +108,11 @@ export type WireNotify = {
  * Stream family (`s*`)                                                         *
  * ============================================================================ */
 
-/** Client → server: open a server-pushed stream. */
+/**
+ * Client → server: open a server-pushed stream.
+ *
+ * @public
+ */
 export type WireStreamSubscribe = {
   readonly v: 1;
   readonly k: 'ss';
@@ -95,7 +121,11 @@ export type WireStreamSubscribe = {
   readonly a: unknown;
 };
 
-/** Server → client: stream chunk. */
+/**
+ * Server → client: stream chunk.
+ *
+ * @public
+ */
 export type WireStreamNext = {
   readonly v: 1;
   readonly k: 'sn';
@@ -103,14 +133,22 @@ export type WireStreamNext = {
   readonly d: unknown;
 };
 
-/** Server → client: stream finished cleanly. */
+/**
+ * Server → client: stream finished cleanly.
+ *
+ * @public
+ */
 export type WireStreamComplete = {
   readonly v: 1;
   readonly k: 'sc';
   readonly i: string;
 };
 
-/** Server → client: stream errored (terminal). */
+/**
+ * Server → client: stream errored (terminal).
+ *
+ * @public
+ */
 export type WireStreamError = {
   readonly v: 1;
   readonly k: 'se';
@@ -121,6 +159,8 @@ export type WireStreamError = {
 /**
  * Client → server: consumer-initiated cancel of an active subscription.
  * Producer should stop emitting `sn` and respond with terminal `sc` once cleanup is done.
+ *
+ * @public
  */
 export type WireStreamUnsubscribe = {
   readonly v: 1;
@@ -132,7 +172,11 @@ export type WireStreamUnsubscribe = {
  * Lifecycle family (`l*`)                                                      *
  * ============================================================================ */
 
-/** Server → client: connection-established handshake (success). */
+/**
+ * Server → client: connection-established handshake (success).
+ *
+ * @public
+ */
 export type WireHelloOk = {
   readonly v: 1;
   readonly k: 'lh';
@@ -140,7 +184,11 @@ export type WireHelloOk = {
   readonly d?: unknown;
 };
 
-/** Server → client: connection-established handshake (failure). */
+/**
+ * Server → client: connection-established handshake (failure).
+ *
+ * @public
+ */
 export type WireHelloError = {
   readonly v: 1;
   readonly k: 'lh';
@@ -148,10 +196,18 @@ export type WireHelloError = {
   readonly e: WireError;
 };
 
-/** Server → client: union of {@link WireHelloOk} and {@link WireHelloError}. */
+/**
+ * Server → client: union of {@link WireHelloOk} and {@link WireHelloError}.
+ *
+ * @public
+ */
 export type WireHello = WireHelloOk | WireHelloError;
 
-/** Bidirectional graceful close control. After `lb`, no further frames are accepted. */
+/**
+ * Bidirectional graceful close control. After `lb`, no further frames are accepted.
+ *
+ * @public
+ */
 export type WireBye = {
   readonly v: 1;
   readonly k: 'lb';
@@ -166,6 +222,8 @@ export type WireBye = {
  * Reserved: acknowledge frames up to id `i`. Not implemented; receivers log once
  * and drop. Reserving the kind code prevents wire-format break when flow control
  * lands.
+ *
+ * @public
  */
 export type WireFlowAck = {
   readonly v: 1;
@@ -176,6 +234,8 @@ export type WireFlowAck = {
 /**
  * Reserved: grant `s` more stream-frame slots for stream id `i`. Not implemented;
  * receivers log once and drop.
+ *
+ * @public
  */
 export type WireFlowWindow = {
   readonly v: 1;
@@ -188,7 +248,11 @@ export type WireFlowWindow = {
  * Discriminated union                                                          *
  * ============================================================================ */
 
-/** Discriminated union of all v1 wire envelopes. */
+/**
+ * Discriminated union of all v1 wire envelopes.
+ *
+ * @public
+ */
 export type WireMessage =
   | WireRequest
   | WireResponse
@@ -240,13 +304,6 @@ const isWireErrorShape = (value: unknown): value is WireError => {
   return true;
 };
 
-/**
- * Type guard for {@link WireMessage}. Validates `v`, the kind code, and per-kind required
- * fields. Frames with `_`-prefixed kinds (transport-internal) and unknown kinds are rejected.
- *
- * @param value - Arbitrary inbound payload from a {@link Port}
- * @returns `true` when `value` matches a known v1 wire envelope shape
- */
 type WireFrameLike = {
   v?: unknown;
   k?: unknown;
@@ -260,78 +317,66 @@ type WireFrameLike = {
   s?: unknown;
 };
 
+type WireRawFrame = Record<string, unknown>;
+
+const isResponseShape = (frame: WireFrameLike, raw: WireRawFrame): boolean => {
+  if (!isNonEmptyString(frame.i)) {
+    return false;
+  }
+  if (frame.o === 1) {
+    return 'd' in raw;
+  }
+  if (frame.o === 0) {
+    return isWireErrorShape(frame.e);
+  }
+  return false;
+};
+
+const isHelloShape = (frame: WireFrameLike): boolean => {
+  if (frame.o === 1) {
+    return true;
+  }
+  if (frame.o === 0) {
+    return isWireErrorShape(frame.e);
+  }
+  return false;
+};
+
+const perKindValidators: Readonly<Record<string, (frame: WireFrameLike, raw: WireRawFrame) => boolean>> = {
+  rq: (frame, raw) => isNonEmptyString(frame.i) && isNonEmptyString(frame.n) && 'a' in raw,
+  rs: isResponseShape,
+  rc: (frame) => isNonEmptyString(frame.i) && (frame.e === undefined || isWireErrorShape(frame.e)),
+  nt: (frame, raw) => isNonEmptyString(frame.n) && 'a' in raw,
+  ss: (frame, raw) => isNonEmptyString(frame.i) && isNonEmptyString(frame.n) && 'a' in raw,
+  sn: (frame, raw) => isNonEmptyString(frame.i) && 'd' in raw,
+  sc: (frame) => isNonEmptyString(frame.i),
+  su: (frame) => isNonEmptyString(frame.i),
+  se: (frame) => isNonEmptyString(frame.i) && isWireErrorShape(frame.e),
+  lh: isHelloShape,
+  lb: (frame) => frame.r === undefined || isString(frame.r),
+  fa: (frame) => isNonEmptyString(frame.i),
+  fw: (frame) => isNonEmptyString(frame.i) && typeof frame.s === 'number' && Number.isFinite(frame.s),
+};
+
+/**
+ * Type guard for {@link WireMessage}. Validates `v`, the kind code, and per-kind required
+ * fields. Frames with `_`-prefixed kinds (transport-internal) and unknown kinds are rejected.
+ *
+ * @param value - Arbitrary inbound payload from a {@link Port}
+ * @returns `true` when `value` matches a known v1 wire envelope shape
+ * @public
+ */
 export const isWireMessage = (value: unknown): value is WireMessage => {
   if (typeof value !== 'object' || value === null) {
     return false;
   }
-  const o = value as WireFrameLike;
-  if (o.v !== wireVersion) {
+  const frame = value as WireFrameLike;
+  if (frame.v !== wireVersion) {
     return false;
   }
-  if (!isString(o.k)) {
+  if (!isString(frame.k) || frame.k.startsWith('_') || !knownKinds.has(frame.k)) {
     return false;
   }
-  if (o.k.startsWith('_')) {
-    return false;
-  }
-  if (!knownKinds.has(o.k)) {
-    return false;
-  }
-  switch (o.k) {
-    case 'rq': {
-      return isNonEmptyString(o.i) && isNonEmptyString(o.n) && 'a' in value;
-    }
-    case 'rs': {
-      if (!isNonEmptyString(o.i)) {
-        return false;
-      }
-      if (o.o === 1) {
-        return 'd' in value;
-      }
-      if (o.o === 0) {
-        return isWireErrorShape(o.e);
-      }
-      return false;
-    }
-    case 'rc': {
-      return isNonEmptyString(o.i) && (o.e === undefined || isWireErrorShape(o.e));
-    }
-    case 'nt': {
-      return isNonEmptyString(o.n) && 'a' in value;
-    }
-    case 'ss': {
-      return isNonEmptyString(o.i) && isNonEmptyString(o.n) && 'a' in value;
-    }
-    case 'sn': {
-      return isNonEmptyString(o.i) && 'd' in value;
-    }
-    case 'sc':
-    case 'su': {
-      return isNonEmptyString(o.i);
-    }
-    case 'se': {
-      return isNonEmptyString(o.i) && isWireErrorShape(o.e);
-    }
-    case 'lh': {
-      if (o.o === 1) {
-        return true;
-      }
-      if (o.o === 0) {
-        return isWireErrorShape(o.e);
-      }
-      return false;
-    }
-    case 'lb': {
-      return o.r === undefined || isString(o.r);
-    }
-    case 'fa': {
-      return isNonEmptyString(o.i);
-    }
-    case 'fw': {
-      return isNonEmptyString(o.i) && typeof o.s === 'number' && Number.isFinite(o.s);
-    }
-    default: {
-      return false;
-    }
-  }
+  const validator = perKindValidators[frame.k];
+  return validator ? validator(frame, value as WireRawFrame) : false;
 };

@@ -25,15 +25,18 @@ type SampleProtocol = {
 
 describe('Channel<P> typed surface (R2)', () => {
   it('infers ready and closed promises', () => {
+    /* These are pure type-level assignability checks, not actual promise chains. */
+    // oxlint-disable promise/prefer-await-to-then -- type-level Promise.resolve() seeds, no .then() chain
     const ready: Channel<SampleProtocol>['ready'] = Promise.resolve();
     assertType<Promise<void>>(ready);
     const closed: Channel<SampleProtocol>['closed'] = Promise.resolve();
     assertType<Promise<void>>(closed);
+    // oxlint-enable promise/prefer-await-to-then
   });
 
   it('admits the empty protocol so legacy untyped consumers keep compiling', () => {
-    type _EmptyAssignableToBase = EmptyRpcProtocol extends RpcProtocol ? true : false;
-    const value: _EmptyAssignableToBase = true;
+    type EmptyAssignableToBase = EmptyRpcProtocol extends RpcProtocol ? true : false;
+    const value: EmptyAssignableToBase = true;
     assertType<true>(value);
   });
 });

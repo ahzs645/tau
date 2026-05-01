@@ -34,6 +34,9 @@ const wrapRecording = (port: Port<unknown>, observed: ObservedFrame[]): Port<unk
 
 const flushMicrotasks = async (): Promise<void> => {
   for (let index = 0; index < 4; index += 1) {
+    /* Sequential awaits are required: each setImmediate must drain before
+     * the next is scheduled so queued microtasks run between ticks. */
+    // oxlint-disable-next-line no-await-in-loop -- sequencing setImmediate ticks; Promise.all would batch them.
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });

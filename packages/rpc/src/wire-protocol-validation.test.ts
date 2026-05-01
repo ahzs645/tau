@@ -110,11 +110,8 @@ describe('Wire-protocol validation (C14)', () => {
       impl: {
         async call(_context, name, args) {
           handler(name, args);
-          if (name === 'echo') {
-            const a = args as { value: number };
-            return { ok: true, doubled: a.value * 2 };
-          }
-          throw new Error(`unknown call '${name}'`);
+          const a = args as { value: number };
+          return { ok: true, doubled: a.value * 2 };
         },
         listen: () => {
           throw new Error('not implemented');
@@ -139,11 +136,8 @@ describe('Wire-protocol validation (C14)', () => {
   it('server validates good call args and forwards them to the handler', async () => {
     const { client, server } = wirePair();
     const handler = vi.fn(
-      async (_context: unknown, name: 'echo', args: { value: number }): Promise<{ ok: true; doubled: number }> => {
-        if (name === 'echo') {
-          return { ok: true, doubled: args.value * 2 };
-        }
-        throw new Error(`unknown call '${String(name)}'`);
+      async (_context: unknown, _name: 'echo', args: { value: number }): Promise<{ ok: true; doubled: number }> => {
+        return { ok: true, doubled: args.value * 2 };
       },
     );
     const srv = createChannelServer<Protocol>({
@@ -193,12 +187,16 @@ describe('Wire-protocol validation (C14)', () => {
 
     /* Give the channel a tick to deliver. The notify handler must NOT
      * have been called because validation failed. */
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 20);
+    });
     expect(notifyHandler).not.toHaveBeenCalled();
 
     /* Sanity: a valid notify gets through. */
     cli.notify('ping', { stamp: 7 });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 20);
+    });
     expect(notifyHandler).toHaveBeenCalledWith('ping', { stamp: 7 });
 
     cli.close();
@@ -212,13 +210,10 @@ describe('Wire-protocol validation (C14)', () => {
       sessionKey: 'test',
       protocolSchemas, // Server validates inbound args ...
       impl: {
-        async call(_context, name) {
-          if (name === 'echo') {
-            /* Return a malformed result — passes server outbound, but
-             * client validates and should reject. */
-            return { wrong: 'shape' } as unknown as { ok: true; doubled: number };
-          }
-          throw new Error('unknown');
+        async call() {
+          /* Return a malformed result — passes server outbound, but
+           * client validates and should reject. */
+          return { wrong: 'shape' } as unknown as { ok: true; doubled: number };
         },
         listen: () => {
           throw new Error('not impl');
@@ -247,11 +242,8 @@ describe('Wire-protocol validation (C14)', () => {
       sessionKey: 'test',
       /* No protocolSchemas — wire is trusted. */
       impl: {
-        async call(_context, name, args) {
-          if (name === 'echo') {
-            return { ok: true, doubled: ((args as { value: number }).value ?? 0) * 2 };
-          }
-          throw new Error('unknown');
+        async call(_context, _name, args) {
+          return { ok: true, doubled: (args as { value: number }).value * 2 };
         },
         listen: () => {
           throw new Error('not impl');

@@ -1,3 +1,6 @@
+/* oxlint-disable max-lines -- comprehensive R1/R2/R3/R6 conformance suite for the typed channel
+ * spans every wire kind plus close/lifecycle and consumer-error paths; splitting forces brittle
+ * cross-file MessageChannel sharing harnesses. */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { MessageChannel } from 'node:worker_threads';
 import type { Port } from '#port.js';

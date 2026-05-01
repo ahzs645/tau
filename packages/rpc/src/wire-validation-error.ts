@@ -96,15 +96,15 @@ export type WireValidationSite =
  * @public
  */
 export class WireValidationError extends Error {
-  override readonly name = 'WireValidationError';
+  public override readonly name = 'WireValidationError';
   /** Site at which validation failed. */
-  readonly site: WireValidationSite;
+  public readonly site: WireValidationSite;
   /** Protocol entry name (call name or notify name). */
-  readonly entry: string;
+  public readonly entry: string;
   /** Per-field validation issues. */
-  readonly issues: readonly WireValidationIssue[];
+  public readonly issues: readonly WireValidationIssue[];
 
-  constructor(site: WireValidationSite, entry: string, issues: readonly WireValidationIssue[]) {
+  public constructor(site: WireValidationSite, entry: string, issues: readonly WireValidationIssue[]) {
     const summary =
       issues.length === 0
         ? `wire validation failed for ${site} '${entry}'`
@@ -121,6 +121,8 @@ export class WireValidationError extends Error {
 /**
  * Type guard for {@link WireValidationError}.
  *
+ * @param value - Arbitrary value to test.
+ * @returns `true` when `value` is a {@link WireValidationError} instance.
  * @public
  */
 export const isWireValidationError = (value: unknown): value is WireValidationError =>

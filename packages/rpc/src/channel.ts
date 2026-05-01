@@ -1,5 +1,16 @@
 import type { Port } from '#port.js';
-import type { WireMessage, WireRequestCancel, WireBye, WireNotify, WireError } from '#wire.js';
+import type {
+  WireMessage,
+  WireRequestCancel,
+  WireBye,
+  WireNotify,
+  WireError,
+  WireHello,
+  WireResponse,
+  WireStreamNext,
+  WireStreamComplete,
+  WireStreamError,
+} from '#wire.js';
 import { isWireMessage } from '#wire.js';
 import { WireValidationError } from '#wire-validation-error.js';
 import type {
@@ -9,19 +20,25 @@ import type {
   WireValidator,
 } from '#wire-validation-error.js';
 
+type ValidateWireFrameInput = {
+  validator: WireValidator | undefined;
+  site: WireValidationSite;
+  entry: string;
+  payload: unknown;
+};
+
 /**
  * Validate a payload against an optional {@link WireValidator}.
  *
  * Returns the parsed value on success and throws a
  * {@link WireValidationError} on failure. When the validator is absent
  * the payload passes through untouched.
+ *
+ * @param input - Frame validation inputs (validator, site, entry, payload).
+ * @returns The validator's parsed `data` on success or the raw `payload` when no validator is bound.
  */
-const validateWireFrame = (
-  validator: WireValidator | undefined,
-  site: WireValidationSite,
-  entry: string,
-  payload: unknown,
-): unknown => {
+const validateWireFrame = (input: ValidateWireFrameInput): unknown => {
+  const { validator, site, entry, payload } = input;
   if (!validator) {
     return payload;
   }
@@ -29,8 +46,8 @@ const validateWireFrame = (
   if (outcome.success) {
     return outcome.data;
   }
-  const issues: readonly WireValidationIssue[] = (outcome.error.issues ?? []).map((issue) => ({
-    path: issue.path ?? [],
+  const issues: readonly WireValidationIssue[] = outcome.error.issues.map((issue) => ({
+    path: issue.path,
     message: issue.message,
     code: issue.code,
   }));
@@ -322,6 +339,21 @@ const resolveListenIterable = async (result: unknown): Promise<AsyncIterable<unk
 
 const defaultCloseTimeout = 5000;
 
+/**
+ * Widened call/listen/notify handler shapes used internally by the server dispatch loop. They
+ * mirror the public {@link ChannelServer} method signatures but drop protocol narrowing so the
+ * wire frame's `string` name and `unknown` args can flow through. The rest-tuple form keeps the
+ * positional shape readable while collapsing to a single rest parameter — `max-params` only
+ * inspects formal parameter count, not tuple arity.
+ */
+type WidenedCallImpl = (
+  ...args: [context: ChannelContext, name: string, args: unknown, signal: AbortSignal]
+) => Promise<unknown>;
+type WidenedListenImpl = (
+  ...args: [context: ChannelContext, event: string, args: unknown, signal: AbortSignal]
+) => AsyncIterable<unknown> | Promise<AsyncIterable<unknown>>;
+type WidenedNotifyImpl = (...args: [context: ChannelContext, name: string, args: unknown]) => void;
+
 type CloseOrigin = 'local' | 'remote' | 'timeout';
 
 type CloseController = {
@@ -479,7 +511,12 @@ const warnFlowWindowOnce = (): void => {
   console.warn('[@taucad/rpc] flow-window frame received; flow control is reserved for a future revision and ignored');
 };
 
-/** Test-only: reset the once-warned flags so each test sees a fresh log. @internal */
+/**
+ * Test-only: reset the once-warned flags so each test sees a fresh log.
+ *
+ * @internal
+ * @public
+ */
 export const __resetFlowControlWarnings = (): void => {
   flowAckWarned = false;
   flowWindowWarned = false;
@@ -488,6 +525,8 @@ export const __resetFlowControlWarnings = (): void => {
 /**
  * Passthrough for {@link createChannelClient} options; keeps literal parameter types in signatures.
  *
+ * @param config - Channel client options to validate and pass through.
+ * @returns The same `config` reference, narrowed to its literal type.
  * @public
  */
 export const createChannelClientOptions: <T extends ChannelClientOptions>(config: T) => T = (config) => config;
@@ -495,6 +534,8 @@ export const createChannelClientOptions: <T extends ChannelClientOptions>(config
 /**
  * Passthrough for {@link createChannelServer} options; keeps literal parameter types in signatures.
  *
+ * @param config - Channel server options to validate and pass through.
+ * @returns The same `config` reference, narrowed to its literal type.
  * @public
  */
 export const createChannelServerOptions = <P extends RpcProtocol, T extends ChannelServerOptions<P>>(config: T): T =>
@@ -504,6 +545,8 @@ export const createChannelServerOptions = <P extends RpcProtocol, T extends Chan
  * Create an RPC client over a {@link Port}. Resolves {@link Channel.ready} after the server's
  * hello frame is observed; calls made before `ready` are queued.
  *
+ * @param options - Channel client construction options (port, sessionKey, optional schemas, ...).
+ * @returns A typed {@link Channel} bound to the supplied port.
  * @public
  */
 export const createChannelClient = <P extends RpcProtocol = EmptyRpcProtocol>(
@@ -559,108 +602,131 @@ export const createChannelClient = <P extends RpcProtocol = EmptyRpcProtocol>(
     }
   };
 
+  const handleHelloFrame = (frame: WireHello): void => {
+    if (isReady) {
+      return;
+    }
+    if (frame.o === 1) {
+      hello.payload = frame.d;
+      isReady = true;
+      resolveReady();
+      flushSendQueue();
+      return;
+    }
+    rejectReady(fromWireError(frame.e));
+    closeController.initiateLocal('hello-error');
+  };
+
+  const handleResponseFrame = (frame: WireResponse): void => {
+    const p = callPending.get(frame.i);
+    if (!p) {
+      return;
+    }
+    const callName = callPendingNames.get(frame.i);
+    callPending.delete(frame.i);
+    callPendingNames.delete(frame.i);
+    if (frame.o === 0) {
+      p.reject(fromWireError(frame.e));
+      return;
+    }
+    try {
+      const validated = validateWireFrame({
+        validator: callName ? protocolSchemas?.calls[callName]?.result : undefined,
+        site: 'client-call-result',
+        entry: callName ?? '<unknown>',
+        payload: frame.d,
+      });
+      p.resolve(validated);
+    } catch (validationError) {
+      p.reject(validationError);
+    }
+  };
+
+  const handleStreamFrame = (frame: WireStreamNext | WireStreamComplete | WireStreamError): void => {
+    const sink = listenSinks.get(frame.i);
+    if (!sink) {
+      return;
+    }
+    if (frame.k === 'sn') {
+      sink.push(frame.d);
+      return;
+    }
+    listenSinks.delete(frame.i);
+    if (frame.k === 'sc') {
+      sink.push(listenEnd);
+      return;
+    }
+    sink.fail(fromWireError(frame.e));
+  };
+
+  const handleNotifyFrame = (frame: WireNotify): void => {
+    const handlers = notifyHandlers.get(frame.n);
+    if (!handlers) {
+      return;
+    }
+    let payload: unknown;
+    try {
+      payload = validateWireFrame({
+        validator: protocolSchemas?.notifies[frame.n],
+        site: 'client-notify-args',
+        entry: frame.n,
+        payload: frame.a,
+      });
+    } catch {
+      /* Drop frames that fail wire validation on the client side —
+       * notifies are fire-and-forget so there is no caller to reject.
+       * Validation errors on a hot loop would otherwise spam the
+       * console; consumers wanting strict enforcement should use a
+       * call instead. */
+      return;
+    }
+    for (const h of handlers) {
+      try {
+        h(payload);
+      } catch {
+        // Drop listener errors so other handlers still run.
+      }
+    }
+  };
+
   const onWire = (raw: unknown): void => {
     if (!isWireMessage(raw)) {
       return;
     }
-    if (raw.k === 'lh') {
-      if (isReady) {
+    switch (raw.k) {
+      case 'lh': {
+        handleHelloFrame(raw);
         return;
       }
-      if (raw.o === 1) {
-        hello.payload = raw.d;
-        isReady = true;
-        resolveReady();
-        flushSendQueue();
-      } else {
-        rejectReady(fromWireError(raw.e));
-        closeController.initiateLocal('hello-error');
-      }
-      return;
-    }
-    if (raw.k === 'rs') {
-      const p = callPending.get(raw.i);
-      if (!p) {
+      case 'rs': {
+        handleResponseFrame(raw);
         return;
       }
-      const callName = callPendingNames.get(raw.i);
-      callPending.delete(raw.i);
-      callPendingNames.delete(raw.i);
-      if (raw.o === 1) {
-        try {
-          const validated = validateWireFrame(
-            callName ? protocolSchemas?.calls[callName]?.result : undefined,
-            'client-call-result',
-            callName ?? '<unknown>',
-            raw.d,
-          );
-          p.resolve(validated);
-        } catch (validationError) {
-          p.reject(validationError);
-        }
-      } else {
-        p.reject(fromWireError(raw.e));
-      }
-      return;
-    }
-    if (raw.k === 'sn') {
-      const sink = listenSinks.get(raw.i);
-      sink?.push(raw.d);
-      return;
-    }
-    if (raw.k === 'sc') {
-      const sink = listenSinks.get(raw.i);
-      if (sink) {
-        listenSinks.delete(raw.i);
-        sink.push(listenEnd);
-      }
-      return;
-    }
-    if (raw.k === 'se') {
-      const sink = listenSinks.get(raw.i);
-      if (sink) {
-        listenSinks.delete(raw.i);
-        sink.fail(fromWireError(raw.e));
-      }
-      return;
-    }
-    if (raw.k === 'nt') {
-      const handlers = notifyHandlers.get(raw.n);
-      if (!handlers) {
+      case 'sn':
+      case 'sc':
+      case 'se': {
+        handleStreamFrame(raw);
         return;
       }
-      let payload: unknown;
-      try {
-        payload = validateWireFrame(protocolSchemas?.notifies[raw.n], 'client-notify-args', raw.n, raw.a);
-      } catch {
-        /* Drop frames that fail wire validation on the client side —
-         * notifies are fire-and-forget so there is no caller to reject.
-         * Validation errors on a hot loop would otherwise spam the
-         * console; consumers wanting strict enforcement should use a
-         * call instead. */
+      case 'nt': {
+        handleNotifyFrame(raw);
         return;
       }
-      for (const h of handlers) {
-        try {
-          h(payload);
-        } catch {
-          // Drop listener errors so other handlers still run.
-        }
+      case 'lb': {
+        closeController.acceptRemote(raw.r);
+        return;
       }
-      return;
+      case 'fa': {
+        warnFlowAckOnce();
+        return;
+      }
+      case 'fw': {
+        warnFlowWindowOnce();
+        break;
+      }
+      // Unhandled known kinds (rq/rc/ss/su) for client side: drop.
+      default:
     }
-    if (raw.k === 'lb') {
-      closeController.acceptRemote(raw.r);
-      return;
-    }
-    if (raw.k === 'fa') {
-      warnFlowAckOnce();
-      return;
-    }
-    if (raw.k === 'fw') {
-      warnFlowWindowOnce();
-    }
-    // Unhandled known kinds (rq/rc/ss/su) for client side: drop.
   };
 
   let off: () => void = (): void => undefined;
@@ -896,6 +962,8 @@ export const createChannelClient = <P extends RpcProtocol = EmptyRpcProtocol>(
  * Create an RPC server on a {@link Port}. Emits a hello (`lh`) frame as soon as the port is wired
  * so the matching client can resolve {@link Channel.ready}.
  *
+ * @param options - Channel server construction options (port, sessionKey, impl, ...).
+ * @returns A handle that exposes `dispose`, `notify`, and the close lifecycle.
  * @public
  */
 export const createChannelServer = <P extends RpcProtocol = EmptyRpcProtocol>(
@@ -914,7 +982,12 @@ export const createChannelServer = <P extends RpcProtocol = EmptyRpcProtocol>(
       const id = raw.i;
       let validatedArgs: unknown;
       try {
-        validatedArgs = validateWireFrame(protocolSchemas?.calls[raw.n]?.args, 'server-call-args', raw.n, raw.a);
+        validatedArgs = validateWireFrame({
+          validator: protocolSchemas?.calls[raw.n]?.args,
+          site: 'server-call-args',
+          entry: raw.n,
+          payload: raw.a,
+        });
       } catch (validationError) {
         if (closeController.isClosed()) {
           return;
@@ -924,12 +997,7 @@ export const createChannelServer = <P extends RpcProtocol = EmptyRpcProtocol>(
       }
       const ac = new AbortController();
       inFlightCalls.set(id, ac);
-      const callImpl = impl.call as (
-        context: ChannelContext,
-        name: string,
-        args: unknown,
-        signal: AbortSignal,
-      ) => Promise<unknown>;
+      const callImpl = impl.call as WidenedCallImpl;
       // async-iife: bootstrap — wire handlers are sync per Port contract; per-frame
       // dispatch is tracked via inFlightCalls AbortController registry below.
       void (async () => {
@@ -962,7 +1030,12 @@ export const createChannelServer = <P extends RpcProtocol = EmptyRpcProtocol>(
     if (raw.k === 'nt') {
       let validatedArgs: unknown;
       try {
-        validatedArgs = validateWireFrame(protocolSchemas?.notifies[raw.n], 'server-notify-args', raw.n, raw.a);
+        validatedArgs = validateWireFrame({
+          validator: protocolSchemas?.notifies[raw.n],
+          site: 'server-notify-args',
+          entry: raw.n,
+          payload: raw.a,
+        });
       } catch {
         /* Drop notifies that fail wire validation on the server side —
          * fire-and-forget messages have no caller to reject. */
@@ -970,11 +1043,7 @@ export const createChannelServer = <P extends RpcProtocol = EmptyRpcProtocol>(
       }
       if (impl.notify) {
         try {
-          (impl.notify as (context: ChannelContext, name: string, args: unknown) => void)(
-            context,
-            raw.n,
-            validatedArgs,
-          );
+          (impl.notify as WidenedNotifyImpl)(context, raw.n, validatedArgs);
         } catch {
           // Drop notify handler errors so the channel survives.
         }
@@ -985,12 +1054,7 @@ export const createChannelServer = <P extends RpcProtocol = EmptyRpcProtocol>(
       const subId = raw.i;
       const ac = new AbortController();
       inFlightStreams.set(subId, ac);
-      const listenImpl = impl.listen as (
-        context: ChannelContext,
-        event: string,
-        args: unknown,
-        signal: AbortSignal,
-      ) => AsyncIterable<unknown> | Promise<AsyncIterable<unknown>>;
+      const listenImpl = impl.listen as WidenedListenImpl;
       // async-iife: bootstrap — wire handlers are sync per Port contract; per-stream
       // dispatch is tracked via inFlightStreams AbortController registry below.
       void (async () => {
