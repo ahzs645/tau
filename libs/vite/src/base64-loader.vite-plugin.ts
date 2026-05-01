@@ -6,6 +6,8 @@ import type { Plugin } from 'vite';
  *
  * Import any file with `?base64` suffix to get its contents as a base64 string.
  * The data encoding for url() imports is not supplied.
+ *
+ * @public
  */
 export const base64Loader: Plugin = {
   name: 'vite:base64-loader',

@@ -12,6 +12,8 @@ import type { Plugin } from 'vite';
  * its own precise regex matching — the filter is only a fast pre-check.
  *
  * @see https://github.com/vitejs/vite/issues/XXXXX (to be filed)
+ *
+ * @public
  */
 export function largeDepRegexFix(): Plugin {
   return {

@@ -12,7 +12,7 @@ vi.mock('node:fs', () => ({
 const { existsSync } = await import('node:fs').then((m) => m.default);
 const mockExistsSync = vi.mocked(existsSync);
 
-type ResolveResult = { id: string } | null | undefined;
+type ResolveResult = { id: string } | undefined;
 type TransformContext = {
   emitFile: ReturnType<typeof vi.fn>;
   resolve?: ReturnType<typeof vi.fn>;
@@ -41,7 +41,7 @@ async function callTransform({ plugin, code, id, context = noopContext }: Transf
 const makeResolveStub = (resolutions: Record<string, string | undefined>) =>
   vi.fn(async (specifier: string): Promise<ResolveResult> => {
     const resolved = resolutions[specifier];
-    return resolved ? { id: resolved } : null;
+    return resolved ? { id: resolved } : undefined;
   });
 
 const fakeId = '/project/src/plugins/factories.ts';
@@ -199,9 +199,10 @@ describe('tsModuleUrlBuildPlugin', () => {
    * lands on a `.ts` source is hoisted into a Rollup chunk via `emitFile`.
    */
   it('should emit a chunk for bare module specifiers that resolve to a .ts source', async () => {
-    mockExistsSync.mockReturnValue(false); // no sibling .ts on disk
+    mockExistsSync.mockReturnValue(false); // No sibling .ts on disk
     const emitFile = vi.fn().mockReturnValue('bareSpec1');
     const resolvedTsPath = '/workspace/packages/runtime/src/framework/kernel-runtime-worker.ts';
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- bare module specifier used as resolution stub key
     const resolve = makeResolveStub({ '@taucad/runtime/worker': resolvedTsPath });
 
     const code = `const url = new URL('@taucad/runtime/worker', import.meta.url);`;
@@ -459,6 +460,7 @@ describe('tsModuleUrlServePlugin', () => {
    * is the correct request token). */
   it('should leave bare module specifiers untouched (Vite dev resolves them natively)', async () => {
     const resolve = makeResolveStub({
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- bare module specifier used as resolution stub key
       '@taucad/runtime/worker': '/workspace/packages/runtime/src/framework/kernel-runtime-worker.ts',
     });
     const code = `const url = new URL('@taucad/runtime/worker', import.meta.url);`;

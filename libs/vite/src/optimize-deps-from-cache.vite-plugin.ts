@@ -24,6 +24,8 @@ type CacheMetadata = {
  * - **Removed dep**: unresolvable name produces a harmless warning.
  * - **New dep**: discovered dynamically (single reload), then cached for
  *   the next start.
+ *
+ * @public
  */
 export function optimizeDepsFromCache(): Plugin {
   return {
