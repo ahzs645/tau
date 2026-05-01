@@ -263,7 +263,9 @@ const initializeServicesActor = fromSafeAsync<WorkerInitializedEvent, { context:
     treeService.connectToContentService(contentService);
 
     proxy.listen?.('fileChanged', (event) => {
-      treeService.handleWorkerFileChanged(event as ChangeEvent);
+      const changeEvent = event as ChangeEvent;
+      treeService.handleWorkerFileChanged(changeEvent);
+      contentService.handleWorkerFileChanged(changeEvent);
     });
 
     console.debug('[FileManager] initializeServicesActor: success');

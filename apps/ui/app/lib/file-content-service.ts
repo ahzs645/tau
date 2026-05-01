@@ -1,5 +1,6 @@
 import { BoundedFileCache } from '@taucad/filesystem';
 import type { SharedPool } from '@taucad/memory';
+import type { ChangeEvent } from '@taucad/types';
 import type { FileWriteSource, FileManagerProxy } from '#machines/file-manager.machine.types.js';
 import { joinPath } from '@taucad/utils/path';
 import { headSniffByteLength, seemsBinary } from '#lib/seems-binary.js';
@@ -360,6 +361,80 @@ export class FileContentService {
   }
 
   /**
+   * React to filesystem mutations pushed by the worker (`fileChanged`
+   * channel). Evicts cached bytes for any path that may have changed
+   * out-of-band — another tab via `BroadcastChannel`, the OS-level editor
+   * surfaced through `FileSystemObserverBridge`, or a runtime worker that
+   * bypassed `FileContentService.write`. Without this hook the cache holds
+   * stale text long after the file on disk changed, and `read_file` /
+   * `grep` / `edit_file` (all of which route through `resolveBytes`) return
+   * pre-mutation content to the chat agent.
+   *
+   * Events that originate from internal `write` / `delete` / `rename` calls
+   * are echoed back to us too: those evictions are correct but redundant
+   * (the cache already holds the post-mutation bytes). The next access does
+   * one extra `proxy.readFile` and re-publishes the same outcome — the
+   * cost is bounded and `mtimeMs`-aware caching can eliminate it later.
+   */
+  public handleWorkerFileChanged(event: ChangeEvent): void {
+    const rootPrefix = this.rootDirectory.endsWith('/') ? this.rootDirectory : `${this.rootDirectory}/`;
+
+    switch (event.type) {
+      case 'fileWritten': {
+        const relative = this.toRelativePath(event.path, rootPrefix);
+        if (relative === undefined) {
+          return;
+        }
+        this.cache.delete(relative);
+        this.outcomes.delete(relative);
+        this.setOrphaned(relative, false);
+        this.notifyPathSubscribers(relative);
+        return;
+      }
+      case 'fileDeleted': {
+        const relative = this.toRelativePath(event.path, rootPrefix);
+        if (relative === undefined) {
+          return;
+        }
+        this.cache.delete(relative);
+        this.setOrphaned(relative, true);
+        this.publishOutcome(relative, { kind: 'orphaned' });
+        return;
+      }
+      case 'fileRenamed': {
+        const oldRelative = this.toRelativePath(event.oldPath, rootPrefix);
+        const newRelative = this.toRelativePath(event.newPath, rootPrefix);
+        if (oldRelative !== undefined) {
+          this.cache.delete(oldRelative);
+          this.outcomes.delete(oldRelative);
+          this.setOrphaned(oldRelative, true);
+          this.notifyPathSubscribers(oldRelative);
+        }
+        if (newRelative !== undefined) {
+          this.cache.delete(newRelative);
+          this.outcomes.delete(newRelative);
+          this.setOrphaned(newRelative, false);
+          this.notifyPathSubscribers(newRelative);
+        }
+        return;
+      }
+      case 'directoryChanged': {
+        this.invalidateUnderPrefix(event.path, rootPrefix);
+        return;
+      }
+      case 'backendChanged': {
+        this.cache.clear();
+        const previousPaths = [...this.outcomes.keys()];
+        this.outcomes.clear();
+        this.orphanedPaths.clear();
+        for (const path of previousPaths) {
+          this.notifyPathSubscribers(path);
+        }
+      }
+    }
+  }
+
+  /**
    * Reset the service for a new root directory (e.g., project change).
    */
   public reset(rootDirectory: string): void {
@@ -386,6 +461,53 @@ export class FileContentService {
 
   private shouldRecompute(options?: ResolveOptions): boolean {
     return Boolean(options?.forceText) || options?.sizeLimit !== undefined;
+  }
+
+  /**
+   * Map an absolute worker-side path back to the cache's relative key.
+   * Returns `undefined` when the event refers to a path outside the
+   * current project root, so cross-project events are ignored.
+   */
+  private toRelativePath(absolutePath: string, rootPrefix: string): string | undefined {
+    if (absolutePath === this.rootDirectory) {
+      return '';
+    }
+    if (!absolutePath.startsWith(rootPrefix)) {
+      return undefined;
+    }
+    return absolutePath.slice(rootPrefix.length);
+  }
+
+  /**
+   * Evict every cached entry whose relative path lies under `absolutePath`.
+   * Used for `directoryChanged` events where the worker only tells us the
+   * containing directory shifted, not which files inside it were touched.
+   */
+  private invalidateUnderPrefix(absolutePath: string, rootPrefix: string): void {
+    const relative = this.toRelativePath(absolutePath, rootPrefix);
+    if (relative === undefined) {
+      return;
+    }
+    const directoryPrefix = relative === '' ? '' : relative.endsWith('/') ? relative : `${relative}/`;
+    const evicted: string[] = [];
+    for (const path of this.outcomes.keys()) {
+      if (directoryPrefix === '' || path === relative || path.startsWith(directoryPrefix)) {
+        evicted.push(path);
+      }
+    }
+    for (const [path] of this.cache.entries()) {
+      if (
+        (directoryPrefix === '' || path === relative || path.startsWith(directoryPrefix)) &&
+        !evicted.includes(path)
+      ) {
+        evicted.push(path);
+      }
+    }
+    for (const path of evicted) {
+      this.cache.delete(path);
+      this.outcomes.delete(path);
+      this.notifyPathSubscribers(path);
+    }
   }
 
   private async computeOutcome(path: string, options?: ResolveOptions): Promise<FileContentResult> {

@@ -660,6 +660,108 @@ describe('FileContentService', () => {
     });
   });
 
+  describe('handleWorkerFileChanged', () => {
+    it('should evict cache and notify subscribers when a watched file is written out-of-band', async () => {
+      const initialBytes = new Uint8Array([1, 2, 3]);
+      vi.mocked(proxy.readFile).mockResolvedValue(initialBytes);
+      await service.resolve('main.ts');
+      expect(service.has('main.ts')).toBe(true);
+
+      const callback = vi.fn();
+      service.subscribe('main.ts', callback);
+
+      service.handleWorkerFileChanged({ type: 'fileWritten', path: '/project/main.ts', backend: 'indexeddb' });
+
+      expect(service.has('main.ts')).toBe(false);
+      expect(service.peekOutcome('main.ts')).toEqual({ kind: 'loading' });
+      expect(callback).toHaveBeenCalledOnce();
+    });
+
+    it('should re-read fresh bytes from the proxy after fileWritten eviction', async () => {
+      const before = new Uint8Array([1]);
+      const after = new Uint8Array([2, 3, 4]);
+      vi.mocked(proxy.readFile).mockResolvedValueOnce(before);
+      await service.resolve('main.ts');
+
+      vi.mocked(proxy.readFile).mockResolvedValueOnce(after);
+      service.handleWorkerFileChanged({ type: 'fileWritten', path: '/project/main.ts', backend: 'indexeddb' });
+
+      const next = await service.resolve('main.ts');
+      expectTextContent(next, after);
+      expect(proxy.readFile).toHaveBeenCalledTimes(2);
+    });
+
+    it('should mark the path as orphaned and publish an orphaned outcome on fileDeleted', async () => {
+      vi.mocked(proxy.readFile).mockResolvedValue(new Uint8Array([1]));
+      await service.resolve('main.ts');
+
+      service.handleWorkerFileChanged({ type: 'fileDeleted', path: '/project/main.ts', backend: 'indexeddb' });
+
+      expect(service.has('main.ts')).toBe(false);
+      expect(service.isOrphaned('main.ts')).toBe(true);
+      expect(service.peekOutcome('main.ts')).toEqual({ kind: 'orphaned' });
+    });
+
+    it('should evict both old and new keys on fileRenamed', async () => {
+      vi.mocked(proxy.readFile).mockResolvedValueOnce(new Uint8Array([1]));
+      await service.resolve('old.ts');
+      vi.mocked(proxy.readFile).mockResolvedValueOnce(new Uint8Array([2]));
+      await service.resolve('new.ts');
+
+      service.handleWorkerFileChanged({
+        type: 'fileRenamed',
+        oldPath: '/project/old.ts',
+        newPath: '/project/new.ts',
+        backend: 'indexeddb',
+      });
+
+      expect(service.has('old.ts')).toBe(false);
+      expect(service.has('new.ts')).toBe(false);
+      expect(service.isOrphaned('old.ts')).toBe(true);
+      expect(service.isOrphaned('new.ts')).toBe(false);
+    });
+
+    it('should evict every cached entry under a directoryChanged prefix', async () => {
+      const populate = async (path: string): Promise<void> => {
+        vi.mocked(proxy.readFile).mockResolvedValueOnce(new Uint8Array([1]));
+        await service.resolve(path);
+      };
+      await populate('lib/a.ts');
+      await populate('lib/sub/b.ts');
+      await populate('main.ts');
+
+      service.handleWorkerFileChanged({ type: 'directoryChanged', path: '/project/lib', backend: 'indexeddb' });
+
+      expect(service.has('lib/a.ts')).toBe(false);
+      expect(service.has('lib/sub/b.ts')).toBe(false);
+      expect(service.has('main.ts')).toBe(true);
+    });
+
+    it('should clear the entire cache on backendChanged', async () => {
+      vi.mocked(proxy.readFile).mockResolvedValue(new Uint8Array([1]));
+      await service.resolve('a.ts');
+      await service.resolve('b.ts');
+
+      const callback = vi.fn();
+      service.subscribe('a.ts', callback);
+
+      service.handleWorkerFileChanged({ type: 'backendChanged', backend: 'opfs' });
+
+      expect(service.has('a.ts')).toBe(false);
+      expect(service.has('b.ts')).toBe(false);
+      expect(callback).toHaveBeenCalledOnce();
+    });
+
+    it('should ignore events that fall outside the project root', async () => {
+      vi.mocked(proxy.readFile).mockResolvedValue(new Uint8Array([1]));
+      await service.resolve('main.ts');
+
+      service.handleWorkerFileChanged({ type: 'fileWritten', path: '/other/main.ts', backend: 'indexeddb' });
+
+      expect(service.has('main.ts')).toBe(true);
+    });
+  });
+
   describe('cache capacity', () => {
     it('should accept 500 entries before eviction with default cache options', async () => {
       const svc = new FileContentService({

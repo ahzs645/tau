@@ -535,6 +535,63 @@ describe('FileTreeService', () => {
     });
   });
 
+  // ── readDirectoryEntriesWithStats() ──
+
+  describe('readDirectoryEntriesWithStats', () => {
+    it('should fan out per-child stat calls and surface real size + mtime', async () => {
+      vi.mocked(proxy.readDirectory).mockResolvedValueOnce([
+        { id: 'a.ts', name: 'a.ts' },
+        { id: 'b.ts', name: 'b.ts' },
+        { id: 'sub', name: 'sub', children: [] },
+      ]);
+      const statByPath = new Map<string, { type: 'file' | 'dir'; size: number; mtimeMs: number }>([
+        ['/project/lib/a.ts', { type: 'file', size: 11, mtimeMs: 1700 }],
+        ['/project/lib/b.ts', { type: 'file', size: 222, mtimeMs: 1800 }],
+        ['/project/lib/sub', { type: 'dir', size: 0, mtimeMs: 1900 }],
+      ]);
+      vi.mocked(proxy.stat).mockImplementation(async (absolute: string) => {
+        const entry = statByPath.get(absolute);
+        if (!entry) {
+          throw new Error(`unexpected stat call: ${absolute}`);
+        }
+        return entry;
+      });
+
+      const result = await service.readDirectoryEntriesWithStats('lib');
+
+      expect(result).toEqual([
+        { name: 'a.ts', type: 'file', size: 11, mtimeMs: 1700 },
+        { name: 'b.ts', type: 'file', size: 222, mtimeMs: 1800 },
+        { name: 'sub', type: 'dir', size: 0, mtimeMs: 1900 },
+      ]);
+      expect(proxy.readDirectory).toHaveBeenCalledWith('/project/lib');
+      expect(proxy.stat).toHaveBeenCalledTimes(3);
+    });
+
+    it('should fall back to inferred type and zeroed stats when proxy.stat rejects', async () => {
+      vi.mocked(proxy.readDirectory).mockResolvedValueOnce([
+        { id: 'racy.ts', name: 'racy.ts' },
+        { id: 'dir', name: 'dir', children: [] },
+      ]);
+      vi.mocked(proxy.stat).mockRejectedValue(new Error('ENOENT'));
+
+      const result = await service.readDirectoryEntriesWithStats('');
+
+      expect(result).toEqual([
+        { name: 'racy.ts', type: 'file', size: 0, mtimeMs: 0 },
+        { name: 'dir', type: 'dir', size: 0, mtimeMs: 0 },
+      ]);
+    });
+
+    it('should resolve the project root when path is empty', async () => {
+      vi.mocked(proxy.readDirectory).mockResolvedValueOnce([]);
+
+      await service.readDirectoryEntriesWithStats('');
+
+      expect(proxy.readDirectory).toHaveBeenCalledWith('/project');
+    });
+  });
+
   // ── handleContentChange 'read' events ──
 
   describe('content read events', () => {

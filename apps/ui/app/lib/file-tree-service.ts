@@ -17,6 +17,19 @@ export type FileItem = {
   size: number;
 };
 
+/**
+ * Stat-enriched directory entry returned by
+ * {@link FileTreeService.readDirectoryEntriesWithStats}.
+ */
+export type DirectoryEntryWithStat = {
+  name: string;
+  type: 'file' | 'dir';
+  /** File size in bytes, or `0` for directories. */
+  size: number;
+  /** Last-modified timestamp in milliseconds since the Unix epoch. */
+  mtimeMs: number;
+};
+
 type FileTreeServiceInit = {
   proxy: FileManagerProxy;
   rootDirectory: string;
@@ -186,6 +199,38 @@ export class FileTreeService {
   public async readDirectoryEntries(path: string): Promise<FileTreeNode[]> {
     const absolutePath = path === '' ? normalizePath(this.rootDirectory) : joinPath(this.rootDirectory, path);
     return this.proxy.readDirectory(absolutePath);
+  }
+
+  /**
+   * Stat-aware companion to {@link readDirectoryEntries}. Returns one entry
+   * per immediate child with real `size` / `mtimeMs` populated by per-child
+   * `proxy.stat` calls, fanned out in parallel.
+   *
+   * Used by the chat RPC `readdir` adapter so `list_directory` /
+   * `glob_search` surface authoritative byte counts to the agent instead of
+   * a synthetic `0`. Stat failures (entry deleted between readDirectory and
+   * stat) fall back to `size: 0`/`mtimeMs: 0` so the listing still resolves.
+   */
+  public async readDirectoryEntriesWithStats(path: string): Promise<DirectoryEntryWithStat[]> {
+    const absolutePath = path === '' ? normalizePath(this.rootDirectory) : joinPath(this.rootDirectory, path);
+    const nodes = await this.proxy.readDirectory(absolutePath);
+    return Promise.all(
+      nodes.map(async (node) => {
+        const inferredType: 'file' | 'dir' = node.children === undefined ? 'file' : 'dir';
+        try {
+          const childAbsolute = joinPath(absolutePath, node.name);
+          const childStat = await this.proxy.stat(childAbsolute);
+          return {
+            name: node.name,
+            type: childStat.type,
+            size: childStat.size,
+            mtimeMs: childStat.mtimeMs,
+          };
+        } catch {
+          return { name: node.name, type: inferredType, size: 0, mtimeMs: 0 };
+        }
+      }),
+    );
   }
 
   /**

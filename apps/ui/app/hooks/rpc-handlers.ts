@@ -69,6 +69,9 @@ export type RpcHandlerDependencies = {
         getTreeSnapshot(): Map<string, FileEntry>;
         exists(path: string): Promise<boolean>;
         readDirectoryEntries(path: string): Promise<Array<{ id?: string; name: string; children?: unknown[] }>>;
+        readDirectoryEntriesWithStats(
+          path: string,
+        ): Promise<Array<{ name: string; type: 'file' | 'dir'; size: number; mtimeMs: number }>>;
       }
     | undefined;
   screenshotQuality: number;
@@ -107,11 +110,12 @@ function createBrowserRpcFileSystem(
       if (!treeService) {
         return [];
       }
-      const nodes = await treeService.readDirectoryEntries(path);
-      return nodes.map((node) => ({
-        name: node.name,
-        type: node.children === undefined ? 'file' : 'dir',
-        size: 0,
+      const entries = await treeService.readDirectoryEntriesWithStats(path);
+      return entries.map((entry) => ({
+        name: entry.name,
+        type: entry.type,
+        size: entry.size,
+        ...(entry.mtimeMs > 0 ? { modifiedAt: new Date(entry.mtimeMs).toISOString() } : {}),
       }));
     },
     async exists(path: string): Promise<boolean> {
