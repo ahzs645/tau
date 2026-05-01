@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, Link } from 'react-router';
+import { AlertTriangle } from 'lucide-react';
 import type { Project } from '@taucad/types';
 import { Button } from '#components/ui/button.js';
 import { Loader } from '#components/ui/loader.js';
@@ -71,14 +72,26 @@ function DynamicPreviewProvider({
 }): React.JSX.Element {
   const projectManager = useProjectManager();
   const [project, setProject] = useState<Project | undefined>();
+  const [isLoaded, setIsLoaded] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
+    setIsLoaded(false);
+
     async function loadProjectMetadata(): Promise<void> {
       const loaded = await projectManager.getProject(projectId);
+      if (cancelled) {
+        return;
+      }
       setProject(loaded);
+      setIsLoaded(true);
     }
 
     void loadProjectMetadata();
+
+    return (): void => {
+      cancelled = true;
+    };
   }, [projectId, projectManager]);
 
   const updateName = useCallback(
@@ -118,6 +131,21 @@ function DynamicPreviewProvider({
 
   const mainFile = project?.assets.mechanical?.main;
 
+  if (isLoaded && !project) {
+    return (
+      <PreviewProjectContext.Provider value={metadataValue}>
+        <div role='alert' aria-label='Preview error' className='flex h-full items-center justify-center'>
+          <div className='flex flex-col items-center gap-3 text-destructive'>
+            <AlertTriangle className='size-10 opacity-60' strokeWidth={1.5} />
+            <span className='max-w-sm text-center text-sm'>
+              Project <span className='font-mono'>{projectId}</span> was not found.
+            </span>
+          </div>
+        </div>
+      </PreviewProjectContext.Provider>
+    );
+  }
+
   return (
     <PreviewProjectContext.Provider value={metadataValue}>
       {mainFile ? (
@@ -125,7 +153,12 @@ function DynamicPreviewProvider({
           {children}
         </CadPreviewProvider>
       ) : (
-        <div className='flex h-full items-center justify-center'>
+        <div
+          role='status'
+          aria-label='Loading preview'
+          aria-busy='true'
+          className='flex h-full items-center justify-center'
+        >
           <Loader className='size-16 text-primary' />
         </div>
       )}
