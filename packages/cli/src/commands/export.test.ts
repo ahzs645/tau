@@ -1,6 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { runCommand } from 'citty';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ExportResult } from '@taucad/runtime';
 
@@ -66,13 +67,9 @@ describe('exportCommand', () => {
   it('should throw when --ext is not a supported format and not invoke the runtime', async () => {
     const command = await importExportCommand();
 
-    await expect(
-      command.run!({
-        args: { file: inputPath, ext: 'totally-bogus' },
-        rawArgs: [],
-        cmd: command,
-      } as never),
-    ).rejects.toThrow(/Unsupported format: "totally-bogus"/);
+    await expect(runCommand(command, { rawArgs: [inputPath, '--ext=totally-bogus'] })).rejects.toThrow(
+      /Unsupported format: "totally-bogus"/,
+    );
 
     const runtime = await importedRuntime();
     expect(runtime.createNodeClient).not.toHaveBeenCalled();
@@ -82,13 +79,9 @@ describe('exportCommand', () => {
   it('should throw with the offending payload when --params is not valid JSON', async () => {
     const command = await importExportCommand();
 
-    await expect(
-      command.run!({
-        args: { file: inputPath, ext: 'glb', params: 'not-json{' },
-        rawArgs: [],
-        cmd: command,
-      } as never),
-    ).rejects.toThrow(/Invalid JSON in --params: not-json{/);
+    await expect(runCommand(command, { rawArgs: [inputPath, '--ext=glb', '--params=not-json{'] })).rejects.toThrow(
+      /Invalid JSON in --params: not-json{/,
+    );
   });
 
   it('should write exported bytes to disk on success and propagate parsed parameters', async () => {
@@ -98,16 +91,9 @@ describe('exportCommand', () => {
     const command = await importExportCommand();
 
     const outputPath = join(workspace, 'out.glb');
-    await command.run!({
-      args: {
-        file: inputPath,
-        ext: 'glb',
-        output: outputPath,
-        params: '{"width":150}',
-      },
-      rawArgs: [],
-      cmd: command,
-    } as never);
+    await runCommand(command, {
+      rawArgs: [inputPath, '--ext=glb', `--output=${outputPath}`, '--params={"width":150}'],
+    });
 
     expect(exportFunction).toHaveBeenCalledWith('glb', {
       file: 'model.ts',
@@ -122,13 +108,9 @@ describe('exportCommand', () => {
     exportFunction.mockResolvedValueOnce(buildFailureResult(['boom', 'kaboom']));
     const command = await importExportCommand();
 
-    await expect(
-      command.run!({
-        args: { file: inputPath, ext: 'glb' },
-        rawArgs: [],
-        cmd: command,
-      } as never),
-    ).rejects.toThrow(/Export failed:\n {2}boom\n {2}kaboom/);
+    await expect(runCommand(command, { rawArgs: [inputPath, '--ext=glb'] })).rejects.toThrow(
+      /Export failed:\n {2}boom\n {2}kaboom/,
+    );
 
     expect(terminate).toHaveBeenCalledOnce();
   });
@@ -137,13 +119,7 @@ describe('exportCommand', () => {
     exportFunction.mockRejectedValueOnce(new Error('worker crashed'));
     const command = await importExportCommand();
 
-    await expect(
-      command.run!({
-        args: { file: inputPath, ext: 'glb' },
-        rawArgs: [],
-        cmd: command,
-      } as never),
-    ).rejects.toThrow('worker crashed');
+    await expect(runCommand(command, { rawArgs: [inputPath, '--ext=glb'] })).rejects.toThrow('worker crashed');
 
     expect(terminate).toHaveBeenCalledOnce();
   });
@@ -152,11 +128,9 @@ describe('exportCommand', () => {
     exportFunction.mockResolvedValueOnce(buildSuccessResult(new Uint8Array(new ArrayBuffer(1))));
     const command = await importExportCommand();
 
-    await command.run!({
-      args: { file: inputPath, ext: 'glb', output: join(workspace, 'log.glb') },
-      rawArgs: [],
-      cmd: command,
-    } as never);
+    await runCommand(command, {
+      rawArgs: [inputPath, '--ext=glb', `--output=${join(workspace, 'log.glb')}`],
+    });
 
     expect(onFunction).toHaveBeenCalledWith('log', expect.any(Function));
   });
@@ -167,11 +141,7 @@ describe('exportCommand', () => {
     exportFunction.mockResolvedValueOnce(buildSuccessResult(bytes));
     const command = await importExportCommand();
 
-    await command.run!({
-      args: { file: inputPath, ext: 'glb' },
-      rawArgs: [],
-      cmd: command,
-    } as never);
+    await runCommand(command, { rawArgs: [inputPath, '--ext=glb'] });
 
     const written = await readFile(join(workspace, 'model.glb'));
     expect(written.byteLength).toBe(3);
@@ -187,14 +157,12 @@ describe('exportCommand', () => {
       },
       issues: [{ severity: 'warning', message: 'mild concern', code: 'RUNTIME' }],
     };
-    exportFunction.mockResolvedValueOnce(result as ExportResult);
+    exportFunction.mockResolvedValueOnce(result);
     const command = await importExportCommand();
 
-    await command.run!({
-      args: { file: inputPath, ext: 'glb', output: join(workspace, 'warn.glb') },
-      rawArgs: [],
-      cmd: command,
-    } as never);
+    await runCommand(command, {
+      rawArgs: [inputPath, '--ext=glb', `--output=${join(workspace, 'warn.glb')}`],
+    });
 
     expect(terminate).toHaveBeenCalledOnce();
   });
