@@ -12,6 +12,7 @@ import { inspect } from '@gltf-transform/functions';
 import type { PartialDeep } from 'type-fest';
 import { expect } from 'vitest';
 import type { GeometryResponse } from '@taucad/types';
+import type { ExportResult } from '#client/runtime-client.js';
 import type { CreateGeometryResult } from '#types/runtime.types.js';
 
 // =============================================================================
@@ -179,6 +180,11 @@ function isGltfResponse(response: GeometryResponse): response is { format: 'gltf
 /**
  * Extracts the first GLTF content from a CreateGeometryResult.
  *
+ * Used at the kernel level (when calling `kernel.createGeometry(...)` directly
+ * via the kernel-worker testing harness). For client-level tests using
+ * `client.export('glb', ...)`, prefer {@link extractGltfFromExportResult}
+ * which unwraps the single-file `ExportResult` shape.
+ *
  * @param result - The geometry result to extract from
  * @returns The GLB binary content, or `undefined` if no GLTF geometry exists
  * @public
@@ -190,6 +196,38 @@ export function extractGltfFromResult(result: CreateGeometryResult): Uint8Array<
 
   const gltfResponse = result.data.find((response) => isGltfResponse(response));
   return gltfResponse?.content;
+}
+
+/**
+ * Extracts the GLB bytes from an `ExportResult` returned by `client.export('glb', ...)`.
+ *
+ * The `ExportResult` from `RuntimeClient.export(...)` is a single-file shape
+ * (`result.data.bytes`) — this helper exists for symmetry with
+ * {@link extractGltfFromResult} and to return a typed `undefined` on failure
+ * rather than forcing every callsite to repeat the success guard.
+ *
+ * @param result - The export result returned from `client.export('glb', ...)`
+ * @returns The GLB binary content, or `undefined` if the export failed
+ * @public
+ *
+ * @example <caption>Asserting a glTF/GLB export at the client level</caption>
+ * ```typescript
+ * import { extractGltfFromExportResult } from '@taucad/runtime/testing';
+ *
+ * declare const client: { export: (format: string, input: { code: Record<string, string>; file: string }) => Promise<unknown> };
+ * declare const expect: (value: unknown) => { toBeInstanceOf: (ctor: unknown) => void };
+ * declare const source: string;
+ *
+ * const result = (await client.export('glb', { code: { '/main.ts': source }, file: '/main.ts' })) as never;
+ * const glb = extractGltfFromExportResult(result);
+ * expect(glb).toBeInstanceOf(Uint8Array);
+ * ```
+ */
+export function extractGltfFromExportResult(result: ExportResult): Uint8Array<ArrayBuffer> | undefined {
+  if (!result.success) {
+    return undefined;
+  }
+  return result.data.bytes;
 }
 
 // =============================================================================
@@ -257,13 +295,19 @@ const expectVector3ToBeCloseTo = ({
  *
  * @public
  *
- * @example <caption>Asserting geometry results in tests</caption>
+ * @example <caption>Asserting kernel-worker geometry results in tests</caption>
  * ```typescript
- * import { createGeometryTestHelpers, createMockRuntimeClient } from '@taucad/runtime/testing';
+ * import { createGeometryTestHelpers, createTestWorker, createGeometryFile } from '@taucad/runtime/testing';
+ *
+ * declare const myKernel: Parameters<typeof createTestWorker>[0];
+ * declare const myKernelOptions: Parameters<typeof createTestWorker>[1];
  *
  * const helpers = createGeometryTestHelpers();
- * const client = createMockRuntimeClient();
- * const result = await client.render({ code: { '/main.ts': 'export default () => [];' } });
+ * const worker = await createTestWorker(myKernel, myKernelOptions);
+ * const result = await worker.createGeometry({
+ *   file: createGeometryFile('main.ts', 'export default () => [];'),
+ *   parameters: {},
+ * });
  * await helpers.expectMeshCount(result, 1);
  * ```
  */

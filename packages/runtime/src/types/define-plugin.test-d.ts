@@ -15,6 +15,8 @@
 import { describe, expectTypeOf, it } from 'vitest';
 import { z } from 'zod';
 import type { FileExtension } from '@taucad/types';
+import { inProcessTransport } from '#transport/in-process-transport.js';
+import { fromMemoryFs } from '#filesystem/runtime-filesystem.js';
 import { defineKernel } from '#types/runtime-kernel.types.js';
 import type { KernelDefinition, ExportGeometryInput } from '#types/runtime-kernel.types.js';
 import { coordinateSystemSchema } from '#types/export-option-schemas.js';
@@ -59,6 +61,8 @@ import type {
 import { replicad } from '#kernels/replicad/replicad.plugin.js';
 import { converterTranscoder } from '#transcoders/converter/converter.plugin.js';
 import { presets } from '#plugins/presets.js';
+
+const stubTransport = inProcessTransport({ fileSystem: fromMemoryFs() });
 
 const tessellationSchema = z.object({
   tessellation: z
@@ -979,6 +983,7 @@ describe('RuntimeClient.export() type safety', () => {
   });
 
   const client = createRuntimeClient({
+    transport: stubTransport,
     kernels: [factory()],
   });
 
@@ -1408,7 +1413,7 @@ describe('RuntimeClient.export() expanded type safety', () => {
       exportSchemas: { stl: stlSchema, step: stepSchema, glb: glbSchema },
     });
 
-    const client = createRuntimeClient({ kernels: [factory()] });
+    const client = createRuntimeClient({ transport: stubTransport, kernels: [factory()] });
 
     void client.export('stl', { binary: true });
     void client.export('step', { assemblyMode: 'assembly' });
@@ -1426,7 +1431,7 @@ describe('RuntimeClient.export() expanded type safety', () => {
       exportSchemas: { stl: stlSchema },
     });
 
-    const client = createRuntimeClient({ kernels: [factory()] });
+    const client = createRuntimeClient({ transport: stubTransport, kernels: [factory()] });
 
     // @ts-expect-error -- invalid option type
     void client.export('stl', { binary: 'yes' });
@@ -1440,7 +1445,7 @@ describe('RuntimeClient.export() expanded type safety', () => {
       exportSchemas: { stl: stlSchema },
     });
 
-    const client = createRuntimeClient({ kernels: [factory()] });
+    const client = createRuntimeClient({ transport: stubTransport, kernels: [factory()] });
     // @ts-expect-error -- invalid format
     void client.export('invalid-format', { anyOption: 42 });
   });
@@ -1460,7 +1465,7 @@ describe('RuntimeClient.export() expanded type safety', () => {
       exportSchemas: { glb: glbSchema },
     });
 
-    const client = createRuntimeClient({ kernels: [kernelA(), kernelB()] });
+    const client = createRuntimeClient({ transport: stubTransport, kernels: [kernelA(), kernelB()] });
 
     void client.export('stl', { binary: false });
     void client.export('glb', {
@@ -1479,7 +1484,7 @@ describe('RuntimeClient.export() expanded type safety', () => {
       exportSchemas: { stl: stlSchema },
     });
 
-    const client = createRuntimeClient({ kernels: [factory()] });
+    const client = createRuntimeClient({ transport: stubTransport, kernels: [factory()] });
     void client.export('stl');
   });
 
@@ -2370,7 +2375,7 @@ describe('createRuntimeClient — kernels only', () => {
   });
 
   it('should infer export format map from a single kernel plugin', () => {
-    const client = createRuntimeClient({ kernels: [k1()] });
+    const client = createRuntimeClient({ transport: stubTransport, kernels: [k1()] });
     void client.export('stl', { binary: true });
     void client.export('step', { assemblyMode: 'assembly' });
     // @ts-expect-error -- invalid format
@@ -2378,7 +2383,7 @@ describe('createRuntimeClient — kernels only', () => {
   });
 
   it('should merge export format maps from multiple kernel plugins', () => {
-    const client = createRuntimeClient({ kernels: [k1(), k2()] });
+    const client = createRuntimeClient({ transport: stubTransport, kernels: [k1(), k2()] });
     void client.export('stl', { binary: true });
     void client.export('step', { assemblyMode: 'assembly' });
     void client.export('glb', { quality: 0.5 });
@@ -2387,7 +2392,7 @@ describe('createRuntimeClient — kernels only', () => {
   });
 
   it('should infer openFile options from single kernel renderSchema', () => {
-    const client = createRuntimeClient({ kernels: [k1()] });
+    const client = createRuntimeClient({ transport: stubTransport, kernels: [k1()] });
     void client.openFile({
       code: { 'main.ts': 'const x = 1;' },
       options: { tessellation: { linearTolerance: 0.1 } },
@@ -2395,7 +2400,7 @@ describe('createRuntimeClient — kernels only', () => {
   });
 
   it('should union openFile options from multiple kernels', () => {
-    const client = createRuntimeClient({ kernels: [k1(), k2()] });
+    const client = createRuntimeClient({ transport: stubTransport, kernels: [k1(), k2()] });
     void client.openFile({
       code: { 'main.ts': 'const x = 1;' },
       options: { tessellation: { linearTolerance: 0.1 } },
@@ -2407,30 +2412,30 @@ describe('createRuntimeClient — kernels only', () => {
   });
 
   it('should allow export without options (defaults applied by worker)', () => {
-    const client = createRuntimeClient({ kernels: [k1()] });
+    const client = createRuntimeClient({ transport: stubTransport, kernels: [k1()] });
     void client.export('stl');
   });
 
   it('should reject undeclared export formats', () => {
-    const client = createRuntimeClient({ kernels: [k1()] });
+    const client = createRuntimeClient({ transport: stubTransport, kernels: [k1()] });
     // @ts-expect-error -- undeclared format
     void client.export('usdz');
   });
 
   it('should accept self-rendering export when kernels have no exportSchemas', () => {
-    const client = createRuntimeClient({ kernels: [k3()] });
+    const client = createRuntimeClient({ transport: stubTransport, kernels: [k3()] });
     void client.export('stl' as FileExtension, { file: 'main.ts' });
   });
 
   it('should allow export with empty options when schema fields have defaults (z.input)', () => {
-    const client = createRuntimeClient({ kernels: [k1(), k2()] });
+    const client = createRuntimeClient({ transport: stubTransport, kernels: [k1(), k2()] });
     void client.export('stl', {});
     void client.export('step', {});
     void client.export('glb', {});
   });
 
   it('should allow export with partial options when schema fields have defaults (z.input)', () => {
-    const client = createRuntimeClient({ kernels: [k1(), k2()] });
+    const client = createRuntimeClient({ transport: stubTransport, kernels: [k1(), k2()] });
     void client.export('stl', { binary: false });
     void client.export('step', {});
     void client.export('glb', {});
@@ -2478,19 +2483,19 @@ describe('createRuntimeClient — kernels + transcoders', () => {
   });
 
   it('should include transcoder edge formats in export map with merged source options', () => {
-    const client = createRuntimeClient({ kernels: [k1()], transcoders: [t1()] });
+    const client = createRuntimeClient({ transport: stubTransport, kernels: [k1()], transcoders: [t1()] });
     void client.export('usdz', { quality: 0.5 });
     void client.export('usdz', { quality: 0.5, tessellation: { linearTolerance: 0.01 } });
   });
 
   it('should preserve kernel-native formats alongside transcoded formats', () => {
-    const client = createRuntimeClient({ kernels: [k1()], transcoders: [t1()] });
+    const client = createRuntimeClient({ transport: stubTransport, kernels: [k1()], transcoders: [t1()] });
     void client.export('glb', { tessellation: { linearTolerance: 0.1 } });
     void client.export('usdz', { quality: 0.5 });
   });
 
   it('should support kernel-native format options alongside transcoded format options', () => {
-    const client = createRuntimeClient({ kernels: [k1()], transcoders: [t1()] });
+    const client = createRuntimeClient({ transport: stubTransport, kernels: [k1()], transcoders: [t1()] });
     void client.export('usdz', {
       quality: 0.5,
       tessellation: { linearTolerance: 0.1 },
@@ -2498,18 +2503,18 @@ describe('createRuntimeClient — kernels + transcoders', () => {
   });
 
   it('should reject invalid transcoder edge options', () => {
-    const client = createRuntimeClient({ kernels: [k1()], transcoders: [t1()] });
+    const client = createRuntimeClient({ transport: stubTransport, kernels: [k1()], transcoders: [t1()] });
     // @ts-expect-error -- wrong option type for usdz
     void client.export('usdz', { quality: 'high' });
   });
 
   it('should handle transcoder with no edge options (empty merge)', () => {
-    const client = createRuntimeClient({ kernels: [k1()], transcoders: [t3()] });
+    const client = createRuntimeClient({ transport: stubTransport, kernels: [k1()], transcoders: [t3()] });
     void client.export('glb', { tessellation: { linearTolerance: 0.1 } });
   });
 
   it('should handle multiple transcoders with merged source options', () => {
-    const client = createRuntimeClient({ kernels: [k1()], transcoders: [t1(), t2()] });
+    const client = createRuntimeClient({ transport: stubTransport, kernels: [k1()], transcoders: [t1(), t2()] });
     void client.export('usdz', { quality: 0.5, tessellation: { linearTolerance: 0.1 } });
 
     void client.export('obj', { normals: true, tessellation: { linearTolerance: 0.1 } });
@@ -2551,7 +2556,7 @@ describe('createRuntimeClient — source-format merging', () => {
   });
 
   it('should merge kernel source-format options into transcoded export', () => {
-    const client = createRuntimeClient({ kernels: [k1()], transcoders: [t1()] });
+    const client = createRuntimeClient({ transport: stubTransport, kernels: [k1()], transcoders: [t1()] });
     void client.export('usdz', {
       quality: 0.5,
       tessellation: { linearTolerance: 0.1 },
@@ -2559,29 +2564,29 @@ describe('createRuntimeClient — source-format merging', () => {
   });
 
   it('should allow transcoded export with only edge options (source opts have defaults)', () => {
-    const client = createRuntimeClient({ kernels: [k1()], transcoders: [t1()] });
+    const client = createRuntimeClient({ transport: stubTransport, kernels: [k1()], transcoders: [t1()] });
     void client.export('usdz', { quality: 0.5 });
   });
 
   it('should allow transcoded export with only source-format options', () => {
-    const client = createRuntimeClient({ kernels: [k1()], transcoders: [t1()] });
+    const client = createRuntimeClient({ transport: stubTransport, kernels: [k1()], transcoders: [t1()] });
     void client.export('usdz', { tessellation: { linearTolerance: 0.1 } });
   });
 
   it('should reject invalid source-format options on transcoded export', () => {
-    const client = createRuntimeClient({ kernels: [k1()], transcoders: [t1()] });
+    const client = createRuntimeClient({ transport: stubTransport, kernels: [k1()], transcoders: [t1()] });
     // @ts-expect-error -- tessellation must be an object, not a string
     void client.export('usdz', { quality: 0.5, tessellation: 'invalid' });
   });
 
   it('should reject invalid edge options on transcoded export', () => {
-    const client = createRuntimeClient({ kernels: [k1()], transcoders: [t1()] });
+    const client = createRuntimeClient({ transport: stubTransport, kernels: [k1()], transcoders: [t1()] });
     // @ts-expect-error -- quality must be a number
     void client.export('usdz', { quality: 'high' });
   });
 
   it('should not merge source-format options when transcoder lacks from', () => {
-    const client = createRuntimeClient({ kernels: [k1()], transcoders: [tNoFrom()] });
+    const client = createRuntimeClient({ transport: stubTransport, kernels: [k1()], transcoders: [tNoFrom()] });
     void client.export('fbx', { ascii: true });
   });
 
@@ -2593,24 +2598,24 @@ describe('createRuntimeClient — source-format merging', () => {
       // eslint-disable-next-line id-denylist -- `obj` is a valid extension
       edges: { obj: z.object({ normals: z.boolean().default(true) }) },
     });
-    const client = createRuntimeClient({ kernels: [k1()], transcoders: [t1(), t2()] });
+    const client = createRuntimeClient({ transport: stubTransport, kernels: [k1()], transcoders: [t1(), t2()] });
     void client.export('usdz', { quality: 0.5, tessellation: { linearTolerance: 0.1 } });
 
     void client.export('obj', { normals: true, tessellation: { linearTolerance: 0.1 } });
   });
 
   it('should keep kernel-native formats unaffected by transcoders', () => {
-    const client = createRuntimeClient({ kernels: [k1()], transcoders: [t1()] });
+    const client = createRuntimeClient({ transport: stubTransport, kernels: [k1()], transcoders: [t1()] });
     void client.export('glb', { tessellation: { linearTolerance: 0.1 } });
   });
 
   it('should allow kernel-native export with empty options (z.input defaults are optional)', () => {
-    const client = createRuntimeClient({ kernels: [k1()], transcoders: [t1()] });
+    const client = createRuntimeClient({ transport: stubTransport, kernels: [k1()], transcoders: [t1()] });
     void client.export('glb', {});
   });
 
   it('should allow transcoded export with empty options when both sides have defaults', () => {
-    const client = createRuntimeClient({ kernels: [k1()], transcoders: [t1()] });
+    const client = createRuntimeClient({ transport: stubTransport, kernels: [k1()], transcoders: [t1()] });
     void client.export('usdz', {});
   });
 });
@@ -2637,7 +2642,7 @@ describe('createRuntimeClientOptions — generic preservation', () => {
   });
 
   it('should preserve kernel tuple types through identity call', () => {
-    const options = createRuntimeClientOptions({ kernels: [k1()] });
+    const options = createRuntimeClientOptions({ transport: stubTransport, kernels: [k1()] });
     const client = createRuntimeClient(options);
     void client.export('stl', { binary: true });
     // @ts-expect-error -- undeclared format
@@ -2645,14 +2650,14 @@ describe('createRuntimeClientOptions — generic preservation', () => {
   });
 
   it('should preserve kernel + transcoder tuple types through identity call', () => {
-    const options = createRuntimeClientOptions({ kernels: [k1()], transcoders: [t1()] });
+    const options = createRuntimeClientOptions({ transport: stubTransport, kernels: [k1()], transcoders: [t1()] });
     const client = createRuntimeClient(options);
     void client.export('stl', { binary: true });
     void client.export('usdz', { quality: 0.5 });
   });
 
   it('should produce typed client from full options pipeline', () => {
-    const options = createRuntimeClientOptions({ kernels: [k1()], transcoders: [t1()] });
+    const options = createRuntimeClientOptions({ transport: stubTransport, kernels: [k1()], transcoders: [t1()] });
     const client = createRuntimeClient(options);
     void client.export('stl', { binary: false });
     void client.export('usdz', { quality: 0.9 });
@@ -2661,7 +2666,7 @@ describe('createRuntimeClientOptions — generic preservation', () => {
   });
 
   it('should preserve source-merged types through identity call', () => {
-    const options = createRuntimeClientOptions({ kernels: [k1()], transcoders: [t1()] });
+    const options = createRuntimeClientOptions({ transport: stubTransport, kernels: [k1()], transcoders: [t1()] });
     const client = createRuntimeClient(options);
     void client.export('usdz', { quality: 0.5, binary: true });
   });
@@ -2872,7 +2877,11 @@ describe('TranscodeInput discriminated union', () => {
 
 describe('converterTranscoder + replicad — production factories', () => {
   it('should typecheck client.export("3mf", { tessellation, coordinateSystem, unit, application })', () => {
-    const client = createRuntimeClient({ kernels: [replicad()], transcoders: [converterTranscoder()] });
+    const client = createRuntimeClient({
+      transport: stubTransport,
+      kernels: [replicad()],
+      transcoders: [converterTranscoder()],
+    });
     void client.export('3mf', {
       unit: 'meter',
       application: 'PrusaSlicer 2.8',
@@ -2882,41 +2891,69 @@ describe('converterTranscoder + replicad — production factories', () => {
   });
 
   it('should typecheck client.export("3mf", {}) — every field is defaulted or optional', () => {
-    const client = createRuntimeClient({ kernels: [replicad()], transcoders: [converterTranscoder()] });
+    const client = createRuntimeClient({
+      transport: stubTransport,
+      kernels: [replicad()],
+      transcoders: [converterTranscoder()],
+    });
     void client.export('3mf', {});
   });
 
   it('should reject invalid edge option values', () => {
-    const client = createRuntimeClient({ kernels: [replicad()], transcoders: [converterTranscoder()] });
+    const client = createRuntimeClient({
+      transport: stubTransport,
+      kernels: [replicad()],
+      transcoders: [converterTranscoder()],
+    });
     // @ts-expect-error -- 'parsec' is not a member of the unit enum
     void client.export('3mf', { unit: 'parsec' });
   });
 
   it('should reject wrong-typed edge option values', () => {
-    const client = createRuntimeClient({ kernels: [replicad()], transcoders: [converterTranscoder()] });
+    const client = createRuntimeClient({
+      transport: stubTransport,
+      kernels: [replicad()],
+      transcoders: [converterTranscoder()],
+    });
     // @ts-expect-error -- application must be a string
     void client.export('3mf', { application: 42 });
   });
 
   it('should reject wrong-shaped source-format options on transcoded export', () => {
-    const client = createRuntimeClient({ kernels: [replicad()], transcoders: [converterTranscoder()] });
+    const client = createRuntimeClient({
+      transport: stubTransport,
+      kernels: [replicad()],
+      transcoders: [converterTranscoder()],
+    });
     // @ts-expect-error -- tessellation must be an object, not a string
     void client.export('3mf', { tessellation: 'invalid' });
   });
 
   it('should typecheck schemaless transcoded export with GLB source-format options (fbx)', () => {
-    const client = createRuntimeClient({ kernels: [replicad()], transcoders: [converterTranscoder()] });
+    const client = createRuntimeClient({
+      transport: stubTransport,
+      kernels: [replicad()],
+      transcoders: [converterTranscoder()],
+    });
     void client.export('fbx', { tessellation: { linearTolerance: 0.1 } });
   });
 
   it('should reject excess properties on schemaless transcoded export (fbx)', () => {
-    const client = createRuntimeClient({ kernels: [replicad()], transcoders: [converterTranscoder()] });
+    const client = createRuntimeClient({
+      transport: stubTransport,
+      kernels: [replicad()],
+      transcoders: [converterTranscoder()],
+    });
     // @ts-expect-error -- fbx has no 'quality' option; only GLB source-format options apply
     void client.export('fbx', { quality: 0.5 });
   });
 
   it('should preserve kernel-native glb export typing alongside transcoded formats', () => {
-    const client = createRuntimeClient({ kernels: [replicad()], transcoders: [converterTranscoder()] });
+    const client = createRuntimeClient({
+      transport: stubTransport,
+      kernels: [replicad()],
+      transcoders: [converterTranscoder()],
+    });
     void client.export('glb', { tessellation: { linearTolerance: 0.1 } });
   });
 });
@@ -2927,7 +2964,7 @@ describe('converterTranscoder + replicad — production factories', () => {
 
 describe('presets.all() — multi-kernel preset typesafety', () => {
   it('should typecheck client.export("glb", { tessellation, coordinateSystem }) on the kernel-native path', () => {
-    const client = createRuntimeClient(presets.all());
+    const client = createRuntimeClient({ ...presets.all(), transport: stubTransport });
     void client.export('glb', {
       tessellation: { linearTolerance: 0.05, angularTolerance: 10 },
       coordinateSystem: 'z-up',
@@ -2935,14 +2972,14 @@ describe('presets.all() — multi-kernel preset typesafety', () => {
   });
 
   it('should accept OCCT-style tessellation fields on the multi-kernel preset', () => {
-    const client = createRuntimeClient(presets.all());
+    const client = createRuntimeClient({ ...presets.all(), transport: stubTransport });
     void client.export('glb', {
       tessellation: { linearTolerance: 0.05, angularTolerance: 10 },
     });
   });
 
   it('should typecheck client.export("gltf", ...) on the preset path', () => {
-    const client = createRuntimeClient(presets.all());
+    const client = createRuntimeClient({ ...presets.all(), transport: stubTransport });
     void client.export('gltf', {
       tessellation: { linearTolerance: 0.05, angularTolerance: 10 },
       coordinateSystem: 'z-up',
@@ -2950,12 +2987,12 @@ describe('presets.all() — multi-kernel preset typesafety', () => {
   });
 
   it('should typecheck client.export("step", { coordinateSystem }) on the preset path', () => {
-    const client = createRuntimeClient(presets.all());
+    const client = createRuntimeClient({ ...presets.all(), transport: stubTransport });
     void client.export('step', { coordinateSystem: 'z-up' });
   });
 
   it('should typecheck client.export("3mf", { tessellation, unit, application }) on the transcoded path', () => {
-    const client = createRuntimeClient(presets.all());
+    const client = createRuntimeClient({ ...presets.all(), transport: stubTransport });
     void client.export('3mf', {
       unit: 'meter',
       application: 'PrusaSlicer 2.8',
@@ -2965,7 +3002,7 @@ describe('presets.all() — multi-kernel preset typesafety', () => {
   });
 
   it('should typecheck client.export("usdz", { tessellation }) on the transcoded path', () => {
-    const client = createRuntimeClient(presets.all());
+    const client = createRuntimeClient({ ...presets.all(), transport: stubTransport });
     void client.export('usdz', {
       tessellation: { linearTolerance: 0.1 },
       coordinateSystem: 'y-up',
@@ -2973,30 +3010,30 @@ describe('presets.all() — multi-kernel preset typesafety', () => {
   });
 
   it('should typecheck client.export("3mf", {}) — every field defaulted or optional', () => {
-    const client = createRuntimeClient(presets.all());
+    const client = createRuntimeClient({ ...presets.all(), transport: stubTransport });
     void client.export('3mf', {});
   });
 
   it('should reject excess properties on transcoded export', () => {
-    const client = createRuntimeClient(presets.all());
+    const client = createRuntimeClient({ ...presets.all(), transport: stubTransport });
     // @ts-expect-error -- bogus key not declared by any contributing kernel or transcoder edge
     void client.export('3mf', { bogusOption: 42 });
   });
 
   it('should reject wrong-typed edge option values on the preset path', () => {
-    const client = createRuntimeClient(presets.all());
+    const client = createRuntimeClient({ ...presets.all(), transport: stubTransport });
     // @ts-expect-error -- application must be a string, not number
     void client.export('3mf', { application: 42 });
   });
 
   it('should reject invalid edge enum values on the preset path', () => {
-    const client = createRuntimeClient(presets.all());
+    const client = createRuntimeClient({ ...presets.all(), transport: stubTransport });
     // @ts-expect-error -- 'parsec' not in unit enum
     void client.export('3mf', { unit: 'parsec' });
   });
 
   it('should reject undeclared formats on the preset path', () => {
-    const client = createRuntimeClient(presets.all());
+    const client = createRuntimeClient({ ...presets.all(), transport: stubTransport });
     // @ts-expect-error -- 'not-a-format' is not declared by any kernel or transcoder
     void client.export('not-a-format', {});
   });
@@ -3065,20 +3102,20 @@ describe('CollectKernelIds type inference', () => {
 
 describe('createRuntimeClient — bestRouteFor KernelId narrowing', () => {
   it('should accept literal kernel ids declared on the kernels tuple', () => {
-    const client = createRuntimeClient(presets.all());
+    const client = createRuntimeClient({ ...presets.all(), transport: stubTransport });
     void client.bestRouteFor('glb', 'replicad');
     void client.bestRouteFor('glb', 'jscad');
     void client.bestRouteFor('glb');
   });
 
   it('should reject kernel ids that are not in the kernels tuple', () => {
-    const client = createRuntimeClient(presets.all());
+    const client = createRuntimeClient({ ...presets.all(), transport: stubTransport });
     // @ts-expect-error -- 'not-a-kernel' is not a registered kernel id
     void client.bestRouteFor('glb', 'not-a-kernel');
   });
 
   it('should expose routesFor as a readonly array of routes', () => {
-    const client = createRuntimeClient(presets.all());
+    const client = createRuntimeClient({ ...presets.all(), transport: stubTransport });
     const routes = client.routesFor('glb');
     expectTypeOf(routes).toExtend<ReadonlyArray<{ targetFormat: string; kernelId: string }>>();
   });

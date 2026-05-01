@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 type DocumentStub = {
   getElementsByTagName: () => unknown[];
   querySelector: () => unknown;
+  querySelectorAll: () => ArrayLike<unknown>;
   createElement: () => {
     rel: string;
     as: string;
@@ -11,7 +12,12 @@ type DocumentStub = {
     setAttribute: () => void;
     addEventListener: () => void;
   };
+  createTextNode: () => unknown;
+  addEventListener: () => void;
+  removeEventListener: () => void;
   head: { appendChild: () => void };
+  body: unknown;
+  visibilityState: string;
 };
 
 type WindowStub = {
@@ -104,6 +110,56 @@ describe('worker-preload-polyfill', () => {
     expect(typeof stubDocument.head.appendChild).toBe('function');
 
     stubDocument.head.appendChild();
+  });
+
+  /*
+   * Vite v8's HMR client (`vite/dist/client/client.mjs:1058`) probes
+   * `"document" in globalThis` and unconditionally calls every method
+   * below when the probe succeeds — without per-method `typeof` guards.
+   *
+   * Our polyfill makes the probe succeed (so the modulepreload helper
+   * stays happy), so we MUST stub every method the HMR client touches.
+   * If any one is missing, the worker crashes with
+   * `TypeError: document.X is not a function`, which manifests upstream
+   * as a perpetually-hanging preview render (the kernel client never
+   * receives a `worker-ready` message because the worker died on import).
+   *
+   * Audit source: `grep -oE "document\\.[a-zA-Z]+"` against the installed
+   * `vite/dist/client/client.mjs`. Re-audit on every Vite upgrade.
+   */
+  it.each([
+    ['querySelectorAll', 'function'],
+    ['addEventListener', 'function'],
+    ['removeEventListener', 'function'],
+    ['createTextNode', 'function'],
+    ['visibilityState', 'string'],
+  ] as const)('should provide document.%s as %s for Vite HMR client', async (method, expectedType) => {
+    await import('#framework/worker-preload-polyfill.js');
+
+    const stubDocument = getDocumentStub() as unknown as Record<string, unknown>;
+    expect(typeof stubDocument[method]).toBe(expectedType);
+  });
+
+  it('should provide a non-throwing document.body accessor for Vite HMR client', async () => {
+    await import('#framework/worker-preload-polyfill.js');
+
+    const stubDocument = getDocumentStub();
+    expect(() => stubDocument.body).not.toThrow();
+  });
+
+  it('should not crash when Vite HMR client iterates document.querySelectorAll() result', async () => {
+    await import('#framework/worker-preload-polyfill.js');
+
+    const stubDocument = getDocumentStub();
+    /*
+     * Replicates `client.mjs:1058`:
+     *   document.querySelectorAll("style[data-vite-dev-id]").forEach((el) => { ... })
+     * The result must support `.forEach` to keep the HMR client alive.
+     */
+    expect(() => {
+      const nodes = stubDocument.querySelectorAll();
+      (nodes as unknown as { forEach: (cb: (el: unknown) => void) => void }).forEach(() => {});
+    }).not.toThrow();
   });
 
   it('should not overwrite document when it already exists', async () => {

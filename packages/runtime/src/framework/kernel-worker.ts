@@ -17,7 +17,7 @@ import type {
   ExportRoute,
 } from '#types/runtime.types.js';
 import type {
-  RuntimeFileSystem,
+  KernelFileSystem,
   RuntimeFileSystemBase,
   KernelRuntime,
   RuntimeLogger,
@@ -50,24 +50,19 @@ import type {
   ParameterDependency,
   AssetDependency,
 } from '#types/runtime-dependency.types.js';
-import type {
-  PerformanceEntryData,
-  RenderPhase,
-  WorkerState,
-  TranscoderModuleEntry,
-} from '#types/runtime-protocol.types.js';
-import { signalSlot, abortReason as abortReasonEnum, workerStateEnum } from '#types/runtime-protocol.types.js';
+import type { TelemetryEntry, RenderPhase, WorkerState, TranscoderModuleEntry } from '#types/runtime-protocol.types.js';
+import { signalSlot, abortReason as abortReasonEnum } from '#types/runtime-protocol.types.js';
 import type { TranscoderDefinition, TranscoderEdge, TranscoderRuntime } from '#types/runtime-transcoder.types.js';
 import { isRenderAbortedError, RenderAbortedError } from '#framework/runtime-worker-client.js';
 import { setAbortContext, clearAbortContext } from '#framework/cooperative-abort.js';
-import type { FileSystemProxy } from '#framework/runtime-filesystem-bridge.js';
-import { createBridgeProxy } from '#framework/runtime-filesystem-bridge.js';
+import type { FileSystemProxy } from '#transport/_internal/runtime-filesystem-bridge.js';
+import { createBridgeProxy, wrapWorkerFilesystemBridgePort } from '#transport/_internal/runtime-filesystem-bridge.js';
 import { createRuntimeFileSystem } from '#filesystem/create-runtime-filesystem.js';
 import { toJSONSchema } from 'zod';
 import type { z } from 'zod';
 import { createKernelError } from '#kernels/kernel-helpers.js';
 import { cooperativeYield } from '#framework/async-polyfills.js';
-import { parameterDebounceMs, fileChangeDebounceMs } from '#framework/runtime-framework.constants.js';
+import { parameterDebounce, fileChangeDebounce } from '#framework/runtime-framework.constants.js';
 import { hashBytes, hashString } from '#utils/hash.utils.js';
 import { RuntimeTracer } from '#framework/runtime-tracer.js';
 import { WorkerTelemetryCollector } from '#framework/worker-telemetry.js';
@@ -82,6 +77,37 @@ type LoadedTranscoder = {
   context: unknown;
   edges: readonly TranscoderEdge[];
 };
+
+/* TR16 fast-path adapter — wraps an inline `RuntimeFileSystemBase` as a
+ * `FileSystemProxy` so the kernel-worker boundary remains uniform whether
+ * the FS arrives via a `MessagePort` bridge or in-process. The `dispose`
+ * is a no-op (the inline FS owns its own lifecycle, managed by the runner
+ * that supplied it). When the inline FS lacks `watch`, we surface a
+ * subscription that returns an immediate unsubscribe — kernels that watch
+ * dependencies still function, they just receive no events. */
+function adaptInlineFileSystem(fs: RuntimeFileSystemBase): FileSystemProxy {
+  /* `noop` covers the absent-watch fallback (returns an unsubscribe that
+   * does nothing) and the FS-handle `dispose` (the inline FS owns its
+   * own lifecycle, managed by whoever supplied it to the runner). */
+  // oxlint-disable-next-line eslint/no-empty-function -- intentional no-op for inline-FS lifecycle bookkeeping
+  const noop = (): void => {};
+  return {
+    id: fs.id,
+    capabilities: fs.capabilities,
+    readFile: fs.readFile.bind(fs),
+    writeFile: fs.writeFile.bind(fs),
+    mkdir: fs.mkdir.bind(fs),
+    readdir: fs.readdir.bind(fs),
+    unlink: fs.unlink.bind(fs),
+    rmdir: fs.rmdir.bind(fs),
+    rename: fs.rename.bind(fs),
+    stat: fs.stat.bind(fs),
+    lstat: fs.lstat.bind(fs),
+    exists: fs.exists.bind(fs),
+    watch: fs.watch ? fs.watch.bind(fs) : () => noop,
+    dispose: noop,
+  };
+}
 
 function setsEqual<T>(a: Set<T>, b: Set<T>): boolean {
   if (a.size !== b.size) {
@@ -176,17 +202,35 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   /** Callback for pushing state changes to the dispatcher (postMessage fallback). */
   public onStateChanged?: (state: WorkerState, detail?: string) => void;
 
-  /** Callback for pushing geometry results to the dispatcher. */
-  public onGeometryComputed?: (result: HashedGeometryResult) => void;
+  /**
+   * Callback for pushing geometry results to the dispatcher. The `rgen`
+   * argument is the autonomous render generation that produced the
+   * result; downstream consumers gate frame application on `rgen >=
+   * lastApplied` to ignore frames from superseded renders.
+   */
+  public onGeometryComputed?: (result: HashedGeometryResult, rgen: number) => void;
 
-  /** Callback for pushing parameter results to the dispatcher. */
-  public onParametersResolved?: (result: GetParametersResult) => void;
+  /**
+   * Callback for pushing parameter results to the dispatcher. The
+   * `rgen` argument correlates the resolved schema with the originating
+   * render generation so the consumer can pair early-arriving parameter
+   * frames with the eventual `geometryComputed` for the same `rgen`.
+   */
+  public onParametersResolved?: (result: GetParametersResult, rgen: number) => void;
 
-  /** Callback for pushing progress updates to the dispatcher. */
-  public onProgressUpdate?: (phase: RenderPhase) => void;
+  /**
+   * Callback for pushing progress updates to the dispatcher. The
+   * `rgen` argument lets the consumer discard progress frames from
+   * superseded renders.
+   */
+  public onProgressUpdate?: (phase: RenderPhase, rgen: number, detail?: Record<string, unknown>) => void;
 
-  /** Callback for pushing errors to the dispatcher. */
-  public onError?: (issues: KernelIssue[]) => void;
+  /**
+   * Callback for pushing errors to the dispatcher. `rgen` is supplied
+   * for render-scoped failures and omitted for connection-scoped
+   * issues (e.g. handshake failure, transcoder load).
+   */
+  public onError?: (issues: KernelIssue[], rgen?: number) => void;
 
   /** Callback for pushing active kernel changes to the dispatcher. */
   public onActiveKernelChanged?: (kernelId: string | undefined) => void;
@@ -204,6 +248,11 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * Framework-managed native geometry handle from the last successful createGeometry call.
    * Opaque to the framework -- typed by each kernel subclass.
    * Passed to exportGeometry so exports work regardless of cache state.
+   *
+   * The cache is opportunistic, not contractual: an export immediately
+   * following a render may skip the re-mesh, but the only contractual
+   * guarantee is that single-arg `client.export(format)` throws
+   * `NoRenderOutcomeError` when no prior render has settled.
    */
   protected nativeHandle: unknown;
 
@@ -211,6 +260,8 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * Serialized form of nativeHandle from the last successful createGeometry call.
    * Populated by kernel `serializeHandle` hooks or auto-detected for Tier 1 types.
    * Used by `ensureNativeHandle` to restore the handle without re-running createGeometry.
+   *
+   * Same opportunistic-cache contract applies as `nativeHandle` above.
    */
   protected lastSerializedHandle: unknown;
 
@@ -274,7 +325,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * Internal filesystem instance.
    * Initialized via initialize() when fileSystemPort is provided.
    */
-  private _filesystem: RuntimeFileSystem | undefined;
+  private _filesystem: KernelFileSystem | undefined;
 
   /**
    * Internal logger instance.
@@ -431,7 +482,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * @returns the kernel filesystem interface
    * @throws Error if accessed before initialize() completes with fileSystemPort
    */
-  private get filesystem(): RuntimeFileSystem {
+  private get filesystem(): KernelFileSystem {
     if (!this._filesystem) {
       throw new Error('filesystem not available - initialize must complete first with fileSystemPort');
     }
@@ -477,7 +528,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    */
   public async initialize(input: {
     callbacks: { onLog: OnWorkerLog };
-    transferables: { fileSystemPort?: MessagePort };
+    transferables: { fileSystemPort?: MessagePort; inlineFileSystem?: RuntimeFileSystemBase };
     options: Options;
     middlewareEntries: MiddlewareRegistrations;
     transcoderModules?: TranscoderModuleEntry[];
@@ -495,11 +546,22 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       this._filePool = new SharedPool(this._filePoolBuffer);
     }
 
-    // Register file manager and create filesystem if port is provided
-    if (input.transferables.fileSystemPort) {
-      this.fileSystem = createBridgeProxy<RuntimeFileSystemBase>(input.transferables.fileSystemPort, {
-        filePool: this._filePool,
-      });
+    /* Filesystem wiring — three precedence rules (TR16):
+     * 1. `inlineFileSystem` takes precedence: same V8 cluster fast-path,
+     *    no MessagePort serialization or bridge proxy.
+     * 2. `fileSystemPort` falls back to the generic bridge proxy (worker /
+     *    cross-process topologies).
+     * 3. Neither: filesystem stays undefined; kernel runs without FS. */
+    if (input.transferables.inlineFileSystem) {
+      this.fileSystem = adaptInlineFileSystem(input.transferables.inlineFileSystem);
+      this._filesystem = this.createFileSystem();
+    } else if (input.transferables.fileSystemPort) {
+      this.fileSystem = createBridgeProxy<RuntimeFileSystemBase>(
+        wrapWorkerFilesystemBridgePort(input.transferables.fileSystemPort),
+        {
+          filePool: this._filePool,
+        },
+      );
       this._filesystem = this.createFileSystem();
     }
 
@@ -553,6 +615,26 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   }
 
   /**
+   * Wire-format cooperative abort entry-point used by SAB-less transports
+   * (e.g. {@link createWebSocketTransport}). The dispatcher invokes this
+   * for every `{ type: 'abort', reason }` message; we bump the local
+   * `renderGeneration` exactly as we would from an `Atomics`-driven SAB
+   * notification — and write the reason into the SAB when available so
+   * downstream `isAborted()` checks classify the abort correctly.
+   *
+   * @param reason - Abort reason carried inline by the wire command.
+   */
+  public handleWireAbort(reason: number): void {
+    if (this.signalView) {
+      Atomics.store(this.signalView, signalSlot.abortReason, reason);
+      this.renderGeneration = Atomics.add(this.signalView, signalSlot.abortGeneration, 1) + 1;
+      Atomics.notify(this.signalView, signalSlot.abortGeneration);
+    } else {
+      this.renderGeneration++;
+    }
+  }
+
+  /**
    * Set the SharedArrayBuffer for the geometry pool.
    * Called by the dispatcher during initialization.
    *
@@ -581,7 +663,58 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * @param parameters - Parameter overrides.
    * @param options - Optional kernel-specific render options.
    */
-  public handleSetFile(
+  /**
+   * Stage byte payloads onto the worker-side {@link RuntimeFileSystem} and
+   * then dispatch the supplied entry through the same autonomous render
+   * flow as {@link KernelWorker.handleOpenFile}. Used by
+   * `RuntimeClient.openFile({ code })` to ship inline source code through
+   * the runtime without forcing consumers to wire up an inline-kind
+   * filesystem handle (TR7).
+   *
+   * @param request - Stage map plus the entry to open after staging completes.
+   */
+  public async handleStageAndOpenFile(request: {
+    stage: Record<string, Uint8Array<ArrayBuffer>>;
+    file: GeometryFile;
+    parameters?: Record<string, unknown>;
+    options?: Record<string, unknown>;
+  }): Promise<void> {
+    const entries = Object.entries(request.stage);
+
+    if (entries.length > 0) {
+      const fs = this.filesystem;
+      const writtenDirectories = new Set<string>();
+
+      for (const [absolutePath, bytes] of entries) {
+        const lastSlash = absolutePath.lastIndexOf('/');
+        if (lastSlash > 0) {
+          const directory = absolutePath.slice(0, lastSlash);
+          if (!writtenDirectories.has(directory)) {
+            writtenDirectories.add(directory);
+            // oxlint-disable-next-line no-await-in-loop -- Sequential mkdir to preserve parent-before-child order.
+            await fs.mkdir(directory, { recursive: true });
+          }
+        }
+        // oxlint-disable-next-line no-await-in-loop -- Writes must complete before render reads them.
+        await fs.writeFile(absolutePath, bytes);
+      }
+
+      // Invalidate every cache layer keyed on the staged paths so the
+      // next render reads the freshly written bytes. Without this,
+      // back-to-back `client.openFile({ code })` calls (e.g. an
+      // editor edit followed by a re-render) would resolve through
+      // the OLD `fileContentCache` entry and produce stale parameter
+      // extraction / dependency hashes — even though the underlying
+      // filesystem now holds the new content. Mirrors the
+      // `notifyFileChanged` invalidation path so the cache contract
+      // is identical regardless of who wrote the bytes.
+      this._invalidateCachesForPaths(entries.map(([absolutePath]) => absolutePath));
+    }
+
+    this.handleOpenFile(request.file, request.parameters, request.options);
+  }
+
+  public handleOpenFile(
     file: GeometryFile,
     parameters?: Record<string, unknown>,
     options?: Record<string, unknown>,
@@ -615,7 +748,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    *
    * @param parameters - Parameter overrides.
    */
-  public handleSetParameters(parameters: Record<string, unknown>): void {
+  public handleUpdateParameters(parameters: Record<string, unknown>): void {
     this.currentParameters = parameters;
 
     if (this.signalView) {
@@ -624,7 +757,32 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       this.renderGeneration++;
     }
 
-    this.scheduleRender(parameterDebounceMs);
+    this.scheduleRender(parameterDebounce);
+  }
+
+  /**
+   * Handle a setOptions command from the main thread.
+   * Replaces the current per-render kernel options, aborts any in-progress
+   * render, and schedules an immediate re-render against the active file
+   * with the existing parameters.
+   *
+   * @param options - Replacement kernel-specific render options.
+   */
+  public handleSetOptions(options: Record<string, unknown>): void {
+    this.currentRenderOptions = options;
+
+    if (this.signalView) {
+      this.renderGeneration = Atomics.add(this.signalView, signalSlot.abortGeneration, 1) + 1;
+    } else {
+      this.renderGeneration++;
+    }
+
+    clearTimeout(this.paramDebounceTimer);
+    this.paramDebounceTimer = undefined;
+
+    if (this.currentFile) {
+      void this.executeRender();
+    }
   }
 
   /** Clean up worker state, native handles, telemetry collector, and filesystem proxy. */
@@ -1076,35 +1234,35 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
 
   /**
    * Unified render entry point that combines parameter extraction and geometry computation
-   * in a single call. This eliminates redundant dependency computation, bundling, and hashing
-   * between the two operations.
+   * in a single call. Per-render callbacks were retired in favour of autonomous notifies:
+   * `parametersResolved` and `progress` events fan out via the top-level
+   * {@link KernelWorker.onParametersResolved} / {@link KernelWorker.onProgressUpdate}
+   * fields wired by the dispatcher, threading the originating render generation (`rgen`)
+   * for frame-level correlation. This method remains as a synchronous helper for
+   * non-autonomous code paths (CLI, benchmarks) that drive a single render-and-await flow.
    *
-   * @param input - Render input containing file, parameters, and optional callbacks
-   * @param input.file - The geometry file to render
-   * @param input.parameters - User-provided parameters
-   * @param input.onParametersResolved - Optional callback to stream parameters back while geometry computes
-   * @param input.onProgress - Optional callback for render phase progress
-   * @param input.options - Optional kernel-specific render options
-   * @returns The computed geometry
+   * @param input - Render input containing file, parameters, and options.
+   * @returns The computed geometry.
    */
   public async render(input: {
     file: GeometryFile;
     parameters: Record<string, unknown>;
-    onParametersResolved?: (result: GetParametersResult) => void;
-    onProgress?: (phase: RenderPhase) => void;
     options?: Record<string, unknown>;
   }): Promise<HashedGeometryResult> {
     this.tracer.reset();
     const renderSpan = this.tracer.startSpan('kernel.render', {
       file: input.file.filename,
     });
-    this.onProgress = input.onProgress;
+    const generation = ++this.renderGeneration;
+    this.onProgress = (phase: RenderPhase) => {
+      this.onProgressUpdate?.(phase, generation);
+    };
     this.renderDependencyCache = undefined;
     this.setBasePath(input.file);
 
     try {
       const parametersResult = await this.getParameters(input.file);
-      input.onParametersResolved?.(parametersResult);
+      this.onParametersResolved?.(parametersResult, generation);
 
       let mergedParameters = input.parameters;
       if (parametersResult.success) {
@@ -1136,7 +1294,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    *
    * @param changedPaths - Absolute paths of files that changed
    */
-  public async notifyFileChanged(changedPaths: string[]): Promise<void> {
+  public async notifyFileChanged(changedPaths: readonly string[]): Promise<void> {
     this._invalidateCachesForPaths(changedPaths);
     this.onFileChanged(changedPaths);
   }
@@ -1430,13 +1588,13 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    *
    * @param _changedPaths - absolute paths of files that changed
    */
-  protected onFileChanged(_changedPaths: string[]): void {
+  protected onFileChanged(_changedPaths: readonly string[]): void {
     // Default: no-op. KernelRuntimeWorker overrides to clear selectionCache.
   }
 
   /**
-   * Worker-specific initialization. Override this method to add custom initialization logic.
-   * No need to call super.initialize() - common initialization is handled by initialize.
+   * Override to add kernel-specific initialization. Common framework
+   * initialization runs separately.
    *
    * @param _input - Input containing worker options
    * @param _runtime - Runtime services (filesystem, logger)
@@ -1446,10 +1604,8 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   }
 
   /**
-   * Worker-specific cleanup. Override this method to add custom cleanup logic.
-   * No need to call super.cleanup() - common cleanup is handled by cleanup.
-   *
-   * This can be used to release memory, close connections, etc.
+   * Override to add kernel-specific cleanup (release memory, close connections,
+   * etc.). Common framework cleanup runs separately.
    */
   protected async onCleanup(): Promise<void> {
     // Base implementation - can be overridden by subclasses
@@ -1569,31 +1725,30 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
   }
 
   /**
-   * Push worker state to the shared signal channel and notify the main thread.
+   * Emit a worker state transition to the main thread via the single
+   * ordered `postMessage` channel. Deduplicates repeated emissions so
+   * consumers observe one event per logical transition.
    *
-   * @param state - The worker state to push.
+   * @param state - The worker state to emit.
    */
   private pushState(state: WorkerState): void {
     if (state === this.lastPushedState) {
       return;
     }
     this.lastPushedState = state;
-    if (this.signalView) {
-      Atomics.store(this.signalView, signalSlot.workerState, workerStateEnum[state]);
-      Atomics.notify(this.signalView, signalSlot.workerState);
-    }
     this.onStateChanged?.(state);
   }
 
   /**
-   * Push progress percentage to the shared signal channel (no notify, polled).
+   * Placeholder for percentage-based progress emissions. Progress events
+   * fan out via `postMessage` driven by {@link KernelWorker.onProgressUpdate};
+   * this hook keeps the percentage-based path structurally co-located with
+   * the state-transition path for future use.
    *
-   * @param percent - Progress percentage (0-100).
+   * @param _percent - The percentage of progress to emit.
    */
-  private pushProgress(percent: number): void {
-    if (this.signalView) {
-      Atomics.store(this.signalView, signalSlot.progressPercent, percent);
-    }
+  private pushProgress(_percent: number): void {
+    // Intentionally empty — see JSDoc.
   }
 
   /**
@@ -1653,7 +1808,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
         file: this.currentFile.filename,
       });
       this.onProgress = (phase: RenderPhase) => {
-        this.onProgressUpdate?.(phase);
+        this.onProgressUpdate?.(phase, generation);
       };
       this.renderDependencyCache = undefined;
       this.setBasePath(this.currentFile);
@@ -1667,7 +1822,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
         if (this.isAborted(generation)) {
           throw new RenderAbortedError();
         }
-        this.onParametersResolved?.(parametersResult);
+        this.onParametersResolved?.(parametersResult, generation);
 
         let mergedParameters = this.currentParameters;
         if (parametersResult.success) {
@@ -1705,7 +1860,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       renderSpan.end();
 
       this.flushTelemetry();
-      this.onGeometryComputed?.(result);
+      this.onGeometryComputed?.(result, generation);
       this.pushState(this.paramDebounceTimer ? 'buffering' : 'idle');
     } catch (error) {
       this.onProgress = undefined;
@@ -1715,7 +1870,10 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
         if (reason === abortReasonEnum.timeout) {
           const timeoutMessage =
             'Render timed out. Increase the timeout in viewer settings or simplify the model geometry.';
-          this.onError?.([{ message: timeoutMessage, code: 'RENDER_TIMEOUT', type: 'runtime', severity: 'error' }]);
+          this.onError?.(
+            [{ message: timeoutMessage, code: 'RENDER_TIMEOUT', type: 'runtime', severity: 'error' }],
+            generation,
+          );
           this.pushState('error');
         } else {
           this.pushState(this.paramDebounceTimer ? 'buffering' : 'idle');
@@ -1724,7 +1882,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       }
 
       const errorMessage = error instanceof Error ? error.message : String(error);
-      this.onError?.([{ message: errorMessage, code: 'RUNTIME', type: 'runtime', severity: 'error' }]);
+      this.onError?.([{ message: errorMessage, code: 'RUNTIME', type: 'runtime', severity: 'error' }], generation);
       this.pushState('error');
     } finally {
       clearAbortContext();
@@ -1740,7 +1898,7 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * Shared by both `notifyFileChanged` (command-driven) and the watch handler (autonomous).
    * @param changedPaths - Absolute paths of files that changed.
    */
-  private _invalidateCachesForPaths(changedPaths: string[]): void {
+  private _invalidateCachesForPaths(changedPaths: readonly string[]): void {
     for (const path of changedPaths) {
       this.fileHashCache.delete(path);
       this.fileContentCache.delete(path);
@@ -2191,9 +2349,9 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
    * Wraps the raw proxy with tracing, then enhances with helper methods
    * via `createRuntimeFileSystem`.
    *
-   * @returns RuntimeFileSystem with 11 base primitives + enhanced helper methods
+   * @returns KernelFileSystem with 11 base primitives + enhanced helper methods
    */
-  private createFileSystem(): RuntimeFileSystem {
+  private createFileSystem(): KernelFileSystem {
     const fileSystem = this.fileSystem!;
     const { tracer } = this;
 
@@ -2207,6 +2365,10 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
     }
 
     return createRuntimeFileSystem({
+      id: 'runtime:kernel-worker-bridge',
+      capabilities: { persistent: true, writable: true, quotaBased: false, caseSensitive: true },
+      // oxlint-disable-next-line eslint/no-empty-function -- Underlying FS owns its lifecycle; the bridge is a stateless decorator with nothing to release.
+      dispose() {},
       readFile,
 
       async exists(path: string): Promise<boolean> {

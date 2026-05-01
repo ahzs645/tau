@@ -22,7 +22,7 @@ import type { GeometryResponse } from '@taucad/types';
 import { z } from 'zod';
 import { LruMap } from '@taucad/utils/cache';
 import { joinPath } from '@taucad/utils/path';
-import type { RuntimeFileSystem } from '#types/runtime-kernel.types.js';
+import type { KernelFileSystem } from '#types/runtime-kernel.types.js';
 import type { KernelSuccessResult } from '#types/runtime.types.js';
 import { defineMiddleware } from '#middleware/runtime-middleware.js';
 
@@ -136,7 +136,7 @@ async function cleanupOldCacheEntries({
   maxEntries,
 }: {
   /** The filesystem for file operations */
-  filesystem: RuntimeFileSystem;
+  filesystem: KernelFileSystem;
   /** The cache directory path */
   cacheDirectory: string;
   /** Maximum age for cache entries. Milliseconds. */

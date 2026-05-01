@@ -10,29 +10,29 @@ describe('waitForSlotChange', () => {
   it('should resolve via Atomics.waitAsync when available', async () => {
     const buffer = new SharedArrayBuffer(16);
     const view = new Int32Array(buffer);
-    Atomics.store(view, signalSlot.workerState, 0);
+    Atomics.store(view, signalSlot.abortGeneration, 0);
 
-    const promise = waitForSlotChange(view, signalSlot.workerState, 0);
+    const promise = waitForSlotChange(view, signalSlot.abortGeneration, 0);
 
-    Atomics.store(view, signalSlot.workerState, 1);
-    Atomics.notify(view, signalSlot.workerState);
+    Atomics.store(view, signalSlot.abortGeneration, 1);
+    Atomics.notify(view, signalSlot.abortGeneration);
 
     await promise;
 
-    expect(Atomics.load(view, signalSlot.workerState)).toBe(1);
+    expect(Atomics.load(view, signalSlot.abortGeneration)).toBe(1);
   });
 
   it('should resolve immediately when the slot already differs from expectedValue', async () => {
     const buffer = new SharedArrayBuffer(16);
     const view = new Int32Array(buffer);
-    Atomics.store(view, signalSlot.workerState, 3);
+    Atomics.store(view, signalSlot.abortGeneration, 3);
 
     const start = performance.now();
-    await waitForSlotChange(view, signalSlot.workerState, 0);
+    await waitForSlotChange(view, signalSlot.abortGeneration, 0);
     const elapsed = performance.now() - start;
 
     expect(elapsed).toBeLessThan(50);
-    expect(Atomics.load(view, signalSlot.workerState)).toBe(3);
+    expect(Atomics.load(view, signalSlot.abortGeneration)).toBe(3);
   });
 
   it('should fall back to setTimeout polling when Atomics.waitAsync is unavailable', async () => {
@@ -43,10 +43,10 @@ describe('waitForSlotChange', () => {
 
       const buffer = new SharedArrayBuffer(16);
       const view = new Int32Array(buffer);
-      Atomics.store(view, signalSlot.workerState, 0);
+      Atomics.store(view, signalSlot.abortGeneration, 0);
 
       const start = performance.now();
-      await waitForSlotChange(view, signalSlot.workerState, 0);
+      await waitForSlotChange(view, signalSlot.abortGeneration, 0);
       const elapsed = performance.now() - start;
 
       expect(elapsed).toBeGreaterThanOrEqual(10);

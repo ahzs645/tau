@@ -12,7 +12,6 @@ describe('Browser compatibility (jsdom)', () => {
   it('should import the main entry point without errors', async () => {
     const module_ = await import('#index.js');
     expect(module_.presets).toBeDefined();
-    expect(module_.createBridgePort).toBeTypeOf('function');
     expect(module_.createKernelSuccess).toBeTypeOf('function');
     expect(module_.createKernelError).toBeTypeOf('function');
     expect(module_.fromFsLike).toBeTypeOf('function');
@@ -20,9 +19,17 @@ describe('Browser compatibility (jsdom)', () => {
 
   it('should import the filesystem subpath without errors', async () => {
     const module_ = await import('#filesystem/index.js');
+    expect(module_.fromMemoryFs).toBeTypeOf('function');
+    expect(module_.fromFsLike).toBeTypeOf('function');
+    expect(module_.fromChannelFs).toBeTypeOf('function');
+    expect(module_.fromBrowserFs).toBeTypeOf('function');
+    expect(module_.createRuntimeFileSystem).toBeTypeOf('function');
+    expect(module_.isRuntimeFileSystem).toBeTypeOf('function');
+  });
+
+  it('should import the transport-internals subpath without errors', async () => {
+    const module_ = await import('#transport-internals.js');
     expect(module_.exposeFileSystem).toBeTypeOf('function');
-    expect(module_.createFileSystemBridge).toBeTypeOf('function');
-    expect(module_.createBridgeServer).toBeTypeOf('function');
     expect(module_.createBridgeProxy).toBeTypeOf('function');
     expect(module_.createBridgePort).toBeTypeOf('function');
   });

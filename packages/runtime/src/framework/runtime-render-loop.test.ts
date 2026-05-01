@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { signalSlot, workerStateEnum } from '#types/runtime-protocol.types.js';
+import { signalSlot } from '#types/runtime-protocol.types.js';
 import {
   RenderAbortedError,
   isRenderAbortedError,
@@ -72,51 +72,14 @@ describe('Autonomous render loop patterns', () => {
     });
   });
 
-  describe('state push pattern', () => {
-    it('should push rendering state', () => {
-      Atomics.store(signalView, signalSlot.workerState, workerStateEnum.rendering);
-      Atomics.notify(signalView, signalSlot.workerState);
-      expect(Atomics.load(signalView, signalSlot.workerState)).toBe(workerStateEnum.rendering);
-    });
-
-    it('should push idle state after render completes', () => {
-      Atomics.store(signalView, signalSlot.workerState, workerStateEnum.rendering);
-      Atomics.notify(signalView, signalSlot.workerState);
-
-      Atomics.store(signalView, signalSlot.workerState, workerStateEnum.idle);
-      Atomics.notify(signalView, signalSlot.workerState);
-
-      expect(Atomics.load(signalView, signalSlot.workerState)).toBe(workerStateEnum.idle);
-    });
-
-    it('should push error state on failure', () => {
-      Atomics.store(signalView, signalSlot.workerState, workerStateEnum.error);
-      Atomics.notify(signalView, signalSlot.workerState);
-      expect(Atomics.load(signalView, signalSlot.workerState)).toBe(workerStateEnum.error);
-    });
-  });
-
-  describe('progress tracking', () => {
-    it('should track progress from 0 to 100', () => {
-      Atomics.store(signalView, signalSlot.progressPercent, 0);
-      expect(Atomics.load(signalView, signalSlot.progressPercent)).toBe(0);
-
-      Atomics.store(signalView, signalSlot.progressPercent, 30);
-      expect(Atomics.load(signalView, signalSlot.progressPercent)).toBe(30);
-
-      Atomics.store(signalView, signalSlot.progressPercent, 100);
-      expect(Atomics.load(signalView, signalSlot.progressPercent)).toBe(100);
-    });
-  });
-
   describe('debounce scheduling', () => {
     it('should debounce parameter changes at 200ms', () => {
       const renderFunction = vi.fn();
       let timer: number | undefined;
 
-      const scheduleRender = (delayMs: number) => {
+      const scheduleRender = (renderDelay: number) => {
         clearTimeout(timer);
-        timer = Number(setTimeout(renderFunction, delayMs));
+        timer = Number(setTimeout(renderFunction, renderDelay));
       };
 
       // Rapid parameter changes
@@ -140,9 +103,9 @@ describe('Autonomous render loop patterns', () => {
       const renderFunction = vi.fn();
       let timer: number | undefined;
 
-      const scheduleRender = (delayMs: number) => {
+      const scheduleRender = (renderDelay: number) => {
         clearTimeout(timer);
-        timer = Number(setTimeout(renderFunction, delayMs));
+        timer = Number(setTimeout(renderFunction, renderDelay));
       };
 
       scheduleRender(200);
@@ -158,9 +121,9 @@ describe('Autonomous render loop patterns', () => {
       const renderFunction = vi.fn();
       let timer: number | undefined;
 
-      const scheduleRender = (delayMs: number) => {
+      const scheduleRender = (renderDelay: number) => {
         clearTimeout(timer);
-        timer = Number(setTimeout(renderFunction, delayMs));
+        timer = Number(setTimeout(renderFunction, renderDelay));
       };
 
       scheduleRender(200);
@@ -225,9 +188,9 @@ describe('Autonomous render loop patterns', () => {
       let renderGeneration = 0;
       const results: Array<{ generation: number; data: string }> = [];
 
-      const simulateRender = async (genAtStart: number, data: string, delayMs: number) => {
+      const simulateRender = async (genAtStart: number, data: string, renderDelay: number) => {
         await new Promise<void>((resolve) => {
-          setTimeout(resolve, delayMs);
+          setTimeout(resolve, renderDelay);
         });
         // Check if still current
         if (genAtStart === renderGeneration) {
@@ -258,7 +221,7 @@ describe('Autonomous render loop patterns', () => {
 
   describe('render timeout pattern', () => {
     it('should reject with RenderTimeoutError when timeout elapses', async () => {
-      const timeoutMs = 500;
+      const renderTimeout = 500;
 
       const renderWork = async (): Promise<string> =>
         new Promise((resolve) => {
@@ -274,8 +237,8 @@ describe('Autonomous render loop patterns', () => {
             renderWork(),
             new Promise<never>((_resolve, reject) => {
               timeoutId = setTimeout(() => {
-                reject(new RenderTimeoutError(timeoutMs));
-              }, timeoutMs);
+                reject(new RenderTimeoutError(renderTimeout));
+              }, renderTimeout);
             }),
           ]);
         } finally {
@@ -284,7 +247,7 @@ describe('Autonomous render loop patterns', () => {
       };
       const result = raceWithTimeout();
 
-      vi.advanceTimersByTime(timeoutMs);
+      vi.advanceTimersByTime(renderTimeout);
 
       await expect(result).rejects.toThrow(RenderTimeoutError);
       try {
@@ -296,7 +259,7 @@ describe('Autonomous render loop patterns', () => {
     });
 
     it('should resolve normally when work completes before timeout', async () => {
-      const timeoutMs = 5000;
+      const renderTimeout = 5000;
 
       const renderWork = async (): Promise<string> =>
         new Promise((resolve) => {
@@ -312,8 +275,8 @@ describe('Autonomous render loop patterns', () => {
             renderWork(),
             new Promise<never>((_resolve, reject) => {
               timeoutId = setTimeout(() => {
-                reject(new RenderTimeoutError(timeoutMs));
-              }, timeoutMs);
+                reject(new RenderTimeoutError(renderTimeout));
+              }, renderTimeout);
             }),
           ]);
         } finally {

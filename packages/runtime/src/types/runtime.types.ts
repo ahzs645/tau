@@ -22,6 +22,7 @@ import type {
   RenderOptionsFor,
   TranscoderPlugin,
 } from '#plugins/plugin-types.js';
+import type { TransportDescriptor } from '#transport/runtime-transport.types.js';
 
 // =============================================================================
 // Error Types
@@ -418,5 +419,50 @@ export type CapabilitiesManifest<
       defaults: RenderOptionsFor<Kernels, K>;
     };
   };
+};
+// oxlint-enable @typescript-eslint/no-explicit-any
+
+/**
+ * Transport-side capabilities surfaced under
+ * {@link RuntimeCapabilities.transport}. Carries the diagnostic descriptor
+ * the transport publishes through `client.describe()`. Diagnostic overlays
+ * read this without branching on transport identity.
+ *
+ * @public
+ */
+export type TransportCapabilities = {
+  readonly descriptor: TransportDescriptor;
+};
+
+/**
+ * The single rolled-up capabilities surface exposed at
+ * {@link RuntimeClient.capabilities}. Layers kernel-derived information
+ * (every field of {@link CapabilitiesManifest}) under the same object as
+ * transport-derived information (`autonomousRenderLoop`, `transport.*`)
+ * so consumers reach for one property instead of branching between
+ * `capabilities` and a separate `transportCapabilities`.
+ *
+ * - `autonomousRenderLoop` reflects whether the active transport drives
+ *   its own render loop. `false` on no-worker hostings (browser main
+ *   thread, edge worker) where consumers must call `client.render(...)`
+ *   explicitly; `true` for in-process and worker transports.
+ * - `transport.descriptor` is diagnostic only — `RuntimeClient` does not
+ *   branch on transport identity.
+ *
+ * Both `Kernels` and `Transcoders` flow through from
+ * {@link CapabilitiesManifest} so route narrowing carries over to the
+ * rolled-up surface.
+ *
+ * @template Kernels - Tuple of registered `KernelPlugin`s
+ * @template Transcoders - Tuple of registered `TranscoderPlugin`s
+ * @public
+ */
+// oxlint-disable @typescript-eslint/no-explicit-any -- variance: bag projection over heterogeneous tuples
+export type RuntimeCapabilities<
+  Kernels extends readonly KernelPlugin<any, any, any>[] = KernelPlugin[],
+  Transcoders extends readonly TranscoderPlugin<any, any, any>[] = TranscoderPlugin[],
+> = CapabilitiesManifest<Kernels, Transcoders> & {
+  readonly autonomousRenderLoop: boolean;
+  readonly transport: TransportCapabilities;
 };
 // oxlint-enable @typescript-eslint/no-explicit-any

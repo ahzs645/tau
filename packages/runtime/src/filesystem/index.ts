@@ -1,42 +1,22 @@
 /**
- * Advanced filesystem bridge primitives (`taucad/runtime/filesystem` subpath).
+ * Public filesystem surface (`@taucad/runtime/filesystem` subpath).
  *
- * Low-level primitives for custom filesystem bridge setups, plus high-level
- * wrappers for zero-config worker-to-worker communication.
- *
- * Most consumers should use `fromMemoryFS` or `fromFsLike` from the main
- * `@taucad/runtime` entry, or `fromNodeFS` from `@taucad/runtime/filesystem/node`.
+ * Consumers compose an opaque {@link RuntimeFileSystem} via one of the
+ * bundled `fromX` factories and hand it to a transport plugin. Bridge
+ * primitives (`createBridgeServer`, `exposeFileSystem`,
+ * `createFileSystemBridge`, `waitForWorkerReady`, ...) are
+ * transport-author tools; reach for them via
+ * `@taucad/runtime/transport-internals` only when authoring a custom
+ * FS bridge — ordinary consumers never need them.
  */
 
-// Filesystem constructors
-export { fromMemoryFS } from '#filesystem/from-memory-fs.js';
-export { fromFsLike } from '#filesystem/from-fs-like.js';
-export type { FsLike } from '#filesystem/from-fs-like.js';
+// Public opaque `RuntimeFileSystem` and `fromX` factories.
+export { fromMemoryFs, fromFsLike, fromChannelFs, isRuntimeFileSystem } from '#filesystem/runtime-filesystem.js';
+export type { FsLike, RuntimeFileSystem } from '#filesystem/runtime-filesystem.js';
+export { fromBrowserFs } from '#filesystem/from-browser-fs.js';
 
-// Enhanced filesystem wrapper
+// Enhanced filesystem wrapper — used by kernel authors composing their own
+// `RuntimeFileSystemBase` implementations.
 export { createRuntimeFileSystem } from '#filesystem/create-runtime-filesystem.js';
 
-// High-level wrappers
-export { exposeFileSystem, createFileSystemBridge, waitForWorkerReady } from '#filesystem/filesystem-bridge.js';
-export type {
-  FileSystemBridgeOptions,
-  ExposeFileSystemHandle,
-  ChangeEventCoalescer,
-  CoalescerFactory,
-  ThrottledEventWorker,
-  ThrottledWorkerFactory,
-} from '#filesystem/filesystem-bridge.js';
-
-// Constants
-export { workerReadyMessageType } from '#framework/runtime-framework.constants.js';
-
-// Low-level bridge primitives
-export {
-  createBridgeServer,
-  createBridgePort,
-  createBridgeCall,
-  createBridgeProxy,
-  catchMessages,
-  extractTransferables,
-} from '#framework/runtime-filesystem-bridge.js';
-export type { BridgeError, BridgeHandle, BridgeServerHandle, FilePool } from '#framework/runtime-filesystem-bridge.js';
+export { runtimeFileSystemSchema } from '#filesystem/runtime-filesystem.schemas.js';

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createFileSystemBridge, exposeFileSystem } from '#filesystem/filesystem-bridge.js';
 import type { ChangeEvent } from '@taucad/types';
 
@@ -6,29 +6,20 @@ const testBackend = 'memory';
 const written = (path: string): ChangeEvent => ({ type: 'fileWritten', path, backend: testBackend });
 
 describe('createFileSystemBridge', () => {
-  const originalPostMessage = MessagePort.prototype.postMessage;
-  afterEach(() => {
-    MessagePort.prototype.postMessage = originalPostMessage;
-  });
-
   it('should send disconnect message before closing port on dispose', () => {
-    const messages: unknown[] = [];
-    const worker = {
-      postMessage: vi.fn(),
-    } as unknown as Worker;
+    const postSpy = vi.spyOn(MessagePort.prototype, 'postMessage');
+    try {
+      const worker = {
+        postMessage: vi.fn(),
+      } as unknown as Worker;
 
-    const handle = createFileSystemBridge(worker);
+      const handle = createFileSystemBridge(worker);
+      handle.dispose();
 
-    const originalPort2PostMessage = handle.port.postMessage.bind(handle.port);
-    // @ts-expect-error - mock the postMessage method
-    handle.port.postMessage = vi.fn((...args: Parameters<MessagePort['postMessage']>) => {
-      messages.push(args[0]);
-      originalPort2PostMessage(...args);
-    });
-
-    handle.dispose();
-
-    expect(messages).toContainEqual({ type: 'disconnect' });
+      expect(postSpy).toHaveBeenCalledWith(expect.objectContaining({ type: 'disconnect' }));
+    } finally {
+      postSpy.mockRestore();
+    }
   });
 });
 

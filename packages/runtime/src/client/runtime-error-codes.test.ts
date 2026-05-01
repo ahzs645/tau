@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/naming-convention -- file names don't follow camelCase */
 // @vitest-environment node
 /**
  * Locks the typed `code` discriminator on every public runtime-client error
@@ -17,7 +16,6 @@ import {
   RuntimeNotConnectedError,
   RuntimeTerminatedError,
   SharedPoolEntryNotFoundError,
-  TransportCapabilityError,
 } from '#index.js';
 
 describe('runtime error codes', () => {
@@ -63,12 +61,5 @@ describe('runtime error codes', () => {
     expect(error.code).toBe('RUNTIME_SHARED_POOL_KEY_MISSING');
     expect(error.key).toBe('missing-key');
     expectTypeOf(error.code).toEqualTypeOf<'RUNTIME_SHARED_POOL_KEY_MISSING'>();
-  });
-
-  it('TransportCapabilityError exposes code RUNTIME_TRANSPORT_CAPABILITY_MISSING', () => {
-    const error = new TransportCapabilityError('pooled-geometry');
-    expect(error.code).toBe('RUNTIME_TRANSPORT_CAPABILITY_MISSING');
-    expect(error.capability).toBe('pooled-geometry');
-    expectTypeOf(error.code).toEqualTypeOf<'RUNTIME_TRANSPORT_CAPABILITY_MISSING'>();
   });
 });

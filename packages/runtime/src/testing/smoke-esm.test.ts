@@ -10,8 +10,6 @@ describe('ESM import smoke tests', () => {
     const module_ = await import('#index.js');
     expect(module_).toBeDefined();
     expect(module_.presets).toBeDefined();
-    expect(module_.RuntimeWorkerClient).toBeTypeOf('function');
-    expect(module_.createBridgePort).toBeTypeOf('function');
     expect(module_.fromFsLike).toBeTypeOf('function');
     expect(module_.createKernelSuccess).toBeTypeOf('function');
     expect(module_.createKernelError).toBeTypeOf('function');
@@ -22,9 +20,18 @@ describe('ESM import smoke tests', () => {
   it('should resolve the filesystem subpath', async () => {
     const module_ = await import('#filesystem/index.js');
     expect(module_).toBeDefined();
+    expect(module_.fromMemoryFs).toBeTypeOf('function');
+    expect(module_.fromFsLike).toBeTypeOf('function');
+    expect(module_.fromChannelFs).toBeTypeOf('function');
+    expect(module_.fromBrowserFs).toBeTypeOf('function');
+    expect(module_.createRuntimeFileSystem).toBeTypeOf('function');
+    expect(module_.isRuntimeFileSystem).toBeTypeOf('function');
+  });
+
+  it('should resolve the transport-internals subpath', async () => {
+    const module_ = await import('#transport-internals.js');
+    expect(module_).toBeDefined();
     expect(module_.exposeFileSystem).toBeTypeOf('function');
-    expect(module_.createFileSystemBridge).toBeTypeOf('function');
-    expect(module_.createBridgeServer).toBeTypeOf('function');
     expect(module_.createBridgeProxy).toBeTypeOf('function');
     expect(module_.createBridgePort).toBeTypeOf('function');
   });

@@ -16,6 +16,18 @@
 
 import type { Plugin, PreviewServer, ViteDevServer } from 'vite';
 
+/*
+ * The WASM asset-inline callback is duplicated here from `runtime-invariants.ts`
+ * (the shared source of truth used by the Rolldown plugin and the regression
+ * tests) — the Vite config graph resolver that Nx uses to analyse
+ * `vite.config.ts` consumers does not follow `.js` specifiers (or the package
+ * `#imports` map) back to `.ts` sources across workspace packages, so any
+ * cross-file import in this entry breaks Nx's project-graph build for
+ * downstream apps. Parity with the canonical module is enforced by
+ * `runtime.test.ts`.
+ */
+const wasmAssetsInlineLimit = (filePath: string): false | undefined => (filePath.endsWith('.wasm') ? false : undefined);
+
 const documentHeaders: Readonly<Record<string, string>> = Object.freeze({
   'Cross-Origin-Opener-Policy': 'same-origin',
   'Cross-Origin-Embedder-Policy': 'require-corp',
@@ -63,4 +75,67 @@ export function crossOriginIsolation(): Plugin {
     configureServer: applyHeaders,
     configurePreviewServer: applyHeaders,
   };
+}
+
+/**
+ * Options for the {@link runtime} Vite plugin.
+ *
+ * @public
+ */
+export type RuntimePluginOptions = {
+  /**
+   * Skip the cross-origin-isolation middleware. Set to `false` when the host
+   * already serves COOP/COEP headers (e.g. via Express middleware or platform
+   * headers). Defaults to `true`.
+   */
+  readonly crossOriginIsolation?: boolean;
+};
+
+/**
+ * One-line Vite integration for `@taucad/runtime` consumers. Bundles every
+ * non-negotiable invariant the runtime requires:
+ *
+ * - registers {@link crossOriginIsolation} (toggleable via
+ *   {@link RuntimePluginOptions.crossOriginIsolation})
+ * - prevents `.wasm` assets from being inlined as base64 (kills V8 caching
+ *   and breaks Worker bootstrap)
+ * - forces `worker.format: 'es'` so workers preserve `import.meta.url`
+ *
+ * Any consumer that needs to override these invariants should compose their
+ * own plugin set; this helper exists to remove the gap between "install
+ * `@taucad/runtime`" and "it works".
+ *
+ * @param options - Optional toggles for the bundled invariants.
+ *
+ * @returns An array of Vite plugins implementing the runtime contract.
+ *
+ * @public
+ *
+ * @example <caption>Drop-in usage in vite.config.ts</caption>
+ * ```typescript
+ * import { runtime } from '@taucad/runtime/vite';
+ * import { defineConfig } from 'vite';
+ *
+ * export default defineConfig({
+ *   plugins: [runtime()],
+ * });
+ * ```
+ */
+export function runtime(options: RuntimePluginOptions = {}): Plugin[] {
+  const { crossOriginIsolation: includeCoi = true } = options;
+
+  const invariants: Plugin = {
+    name: 'taucad-runtime:invariants',
+    enforce: 'pre',
+    config: () => ({
+      build: {
+        assetsInlineLimit: wasmAssetsInlineLimit,
+      },
+      worker: {
+        format: 'es',
+      },
+    }),
+  };
+
+  return includeCoi ? [crossOriginIsolation(), invariants] : [invariants];
 }

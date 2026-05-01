@@ -11,7 +11,7 @@ import { importToGlb } from '@taucad/converter';
 import type { SupportedImportFormat, FileResolver } from '@taucad/converter';
 import { defineKernel } from '#types/runtime-kernel.types.js';
 import { tauExportSchemas } from '#kernels/tau/tau.schemas.js';
-import type { RuntimeFileSystem } from '#types/runtime-kernel.types.js';
+import type { KernelFileSystem } from '#types/runtime-kernel.types.js';
 import { resolveToRelative } from '#kernels/kernel-module-helpers.js';
 import type { KernelIssue } from '#types/runtime.types.js';
 import { createKernelError, createKernelSuccess } from '#kernels/kernel-helpers.js';
@@ -45,7 +45,7 @@ function getDirname(filepath: string): string {
  * @param directory - the directory path to pre-load
  * @returns a synchronous file resolver backed by the cached directory contents
  */
-async function createDirectoryResolver(filesystem: RuntimeFileSystem, directory: string): Promise<FileResolver> {
+async function createDirectoryResolver(filesystem: KernelFileSystem, directory: string): Promise<FileResolver> {
   const fileCache = new Map<string, Uint8Array<ArrayBuffer>>();
 
   try {

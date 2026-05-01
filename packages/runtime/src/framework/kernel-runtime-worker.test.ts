@@ -1,7 +1,13 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import process from 'node:process';
+import { MessageChannel } from 'node:worker_threads';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { z } from 'zod';
 import type { ExportFile } from '@taucad/types';
+import { createChannelClient, wrapMessagePort } from '@taucad/rpc';
 import { KernelRuntimeWorker } from '#framework/kernel-runtime-worker.js';
+import { installWorkerCrashTrap } from '#transport/_internal/worker-crash-trap.js';
+import { createWorkerDispatcher, runtimeChannelSessionKey } from '#transport/_internal/runtime-worker-dispatcher.js';
+import type { RuntimeProtocol } from '#types/runtime-protocol.types.js';
 import { defineKernel } from '#types/runtime-kernel.types.js';
 import type { KernelDefinition } from '#types/runtime-kernel.types.js';
 import type { CapabilitiesManifest, KernelIssue } from '#types/runtime.types.js';
@@ -471,5 +477,133 @@ describe('lazy capabilities manifest', () => {
       }),
     );
     /* oxlint-enable @typescript-eslint/no-unsafe-assignment */
+  });
+});
+
+// ===================================================================
+// Worker crash trap
+// ===================================================================
+
+describe('installWorkerCrashTrap', () => {
+  let teardown: (() => void) | undefined;
+
+  afterEach(() => {
+    teardown?.();
+    teardown = undefined;
+  });
+
+  async function buildBootstrapFixture(): Promise<{
+    server: ReturnType<typeof createWorkerDispatcher>;
+    client: ReturnType<typeof createChannelClient<RuntimeProtocol>>;
+    channel: MessageChannel;
+    closeReasons: Array<string | undefined>;
+  }> {
+    const channel = new MessageChannel();
+    const serverPort = wrapMessagePort<unknown>(channel.port1, { label: 'server' });
+    const clientPort = wrapMessagePort<unknown>(channel.port2, { label: 'client' });
+    serverPort.start?.();
+    clientPort.start?.();
+
+    const worker = new KernelRuntimeWorker();
+    const server = createWorkerDispatcher(worker, serverPort);
+    const client = createChannelClient<RuntimeProtocol>({
+      port: clientPort,
+      sessionKey: runtimeChannelSessionKey,
+    });
+    await client.ready;
+
+    const closeReasons: Array<string | undefined> = [];
+    client.onClose((info) => {
+      closeReasons.push(info.reason);
+    });
+
+    return { server, client, channel, closeReasons };
+  }
+
+  /**
+   * Capture the listener added by {@link installWorkerCrashTrap} and
+   * invoke it directly. Vitest registers its own `uncaughtException` /
+   * `unhandledRejection` handlers that fail the test on real emit, so
+   * we can't drive the trap via `process.emit`. Spying on `process.on`
+   * for the duration of the install lets us pull out exactly the new
+   * listener and exercise it without touching vitest's surface.
+   */
+  function captureAndInstall(server: ReturnType<typeof createWorkerDispatcher>): {
+    readonly dispose: () => void;
+    readonly fireUncaught: (error: Error) => void;
+    readonly fireUnhandled: (reason: unknown) => void;
+  } {
+    const captured = new Map<string, (...args: unknown[]) => void>();
+    const onSpy = vi.spyOn(process, 'on').mockImplementation((event, listener) => {
+      captured.set(String(event), listener as (...args: unknown[]) => void);
+      return process;
+    });
+
+    const dispose = installWorkerCrashTrap(server);
+    onSpy.mockRestore();
+
+    return {
+      dispose,
+      fireUncaught: (error) => captured.get('uncaughtException')?.(error),
+      fireUnhandled: (reason) => captured.get('unhandledRejection')?.(reason),
+    };
+  }
+
+  it('closes the channel with `lb` when an `uncaughtException` fires', async () => {
+    const fixture = await buildBootstrapFixture();
+    const disposeSpy = vi.spyOn(fixture.server, 'dispose');
+    const trap = captureAndInstall(fixture.server);
+    teardown = (): void => {
+      trap.dispose();
+      fixture.server.dispose('test-cleanup');
+      fixture.client.close('test-cleanup');
+      fixture.channel.port1.close();
+      fixture.channel.port2.close();
+    };
+
+    trap.fireUncaught(new Error('synthetic worker crash'));
+
+    expect(disposeSpy).toHaveBeenCalledWith(expect.stringContaining('synthetic worker crash'));
+    /* The trap calls `handle.dispose` synchronously which initiates the
+     * channel's local close — `lb` is queued onto the wire immediately.
+     * Wait for the client to observe the close handshake. */
+    await fixture.client.closed;
+    expect(fixture.closeReasons).toEqual([expect.stringContaining('synthetic worker crash')]);
+  });
+
+  it('closes the channel with `lb` when an `unhandledRejection` fires', async () => {
+    const fixture = await buildBootstrapFixture();
+    const disposeSpy = vi.spyOn(fixture.server, 'dispose');
+    const trap = captureAndInstall(fixture.server);
+    teardown = (): void => {
+      trap.dispose();
+      fixture.server.dispose('test-cleanup');
+      fixture.client.close('test-cleanup');
+      fixture.channel.port1.close();
+      fixture.channel.port2.close();
+    };
+
+    trap.fireUnhandled(new Error('async worker boom'));
+
+    expect(disposeSpy).toHaveBeenCalledWith(expect.stringContaining('async worker boom'));
+    await fixture.client.closed;
+    expect(fixture.closeReasons).toEqual([expect.stringContaining('async worker boom')]);
+  });
+
+  it('removes process listeners after teardown', async () => {
+    const fixture = await buildBootstrapFixture();
+    const beforeCount = process.listenerCount('uncaughtException');
+    const dispose = installWorkerCrashTrap(fixture.server);
+    expect(process.listenerCount('uncaughtException')).toBe(beforeCount + 1);
+
+    dispose();
+    expect(process.listenerCount('uncaughtException')).toBe(beforeCount);
+
+    teardown = (): void => {
+      fixture.server.dispose('test-cleanup');
+      fixture.client.close('test-cleanup');
+      fixture.channel.port1.close();
+      fixture.channel.port2.close();
+    };
   });
 });

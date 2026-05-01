@@ -5,13 +5,14 @@
  * Runs a set of benchmark cases against a kernel, capturing telemetry
  * and computing performance statistics (mean, median, p95, p99, stddev).
  *
- * Uses the public createRuntimeClient API with createInProcessTransport
+ * Uses the public createRuntimeClient API with inProcessTransport
  * to dogfood the same API path as production consumers.
  */
 
 import type { TelemetryEntry } from '#types/runtime-protocol.types.js';
-import { createRuntimeClient, fromMemoryFS } from '#index.js';
-import { createInProcessTransport } from '#transport/in-process-transport.js';
+import { createRuntimeClient } from '#index.js';
+import { inProcessTransport } from '#transport/in-process-transport.js';
+import { fromMemoryFs } from '#filesystem/runtime-filesystem.js';
 import { replicad } from '#plugins/kernel-factories.js';
 import { esbuild } from '#plugins/bundler-factories.js';
 import type { BenchmarkCase } from '#benchmarks/benchmark-suite.js';
@@ -162,6 +163,7 @@ const basePath = '/projects/test';
  * @param options - Runner configuration (iterations, WASM variant, tracing mode)
  * @returns Aggregated results with per-case statistics and optional OC tracing summaries
  */
+// oxlint-disable-next-line complexity -- intentional sequential loop
 export async function runBenchmarks(
   cases: BenchmarkCase[],
   options: BenchmarkRunnerOptions,
@@ -192,12 +194,12 @@ export async function runBenchmarks(
 
     const kernelOptions = { ocTracing, wasm };
 
-    const fileSystem = fromMemoryFS(absoluteFiles);
+    const fileSystem = fromMemoryFs(absoluteFiles);
+    const transport = inProcessTransport({ fileSystem });
     const client = createRuntimeClient({
       kernels: [replicad(kernelOptions)],
       bundlers: [esbuild()],
-      fileSystem,
-      transport: createInProcessTransport(),
+      transport,
     });
 
     client.on('telemetry', (entries) => {
@@ -219,11 +221,9 @@ export async function runBenchmarks(
       telemetryBatches.length = 0;
 
       if (iter > 0) {
-        for (const [filePath, content] of Object.entries(absoluteFiles)) {
-          await fileSystem.writeFile(filePath, content);
-        }
-
-        client.notifyFileChanged(Object.keys(absoluteFiles));
+        /* Re-issue the inline source files via the transport's
+         * stage-and-render envelope on the next export call below;
+         * benchmarks no longer reach into the FS handle directly. */
       }
 
       if (profiler && iter === warmupRuns) {
@@ -232,15 +232,15 @@ export async function runBenchmarks(
       }
 
       const start = performance.now();
-      const renderResult = await client.render({
+      const exportResult = await client.export('glb', {
         file: { filename: benchCase.mainFile, path: basePath },
         parameters: {},
       });
       const elapsed = performance.now() - start;
 
-      if (!renderResult.success) {
-        const messages = renderResult.issues.map((index) => index.message).join('; ');
-        throw new Error(`Benchmark "${benchCase.name}" render failed (iteration ${iter}): ${messages}`);
+      if (!exportResult.success) {
+        const messages = exportResult.issues.map((issue) => issue.message).join('; ');
+        throw new Error(`Benchmark "${benchCase.name}" export failed (iteration ${iter}): ${messages}`);
       }
 
       if (iter < warmupRuns) {

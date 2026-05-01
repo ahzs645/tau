@@ -38,6 +38,18 @@
         "cwd": "{projectRoot}"
       },
       "dependsOn": ["build"]
+    },
+    "audit-public-surface": {
+      "command": "node --import @oxc-node/core/register scripts/audit-public-surface.mts",
+      "options": {
+        "cwd": "{projectRoot}"
+      },
+      "cache": true,
+      "inputs": [
+        "{projectRoot}/scripts/audit-public-surface.mts",
+        "{projectRoot}/src/index.ts",
+        "{projectRoot}/src/client/runtime-client.ts"
+      ]
     }
   }
 }

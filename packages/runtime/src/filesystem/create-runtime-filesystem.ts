@@ -1,76 +1,69 @@
 /**
- * Wrap a RuntimeFileSystemBase with default implementations
- * for the enhanced RuntimeFileSystem helper methods.
+ * Decorate a `RuntimeFileSystemBase` provider into a full `KernelFileSystem`
+ * by delegating routing/cache/watch to the canonical Layer 2
+ * {@link FileSystemService} from `@taucad/filesystem`.
  *
- * Backends may supply optimized overrides for any of the enhanced methods.
- * If not supplied, the wrapper builds them from the 11 base primitives.
+ * The kernel facade (`KernelFileSystem`) is a thin wrapper around
+ * `FileSystemService.asRuntimeFileSystem()`. Backends still implement the
+ * 11 `FileSystemProvider` primitives; the four enhanced helpers (`readFiles`,
+ * `readdirContents`, `readdirStat`, `ensureDir`) come from the service. Bases
+ * may supply their own optimised overrides for the helpers and they are
+ * preserved on top of the service-derived facade.
  */
 
-import type { FileStatEntry } from '@taucad/types';
-import type { RuntimeFileSystem, RuntimeFileSystemBase } from '#types/runtime-kernel.types.js';
+import { createFileSystemService } from '@taucad/filesystem';
+import type { KernelFileSystem, RuntimeFileSystemBase } from '#types/runtime-kernel.types.js';
 
-type EnhancedMethods = Pick<RuntimeFileSystem, 'readFiles' | 'readdirContents' | 'readdirStat' | 'ensureDir'>;
+type EnhancedMethods = Pick<KernelFileSystem, 'readFiles' | 'readdirContents' | 'readdirStat' | 'ensureDir'>;
 
 /**
- * Create an enhanced `RuntimeFileSystem` from a base implementation.
+ * Create an enhanced `KernelFileSystem` from a base provider implementation.
  *
- * The four helper methods (`readFiles`, `readdirContents`, `readdirStat`, `ensureDir`)
- * have default implementations built from the 11 primitives. Backends can supply
- * optimized overrides (e.g. the FileManager can batch-read at the provider layer).
+ * Internally constructs a single-mount {@link FileSystemService} so the kernel
+ * facade gains routing, cache integration, and watch fan-out for free. Bases
+ * that already provide optimised helpers (`readFiles`/`readdirContents`/
+ * `readdirStat`/`ensureDir`) keep them — overrides win over the service
+ * defaults, exactly as before the refactor.
  *
- * @param base - Base filesystem (11 primitives) with optional enhanced method overrides
- * @returns Full RuntimeFileSystem with all enhanced methods guaranteed
+ * @param base - Base filesystem (11 primitives) with optional enhanced overrides.
+ * @returns Full KernelFileSystem with all enhanced methods guaranteed.
  * @public
  */
-export function createRuntimeFileSystem(base: RuntimeFileSystemBase & Partial<EnhancedMethods>): RuntimeFileSystem {
-  return {
-    ...base,
+export function createRuntimeFileSystem(base: RuntimeFileSystemBase & Partial<EnhancedMethods>): KernelFileSystem {
+  const service = createFileSystemService();
+  service.mount('/', base, { backend: 'memory' });
+  const decorated = service.asRuntimeFileSystem();
+  const watchFunction = base.watch?.bind(base);
 
-    readFiles:
-      base.readFiles ??
-      (async (paths: string[]): Promise<Record<string, Uint8Array<ArrayBuffer>>> => {
-        const entries = await Promise.all(paths.map(async (p) => [p, await base.readFile(p)] as const));
-        return Object.fromEntries(entries) as Record<string, Uint8Array<ArrayBuffer>>;
-      }),
+  function readFile(path: string, encoding: 'utf8'): Promise<string>;
+  function readFile(path: string): Promise<Uint8Array<ArrayBuffer>>;
+  async function readFile(path: string, encoding?: 'utf8'): Promise<string | Uint8Array<ArrayBuffer>> {
+    return encoding === 'utf8' ? decorated.readFile(path, 'utf8') : decorated.readFile(path);
+  }
 
-    ensureDir:
-      base.ensureDir ??
-      (async (path: string): Promise<void> => {
-        await base.mkdir(path, { recursive: true });
-      }),
-
-    readdirContents:
-      base.readdirContents ??
-      (async (directoryPath: string): Promise<Record<string, Uint8Array<ArrayBuffer>>> => {
-        const names = await base.readdir(directoryPath);
-        const entries = await Promise.all(
-          names.map(async (name) => {
-            const fullPath = `${directoryPath}/${name}`;
-            const s = await base.stat(fullPath);
-            if (s.type === 'dir') {
-              return undefined;
-            }
-
-            const content = await base.readFile(fullPath);
-            return [name, content] as const;
-          }),
-        );
-        return Object.fromEntries(
-          entries.filter((entry): entry is readonly [string, Uint8Array<ArrayBuffer>] => entry !== undefined),
-        ) as Record<string, Uint8Array<ArrayBuffer>>;
-      }),
-
-    readdirStat:
-      base.readdirStat ??
-      (async (directoryPath: string): Promise<FileStatEntry[]> => {
-        const names = await base.readdir(directoryPath);
-        return Promise.all(
-          names.map(async (name) => {
-            const fullPath = `${directoryPath}/${name}`;
-            const s = await base.stat(fullPath);
-            return { path: fullPath, name, ...s };
-          }),
-        );
-      }),
+  const facade: KernelFileSystem = {
+    id: base.id,
+    capabilities: base.capabilities,
+    dispose: base.dispose.bind(base),
+    readFile,
+    writeFile: decorated.writeFile.bind(decorated),
+    readdir: decorated.readdir.bind(decorated),
+    stat: decorated.stat.bind(decorated),
+    lstat: decorated.lstat.bind(decorated),
+    mkdir: decorated.mkdir.bind(decorated),
+    unlink: decorated.unlink.bind(decorated),
+    rmdir: decorated.rmdir.bind(decorated),
+    rename: decorated.rename.bind(decorated),
+    exists: decorated.exists.bind(decorated),
+    readFiles: base.readFiles ?? decorated.readFiles.bind(decorated),
+    readdirContents: base.readdirContents ?? decorated.readdirContents.bind(decorated),
+    readdirStat: base.readdirStat ?? decorated.readdirStat.bind(decorated),
+    ensureDir: base.ensureDir ?? decorated.ensureDir.bind(decorated),
   };
+
+  if (watchFunction) {
+    facade.watch = watchFunction;
+  }
+
+  return facade;
 }

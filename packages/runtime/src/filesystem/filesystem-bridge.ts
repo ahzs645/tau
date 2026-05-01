@@ -1,21 +1,15 @@
 /**
- * High-level filesystem bridge wrappers.
- *
- * exposeFileSystem -- worker-side: listens for incoming bridge ports and serves a filesystem.
- * createFileSystemBridge -- main-thread side: creates a MessageChannel and transfers a port to a worker.
- *
- * Together they form an expose/wrap pair for the RuntimeFileSystem MessagePort bridge protocol.
+ * Filesystem bridge: worker-side ({@link exposeFileSystem}) and client-side ({@link createFileSystemBridge}).
  */
 
 import { safeDispose } from '@taucad/utils/dispose';
+import { wrapMessagePort } from '@taucad/rpc';
 import type { ChangeEvent } from '@taucad/types';
 import type { StringKeyedObject } from '#types/bridge.types.js';
-import type { BridgeHandle, BridgeServerHandle } from '#framework/runtime-filesystem-bridge.js';
+import type { BridgeServerHandle, FileSystemBridge } from '#transport/_internal/runtime-filesystem-bridge.js';
 import type { RuntimeWatchRequest, RuntimeWatchEvent } from '#types/runtime-kernel.types.js';
-import { createBridgeServer, catchMessages } from '#framework/runtime-filesystem-bridge.js';
-import { workerReadyMessageType } from '#framework/runtime-framework.constants.js';
-
-const defaultBridgeMessageType = 'connect';
+import { createBridgeServer, catchMessages } from '#transport/_internal/runtime-filesystem-bridge.js';
+import { filesystemBridgeConnectMessageType, workerReadyMessageType } from '#framework/runtime-framework.constants.js';
 /** Milliseconds. */
 const defaultUiCoalescingWindow = 500;
 
@@ -139,7 +133,7 @@ export function exposeFileSystem<T extends StringKeyedObject>(
   handlers: T,
   options?: FileSystemBridgeOptions & { watchHandler?: BridgeWatchHandler; changeEventBus?: BridgeChangeEventBus },
 ): ExposeFileSystemHandle {
-  const messageType = options?.messageType ?? defaultBridgeMessageType;
+  const messageType = options?.messageType ?? filesystemBridgeConnectMessageType;
   const activePorts = new Set<MessagePort>();
   const serverHandles = new Map<MessagePort, BridgeServerHandle>();
   const portWatches = new Map<MessagePort, Map<string, () => void>>();
@@ -185,7 +179,12 @@ export function exposeFileSystem<T extends StringKeyedObject>(
       activePorts.add(port);
       portWatches.set(port, new Map());
 
-      const serverHandle = createBridgeServer(handlers, port, {
+      const wrappedPort = wrapMessagePort<unknown>(port, { label: 'expose-fs-bridge' });
+      if (wrappedPort.start !== undefined) {
+        wrappedPort.start();
+      }
+
+      const serverHandle = createBridgeServer(handlers, wrappedPort, {
         onDisconnect() {
           const watches = portWatches.get(port);
           if (watches) {
@@ -302,23 +301,32 @@ export async function waitForWorkerReady(worker: Worker | EventTarget, signal?: 
 /**
  * Create a filesystem bridge to a worker.
  *
+ * The returned `Port` adapter from {@link wrapMessagePort} is intended for same-isolate RPC clients
+ * such as `createBridgeProxy`.
+ *
  * @param worker - Target worker to receive the bridge port
  * @param options - Optional message type configuration
- * @returns Bridge handle with port and dispose
+ * @returns Bridge handle with wrapped port and dispose
  * @public
  */
-export function createFileSystemBridge(worker: Worker, options?: FileSystemBridgeOptions): BridgeHandle {
-  const messageType = options?.messageType ?? defaultBridgeMessageType;
+export function createFileSystemBridge(worker: Worker, options?: FileSystemBridgeOptions): FileSystemBridge {
+  const messageType = options?.messageType ?? filesystemBridgeConnectMessageType;
   const channel = new MessageChannel();
   worker.postMessage({ type: messageType, port: channel.port1 }, [channel.port1]);
+  const rawPort = channel.port2;
+  const wrappedPort = wrapMessagePort<unknown>(rawPort, { label: 'fs-bridge-client' });
+  if (wrappedPort.start !== undefined) {
+    wrappedPort.start();
+  }
+
   return {
-    port: channel.port2,
+    port: wrappedPort,
     dispose() {
       safeDispose(() => {
-        channel.port2.postMessage({ type: 'disconnect' });
+        rawPort.postMessage({ type: 'disconnect' });
       });
       safeDispose(() => {
-        channel.port2.close();
+        rawPort.close();
       });
     },
   };

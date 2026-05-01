@@ -10,7 +10,7 @@ import type { CreateGeometryResult, ExportGeometryResult, GetParametersResult } 
 import type { Dependency } from '#types/runtime-dependency.types.js';
 import type {
   RuntimeLogger,
-  RuntimeFileSystem,
+  KernelFileSystem,
   CreateGeometryInput,
   ExportGeometryInput,
   GetDependenciesInput,
@@ -65,7 +65,7 @@ export type KernelMiddlewareRuntime<
   /** Logger with middleware name pre-configured as the component */
   logger: RuntimeLogger;
   /** Filesystem for all file operations (uses absolute path methods for middleware) */
-  filesystem: RuntimeFileSystem;
+  filesystem: KernelFileSystem;
   /** Type-safe state for persisting data during the wrap hook execution */
   state: MiddlewareState<State>;
   /** Resolved options (optionsSchema defaults merged with caller overrides) */

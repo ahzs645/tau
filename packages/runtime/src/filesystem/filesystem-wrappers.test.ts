@@ -4,11 +4,33 @@
 
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { mock } from 'vitest-mock-extended';
-import { fromMemoryFS } from '#filesystem/from-memory-fs.js';
+import { wrapMessagePort, type Port } from '@taucad/rpc';
+import { _fromMemoryFsHandle as fromMemoryFS } from '#transport/_internal/from-memory-fs-handle.js';
 import type { RuntimeFileSystemBase } from '#types/runtime-kernel.types.js';
-import { createBridgeProxy } from '#framework/runtime-filesystem-bridge.js';
+import { createBridgeProxy } from '#transport/_internal/runtime-filesystem-bridge.js';
 import { workerReadyMessageType } from '#framework/runtime-framework.constants.js';
 import { exposeFileSystem, createFileSystemBridge, waitForWorkerReady } from '#filesystem/filesystem-bridge.js';
+
+/**
+ * Unwrap the discriminated `inline` `RuntimeFileSystemHandle` so the
+ * `exposeFileSystem` wrapper below receives the bare `RuntimeFileSystemBase`
+ * contract it exposes over the bridge.
+ */
+function makeFs(files?: Record<string, string>): RuntimeFileSystemBase {
+  const handle = fromMemoryFS(files);
+  if (handle.kind !== 'inline') {
+    throw new Error('fromMemoryFS() must return the inline-kind handle.');
+  }
+  return handle.fs;
+}
+
+function fsBridgePort(port: MessagePort, label: string): Port<unknown> {
+  const wrapped = wrapMessagePort<unknown>(port, { label });
+  if (wrapped.start !== undefined) {
+    wrapped.start();
+  }
+  return wrapped;
+}
 
 describe('filesystem high-level wrappers', () => {
   describe('exposeFileSystem', () => {
@@ -21,12 +43,12 @@ describe('filesystem high-level wrappers', () => {
 
     it('should serve a filesystem when receiving a bridge message', async () => {
       // eslint-disable-next-line @typescript-eslint/naming-convention -- filesystem paths use non-camelCase names
-      const fs = fromMemoryFS({ '/hello.txt': 'world' });
+      const fs = makeFs({ '/hello.txt': 'world' });
 
       activeHandle = exposeFileSystem(fs);
 
       const channel = new MessageChannel();
-      const proxy = createBridgeProxy<RuntimeFileSystemBase>(channel.port2);
+      const proxy = createBridgeProxy<RuntimeFileSystemBase>(fsBridgePort(channel.port2, 'fs-bridge-client'));
 
       self.dispatchEvent(
         new MessageEvent('message', {
@@ -44,10 +66,10 @@ describe('filesystem high-level wrappers', () => {
 
     it('should buffer messages sent before server is wired (catchMessages)', async () => {
       // eslint-disable-next-line @typescript-eslint/naming-convention -- filesystem paths use non-camelCase names
-      const fs = fromMemoryFS({ '/early.txt': 'buffered' });
+      const fs = makeFs({ '/early.txt': 'buffered' });
 
       const channel = new MessageChannel();
-      const proxy = createBridgeProxy<RuntimeFileSystemBase>(channel.port2);
+      const proxy = createBridgeProxy<RuntimeFileSystemBase>(fsBridgePort(channel.port2, 'fs-bridge-client'));
 
       // Send a request BEFORE exposeFileSystem processes the connect message.
       // The proxy sends immediately on port2; port1 isn't served yet.
@@ -71,7 +93,7 @@ describe('filesystem high-level wrappers', () => {
 
     it('should stop listening after cleanup is called', async () => {
       // eslint-disable-next-line @typescript-eslint/naming-convention -- filesystem paths use non-camelCase names
-      const fs = fromMemoryFS({ '/test.txt': 'data' });
+      const fs = makeFs({ '/test.txt': 'data' });
       activeHandle = exposeFileSystem(fs);
       activeHandle.cleanup();
 
@@ -94,7 +116,7 @@ describe('filesystem high-level wrappers', () => {
 
     it('should support custom messageType', async () => {
       // eslint-disable-next-line @typescript-eslint/naming-convention -- filesystem paths use non-camelCase names
-      const fs = fromMemoryFS({ '/custom.txt': 'custom' });
+      const fs = makeFs({ '/custom.txt': 'custom' });
       activeHandle = exposeFileSystem(fs, { messageType: 'myBridge' });
 
       const channel = new MessageChannel();
@@ -114,7 +136,7 @@ describe('filesystem high-level wrappers', () => {
 
       // Custom type should work
       const channel2 = new MessageChannel();
-      const proxy2 = createBridgeProxy<RuntimeFileSystemBase>(channel2.port2);
+      const proxy2 = createBridgeProxy<RuntimeFileSystemBase>(fsBridgePort(channel2.port2, 'fs-bridge-client'));
 
       self.dispatchEvent(
         new MessageEvent('message', {
@@ -186,7 +208,8 @@ describe('filesystem high-level wrappers', () => {
 
       const { port } = createFileSystemBridge(mockWorker);
 
-      expect(port).toBeInstanceOf(MessagePort);
+      expect(port.postMessage).toBeTypeOf('function');
+      expect(port.onMessage).toBeTypeOf('function');
       expect(postMessageSpy).toHaveBeenCalledOnce();
 
       const [message, transferables] = postMessageSpy.mock.calls[0] as [
@@ -224,7 +247,7 @@ describe('filesystem high-level wrappers', () => {
       const mockWorker = mock<Worker>({ postMessage: postMessageSpy });
 
       const handle = createFileSystemBridge(mockWorker);
-      expect(handle.port).toBeInstanceOf(MessagePort);
+      expect(handle.port.onMessage).toBeTypeOf('function');
 
       expect(() => {
         handle.dispose();

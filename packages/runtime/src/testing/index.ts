@@ -19,6 +19,7 @@ export {
   createTestGeometry,
   getTestParameters,
   getTestFileSystem,
+  getTestFileSystemHandle,
   MockKernelWorker,
 } from '#testing/kernel-testing.utils.js';
 
@@ -28,6 +29,7 @@ export {
   getGeometryStatsFromInspect,
   getBoundingBoxFromInspect,
   extractGltfFromResult,
+  extractGltfFromExportResult,
   createGeometryVariant,
   createGeometryTestHelpers,
 } from '#testing/kernel-geometry-testing.utils.js';

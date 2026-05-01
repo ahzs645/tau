@@ -29,3 +29,12 @@ export const signalBufferMaxByteLength = 16;
 
 /** Message type posted by workers to signal that initialization is complete and they are ready to receive bridge connections. */
 export const workerReadyMessageType = '__worker_ready__';
+
+/**
+ * Message `type` field on the envelope that transfers **`port1`** of a **`MessageChannel`**
+ * from the bridge client isolate into an FS-owning **`Worker`** (**`exposeFileSystem`** listens
+ * with the same discriminator).
+ *
+ * @public
+ */
+export const filesystemBridgeConnectMessageType = 'connect';

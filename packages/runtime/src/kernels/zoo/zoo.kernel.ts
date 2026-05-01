@@ -16,7 +16,7 @@ import { asBuffer } from '@taucad/utils/file';
 import { joinPath } from '@taucad/utils/path';
 import { createExportFile } from '@taucad/types/constants';
 import type { KernelErrorResult, KernelIssue } from '#types/runtime.types.js';
-import type { RuntimeFileSystem, RuntimeLogger } from '#types/runtime-kernel.types.js';
+import type { KernelFileSystem, RuntimeLogger } from '#types/runtime-kernel.types.js';
 import { defineKernel } from '#types/runtime-kernel.types.js';
 import type { RuntimeSpanTracer } from '#types/runtime-tracer.types.js';
 import { zooOptionsSchema, zooExportSchemas } from '#kernels/zoo/zoo.schemas.js';
@@ -94,7 +94,7 @@ function logKernelIssues(errors: KernelIssue[], logger: RuntimeLogger): void {
 function ensureFileSystemManager(
   context: ZooContext,
   basePath: string,
-  filesystem: RuntimeFileSystem,
+  filesystem: KernelFileSystem,
 ): FileSystemManager {
   context.fileSystemManager = new FileSystemManager(filesystem, basePath);
   return context.fileSystemManager;

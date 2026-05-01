@@ -12,7 +12,8 @@
  */
 
 import type { z } from 'zod';
-import type { FileExtension, LogLevel, GeometryResponse, FileStat, FileStatEntry } from '@taucad/types';
+import type { FileExtension, LogLevel, GeometryResponse, FileStatEntry } from '@taucad/types';
+import type { FileSystemProvider } from '@taucad/filesystem';
 import type { ExportGeometryResult, GetParametersResult, KernelIssue } from '#types/runtime.types.js';
 import type { RuntimeSpanTracer } from '#types/runtime-tracer.types.js';
 import type { ExecuteResult, KernelBundler } from '#types/runtime-bundler.types.js';
@@ -58,35 +59,17 @@ export type RuntimeLogger = {
 // =============================================================================
 
 /**
- * Base filesystem interface -- 11 Node.js `fs.promises`-compatible primitives.
- * All paths are absolute. This is the minimal surface that filesystem backends
- * must implement (e.g. fromFsLike, fromMemoryFS, fromNodeFS).
+ * Base filesystem interface for runtime backends.
+ *
+ * Aliases the canonical {@link FileSystemProvider} from `@taucad/filesystem`
+ * augmented with an optional `watch` subscription. Filesystem backends
+ * authored for the runtime (e.g. `fromFsLike`, `fromMemoryFs`, `fromNodeFs`)
+ * implement this shape; the runtime upgrades it into a {@link RuntimeFileSystem}
+ * at the worker boundary via {@link createRuntimeFileSystem}.
+ *
  * @public
  */
-export type RuntimeFileSystemBase = {
-  /** Read file as text. */
-  readFile(path: string, encoding: 'utf8'): Promise<string>;
-  /** Read file as binary. */
-  readFile(path: string): Promise<Uint8Array<ArrayBuffer>>;
-  /** Write file (text or binary). */
-  writeFile(path: string, data: Uint8Array<ArrayBuffer> | string): Promise<void>;
-  /** Create directory, optionally recursive. */
-  mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
-  /** List directory entries (file/dir names). */
-  readdir(path: string): Promise<string[]>;
-  /** Delete file. */
-  unlink(path: string): Promise<void>;
-  /** Remove an empty directory. */
-  rmdir(path: string): Promise<void>;
-  /** Rename / move a file or directory. */
-  rename(oldPath: string, newPath: string): Promise<void>;
-  /** Get file or directory metadata. */
-  stat(path: string): Promise<FileStat>;
-  /** Get file or directory metadata without following symlinks. */
-  lstat(path: string): Promise<FileStat>;
-  /** Check if path exists. */
-  exists(path: string): Promise<boolean>;
-
+export type RuntimeFileSystemBase = FileSystemProvider & {
   /**
    * Subscribe to filesystem change events for the given paths.
    * Returns an unsubscribe function. Events are filtered server-side.
@@ -132,13 +115,25 @@ export type RuntimeWatchEvent =
   | { type: 'overflow'; correlationId?: string };
 
 /**
- * Enhanced filesystem interface for runtime workers.
- * Extends the 11 base primitives with higher-level helper methods that have
+ * Enhanced filesystem interface seen inside kernel/bundler/middleware code.
+ * Extends the base primitives with higher-level helper methods that have
  * default implementations built from the primitives (via `createRuntimeFileSystem`).
  * Backends may supply optimized overrides for any of the enhanced methods.
+ *
+ * Distinct from the consumer-facing opaque `RuntimeFileSystem` value
+ * (`#filesystem/runtime-filesystem.js`) produced by `from*` factories and
+ * handed to a transport plugin's `client({ fileSystem })`; the transport
+ * unwraps the opaque value and upgrades the backing `RuntimeFileSystemBase`
+ * via `createRuntimeFileSystem` inside the runtime worker.
+ *
+ * Renamed from `RuntimeFileSystem` (R14) to disambiguate from the
+ * consumer-facing opaque brand. The `KernelFileSystem` name is exported
+ * only from the kernel-author subpath `@taucad/runtime/kernel`; the
+ * consumer barrel reserves `RuntimeFileSystem` for the opaque value.
+ *
  * @public
  */
-export type RuntimeFileSystem = RuntimeFileSystemBase & {
+export type KernelFileSystem = RuntimeFileSystemBase & {
   /** Batch-read multiple files as binary. Default: `Promise.all(paths.map(readFile))`. */
   readFiles(paths: string[]): Promise<Record<string, Uint8Array<ArrayBuffer>>>;
   /** Read all file contents in a directory (skips subdirectories). */
@@ -161,7 +156,7 @@ export type RuntimeFileSystem = RuntimeFileSystemBase & {
  */
 export type KernelRuntime = {
   /** Filesystem interface (all paths are absolute) */
-  filesystem: RuntimeFileSystem;
+  filesystem: KernelFileSystem;
   /** Logger with kernel name pre-configured */
   logger: RuntimeLogger;
   /** Read-only view of cached file contents (absolute paths), populated during dependency computation */

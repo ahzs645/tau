@@ -36,12 +36,13 @@ import type {
   RuntimeLogger,
   KernelRuntime,
   AnyKernelDefinition,
-  RuntimeFileSystem,
+  KernelFileSystem,
   GetDependenciesInput,
   GetDependenciesResult,
   GetParametersInput,
   CreateGeometryInput,
   ExportGeometryInput,
+  RuntimeFileSystemBase,
 } from '#types/runtime-kernel.types.js';
 import type { BundlerDefinition } from '#types/runtime-bundler.types.js';
 import type { RuntimeClient } from '#client/runtime-client.js';
@@ -57,23 +58,62 @@ import { z } from 'zod';
 import { KernelRuntimeWorker } from '#framework/kernel-runtime-worker.js';
 import type { ResolvedMiddleware } from '#framework/kernel-worker.js';
 import { KernelWorker } from '#framework/kernel-worker.js';
-import { createBridgePort } from '#framework/runtime-filesystem-bridge.js';
-import { fromMemoryFS } from '#filesystem/from-memory-fs.js';
+import { createBridgePort } from '#transport/_internal/runtime-filesystem-bridge.js';
+import { _fromMemoryFsHandle as fromMemoryFS } from '#transport/_internal/from-memory-fs-handle.js';
 
-let _testFileSystem: ReturnType<typeof fromMemoryFS> | undefined;
+let _testFileSystemHandle: ReturnType<typeof fromMemoryFS> | undefined;
 
 // =============================================================================
 // Test Filesystem Utilities
 // =============================================================================
 
 /**
- * Get the shared test filesystem instance. Creates a new one if none exists.
- * @returns The shared in-memory test filesystem
+ * Internal helper: extract the underlying `RuntimeFileSystemBase` from the
+ * cached `RuntimeFileSystemHandle`. The value returned by `fromMemoryFS()`
+ * is always inline-kind; this assertion documents and enforces that.
+ *
+ * @internal
+ *
+ * @returns The underlying `RuntimeFileSystemBase` implementation.
+ */
+function unwrapTestFs(): RuntimeFileSystemBase {
+  _testFileSystemHandle ??= fromMemoryFS();
+  if (_testFileSystemHandle.kind !== 'inline') {
+    throw new Error('Internal invariant: fromMemoryFS() must return the inline-kind handle.');
+  }
+  return _testFileSystemHandle.fs;
+}
+
+/**
+ * Get the shared test filesystem instance for direct manipulation. Tests
+ * call `await getTestFileSystem().writeFile(...)` to seed fixtures or
+ * mutate state between assertions; the returned value is the bare
+ * `RuntimeFileSystemBase` contract, not the runtime-API handle.
+ *
+ * Use {@link getTestFileSystemHandle} when binding the same in-memory FS
+ * to a runtime client (e.g., `client.connect({ fileSystem: getTestFileSystemHandle() })`)
+ * so both call sites share one storage instance.
+ *
+ * @returns The shared in-memory test filesystem implementation.
  * @public
  */
-export function getTestFileSystem(): ReturnType<typeof fromMemoryFS> {
-  _testFileSystem ??= fromMemoryFS();
-  return _testFileSystem;
+export function getTestFileSystem(): RuntimeFileSystemBase {
+  return unwrapTestFs();
+}
+
+/**
+ * Get the shared test filesystem as the discriminated `RuntimeFileSystemHandle`
+ * handle accepted by `client.connect({ fileSystem })`. Backed by the same
+ * cached instance as {@link getTestFileSystem} so direct mutation and
+ * runtime-bound access stay coherent.
+ *
+ * @returns The shared in-memory test filesystem handle.
+ * @public
+ */
+export function getTestFileSystemHandle(): ReturnType<typeof fromMemoryFS> {
+  // Ensure the handle exists (sets `_testFileSystemHandle` as a side effect).
+  unwrapTestFs();
+  return _testFileSystemHandle!;
 }
 
 /**
@@ -85,17 +125,18 @@ export function getTestFileSystem(): ReturnType<typeof fromMemoryFS> {
  * @public
  */
 export async function seedTestFileSystem(files: Record<string, string | Uint8Array<ArrayBuffer>>): Promise<void> {
-  _testFileSystem = fromMemoryFS();
+  _testFileSystemHandle = fromMemoryFS();
+  const fs = unwrapTestFs();
 
   for (const [path, content] of Object.entries(files)) {
     const normalizedPath = path.startsWith('/') ? path : `/${path}`;
     const parentDirectoryPath = parentDirectory(normalizedPath);
 
     if (parentDirectoryPath && parentDirectoryPath !== '/') {
-      await _testFileSystem.mkdir(parentDirectoryPath, { recursive: true });
+      await fs.mkdir(parentDirectoryPath, { recursive: true });
     }
 
-    await _testFileSystem.writeFile(normalizedPath, content);
+    await fs.writeFile(normalizedPath, content);
   }
 }
 
@@ -104,7 +145,7 @@ export async function seedTestFileSystem(files: Record<string, string | Uint8Arr
  * @public
  */
 export async function clearTestFileSystem(): Promise<void> {
-  _testFileSystem = fromMemoryFS();
+  _testFileSystemHandle = fromMemoryFS();
 }
 
 // =============================================================================
@@ -225,11 +266,11 @@ export type MockFileSystemMocks = {
 };
 
 /**
- * A mock RuntimeFileSystem with vitest mock functions for verification.
+ * A mock KernelFileSystem with vitest mock functions for verification.
  * Use the `mocks` property to access mock functions for test setup.
  * @public
  */
-export type MockFileSystem = RuntimeFileSystem & {
+export type MockFileSystem = KernelFileSystem & {
   /** Access underlying mock functions for test assertions and setup */
   mocks: MockFileSystemMocks;
 };
@@ -315,6 +356,11 @@ export function createMockFileSystem(options?: MockFileSystemOptions): MockFileS
   };
 
   return {
+    id: 'runtime:mock-fs',
+    capabilities: { persistent: false, writable: true, quotaBased: false, caseSensitive: true },
+    dispose() {
+      /* The mock filesystem holds no resources beyond GC-managed maps. */
+    },
     readFile,
     exists: async (path: string): Promise<boolean> => existsFunction(path) as boolean,
     readdir: async (path: string) => readdirFunction(path),
@@ -845,16 +891,18 @@ const noop = () => {
  */
 export function createMockRuntimeClient(): RuntimeClient {
   return mock<RuntimeClient>({
+    lifecycleState: 'connected',
+    activeKernelId: undefined,
+    capabilities: undefined,
     connect: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
-    setFile: vi.fn<(file: GeometryFile, params: Record<string, unknown>) => void>(),
-    setParameters: vi.fn<(params: Record<string, unknown>) => void>(),
+    openFile: vi.fn().mockResolvedValue({ superseded: true }),
+    updateParameters: vi.fn().mockResolvedValue({ superseded: true }),
+    setOptions: vi.fn().mockResolvedValue({ superseded: true }),
     export: vi.fn().mockResolvedValue({
       success: true,
       data: { bytes: new Uint8Array([1, 2, 3]), mimeType: 'model/stl' },
       issues: [],
     }),
-    render: vi.fn(),
-    notifyFileChanged: vi.fn(),
     terminate: vi.fn(),
     on: vi.fn<(event: string, handler: (...args: never[]) => void) => () => void>().mockReturnValue(noop),
   });
@@ -882,7 +930,7 @@ export type MockKernelWorkerOptions = {
   /** Custom onLog handler */
   onLog?: OnWorkerLog;
   /** Mock filesystem for middleware operations */
-  filesystem?: RuntimeFileSystem;
+  filesystem?: KernelFileSystem;
   /** Per-format Zod schemas for export validation. Keys define supported formats (defaults to glb+gltf with empty schemas). */
   exportZodSchemas?: Partial<Record<FileExtension, z.ZodType>>;
   /** Zod schema for render option validation. When set, the mock kernel's render options are validated against it. */

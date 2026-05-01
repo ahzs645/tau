@@ -9,8 +9,10 @@
  */
 
 import { assertType, describe, expectTypeOf, it } from 'vitest';
+import type { Port } from '@taucad/rpc';
+
 import type { StringKeyedObject } from '#types/bridge.types.js';
-import { createBridgeServer } from '#framework/runtime-filesystem-bridge.js';
+import { createBridgeServer } from '#transport/_internal/runtime-filesystem-bridge.js';
 
 // =============================================================================
 // StringKeyedObject constraint
@@ -84,7 +86,7 @@ describe('createBridgeServer', () => {
     };
 
     // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- pure type testing
-    assertType(createBridgeServer(handlers, {} as MessagePort));
+    assertType(createBridgeServer(handlers, {} as Port<unknown>));
   });
 
   it('should accept a class instance handler', () => {
@@ -101,16 +103,16 @@ describe('createBridgeServer', () => {
     const service = new FileService();
 
     // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- pure type testing
-    assertType(createBridgeServer(service, {} as MessagePort));
+    assertType(createBridgeServer(service, {} as Port<unknown>));
   });
 
   it('should reject primitives', () => {
     // @ts-expect-error -- string is not a StringKeyedObject
     // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- pure type testing
-    void createBridgeServer('hello', {} as MessagePort);
+    void createBridgeServer('hello', {} as Port<unknown>);
 
     // @ts-expect-error -- number is not a StringKeyedObject
     // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- pure type testing
-    void createBridgeServer(42, {} as MessagePort);
+    void createBridgeServer(42, {} as Port<unknown>);
   });
 });

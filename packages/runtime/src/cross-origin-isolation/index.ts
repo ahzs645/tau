@@ -18,14 +18,6 @@
  * const response = new Response('<!doctype html>…');
  * applyDocumentHeaders(response.headers);
  * ```
- *
- * @example <caption>Detect runtime isolation status</caption>
- * ```typescript
- * import { inspectCrossOriginIsolation } from '@taucad/runtime/cross-origin-isolation';
- *
- * const status = inspectCrossOriginIsolation();
- * if (!status.crossOriginIsolated) console.warn('COI disabled:', status.reason);
- * ```
  */
 
 /**
@@ -118,32 +110,6 @@ export function applyApiHeaders(target: Headers | Record<string, string>): void 
  */
 export function applySubresourceHeaders(target: Headers | Record<string, string>): void {
   applyHeaderMap(target, subresourceHeaders);
-}
-
-/**
- * Inspect the current runtime environment for cross-origin isolation and
- * `SharedArrayBuffer` availability. Safe to call from any JavaScript runtime
- * (browser main thread, Worker, Node.js); returns a typed status object so
- * consumers can surface degradation in their UI.
- *
- * @returns Discriminated union describing isolation state.
- *
- * @public
- */
-export function inspectCrossOriginIsolation(): IsolationStatus {
-  const globalScope = globalThis as typeof globalThis & {
-    crossOriginIsolated?: boolean;
-    isSecureContext?: boolean;
-    SharedArrayBuffer?: unknown;
-  };
-  const sab = typeof globalScope.SharedArrayBuffer === 'function';
-  const isolated = Boolean(globalScope.crossOriginIsolated);
-  if (isolated && sab) {
-    return { crossOriginIsolated: true, sharedArrayBuffer: true };
-  }
-  const secure = Boolean(globalScope.isSecureContext);
-  const reason: IsolationFailureReason = sab ? (secure ? 'no-coep' : 'no-secure-context') : 'no-sab-constructor';
-  return { crossOriginIsolated: false, sharedArrayBuffer: sab, reason };
 }
 
 function applyHeaderMap(target: Headers | Record<string, string>, headers: Readonly<Record<string, string>>): void {

@@ -17,6 +17,7 @@
 
 import type { z } from 'zod';
 import type { KernelPlugin, MiddlewarePlugin, BundlerPlugin, TranscoderPlugin } from '#plugins/plugin-types.js';
+import type { TranscoderDefinition } from '#types/runtime-transcoder.types.js';
 
 // --- Kernel ---
 

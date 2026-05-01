@@ -35,12 +35,20 @@
     "./middleware": "./src/plugins/middleware-entry.ts",
     "./bundler": "./src/plugins/bundler-entry.ts",
     "./transcoder": "./src/plugins/transcoder-factories.ts",
+    "./host": "./src/host/index.ts",
     "./transport": "./src/transport/index.ts",
+    "./transport/in-process": "./src/transport/in-process.ts",
+    "./transport/web": "./src/transport/web.ts",
+    "./transport/node": "./src/transport/node.ts",
     "./node": "./src/node.ts",
     "./filesystem": "./src/filesystem/index.ts",
     "./filesystem/node": "./src/filesystem/from-node-fs.ts",
+    "./filesystem/browser": "./src/filesystem/from-browser-fs.ts",
     "./testing": "./src/testing/index.ts",
-    "./worker": "./src/framework/kernel-runtime-worker.ts",
+    "./worker/web": "./src/worker/web.ts",
+    "./worker/node": "./src/worker/node.ts",
+    "./worker-internals": "./src/worker-internals.ts",
+    "./transport-internals": "./src/transport-internals.ts",
     "./kernels/replicad": "./src/kernels/replicad/replicad.kernel.ts",
     "./kernels/jscad": "./src/kernels/jscad/jscad.kernel.ts",
     "./kernels/manifold": "./src/kernels/manifold/manifold.kernel.ts",
@@ -57,7 +65,8 @@
     "./cross-origin-isolation": "./src/cross-origin-isolation/index.ts",
     "./cross-origin-isolation/express": "./src/cross-origin-isolation/express.ts",
     "./react-router": "./src/react-router/index.ts",
-    "./vite": "./src/vite/index.ts"
+    "./vite": "./src/vite/index.ts",
+    "./rolldown": "./src/rolldown/index.ts"
   },
   "publishConfig": {
     "access": "public",
@@ -72,14 +81,44 @@
           "default": "./dist/esm/index.js"
         }
       },
-      "./worker": {
+      "./worker/web": {
         "require": {
-          "types": "./dist/cjs/framework/kernel-runtime-worker.d.cts",
-          "default": "./dist/cjs/framework/kernel-runtime-worker.cjs"
+          "types": "./dist/cjs/worker/web.d.cts",
+          "default": "./dist/cjs/worker/web.cjs"
         },
         "import": {
-          "types": "./dist/esm/framework/kernel-runtime-worker.d.ts",
-          "default": "./dist/esm/framework/kernel-runtime-worker.js"
+          "types": "./dist/esm/worker/web.d.ts",
+          "default": "./dist/esm/worker/web.js"
+        }
+      },
+      "./worker/node": {
+        "require": {
+          "types": "./dist/cjs/worker/node.d.cts",
+          "default": "./dist/cjs/worker/node.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/worker/node.d.ts",
+          "default": "./dist/esm/worker/node.js"
+        }
+      },
+      "./worker-internals": {
+        "require": {
+          "types": "./dist/cjs/worker-internals.d.cts",
+          "default": "./dist/cjs/worker-internals.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/worker-internals.d.ts",
+          "default": "./dist/esm/worker-internals.js"
+        }
+      },
+      "./transport-internals": {
+        "require": {
+          "types": "./dist/cjs/transport-internals.d.cts",
+          "default": "./dist/cjs/transport-internals.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/transport-internals.d.ts",
+          "default": "./dist/esm/transport-internals.js"
         }
       },
       "./types": {
@@ -150,6 +189,46 @@
         "import": {
           "types": "./dist/esm/transport/index.d.ts",
           "default": "./dist/esm/transport/index.js"
+        }
+      },
+      "./transport/in-process": {
+        "require": {
+          "types": "./dist/cjs/transport/in-process.d.cts",
+          "default": "./dist/cjs/transport/in-process.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/transport/in-process.d.ts",
+          "default": "./dist/esm/transport/in-process.js"
+        }
+      },
+      "./transport/web": {
+        "require": {
+          "types": "./dist/cjs/transport/web.d.cts",
+          "default": "./dist/cjs/transport/web.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/transport/web.d.ts",
+          "default": "./dist/esm/transport/web.js"
+        }
+      },
+      "./transport/node": {
+        "require": {
+          "types": "./dist/cjs/transport/node.d.cts",
+          "default": "./dist/cjs/transport/node.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/transport/node.d.ts",
+          "default": "./dist/esm/transport/node.js"
+        }
+      },
+      "./host": {
+        "require": {
+          "types": "./dist/cjs/host/index.d.cts",
+          "default": "./dist/cjs/host/index.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/host/index.d.ts",
+          "default": "./dist/esm/host/index.js"
         }
       },
       "./middleware/runtime-middleware": {
@@ -312,6 +391,16 @@
           "default": "./dist/esm/filesystem/from-node-fs.js"
         }
       },
+      "./filesystem/browser": {
+        "require": {
+          "types": "./dist/cjs/filesystem/from-browser-fs.d.cts",
+          "default": "./dist/cjs/filesystem/from-browser-fs.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/filesystem/from-browser-fs.d.ts",
+          "default": "./dist/esm/filesystem/from-browser-fs.js"
+        }
+      },
       "./testing": {
         "require": {
           "types": "./dist/cjs/testing/index.d.cts",
@@ -361,6 +450,16 @@
           "types": "./dist/esm/vite/index.d.ts",
           "default": "./dist/esm/vite/index.js"
         }
+      },
+      "./rolldown": {
+        "require": {
+          "types": "./dist/cjs/rolldown/index.d.cts",
+          "default": "./dist/cjs/rolldown/index.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/rolldown/index.d.ts",
+          "default": "./dist/esm/rolldown/index.js"
+        }
       }
     }
   },
@@ -375,9 +474,11 @@
     "@kittycad/lib": "catalog:",
     "@msgpack/msgpack": "catalog:",
     "@taucad/converter": "workspace:*",
+    "@taucad/filesystem": "workspace:*",
     "@taucad/json-schema": "workspace:*",
     "@taucad/kcl-wasm-lib": "catalog:",
     "@taucad/memory": "workspace:*",
+    "@taucad/rpc": "workspace:*",
     "@taucad/types": "workspace:*",
     "@taucad/utils": "workspace:*",
     "cdn-resolve": "catalog:",
@@ -399,10 +500,14 @@
     "zod": "catalog:"
   },
   "peerDependencies": {
+    "rolldown": ">=1.0.0-rc.1",
     "vite": ">=7.0.0",
     "vitest": ">=2.0.0"
   },
   "peerDependenciesMeta": {
+    "rolldown": {
+      "optional": true
+    },
     "vite": {
       "optional": true
     },

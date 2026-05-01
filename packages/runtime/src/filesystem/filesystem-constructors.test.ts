@@ -1,10 +1,26 @@
 import { describe, it, expect } from 'vitest';
-import { fromMemoryFS } from '#filesystem/from-memory-fs.js';
+import { _fromMemoryFsHandle as fromMemoryFS } from '#transport/_internal/from-memory-fs-handle.js';
+import type { RuntimeFileSystemBase } from '#types/runtime-kernel.types.js';
+
+/**
+ * `fromMemoryFS()` returns a `RuntimeFileSystemHandle` discriminated handle whose
+ * `inline` arm carries the bare `RuntimeFileSystemBase` implementation under
+ * `.fs`. This local helper lets the constructor-behaviour tests below assert
+ * directly against the FS contract without sprinkling `.fs` accessors at
+ * every call site.
+ */
+function makeFs(): RuntimeFileSystemBase {
+  const handle = fromMemoryFS();
+  if (handle.kind !== 'inline') {
+    throw new Error('fromMemoryFS() must return the inline-kind handle.');
+  }
+  return handle.fs;
+}
 
 describe('filesystem constructors', () => {
   describe('fromMemoryFS', () => {
     it('should mkdir and create all parent directories', async () => {
-      const fileSystem = fromMemoryFS();
+      const fileSystem = makeFs();
 
       await fileSystem.mkdir('/a/b/c');
 
@@ -14,7 +30,7 @@ describe('filesystem constructors', () => {
     });
 
     it('should make parent directories visible via stat', async () => {
-      const fileSystem = fromMemoryFS();
+      const fileSystem = makeFs();
 
       await fileSystem.mkdir('/x/y/z');
 
@@ -26,7 +42,7 @@ describe('filesystem constructors', () => {
     });
 
     it('should list children created by mkdir in readdir', async () => {
-      const fileSystem = fromMemoryFS();
+      const fileSystem = makeFs();
 
       await fileSystem.mkdir('/parent/child');
 
@@ -35,7 +51,7 @@ describe('filesystem constructors', () => {
     });
 
     it('should list deeply nested mkdir directories via readdir', async () => {
-      const fileSystem = fromMemoryFS();
+      const fileSystem = makeFs();
 
       await fileSystem.mkdir('/a/b/c/d');
 
@@ -45,7 +61,7 @@ describe('filesystem constructors', () => {
     });
 
     it('should read and write files in directories created by mkdir', async () => {
-      const fileSystem = fromMemoryFS();
+      const fileSystem = makeFs();
 
       await fileSystem.mkdir('/project/src');
       await fileSystem.writeFile('/project/src/index.ts', 'export {}');
@@ -55,7 +71,7 @@ describe('filesystem constructors', () => {
     });
 
     it('should read a file as utf8', async () => {
-      const fileSystem = fromMemoryFS();
+      const fileSystem = makeFs();
       await fileSystem.writeFile('/test.txt', 'hello world');
 
       const content = await fileSystem.readFile('/test.txt', 'utf8');
@@ -63,7 +79,7 @@ describe('filesystem constructors', () => {
     });
 
     it('should read a file as Uint8Array', async () => {
-      const fileSystem = fromMemoryFS();
+      const fileSystem = makeFs();
       await fileSystem.writeFile('/bin.txt', 'binary');
 
       const content = await fileSystem.readFile('/bin.txt');
@@ -72,7 +88,7 @@ describe('filesystem constructors', () => {
     });
 
     it('should remove a directory via rmdir', async () => {
-      const fileSystem = fromMemoryFS();
+      const fileSystem = makeFs();
 
       await fileSystem.mkdir('/rmdir-test');
       expect(await fileSystem.exists('/rmdir-test')).toBe(true);
@@ -81,7 +97,7 @@ describe('filesystem constructors', () => {
     });
 
     it('should rename a file', async () => {
-      const fileSystem = fromMemoryFS();
+      const fileSystem = makeFs();
 
       await fileSystem.writeFile('/old.txt', 'rename me');
       await fileSystem.rename('/old.txt', '/new.txt');
@@ -92,7 +108,7 @@ describe('filesystem constructors', () => {
     });
 
     it('should rename a directory', async () => {
-      const fileSystem = fromMemoryFS();
+      const fileSystem = makeFs();
 
       await fileSystem.mkdir('/old-dir');
       await fileSystem.rename('/old-dir', '/new-dir');
@@ -102,13 +118,13 @@ describe('filesystem constructors', () => {
     });
 
     it('should throw ENOENT when renaming nonexistent path', async () => {
-      const fileSystem = fromMemoryFS();
+      const fileSystem = makeFs();
 
       await expect(fileSystem.rename('/nope', '/also-nope')).rejects.toThrow('ENOENT');
     });
 
     it('should delete a file', async () => {
-      const fileSystem = fromMemoryFS();
+      const fileSystem = makeFs();
       await fileSystem.writeFile('/del.txt', 'gone');
 
       await fileSystem.unlink('/del.txt');
@@ -116,7 +132,7 @@ describe('filesystem constructors', () => {
     });
 
     it('should stat a file with correct metadata', async () => {
-      const fileSystem = fromMemoryFS();
+      const fileSystem = makeFs();
       await fileSystem.writeFile('/stat.txt', 'abcde');
 
       const stat = await fileSystem.stat('/stat.txt');
@@ -126,7 +142,7 @@ describe('filesystem constructors', () => {
     });
 
     it('should stat a directory', async () => {
-      const fileSystem = fromMemoryFS();
+      const fileSystem = makeFs();
       await fileSystem.mkdir('/statdir');
 
       const stat = await fileSystem.stat('/statdir');
@@ -134,7 +150,7 @@ describe('filesystem constructors', () => {
     });
 
     it('should check file existence', async () => {
-      const fileSystem = fromMemoryFS();
+      const fileSystem = makeFs();
       await fileSystem.writeFile('/exists.txt', 'yes');
 
       expect(await fileSystem.exists('/exists.txt')).toBe(true);
@@ -142,7 +158,7 @@ describe('filesystem constructors', () => {
     });
 
     it('should lstat a file (delegates to stat, no symlinks)', async () => {
-      const fileSystem = fromMemoryFS();
+      const fileSystem = makeFs();
 
       await fileSystem.writeFile('/lstat.txt', 'abc');
       const stat = await fileSystem.lstat('/lstat.txt');
@@ -152,12 +168,12 @@ describe('filesystem constructors', () => {
     });
 
     it('should throw ENOENT from stat for nonexistent path', async () => {
-      const fileSystem = fromMemoryFS();
+      const fileSystem = makeFs();
       await expect(fileSystem.stat('/does-not-exist')).rejects.toThrow('ENOENT');
     });
 
     it('should return directory stat from lstat', async () => {
-      const fileSystem = fromMemoryFS();
+      const fileSystem = makeFs();
       await fileSystem.mkdir('/my-dir');
 
       const stat = await fileSystem.lstat('/my-dir');
@@ -165,7 +181,7 @@ describe('filesystem constructors', () => {
     });
 
     it('should throw ENOENT from lstat for nonexistent path', async () => {
-      const fileSystem = fromMemoryFS();
+      const fileSystem = makeFs();
       await expect(fileSystem.lstat('/missing')).rejects.toThrow('ENOENT');
     });
   });

@@ -10,8 +10,13 @@
     "limit": "1 kB"
   },
   {
-    "name": "@taucad/runtime/worker",
-    "path": "dist/esm/framework/kernel-runtime-worker.js",
+    "name": "@taucad/runtime/worker/web",
+    "path": "dist/esm/worker/web.js",
+    "limit": "3 kB"
+  },
+  {
+    "name": "@taucad/runtime/worker/node",
+    "path": "dist/esm/worker/node.js",
     "limit": "3 kB"
   },
   {

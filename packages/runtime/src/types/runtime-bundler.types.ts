@@ -7,7 +7,7 @@
 
 import type { z } from 'zod';
 import type { KernelIssue } from '#types/runtime.types.js';
-import type { RuntimeFileSystem, GetDependenciesResult } from '#types/runtime-kernel.types.js';
+import type { KernelFileSystem, GetDependenciesResult } from '#types/runtime-kernel.types.js';
 
 // =============================================================================
 // Bundler Result Types
@@ -88,7 +88,7 @@ export type KernelBundler = {
  */
 export type BundlerInitOptions = {
   /** Filesystem interface for reading project files */
-  filesystem: RuntimeFileSystem;
+  filesystem: KernelFileSystem;
   /** Base path for the project (e.g., /projects/project) */
   projectPath: string;
 };

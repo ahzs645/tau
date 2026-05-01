@@ -49,11 +49,28 @@ export type KernelPlugin<
   builtinModuleNames?: string[];
   /** Kernel-specific options passed to initialize() */
   options?: Record<string, unknown>;
-  /** Phantom type brand — carries format-to-options type information at compile time only. */
+  /**
+   * Phantom type brand — carries format-to-options type information at
+   * compile time only. Marked `@internal` so doc generators filter it
+   * before serialization (the symbol's TS-internal display name
+   * contains literal `@` characters that break MDX/JSX parsers).
+   *
+   * @internal
+   */
   readonly [__exportSchemas]?: FormatMap;
-  /** Phantom type brand — carries render option type information at compile time only. */
+  /**
+   * Phantom type brand — carries render option type information at
+   * compile time only. See `[__exportSchemas]` for `@internal` rationale.
+   *
+   * @internal
+   */
   readonly [__renderSchema]?: RenderOptions;
-  /** Phantom type brand — carries the kernel's literal identifier at compile time only. */
+  /**
+   * Phantom type brand — carries the kernel's literal identifier at
+   * compile time only. See `[__exportSchemas]` for `@internal` rationale.
+   *
+   * @internal
+   */
   readonly [__kernelId]?: Id;
 };
 
@@ -124,11 +141,29 @@ export type TranscoderPlugin<
   moduleUrl: string;
   /** Transcoder-specific options */
   options?: Record<string, unknown>;
-  /** Phantom type brand — carries edge option type information at compile time only. */
+  /**
+   * Phantom type brand — carries edge option type information at
+   * compile time only. Marked `@internal` so doc generators filter it
+   * before serialization (the symbol's TS-internal display name
+   * contains literal `@` characters that break MDX/JSX parsers).
+   *
+   * @internal
+   */
   readonly [__transcodeEdges]?: EdgeMap;
-  /** Phantom type brand — carries source format at compile time only. */
+  /**
+   * Phantom type brand — carries source format at compile time only.
+   * See `[__transcodeEdges]` for `@internal` rationale.
+   *
+   * @internal
+   */
   readonly [__transcodeFrom]?: From;
-  /** Phantom type brand — carries the transcoder's literal identifier at compile time only. */
+  /**
+   * Phantom type brand — carries the transcoder's literal identifier
+   * at compile time only. See `[__transcodeEdges]` for `@internal`
+   * rationale.
+   *
+   * @internal
+   */
   readonly [__transcoderId]?: Id;
 };
 

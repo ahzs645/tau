@@ -10,7 +10,7 @@ import type {
   KernelMiddlewareRuntime,
   MiddlewareState,
 } from '#types/runtime-middleware.types.js';
-import type { RuntimeLogger, RuntimeFileSystem } from '#types/runtime-kernel.types.js';
+import type { RuntimeLogger, KernelFileSystem } from '#types/runtime-kernel.types.js';
 import type { Dependency } from '#types/runtime-dependency.types.js';
 
 /**
@@ -246,7 +246,7 @@ export type CreateMiddlewareRuntimeOptions = {
   /** Name of the middleware */
   middlewareName: string;
   /** Filesystem for all file operations */
-  filesystem: RuntimeFileSystem;
+  filesystem: KernelFileSystem;
   /** Array of dependencies for cache key computation */
   dependencies: readonly Dependency[];
   /** Pre-computed SHA-256 hash of all dependencies */

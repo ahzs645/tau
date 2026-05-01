@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/naming-convention -- file naming */
+/* eslint-disable @typescript-eslint/naming-convention -- file-system path keys (e.g. '/projects/test/main.ts') are not camelCase identifiers. */
 /**
  * Tests for KernelWorker lifecycle, watch subscription, and cache invalidation.
  */
@@ -100,7 +100,7 @@ describe('KernelWorker lifecycle', () => {
         };
       });
 
-      worker.handleSetFile(createGeometryFile('main.ts'), {});
+      worker.handleOpenFile(createGeometryFile('main.ts'), {});
       await renderComplete;
 
       expect(updateWatchSetSpy).toHaveBeenCalled();
@@ -175,7 +175,7 @@ describe('KernelWorker lifecycle', () => {
         worker.onError = vi.fn();
 
         // Start render A — blocks in createGeometry
-        worker.handleSetFile(createGeometryFile('main.ts'), {});
+        worker.handleOpenFile(createGeometryFile('main.ts'), {});
         await flushMicrotasks();
         await vi.advanceTimersByTimeAsync(0);
         await flushMicrotasks();
@@ -183,7 +183,7 @@ describe('KernelWorker lifecycle', () => {
         expect(worker.isRendering).toBe(true);
 
         // Start render B — also blocks in createGeometry (second call)
-        worker.handleSetFile(createGeometryFile('main.ts'), {});
+        worker.handleOpenFile(createGeometryFile('main.ts'), {});
         await flushMicrotasks();
         await vi.advanceTimersByTimeAsync(0);
         await flushMicrotasks();
@@ -283,7 +283,7 @@ describe('KernelWorker lifecycle', () => {
   // ---------------------------------------------------------------------------
 
   describe('render error cleanup', () => {
-    it('should clear onProgress when render() throws', async () => {
+    it('should clear the internal onProgress phase callback when render() throws', async () => {
       const filesystem = createMockFileSystem();
       filesystem.mocks.readFiles.mockResolvedValue({
         '/projects/test/main.ts': new Uint8Array([1, 2, 3]),
@@ -295,13 +295,17 @@ describe('KernelWorker lifecycle', () => {
         filesystem,
       });
 
-      const progressCallback = vi.fn();
+      // Phase 6a-tail: per-call `onProgress` is gone; progress is fanned out via
+      // the worker-level `onProgressUpdate` callback (`(phase, rgen, detail?)`)
+      // which the channel server relays as a `progress` notify. The internal
+      // phase relay (`worker.onProgress`) is wired during render and must be
+      // cleared in the failure path so superseded renders cannot leak frames.
+      worker.onProgressUpdate = vi.fn();
 
       await expect(
         worker.render({
           file: createGeometryFile('main.ts'),
           parameters: {},
-          onProgress: progressCallback,
         }),
       ).rejects.toThrow();
 
@@ -333,7 +337,7 @@ describe('KernelWorker lifecycle', () => {
       expect(updateWatchSetSpy).toHaveBeenCalled();
     });
 
-    it('should clear onProgress when executeRender fails via handleSetFile', async () => {
+    it('should clear onProgress when executeRender fails via handleOpenFile', async () => {
       const filesystem = createMockFileSystem();
       filesystem.mocks.readFiles.mockResolvedValue({
         '/projects/test/main.ts': new Uint8Array([1, 2, 3]),
@@ -355,7 +359,7 @@ describe('KernelWorker lifecycle', () => {
         };
       });
 
-      worker.handleSetFile(createGeometryFile('main.ts'), {});
+      worker.handleOpenFile(createGeometryFile('main.ts'), {});
       await renderComplete;
 
       // @ts-expect-error - accessing private for test verification
@@ -616,10 +620,10 @@ describe('KernelWorker lifecycle', () => {
         // @ts-expect-error - accessing private for test verification
         worker.currentFile = createGeometryFile('main.ts');
 
-        // Call scheduleRender 3x rapidly via handleSetParameters
-        worker.handleSetParameters({ width: 1 });
-        worker.handleSetParameters({ width: 2 });
-        worker.handleSetParameters({ width: 3 });
+        // Call scheduleRender 3x rapidly via handleUpdateParameters
+        worker.handleUpdateParameters({ width: 1 });
+        worker.handleUpdateParameters({ width: 2 });
+        worker.handleUpdateParameters({ width: 3 });
 
         const bufferingCalls = (worker.onStateChanged as ReturnType<typeof vi.fn>).mock.calls.filter(
           ([state]) => state === 'buffering',
@@ -643,7 +647,7 @@ describe('KernelWorker lifecycle', () => {
         };
       });
 
-      worker.handleSetFile(createGeometryFile('main.ts'));
+      worker.handleOpenFile(createGeometryFile('main.ts'));
       await renderComplete;
 
       expect(stateChanges).toContain('rendering');
@@ -685,7 +689,7 @@ describe('KernelWorker lifecycle', () => {
         };
         worker.onGeometryComputed = vi.fn();
 
-        worker.handleSetFile(createGeometryFile('main.ts'), {});
+        worker.handleOpenFile(createGeometryFile('main.ts'), {});
 
         // Simulate a watch event arriving during the render by directly
         // setting paramDebounceTimer (scheduleRender would normally do this)
@@ -711,7 +715,7 @@ describe('KernelWorker lifecycle', () => {
   // handleOpenFile with optional parameters
   // ---------------------------------------------------------------------------
 
-  describe('handleSetFile optional parameters', () => {
+  describe('handleOpenFile optional parameters', () => {
     it('should default parameters to empty object when omitted', async () => {
       const worker = createConfiguredWorker();
 
@@ -723,7 +727,7 @@ describe('KernelWorker lifecycle', () => {
         };
       });
 
-      worker.handleSetFile(createGeometryFile('main.ts'));
+      worker.handleOpenFile(createGeometryFile('main.ts'));
       await renderComplete;
 
       // @ts-expect-error - accessing private for test verification
@@ -741,7 +745,7 @@ describe('KernelWorker lifecycle', () => {
         };
       });
 
-      worker.handleSetFile(createGeometryFile('main.ts'), { width: 10 });
+      worker.handleOpenFile(createGeometryFile('main.ts'), { width: 10 });
       await renderComplete;
 
       // @ts-expect-error - accessing private for test verification
@@ -750,11 +754,118 @@ describe('KernelWorker lifecycle', () => {
   });
 
   // ---------------------------------------------------------------------------
+  // handleStageAndOpenFile (TR7: bytes ride the wire)
+  // ---------------------------------------------------------------------------
+
+  describe('handleStageAndOpenFile', () => {
+    it('writes every staged byte payload to the worker filesystem before opening the entry', async () => {
+      const filesystem = createMockFileSystem();
+      filesystem.mocks.readFiles.mockResolvedValue({
+        '/projects/test/main.ts': new Uint8Array([1, 2, 3]),
+      });
+      const worker = new MockKernelWorker({ middleware: [], onLog: noopLog, filesystem });
+
+      const callOrder: string[] = [];
+      filesystem.mocks.writeFile.mockImplementation(async (path: string) => {
+        callOrder.push(`writeFile:${path}`);
+      });
+      const handleOpenFileSpy = vi.spyOn(worker, 'handleOpenFile').mockImplementation((): void => {
+        callOrder.push('handleOpenFile');
+      });
+
+      const stage: Record<string, Uint8Array<ArrayBuffer>> = {
+        '/projects/test/main.ts': new Uint8Array([10, 20, 30]),
+        '/projects/test/lib.ts': new Uint8Array([40, 50]),
+      };
+
+      await worker.handleStageAndOpenFile({
+        stage,
+        file: createGeometryFile('main.ts'),
+        parameters: { width: 5 },
+        options: { coordinateSystem: 'z-up' },
+      });
+
+      expect(filesystem.mocks.writeFile).toHaveBeenCalledTimes(2);
+      expect(filesystem.mocks.writeFile).toHaveBeenCalledWith('/projects/test/main.ts', new Uint8Array([10, 20, 30]));
+      expect(filesystem.mocks.writeFile).toHaveBeenCalledWith('/projects/test/lib.ts', new Uint8Array([40, 50]));
+
+      // Strict ordering: every write must complete before handleOpenFile is invoked.
+      expect(callOrder).toEqual([
+        'writeFile:/projects/test/main.ts',
+        'writeFile:/projects/test/lib.ts',
+        'handleOpenFile',
+      ]);
+
+      expect(handleOpenFileSpy).toHaveBeenCalledTimes(1);
+      expect(handleOpenFileSpy).toHaveBeenCalledWith(
+        createGeometryFile('main.ts'),
+        { width: 5 },
+        { coordinateSystem: 'z-up' },
+      );
+    });
+
+    it('creates parent directories (recursive) once per unique parent before staging', async () => {
+      const filesystem = createMockFileSystem();
+      filesystem.mocks.readFiles.mockResolvedValue({});
+      const worker = new MockKernelWorker({ middleware: [], onLog: noopLog, filesystem });
+      vi.spyOn(worker, 'handleOpenFile').mockReturnValue(undefined);
+
+      await worker.handleStageAndOpenFile({
+        stage: {
+          '/projects/test/a.ts': new Uint8Array([1]),
+          '/projects/test/b.ts': new Uint8Array([2]),
+          '/projects/test/sub/c.ts': new Uint8Array([3]),
+        },
+        file: createGeometryFile('a.ts'),
+      });
+
+      expect(filesystem.mocks.mkdir).toHaveBeenCalledTimes(2);
+      expect(filesystem.mocks.mkdir).toHaveBeenCalledWith('/projects/test', { recursive: true });
+      expect(filesystem.mocks.mkdir).toHaveBeenCalledWith('/projects/test/sub', { recursive: true });
+    });
+
+    it('opens the entry without staging when the stage map is empty', async () => {
+      const filesystem = createMockFileSystem();
+      filesystem.mocks.readFiles.mockResolvedValue({
+        '/projects/test/main.ts': new Uint8Array([1, 2, 3]),
+      });
+      const worker = new MockKernelWorker({ middleware: [], onLog: noopLog, filesystem });
+      const handleOpenFileSpy = vi.spyOn(worker, 'handleOpenFile').mockReturnValue(undefined);
+
+      await worker.handleStageAndOpenFile({
+        stage: {},
+        file: createGeometryFile('main.ts'),
+        parameters: {},
+      });
+
+      expect(filesystem.mocks.writeFile).not.toHaveBeenCalled();
+      expect(filesystem.mocks.mkdir).not.toHaveBeenCalled();
+      expect(handleOpenFileSpy).toHaveBeenCalledWith(createGeometryFile('main.ts'), {}, undefined);
+    });
+
+    it('does not invoke handleOpenFile if a writeFile failure aborts staging', async () => {
+      const filesystem = createMockFileSystem();
+      filesystem.mocks.writeFile.mockRejectedValueOnce(new Error('disk full'));
+      const worker = new MockKernelWorker({ middleware: [], onLog: noopLog, filesystem });
+      const handleOpenFileSpy = vi.spyOn(worker, 'handleOpenFile').mockReturnValue(undefined);
+
+      await expect(
+        worker.handleStageAndOpenFile({
+          stage: { '/projects/test/main.ts': new Uint8Array([1]) },
+          file: createGeometryFile('main.ts'),
+        }),
+      ).rejects.toThrow('disk full');
+
+      expect(handleOpenFileSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // Immediate entry-file watch
   // ---------------------------------------------------------------------------
 
   describe('immediate entry-file watch', () => {
-    it('should watch the entry file immediately on handleSetFile so edits during a long render are not missed', async () => {
+    it('should watch the entry file immediately on handleOpenFile so edits during a long render are not missed', async () => {
       vi.useFakeTimers();
       try {
         let resolveGate!: () => void;
@@ -791,8 +902,8 @@ describe('KernelWorker lifecycle', () => {
         worker.onStateChanged = vi.fn();
         worker.onGeometryComputed = vi.fn();
 
-        // Starts executeRender via handleSetFile, which blocks in createGeometry
-        worker.handleSetFile(createGeometryFile('main.ts'), {});
+        // Starts executeRender via handleOpenFile, which blocks in createGeometry
+        worker.handleOpenFile(createGeometryFile('main.ts'), {});
 
         // `updateWatchSet` must fire immediately, BEFORE createGeometry completes
         expect(updateWatchSetSpy).toHaveBeenCalled();
@@ -1078,12 +1189,16 @@ describe('abort reason propagation', () => {
       };
     });
 
-    worker.handleSetFile(createGeometryFile('main.ts'), {});
+    worker.handleOpenFile(createGeometryFile('main.ts'), {});
     await renderComplete;
 
+    // Phase 6a-tail (R18): onError is invoked as `(issues, rgen)` so the
+    // dispatcher can attach the originating render generation to the
+    // `errorEvent` notify. Match both arguments.
     expect(worker.onError).toHaveBeenCalledWith(
       // oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- vitest asymmetric matchers are untyped
       expect.arrayContaining([expect.objectContaining({ message: expect.stringContaining('timed out') })]),
+      expect.any(Number),
     );
   });
 
@@ -1123,7 +1238,7 @@ describe('abort reason propagation', () => {
       };
     });
 
-    worker.handleSetFile(createGeometryFile('main.ts'), {});
+    worker.handleOpenFile(createGeometryFile('main.ts'), {});
     await renderComplete;
 
     expect(worker.onError).not.toHaveBeenCalled();
@@ -2055,7 +2170,7 @@ describe('ensureNativeHandle', () => {
       nativeHandle: { meshData: new Float32Array(3) },
     });
 
-    worker.handleSetFile(createGeometryFile('test.ts'), {});
+    worker.handleOpenFile(createGeometryFile('test.ts'), {});
     await flushMicrotasks();
 
     const callsAfterRender = worker.createGeometryCalls;
@@ -2077,7 +2192,7 @@ describe('ensureNativeHandle', () => {
       },
     });
 
-    worker.handleSetFile(createGeometryFile('test.ts'), {});
+    worker.handleOpenFile(createGeometryFile('test.ts'), {});
     await flushMicrotasks();
 
     const result = await worker.runExportGeometry('gltf');
@@ -2088,7 +2203,7 @@ describe('ensureNativeHandle', () => {
   it('should fall back to re-running createGeometry when no handle data exists', async () => {
     const worker = createConfiguredWorker();
 
-    worker.handleSetFile(createGeometryFile('test.ts'), {});
+    worker.handleOpenFile(createGeometryFile('test.ts'), {});
     await flushMicrotasks();
 
     const initialCalls = worker.createGeometryCalls;
@@ -2102,7 +2217,7 @@ describe('ensureNativeHandle', () => {
     const worker = createConfiguredWorker();
 
     const customParams = { radius: 42, height: 10 };
-    worker.handleSetFile(createGeometryFile('test.ts'), customParams);
+    worker.handleOpenFile(createGeometryFile('test.ts'), customParams);
     await flushMicrotasks();
 
     const result = await worker.runExportGeometry('gltf');
@@ -2123,7 +2238,7 @@ describe('render option validation', () => {
     const renderSchema = z.object({ quality: z.number().min(0).max(1) });
     const worker = createConfiguredWorker({ renderZodSchema: renderSchema });
 
-    worker.handleSetFile(createGeometryFile('test.ts'), {}, { quality: 'invalid' });
+    worker.handleOpenFile(createGeometryFile('test.ts'), {}, { quality: 'invalid' });
     await flushMicrotasks();
 
     const result = await worker.runCreateGeometry('test.ts');
@@ -2135,7 +2250,7 @@ describe('render option validation', () => {
     const renderSchema = z.object({ quality: z.number().default(0.8) });
     const worker = createConfiguredWorker({ renderZodSchema: renderSchema });
 
-    worker.handleSetFile(createGeometryFile('test.ts'), {}, { quality: 0.5 });
+    worker.handleOpenFile(createGeometryFile('test.ts'), {}, { quality: 0.5 });
     await flushMicrotasks();
 
     const result = await worker.runCreateGeometry('test.ts');
@@ -2145,7 +2260,7 @@ describe('render option validation', () => {
   it('should pass through options when no render schema exists', async () => {
     const worker = createConfiguredWorker();
 
-    worker.handleSetFile(createGeometryFile('test.ts'), {}, { arbitrary: 'value' });
+    worker.handleOpenFile(createGeometryFile('test.ts'), {}, { arbitrary: 'value' });
     await flushMicrotasks();
 
     const result = await worker.runCreateGeometry('test.ts');
@@ -2167,7 +2282,7 @@ describe('export schema hard-fail', () => {
       exportZodSchemas: { glb: z.object({ binary: z.boolean().default(true) }) },
     });
 
-    worker.handleSetFile(createGeometryFile('test.ts'), {});
+    worker.handleOpenFile(createGeometryFile('test.ts'), {});
     await flushMicrotasks();
 
     const result = await worker.runExportGeometry('stl', { someOption: true });
@@ -2181,7 +2296,7 @@ describe('export schema hard-fail', () => {
       exportZodSchemas: { glb: z.object({}) },
     });
 
-    worker.handleSetFile(createGeometryFile('test.ts'), {});
+    worker.handleOpenFile(createGeometryFile('test.ts'), {});
     await flushMicrotasks();
 
     const result = await worker.runExportGeometry('stl');

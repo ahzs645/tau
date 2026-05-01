@@ -1,0 +1,569 @@
+/**
+ * Conformance test C2 — bundled transports satisfy the canonical
+ * fat {@link RuntimeTransportClient} / {@link RuntimeTransportHost}
+ * contract from `docs/research/runtime-transport-architecture-v6.md`.
+ *
+ * Plugin surface assertions: `id`, `describe()`, `materialize()`.
+ *
+ * Materialised {@link RuntimeTransportClient} assertions: same as legacy
+ * client surface (`open()`, `initialize`, …).
+ *
+ * Host surface assertions via standalone factories {@link webWorkerHost} /
+ * {@link nodeWorkerHost}: `id`, `open()`, `adoptInitialize(handle)`,
+ * `encodeGeometry(g)`, `encodeFile(b)`, `close()`, `closed` Promise.
+ */
+
+import { describe, it, expect, vi } from 'vitest';
+
+import { fromMemoryFs } from '#filesystem/runtime-filesystem.js';
+import type { KernelWorker } from '#framework/kernel-worker.js';
+import { inProcessTransport } from '#transport/in-process-transport.js';
+import { nodeWorkerHost } from '#transport/node-worker-host.js';
+import { webWorkerHost } from '#transport/web-worker-host.js';
+
+/** Surface stub for `KernelWorker` — only used to satisfy host typing in conformance assertions. */
+const makeStubKernelWorker = (): KernelWorker => {
+  const base = {
+    initialize: vi.fn().mockResolvedValue(undefined),
+    render: vi.fn().mockResolvedValue({ success: true, data: [] }),
+    exportGeometry: vi.fn().mockResolvedValue({ success: true, data: [] }),
+    cleanup: vi.fn().mockResolvedValue(undefined),
+    notifyFileChanged: vi.fn().mockResolvedValue(undefined),
+    handleOpenFile: vi.fn(),
+    handleStageAndOpenFile: vi.fn().mockResolvedValue(undefined),
+    handleUpdateParameters: vi.fn(),
+    handleSetOptions: vi.fn(),
+    configureMiddleware: vi.fn().mockResolvedValue(undefined),
+    ensureLoadedBundler: vi.fn().mockResolvedValue(undefined),
+    setTelemetrySend: vi.fn(),
+    flushTelemetry: vi.fn(),
+    setSignalBuffer: vi.fn(),
+    setGeometryPoolBuffer: vi.fn(),
+    setFilePoolBuffer: vi.fn(),
+    handleWireAbort: vi.fn(),
+    capabilitiesManifest: { routes: [], renderSchemas: {} },
+  };
+  return base as unknown as KernelWorker;
+};
+
+/* ============================================================ *
+ * In-process slice                                               *
+ * ============================================================ */
+
+describe('transport conformance — in-process (C2)', () => {
+  it('callable exposes TransportPlugin surface with literal id', () => {
+    expect(typeof inProcessTransport).toBe('function');
+    const plugin = inProcessTransport({ fileSystem: fromMemoryFs() });
+    expect(plugin.id).toBe('in-process');
+    expect(typeof plugin.describe).toBe('function');
+    expect(typeof plugin.materialize).toBe('function');
+  });
+
+  it('materialise() returns the v6 fat client handle surface', () => {
+    const mainEntry = '/main.ts';
+    const plugin = inProcessTransport({
+      fileSystem: fromMemoryFs({ [mainEntry]: 'export default () => true;' }),
+    });
+    const client = plugin.materialize();
+    expect(client.id).toBe('in-process');
+    expect(typeof client.describe).toBe('function');
+    expect(typeof client.open).toBe('function');
+    expect(typeof client.initialize).toBe('function');
+    expect(typeof client.abort).toBe('function');
+    expect(typeof client.resolveGeometry).toBe('function');
+    expect(typeof client.close).toBe('function');
+    expect(client.closed).toBeInstanceOf(Promise);
+    void plugin;
+  });
+
+  it('describe() advertises in-isolate FS, pool delivery, and SAB abort', () => {
+    const plugin = inProcessTransport({ fileSystem: fromMemoryFs() });
+    const descriptor = plugin.describe();
+    expect(descriptor.id).toBe('in-process');
+    expect(descriptor.wire).toBe('in-process');
+    expect(descriptor.fileSystem).toBe('inline');
+    expect(descriptor.memory.geometryDelivery).toBe('pool');
+    expect(descriptor.memory.fileDelivery).toBe('pool');
+    expect(descriptor.memory.abortSignal).toBe('sab-atomics');
+  });
+
+  it('materialised client.open() resolves a typed channel + hello frame', async () => {
+    const plugin = inProcessTransport({ fileSystem: fromMemoryFs() });
+    const client = plugin.materialize();
+    const ready = await client.open();
+    expect(ready.channel).toBeDefined();
+    expect(typeof ready.channel.call).toBe('function');
+    expect(typeof ready.channel.notify).toBe('function');
+    expect(ready.hello.server).toBe('kernel-runtime-worker');
+    expect(ready.hello.transportId).toBe('in-process');
+    expect(typeof ready.hello.runtimeVersion).toBe('string');
+    await client.close();
+    await client.closed;
+  });
+
+  it('client.open() is idempotent (second call resolves the same channel)', async () => {
+    const client = inProcessTransport({ fileSystem: fromMemoryFs() }).materialize();
+    const a = await client.open();
+    const b = await client.open();
+    expect(b.channel).toBe(a.channel);
+    await client.close();
+  });
+
+  it('client.close() resolves the closed Promise', async () => {
+    const client = inProcessTransport({ fileSystem: fromMemoryFs() }).materialize();
+    await client.open();
+    let resolved = false;
+    const waiter = (async (): Promise<void> => {
+      await client.closed;
+      resolved = true;
+    })();
+    await client.close();
+    await waiter;
+    expect(resolved).toBe(true);
+  });
+
+  /* R3 — in-process passthrough transports do not synthesise `.host()`
+   * on the consumer callable — same-isolate authors use {@link inProcessClient}
+   * only; standalone host transports are sibling modules for worker kernels. */
+
+  /* S9: bundled transports wire `runtimeProtocolSchemas` by default at
+   * both wire boundaries (client and dispatcher server), so a malformed
+   * call frame is rejected at the channel layer with a typed
+   * `WireValidationError` rather than reaching the kernel impl. */
+  it('rejects malformed call args with a WireValidationError at the wire boundary', async () => {
+    const client = inProcessTransport({ fileSystem: fromMemoryFs() }).materialize();
+    try {
+      const ready = await client.open();
+      await ready.channel.ready;
+      /* `export` requires `format: FileExtension` (strict object); an
+       * empty payload triggers server-side validation before the impl
+       * runs. */
+      await expect(
+        // Validation test intentionally passes an invalid payload (missing `format`)
+        ready.channel.call(
+          'export',
+          // oxlint-disable-next-line ban-ts-comment -- invalid payload exercises wire-validation path before impl runs
+          // @ts-expect-error Intentionally invalid export args — wire rejects before impl
+          {},
+        ),
+      ).rejects.toThrow(/wire validation failed for server-call-args 'export'/);
+    } finally {
+      await client.close();
+    }
+  });
+});
+
+/* ============================================================ *
+ * Web-worker slice                                               *
+ * ============================================================ */
+
+describe('transport conformance — web-worker (C2)', () => {
+  it('callable exposes paired plugin + standalone host factories', async () => {
+    const { webWorkerTransport } = await import('#transport/web-worker-transport.js');
+    expect(typeof webWorkerTransport).toBe('function');
+    const { workerCtor, dispose } = makeFakeWorkerCtor();
+    try {
+      const plugin = webWorkerTransport({ url: 'about:blank', workerCtor });
+      expect(plugin.id).toBe('web-worker');
+      expect(typeof webWorkerHost).toBe('function');
+    } finally {
+      dispose();
+    }
+  });
+
+  it('materialise() returns the v6 fat client handle surface', async () => {
+    const { webWorkerTransport } = await import('#transport/web-worker-transport.js');
+    const { workerCtor, dispose } = makeFakeWorkerCtor();
+    try {
+      const client = webWorkerTransport({ url: 'about:blank', workerCtor }).materialize();
+      expect(client.id).toBe('web-worker');
+      expect(typeof client.describe).toBe('function');
+      expect(typeof client.open).toBe('function');
+      expect(typeof client.initialize).toBe('function');
+      expect(typeof client.abort).toBe('function');
+      expect(typeof client.resolveGeometry).toBe('function');
+      expect(typeof client.close).toBe('function');
+      expect(client.closed).toBeInstanceOf(Promise);
+    } finally {
+      dispose();
+    }
+  });
+
+  it('describe() declares SAB tier when sharedMemory.geometry is supplied', async () => {
+    const { webWorkerTransport } = await import('#transport/web-worker-transport.js');
+    const { workerCtor, dispose } = makeFakeWorkerCtor();
+    try {
+      const plugin = webWorkerTransport({
+        url: 'about:blank',
+        workerCtor,
+        sharedMemory: { geometry: { bytes: 256 * 1024 } },
+        fileSystem: fromMemoryFs(),
+      });
+      const d = plugin.describe();
+      expect(d.id).toBe('web-worker');
+      expect(d.wire).toBe('web-worker');
+      expect(d.memory.geometryDelivery).toBe('pool');
+      expect(['sab-atomics', 'wire-notify']).toContain(d.memory.abortSignal);
+      expect(d.fileSystem).toBe('inline');
+    } finally {
+      dispose();
+    }
+  });
+
+  it('describe() degrades to transferables when no SAB pool is supplied', async () => {
+    const { webWorkerTransport } = await import('#transport/web-worker-transport.js');
+    const { workerCtor, dispose } = makeFakeWorkerCtor();
+    try {
+      const plugin = webWorkerTransport({ url: 'about:blank', workerCtor });
+      const d = plugin.describe();
+      expect(d.memory.geometryDelivery).toBe('transfer');
+      expect(d.fileSystem).toBe('unbound');
+    } finally {
+      dispose();
+    }
+  });
+
+  it('open() instantiates the worker via the supplied ctor and returns a channel', async () => {
+    const { webWorkerTransport } = await import('#transport/web-worker-transport.js');
+    const fake = makeFakeWorkerCtor();
+    try {
+      const client = webWorkerTransport({
+        url: 'about:blank',
+        workerCtor: fake.workerCtor,
+      }).materialize();
+      const ready = await client.open();
+      expect(fake.created).toHaveLength(1);
+      expect(typeof ready.channel.call).toBe('function');
+      expect(typeof ready.channel.notify).toBe('function');
+      expect(ready.hello.transportId).toBe('web-worker');
+      await client.close();
+    } finally {
+      fake.dispose();
+    }
+  });
+
+  it('throws on a forged RuntimeFileSystem (must come from a fromX factory)', async () => {
+    const { webWorkerTransport } = await import('#transport/web-worker-transport.js');
+    const { workerCtor, dispose } = makeFakeWorkerCtor();
+    try {
+      expect(() =>
+        webWorkerTransport({
+          url: 'about:blank',
+          workerCtor,
+          // @ts-expect-error Intentionally malformed `fileSystem` (must come from a `fromX` factory).
+          fileSystem: { kind: 'inline' },
+        }).materialize(),
+      ).toThrow(/fromX. factory/);
+    } finally {
+      dispose();
+    }
+  });
+
+  it('throws a clear error when no Worker constructor is available', async () => {
+    const { webWorkerTransport } = await import('#transport/web-worker-transport.js');
+    expect(() => webWorkerTransport({ url: 'about:blank' }).materialize()).toThrow(/Worker.*constructor/);
+  });
+
+  /* Default-URL contract (build-stall avoidance).
+   *
+   * Hoisting the worker URL out of every consumer was the v6 ergonomic goal
+   * of this transport. With a built-in default the consumer no longer needs
+   * to write `new URL('@taucad/runtime/worker/web', import.meta.url)` —
+   * which was the singular bare-specifier callsite that drove the
+   * `tsModuleUrlBuildPlugin` resolve regression. The default URL is built
+   * inside the runtime package using a relative `.js` reference, which the
+   * plugin handles via its sync fast path (no async `context.resolve`,
+   * no deadlock surface).
+   */
+  it('materialise() does not require an explicit `url` (defaults to bundled worker subpath)', async () => {
+    const { webWorkerTransport } = await import('#transport/web-worker-transport.js');
+    const fake = makeFakeWorkerCtor();
+    try {
+      const client = webWorkerTransport({ workerCtor: fake.workerCtor }).materialize();
+      await client.open();
+      expect(fake.urls).toHaveLength(1);
+      const constructed = fake.urls[0]!;
+      const href = typeof constructed === 'string' ? constructed : constructed.href;
+      /* Default points at the canonical web-worker subpath module. The
+       * plugin/Vite layer rewrites `web.js` to the emitted chunk URL, but
+       * the literal source the runtime ships is the unrewritten relative
+       * path under `worker/`. Both representations contain `worker/web`. */
+      expect(href).toMatch(/worker\/web(\.[\da-z]+)?\.js/);
+      await client.close();
+    } finally {
+      fake.dispose();
+    }
+  });
+
+  it('honours an explicit `url` override over the default', async () => {
+    const { webWorkerTransport } = await import('#transport/web-worker-transport.js');
+    const fake = makeFakeWorkerCtor();
+    try {
+      const client = webWorkerTransport({
+        url: 'about:blank',
+        workerCtor: fake.workerCtor,
+      }).materialize();
+      await client.open();
+      expect(fake.urls).toEqual(['about:blank']);
+      await client.close();
+    } finally {
+      fake.dispose();
+    }
+  });
+
+  it('webWorkerHost() returns the v6 fat handle surface', async () => {
+    const host = webWorkerHost({ worker: makeStubKernelWorker() });
+    expect(host.id).toBe('web-worker');
+    expect(typeof host.open).toBe('function');
+    expect(typeof host.adoptInitialize).toBe('function');
+    expect(typeof host.encodeGeometry).toBe('function');
+    expect(typeof host.encodeFile).toBe('function');
+    expect(host.closed).toBeInstanceOf(Promise);
+  });
+});
+
+/* ============================================================ *
+ * Node-worker slice                                              *
+ * ============================================================ */
+
+describe('transport conformance — node-worker (C2)', () => {
+  it('callable exposes paired plugin + standalone host factories', async () => {
+    const { nodeWorkerTransport } = await import('#transport/node-worker-transport.js');
+    expect(typeof nodeWorkerTransport).toBe('function');
+    const fake = makeFakeNodeWorkerCtor();
+    try {
+      const plugin = nodeWorkerTransport({
+        url: new URL('about:blank'),
+        workerCtor: fake.workerCtor,
+      });
+      expect(plugin.id).toBe('node-worker');
+      expect(typeof nodeWorkerHost).toBe('function');
+    } finally {
+      fake.dispose();
+    }
+  });
+
+  it('materialise() returns the v6 fat client handle surface', async () => {
+    const { nodeWorkerTransport } = await import('#transport/node-worker-transport.js');
+    const fake = makeFakeNodeWorkerCtor();
+    try {
+      const client = nodeWorkerTransport({
+        url: new URL('about:blank'),
+        workerCtor: fake.workerCtor,
+      }).materialize();
+      expect(client.id).toBe('node-worker');
+      expect(typeof client.describe).toBe('function');
+      expect(typeof client.open).toBe('function');
+      expect(typeof client.initialize).toBe('function');
+      expect(typeof client.abort).toBe('function');
+      expect(typeof client.resolveGeometry).toBe('function');
+      expect(typeof client.close).toBe('function');
+      expect(client.closed).toBeInstanceOf(Promise);
+    } finally {
+      fake.dispose();
+    }
+  });
+
+  it('describe() declares SAB tier when sharedMemory.geometry is supplied', async () => {
+    const { nodeWorkerTransport } = await import('#transport/node-worker-transport.js');
+    const fake = makeFakeNodeWorkerCtor();
+    try {
+      const plugin = nodeWorkerTransport({
+        url: new URL('about:blank'),
+        workerCtor: fake.workerCtor,
+        sharedMemory: { geometry: { bytes: 256 * 1024 } },
+        fileSystem: fromMemoryFs(),
+      });
+      const d = plugin.describe();
+      expect(d.id).toBe('node-worker');
+      expect(d.wire).toBe('node-worker');
+      expect(d.memory.geometryDelivery).toBe('pool');
+      expect(['sab-atomics', 'wire-notify']).toContain(d.memory.abortSignal);
+      expect(d.fileSystem).toBe('inline');
+    } finally {
+      fake.dispose();
+    }
+  });
+
+  it('open() instantiates the worker via the supplied ctor and returns a channel', async () => {
+    const { nodeWorkerTransport } = await import('#transport/node-worker-transport.js');
+    const fake = makeFakeNodeWorkerCtor();
+    try {
+      const client = nodeWorkerTransport({
+        url: new URL('about:blank'),
+        workerCtor: fake.workerCtor,
+      }).materialize();
+      const ready = await client.open();
+      expect(fake.created).toHaveLength(1);
+      expect(typeof ready.channel.call).toBe('function');
+      expect(ready.hello.transportId).toBe('node-worker');
+      await client.close();
+    } finally {
+      fake.dispose();
+    }
+  });
+
+  it('throws on a forged RuntimeFileSystem (must come from a fromX factory)', async () => {
+    const { nodeWorkerTransport } = await import('#transport/node-worker-transport.js');
+    const fake = makeFakeNodeWorkerCtor();
+    try {
+      expect(() =>
+        nodeWorkerTransport({
+          url: new URL('about:blank'),
+          workerCtor: fake.workerCtor,
+          // @ts-expect-error Intentionally malformed `fileSystem` (must come from a `fromX` factory).
+          fileSystem: { kind: 'inline' },
+        }).materialize(),
+      ).toThrow(/fromX. factory/);
+    } finally {
+      fake.dispose();
+    }
+  });
+
+  /* Default-URL contract — node parity with the web-worker test above. */
+  it('materialise() does not require an explicit `url` (defaults to bundled worker subpath)', async () => {
+    const { nodeWorkerTransport } = await import('#transport/node-worker-transport.js');
+    const fake = makeFakeNodeWorkerCtor();
+    try {
+      const client = nodeWorkerTransport({ workerCtor: fake.workerCtor }).materialize();
+      await client.open();
+      expect(fake.urls).toHaveLength(1);
+      const constructed = fake.urls[0]!;
+      const href = typeof constructed === 'string' ? constructed : constructed.href;
+      expect(href).toMatch(/worker\/node(\.[\da-z]+)?\.js/);
+      await client.close();
+    } finally {
+      fake.dispose();
+    }
+  });
+
+  it('honours an explicit `url` override over the default', async () => {
+    const { nodeWorkerTransport } = await import('#transport/node-worker-transport.js');
+    const fake = makeFakeNodeWorkerCtor();
+    try {
+      const client = nodeWorkerTransport({
+        url: new URL('about:blank'),
+        workerCtor: fake.workerCtor,
+      }).materialize();
+      await client.open();
+      expect(fake.urls).toHaveLength(1);
+      const constructed = fake.urls[0]!;
+      const href = typeof constructed === 'string' ? constructed : constructed.href;
+      expect(href).toBe('about:blank');
+      await client.close();
+    } finally {
+      fake.dispose();
+    }
+  });
+
+  it('nodeWorkerHost() returns the v6 fat handle surface', async () => {
+    const host = nodeWorkerHost({ worker: makeStubKernelWorker() });
+    expect(host.id).toBe('node-worker');
+    expect(typeof host.open).toBe('function');
+    expect(typeof host.adoptInitialize).toBe('function');
+    expect(typeof host.encodeGeometry).toBe('function');
+    expect(typeof host.encodeFile).toBe('function');
+    expect(host.closed).toBeInstanceOf(Promise);
+  });
+});
+
+/* ============================================================ *
+ * Test helpers                                                   *
+ * ============================================================ */
+
+type FakeWorker = {
+  postMessage: (data: unknown, transfer?: readonly Transferable[]) => void;
+  addEventListener: (type: 'message', listener: (event: { data: unknown }) => void) => void;
+  removeEventListener: (type: 'message', listener: (event: { data: unknown }) => void) => void;
+  terminate: () => void;
+};
+
+function makeFakeWorkerCtor(): {
+  workerCtor: typeof Worker;
+  created: FakeWorker[];
+  urls: Array<string | URL>;
+  dispose: () => void;
+} {
+  const created: FakeWorker[] = [];
+  const urls: Array<string | URL> = [];
+  const ctor = function fakeWorkerImpl(this: FakeWorker, url: string | URL, _options?: WorkerOptions): FakeWorker {
+    urls.push(url);
+    const listeners = new Set<(event: { data: unknown }) => void>();
+    const fake: FakeWorker = {
+      postMessage() {
+        /* Tests never round-trip messages; channel handshake exercised in lifecycle tests */
+      },
+      addEventListener(_type, listener) {
+        listeners.add(listener);
+      },
+      removeEventListener(_type, listener) {
+        listeners.delete(listener);
+      },
+      terminate() {
+        listeners.clear();
+      },
+    };
+    created.push(fake);
+    return fake;
+  } as unknown as typeof Worker;
+  return {
+    workerCtor: ctor,
+    created,
+    urls,
+    dispose() {
+      for (const w of created) {
+        w.terminate();
+      }
+    },
+  };
+}
+
+type FakeNodeWorker = {
+  postMessage: (data: unknown, transferList?: unknown) => void;
+  on: (event: 'message', listener: (data: unknown) => void) => FakeNodeWorker;
+  off: (event: 'message', listener: (data: unknown) => void) => FakeNodeWorker;
+  terminate: () => Promise<number>;
+};
+
+function makeFakeNodeWorkerCtor(): {
+  workerCtor: unknown;
+  created: FakeNodeWorker[];
+  urls: Array<string | URL>;
+  dispose: () => void;
+} {
+  const created: FakeNodeWorker[] = [];
+  const urls: Array<string | URL> = [];
+  const ctor = function fakeNodeWorkerImpl(this: FakeNodeWorker, url: string | URL): FakeNodeWorker {
+    urls.push(url);
+    const listeners = new Set<(data: unknown) => void>();
+    const fake: FakeNodeWorker = {
+      postMessage() {
+        /* No-op */
+      },
+      on(_event, listener) {
+        listeners.add(listener);
+        return fake;
+      },
+      off(_event, listener) {
+        listeners.delete(listener);
+        return fake;
+      },
+      async terminate() {
+        listeners.clear();
+        return 0;
+      },
+    };
+    created.push(fake);
+    return fake;
+  } as unknown as new (url: string | URL) => FakeNodeWorker;
+  return {
+    workerCtor: ctor,
+    created,
+    urls,
+    dispose() {
+      for (const w of created) {
+        void w.terminate();
+      }
+    },
+  };
+}

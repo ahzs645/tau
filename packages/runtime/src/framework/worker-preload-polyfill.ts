@@ -1,14 +1,23 @@
 /**
  * Minimal DOM stubs for Web Worker contexts.
  *
- * Bundlers like Vite wrap dynamic `import()` calls with a modulepreload helper
- * (`__vitePreload`) that:
- * 1. Injects `<link rel="modulepreload">` via `document` (DOM API)
- * 2. Dispatches `vite:preloadError` via `window.dispatchEvent()` on failure
+ * Two distinct bundler subsystems require these stubs:
  *
- * Neither `document` nor `window` exist in Web Workers, so both helpers crash.
- * This polyfill provides no-op stubs for both so the preload helper executes
- * harmlessly. The actual dynamic `import()` still works normally.
+ * 1. **Vite's `__vitePreload` helper** wraps dynamic `import()` calls and
+ *    injects `<link rel="modulepreload">` via `document` and dispatches
+ *    `vite:preloadError` via `window.dispatchEvent()`.
+ * 2. **Vite's HMR client** (`vite/dist/client/client.mjs`) probes
+ *    `"document" in globalThis` and unconditionally calls every
+ *    `document.X` it needs when the probe succeeds — without per-method
+ *    `typeof` guards. Defining `globalThis.document` flips that probe
+ *    to `true`, so the stub MUST cover every method the HMR client
+ *    touches or the worker dies on import.
+ *
+ * The HMR-client crash is silent and manifests upstream as a
+ * perpetually-hanging preview (the kernel client never gets the
+ * `worker-ready` message). Audit Vite's `client.mjs` for `document.X`
+ * accesses on every Vite upgrade and extend the stub accordingly. The
+ * test file pins the contract.
  *
  * Environment detection (`getEnvironment()`) uses `WorkerGlobalScope` to
  * distinguish workers from browsers, so these stubs don't affect detection.
@@ -30,12 +39,27 @@ if (typeof document === 'undefined') {
     addEventListener: noop,
   };
 
+  /*
+   * Empty-array stand-in for `NodeList` / `HTMLCollection` results — Vite's
+   * HMR client iterates results with `.forEach`, so a real Array suffices.
+   */
+  const emptyNodeList: never[] = [];
+
   Object.defineProperty(globalThis, 'document', {
     value: {
-      getElementsByTagName: () => [],
+      // __vitePreload helper surface
+      getElementsByTagName: () => emptyNodeList,
       querySelector: () => null,
       createElement: () => noopElement,
       head: { appendChild: noop },
+
+      // Vite HMR client surface (vite/dist/client/client.mjs)
+      querySelectorAll: () => emptyNodeList,
+      addEventListener: noop,
+      removeEventListener: noop,
+      createTextNode: () => noopElement,
+      body: null,
+      visibilityState: 'visible',
     },
     writable: true,
     configurable: true,

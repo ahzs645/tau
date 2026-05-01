@@ -22,7 +22,7 @@
  */
 
 import { getCdnCachePath, getNodeModulesPath } from '@taucad/utils/import';
-import type { RuntimeFileSystem } from '#types/runtime-kernel.types.js';
+import type { KernelFileSystem } from '#types/runtime-kernel.types.js';
 
 // =============================================================================
 // Types
@@ -81,7 +81,7 @@ const retryDelay = 60_000;
  */
 export class ModuleManager {
   // oxlint-disable-next-line @typescript-eslint/parameter-properties -- erasableSyntaxOnly forbids parameter properties
-  private readonly filesystem: RuntimeFileSystem;
+  private readonly filesystem: KernelFileSystem;
 
   /** Dedup concurrent fetches for the same cache key */
   private readonly pendingFetches = new Map<string, Promise<void>>();
@@ -89,7 +89,7 @@ export class ModuleManager {
   /** Track failed fetches with timestamp for retry backoff */
   private readonly failedPackages = new Map<string, number>();
 
-  public constructor(filesystem: RuntimeFileSystem) {
+  public constructor(filesystem: KernelFileSystem) {
     this.filesystem = filesystem;
   }
 

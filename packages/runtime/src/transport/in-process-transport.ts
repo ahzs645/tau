@@ -1,88 +1,48 @@
 /**
- * InProcessTransport -- RuntimeTransport that runs the kernel in the same thread.
+ * Bundled in-process transport.
  *
- * Uses a MessageChannel to connect a RuntimeWorkerClient (via RuntimeTransport)
- * to a KernelRuntimeWorker + createWorkerDispatcher on the other side.
- * No Worker threads are created -- everything runs in the same event loop.
+ * Same V8 isolate; no wire crossing — a *passthrough* transport in the
+ * `definePassthroughTransport` sense. The live client logic lives in
+ * {@link inProcessClient}.
  *
- * Ideal for Node.js CLI tools (benchmarks, batch processing, SSR) where
- * spawning a real Worker thread is unnecessary overhead.
+ * @public
  */
 
-import type { RuntimeCommand, RuntimeResponse } from '#types/runtime-protocol.types.js';
-import type { RuntimeTransport } from '#transport/runtime-transport.js';
-import type { RuntimeMessagePort } from '#framework/runtime-message-adapter.js';
-import { KernelRuntimeWorker } from '#framework/kernel-runtime-worker.js';
-import { createWorkerDispatcher } from '#framework/runtime-worker-dispatcher.js';
+import { definePassthroughTransport } from '#transport/define-runtime-transport.js';
+import { inProcessClient } from '#transport/in-process-client.js';
+import { inProcessClientOptionsSchema } from '#transport/in-process-transport.schemas.js';
 
 /**
- * Create a RuntimeTransport that runs the kernel dispatcher in-process.
+ * Bundled in-process transport.
  *
- * Internally creates a MessageChannel, wires one port to a KernelRuntimeWorker
- * via createWorkerDispatcher, and exposes the other port as a RuntimeTransport.
- * Transferable objects (e.g., MessagePort for filesystem) work correctly
- * through MessageChannel even without a real Worker thread.
- *
- * @returns RuntimeTransport for use with createRuntimeClient
+ * Importable from the cross-environment subpath
+ * `@taucad/runtime/transport/in-process` — the package root and
+ * `@taucad/runtime/transport` barrel intentionally exclude this
+ * symbol so every concrete transport ships behind its own
+ * topology-tagged import path.
  *
  * @public
  *
- * @example <caption>In-process testing setup</caption>
+ * @example <caption>Spin up an in-process kernel for tests</caption>
  * ```typescript
- * import { createRuntimeClient } from '@taucad/runtime';
- * import { createInProcessTransport } from '@taucad/runtime/transport';
- * import { replicad } from '@taucad/runtime/kernels';
- * import { esbuild } from '@taucad/runtime/bundler';
+ * import { createRuntimeClient, presets } from '@taucad/runtime';
+ * import { inProcessTransport } from '@taucad/runtime/transport/in-process';
+ * import { fromMemoryFs } from '@taucad/runtime/filesystem';
  *
  * const client = createRuntimeClient({
- *   kernels: [replicad()],
- *   bundlers: [esbuild()],
- *   transport: createInProcessTransport(),
+ *   ...presets.all(),
+ *   transport: inProcessTransport({
+ *     fileSystem: fromMemoryFs({ '/main.ts': 'export default () => "hi";' }),
+ *   }),
  * });
  * ```
  */
-export function createInProcessTransport(): RuntimeTransport {
-  const channel = new MessageChannel();
+export const inProcessTransport = definePassthroughTransport({
+  id: 'in-process',
+  clientOptionsSchema: inProcessClientOptionsSchema,
+  client: inProcessClient,
+});
 
-  const workerPort: RuntimeMessagePort = {
-    postMessage(message: RuntimeCommand | RuntimeResponse, transferables?: Transferable[]): void {
-      if (transferables && transferables.length > 0) {
-        channel.port1.postMessage(message, transferables);
-      } else {
-        channel.port1.postMessage(message);
-      }
-    },
-    onMessage(handler: (data: RuntimeCommand | RuntimeResponse) => void): void {
-      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MessagePort requires onmessage assignment to implicitly call start()
-      channel.port1.onmessage = (event: MessageEvent<RuntimeCommand | RuntimeResponse>): void => {
-        handler(event.data);
-      };
-    },
-    close(): void {
-      channel.port1.close();
-    },
-  };
+export type { InProcessClientOptions } from '#transport/in-process-client.js';
 
-  const worker = new KernelRuntimeWorker();
-  createWorkerDispatcher(worker, workerPort);
-
-  return {
-    send(message: RuntimeCommand, transferables?: Transferable[]): void {
-      if (transferables && transferables.length > 0) {
-        channel.port2.postMessage(message, transferables);
-      } else {
-        channel.port2.postMessage(message);
-      }
-    },
-    onMessage(handler: (message: RuntimeResponse) => void): void {
-      // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MessagePort requires onmessage assignment to implicitly call start()
-      channel.port2.onmessage = (event: MessageEvent<RuntimeResponse>): void => {
-        handler(event.data);
-      };
-    },
-    close(): void {
-      channel.port1.close();
-      channel.port2.close();
-    },
-  };
-}
+export { inProcessClient, inProcessClientDescribe } from '#transport/in-process-client.js';

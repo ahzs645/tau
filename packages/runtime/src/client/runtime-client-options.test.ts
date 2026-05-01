@@ -1,7 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import type { RuntimeClientOptions } from '#client/runtime-client.js';
 import type { KernelPlugin, MiddlewarePlugin, BundlerPlugin, TranscoderPlugin } from '#plugins/plugin-types.js';
+import { createRuntimeClient } from '#client/runtime-client.js';
 import { createRuntimeClientOptions } from '#client/runtime-client-options.js';
+import { inProcessTransport } from '#transport/in-process-transport.js';
+import { fromMemoryFs } from '#filesystem/runtime-filesystem.js';
+
+const stubTransport = inProcessTransport({ fileSystem: fromMemoryFs() });
 
 function kernel(id: string, extra?: Record<string, unknown>): KernelPlugin {
   return { id, moduleUrl: `https://example.com/${id}.js`, extensions: ['ts', 'js'], ...extra };
@@ -21,6 +26,7 @@ function transcoder(id: string): TranscoderPlugin {
 
 function baseOptions(overrides: Partial<RuntimeClientOptions> = {}): RuntimeClientOptions {
   return {
+    transport: stubTransport,
     kernels: [kernel('alpha'), kernel('beta'), kernel('gamma')],
     middleware: [middleware('cache'), middleware('transform')],
     bundlers: [bundler('esbuild')],
@@ -46,6 +52,39 @@ describe('createRuntimeClientOptions', () => {
       const result = createRuntimeClientOptions(options);
 
       expect(result).toBe(options);
+    });
+
+    it('should accept options without a transport (transport is optional)', () => {
+      const options = createRuntimeClientOptions({
+        kernels: [kernel('alpha')],
+      });
+
+      expect(options.transport).toBeUndefined();
+      expect(options.kernels).toHaveLength(1);
+    });
+  });
+
+  // ── Default transport ────────────────────────────────────────────────────
+
+  describe('createRuntimeClient default transport', () => {
+    it('should default to inProcessTransport when transport is omitted', () => {
+      const client = createRuntimeClient({
+        kernels: [kernel('alpha')],
+      });
+
+      expect(client.transport.id).toBe('in-process');
+      expect(client.transport.descriptor.wire).toBe('in-process');
+      client.terminate();
+    });
+
+    it('should use the supplied transport when provided', () => {
+      const client = createRuntimeClient({
+        kernels: [kernel('alpha')],
+        transport: stubTransport,
+      });
+
+      expect(client.transport.id).toBe(stubTransport.id);
+      client.terminate();
     });
   });
 
@@ -163,7 +202,7 @@ describe('createRuntimeClientOptions', () => {
     });
 
     it('should handle override for middleware when base has no middleware', () => {
-      const base: RuntimeClientOptions = { kernels: [kernel('alpha')] };
+      const base: RuntimeClientOptions = { transport: stubTransport, kernels: [kernel('alpha')] };
       const newMiddleware = middleware('cache');
 
       const result = createRuntimeClientOptions(base, { middleware: [newMiddleware] });
@@ -172,7 +211,7 @@ describe('createRuntimeClientOptions', () => {
     });
 
     it('should handle override for bundlers when base has no bundlers', () => {
-      const base: RuntimeClientOptions = { kernels: [kernel('alpha')] };
+      const base: RuntimeClientOptions = { transport: stubTransport, kernels: [kernel('alpha')] };
       const newBundler = bundler('esbuild');
 
       const result = createRuntimeClientOptions(base, { bundlers: [newBundler] });
@@ -201,45 +240,12 @@ describe('createRuntimeClientOptions', () => {
 
   describe('scalar field replacement', () => {
     it('should replace transport entirely', () => {
-      const transport1 = {
-        send: () => {
-          /* Noop */
-        },
-        onMessage: () => {
-          /* Noop */
-        },
-        close: () => {
-          /* Noop */
-        },
-      };
-      const transport2 = {
-        send: () => {
-          /* Noop */
-        },
-        onMessage: () => {
-          /* Noop */
-        },
-        close: () => {
-          /* Noop */
-        },
-      };
-      const base = baseOptions({ transport: transport1 });
+      const transport2 = inProcessTransport({ fileSystem: fromMemoryFs() });
+      const base = baseOptions();
 
       const result = createRuntimeClientOptions(base, { transport: transport2 });
 
       expect(result.transport).toBe(transport2);
-    });
-
-    it('should replace fileSystem entirely', () => {
-      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- Test stub: empty object for identity-equality check
-      const fs1 = {} as RuntimeClientOptions['fileSystem'];
-      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- Test stub: empty object for identity-equality check
-      const fs2 = {} as RuntimeClientOptions['fileSystem'];
-      const base = baseOptions({ fileSystem: fs1 });
-
-      const result = createRuntimeClientOptions(base, { fileSystem: fs2 });
-
-      expect(result.fileSystem).toBe(fs2);
     });
 
     it('should preserve omitted fields from base', () => {

@@ -2,6 +2,7 @@ import deepmerge from 'deepmerge';
 import type { RuntimeClientOptions } from '#client/runtime-client.js';
 // oxlint-disable-next-line @typescript-eslint/no-explicit-any -- variance: accepts any plugin generic
 import type { KernelPlugin, MiddlewarePlugin, BundlerPlugin, TranscoderPlugin } from '#plugins/plugin-types.js';
+import type { TransportPlugin } from '#transport/runtime-transport.types.js';
 
 // oxlint-disable @typescript-eslint/no-explicit-any, typescript/no-unnecessary-type-arguments -- variance: union of all plugin types; constrain Id to string so plugin.id is typed as string (not any)
 type PluginWithId =
@@ -12,7 +13,7 @@ type PluginWithId =
 // oxlint-enable @typescript-eslint/no-explicit-any, typescript/no-unnecessary-type-arguments -- variance: union of all plugin types; constrain Id to string so plugin.id is typed as string (not any)
 
 const pluginArrayKeys = new Set(['kernels', 'middleware', 'bundlers', 'transcoders']);
-const opaqueKeys = new Set(['transport', 'fileSystem', 'sharedMemory']);
+const opaqueKeys = new Set(['transport']);
 
 /**
  * Merge two plugin arrays by ID: replace existing plugins in-place (preserving
@@ -49,7 +50,8 @@ function mergePluginArrays<T extends PluginWithId>(base: T[], overrides: T[]): T
  * or smart-merge a base configuration with partial overrides.
  *
  * **Identity overload** -- provides intellisense without importing the
- * `RuntimeClientOptions` type:
+ * `RuntimeClientOptions` type. Omitting `transport` lets the runtime pick
+ * the default `inProcessTransport({})`:
  *
  * ```typescript
  * import { createRuntimeClientOptions } from '@taucad/runtime';
@@ -68,7 +70,7 @@ function mergePluginArrays<T extends PluginWithId>(base: T[], overrides: T[]): T
  * - **Plugin arrays** (`kernels`, `middleware`, `bundlers`): ID-based merge.
  *   Plugins with a matching `id` in the base are replaced in-place (preserving
  *   priority order); plugins with new IDs are appended.
- * - **Opaque fields** (`transport`, `fileSystem`): Full replacement.
+ * - **Opaque fields** (`transport`): Full replacement.
  * - **All other fields**: Deep merge. Override keys replace base keys; absent
  *   keys preserve the base value.
  *
@@ -76,7 +78,9 @@ function mergePluginArrays<T extends PluginWithId>(base: T[], overrides: T[]): T
  * import { createRuntimeClientOptions } from '@taucad/runtime';
  * import { replicad } from '@taucad/runtime/kernels';
  *
- * const defaults = createRuntimeClientOptions({ kernels: [replicad()] });
+ * const defaults = createRuntimeClientOptions({
+ *   kernels: [replicad()],
+ * });
  * const debug = createRuntimeClientOptions(defaults, {
  *   kernels: [replicad({ withSourceMapping: true })],
  * });
@@ -91,7 +95,8 @@ function mergePluginArrays<T extends PluginWithId>(base: T[], overrides: T[]): T
 export function createRuntimeClientOptions<
   const K extends KernelPlugin<any, any, any>[],
   const T extends TranscoderPlugin<any, any, any>[] = [],
->(options: RuntimeClientOptions<K, T>): RuntimeClientOptions<K, T>;
+  const Transport extends TransportPlugin = TransportPlugin,
+>(options: RuntimeClientOptions<K, T, Transport>): RuntimeClientOptions<K, T, Transport>;
 /**
  * Smart-merge a base configuration with partial overrides.
  *
@@ -104,9 +109,14 @@ export function createRuntimeClientOptions<
 export function createRuntimeClientOptions<
   const K extends KernelPlugin<any, any, any>[],
   const T extends TranscoderPlugin<any, any, any>[] = [],
+  const Transport extends TransportPlugin = TransportPlugin,
   const K2 extends KernelPlugin<any, any, any>[] = K,
   const T2 extends TranscoderPlugin<any, any, any>[] = T,
->(base: RuntimeClientOptions<K, T>, overrides: Partial<RuntimeClientOptions<K2, T2>>): RuntimeClientOptions<K, T>;
+  const Transport2 extends TransportPlugin = Transport,
+>(
+  base: RuntimeClientOptions<K, T, Transport>,
+  overrides: Partial<RuntimeClientOptions<K2, T2, Transport2>>,
+): RuntimeClientOptions<K, T, Transport>;
 // oxlint-enable @typescript-eslint/no-explicit-any
 /**
  * Implementation: routes to identity or smart-merge based on arity.

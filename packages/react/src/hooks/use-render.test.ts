@@ -29,7 +29,7 @@ vi.mock('@taucad/runtime', async (importOriginal) => {
 /* `createRuntimeClient` is mocked above so the transport never actually
  * opens — it only needs to satisfy the typed `transport` field on
  * `RuntimeClientOptions`. */
-const stubTransport = inProcessTransport.client({ fileSystem: fromMemoryFs() });
+const stubTransport = inProcessTransport({ fileSystem: fromMemoryFs() });
 
 const testClientOptions: RuntimeClientOptions = createRuntimeClientOptions({
   transport: stubTransport,

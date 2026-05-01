@@ -35,8 +35,6 @@ import type { RuntimeSpanTracer } from '#types/runtime-tracer.types.js';
 import { KernelWorker } from '#framework/kernel-worker.js';
 import { isRenderAbortedError } from '#framework/runtime-worker-client.js';
 import { preserveMethodNames } from '#framework/named.js';
-import { isWorkerContext, getWorkerMessagePort } from '#framework/runtime-message-adapter.js';
-import { createWorkerDispatcher } from '#framework/runtime-worker-dispatcher.js';
 
 /**
  * Configuration for a kernel module within the runtime worker.
@@ -254,7 +252,7 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
     return [];
   }
 
-  protected override onFileChanged(_changedPaths: string[]): void {
+  protected override onFileChanged(_changedPaths: readonly string[]): void {
     this.selectionCache.clear();
     this.cachedDetectionDeps = undefined;
     this.activeKernelId = undefined;
@@ -493,6 +491,9 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
 
   /**
    * Select the catch-all kernel for files that no other kernel matched.
+   *
+   * @param entry - the kernel module entry to select
+   * @returns the selected kernel and selection method
    */
   private async tryCatchAllKernel(
     entry: KernelModuleEntry,
@@ -529,9 +530,14 @@ class KernelRuntimeWorker extends KernelWorker<RuntimeWorkerOptions> {
 
 preserveMethodNames(KernelRuntimeWorker, ['onCreateGeometry', 'onGetParameters', 'onExportGeometry']);
 
+export { KernelRuntimeWorker };
+
 /**
  * Tier 1 auto-detection: nativeHandle types that are already serializable
  * without kernel-provided hooks (string, Uint8Array, { glb: Uint8Array }).
+ *
+ * @param value - the value to check if it is directly serializable
+ * @returns true if the value is directly serializable, false otherwise
  */
 function isDirectlySerializable(value: unknown): boolean {
   if (typeof value === 'string') {
@@ -550,13 +556,3 @@ function isDirectlySerializable(value: unknown): boolean {
   }
   return false;
 }
-
-// oxlint-disable-next-line unicorn/prefer-top-level-await -- top-level await would break CJS dist output (Rolldown error UNSUPPORTED_FEATURE); workers buffer messages so this brief async window is race-safe.
-void (async () => {
-  if (await isWorkerContext()) {
-    const worker = new KernelRuntimeWorker();
-    createWorkerDispatcher(worker, await getWorkerMessagePort());
-  }
-})();
-
-export { KernelRuntimeWorker };
