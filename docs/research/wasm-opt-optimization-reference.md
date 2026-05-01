@@ -3,7 +3,7 @@ title: 'wasm-opt (Binaryen) Post-Link Optimization Reference'
 description: 'Comprehensive reference of all wasm-opt optimization flags, passes, and feature flags for post-link WASM optimization'
 status: active
 created: '2025-03-24'
-updated: '2025-03-24'
+updated: '2026-04-28'
 category: reference
 related:
   - docs/research/ocjs-full-build-audit.md
