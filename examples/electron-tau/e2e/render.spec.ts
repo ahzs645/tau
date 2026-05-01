@@ -39,14 +39,13 @@ test.describe('Tau Electron PoC end-to-end', () => {
      * missing preload bridge, COEP block) into the same vague message. */
     const appLog: string[] = [];
     const proc = app.process();
-    proc.stderr?.on('data', (chunk: Buffer) => appLog.push(`[main:stderr] ${chunk.toString()}`));
-    proc.stdout?.on('data', (chunk: Buffer) => appLog.push(`[main:stdout] ${chunk.toString()}`));
+    proc.stderr?.on('data', (chunk: Uint8Array<ArrayBuffer>) => appLog.push(`[main:stderr] ${chunk.toString()}`));
+    proc.stdout?.on('data', (chunk: Uint8Array<ArrayBuffer>) => appLog.push(`[main:stdout] ${chunk.toString()}`));
     try {
       const window = await app.firstWindow();
       window.on('console', (message) => {
         const line = `[renderer:${message.type()}] ${message.text()}\n`;
         appLog.push(line);
-        // eslint-disable-next-line no-console -- forward to test stdout for live tail
         if (process.env['TAU_ELECTRON_DEBUG'] === '1') {
           process.stdout.write(line);
         }
@@ -59,8 +58,12 @@ test.describe('Tau Electron PoC end-to-end', () => {
         }
       });
       if (process.env['TAU_ELECTRON_DEBUG'] === '1') {
-        proc.stderr?.on('data', (chunk: Buffer) => process.stdout.write(`[main:stderr] ${chunk.toString()}`));
-        proc.stdout?.on('data', (chunk: Buffer) => process.stdout.write(`[main:stdout] ${chunk.toString()}`));
+        proc.stderr?.on('data', (chunk: Uint8Array<ArrayBuffer>) =>
+          process.stdout.write(`[main:stderr] ${chunk.toString()}`),
+        );
+        proc.stdout?.on('data', (chunk: Uint8Array<ArrayBuffer>) =>
+          process.stdout.write(`[main:stdout] ${chunk.toString()}`),
+        );
       }
       await window.waitForSelector('[data-testid="app-root"]');
 
@@ -93,17 +96,18 @@ test.describe('Tau Electron PoC end-to-end', () => {
       await expect(window.getByTestId('count-vertices')).toHaveText('36');
       await expect(window.getByTestId('count-triangles')).toHaveText('12');
     } catch (error) {
+      const fs = await import('node:fs');
+      fs.writeFileSync('/tmp/tau-electron-e2e-debug.log', appLog.join(''));
       console.error('--- electron app log ---');
       console.error(appLog.join(''));
       console.error('--- end electron app log ---');
       try {
-        const probe = await app.firstWindow().then((w) =>
-          w.evaluate(() => ({
-            taucad: typeof (globalThis as { taucad?: unknown }).taucad,
-            keys: Object.keys(globalThis).filter((k) => k.toLowerCase().includes('tau')),
-            href: location.href,
-          })),
-        );
+        const probeWindow = await app.firstWindow();
+        const probe = await probeWindow.evaluate(() => ({
+          taucad: typeof (globalThis as { taucad?: unknown }).taucad,
+          keys: Object.keys(globalThis).filter((k) => k.toLowerCase().includes('tau')),
+          href: location.href,
+        }));
         console.error('--- renderer probe ---');
         console.error(JSON.stringify(probe, null, 2));
         console.error('--- end renderer probe ---');
@@ -112,6 +116,8 @@ test.describe('Tau Electron PoC end-to-end', () => {
       }
       throw error;
     } finally {
+      const fs = await import('node:fs');
+      fs.writeFileSync('/tmp/tau-electron-e2e-debug.log', appLog.join(''));
       await app.close();
     }
   });

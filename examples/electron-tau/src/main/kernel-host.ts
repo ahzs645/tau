@@ -3,7 +3,7 @@
  *
  * Spawned by Electron main via `utilityProcess.fork(kernelHostUrl)`.
  *
- * `electronUtilityTransport.host()` waits on
+ * `electronUtilityHost({ fileSystem })` waits on
  * `process.parentPort` for the `MessagePortMain` shipped from main,
  * instantiates a `KernelRuntimeWorker`, and runs
  * `createWorkerDispatcher` over the wire. The dispatcher dynamically
@@ -19,7 +19,7 @@ import { join } from 'node:path';
 import { fromNodeFs } from '@taucad/runtime/filesystem/node';
 import { createRuntimeHost } from '@taucad/runtime/host';
 
-import { electronUtilityTransport } from '../transport/electron-utility-transport.js';
+import { electronUtilityHost } from '../transport/electron-utility-transport.js';
 
 const DEBUG_ENABLED = process.env['TAU_ELECTRON_DEBUG'] === '1';
 const debugLog = (origin: string, message: string, data?: Record<string, unknown>): void => {
@@ -52,7 +52,7 @@ mkdirSync(projectRoot, { recursive: true });
  * eager `open()` will fail in the main process with
  * "process.parentPort unavailable". */
 const host = createRuntimeHost({
-  transport: electronUtilityTransport.host({
+  transport: electronUtilityHost({
     fileSystem: fromNodeFs(projectRoot),
   }),
 });

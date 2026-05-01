@@ -20,12 +20,20 @@
  * orchestration glue.
  */
 
+import type { EventEmitter } from 'node:events';
 import { join } from 'node:path';
 
 import { app, BrowserWindow, ipcMain, MessageChannelMain, session, utilityProcess } from 'electron';
 import type { UtilityProcess } from 'electron';
 
 import { ipcChannel } from '../shared/ipc.js';
+
+process.on('uncaughtException', (error) => {
+  console.error('[tau-electron:main] uncaughtException', error);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[tau-electron:main] unhandledRejection', reason);
+});
 
 const isDevelopment = process.env['ELECTRON_RENDERER_URL'] !== undefined;
 const DEBUG_ENABLED = process.env['TAU_ELECTRON_DEBUG'] === '1';
@@ -104,8 +112,12 @@ function spawnRuntimeForRenderer(): SpawnedRuntime {
   utility.on('exit', (code) => {
     debugLog('utility-exited', { code });
   });
-  // oxlint-disable-next-line @typescript-eslint/no-explicit-any -- electron typings lag for utility 'spawn' event
-  utility.on('spawn' as any, () => {
+  /* Electron's `UtilityProcess` extends `EventEmitter` at runtime but its
+   * typings only declare 'exit' / 'message' / 'internal-message'. The
+   * 'spawn' event is documented in the Electron docs but absent from the
+   * `.d.ts`, so we widen through the base `EventEmitter` interface. */
+  const utilityEvents = utility as unknown as EventEmitter;
+  utilityEvents.on('spawn', () => {
     debugLog('utility-spawned', { pid: utility.pid });
   });
 
@@ -164,11 +176,19 @@ app.on('window-all-closed', () => {
   }
 });
 
-void (async (): Promise<void> => {
-  try {
-    await bootstrap();
-  } catch (error) {
-    console.error('[tau-electron:main] bootstrap failed', error);
-    app.exit(1);
-  }
-})();
+/* CRITICAL: do NOT `await bootstrap()` at the top level. Electron defers the
+ * `ready` event until the main ESM module's evaluation completes; awaiting a
+ * promise chain that includes `app.whenReady()` from the module body
+ * deadlocks because module evaluation never completes. `electron-vite dev`
+ * masks this regression by loading main through a different evaluation
+ * harness, so the bug only manifests in production builds (`nx serve` /
+ * `nx test:e2e`). Detach the bootstrap onto its own task so the module body
+ * resolves synchronously and Electron can fire `ready`. The lint suppressions
+ * below are deliberate and load-bearing — neither top-level await nor a
+ * `try/await` rewrite is viable for this specific entry. */
+/* oxlint-disable promise/prefer-await-to-then, unicorn/prefer-top-level-await -- see comment above */
+bootstrap().catch((error: unknown) => {
+  console.error('[tau-electron:main] bootstrap failed', error);
+  app.exit(1);
+});
+/* oxlint-enable promise/prefer-await-to-then, unicorn/prefer-top-level-await -- end of Electron-deadlock workaround */

@@ -51,7 +51,7 @@ import type { RuntimeWatchEvent, RuntimeWatchRequest } from '@taucad/runtime';
  *
  * @public
  */
-export type FsReadFileArgs = {
+export type FsReadFileArguments = {
   readonly path: string;
   readonly encoding?: 'utf8';
 };
@@ -63,7 +63,7 @@ export type FsReadFileArgs = {
  *
  * @public
  */
-export type FsWriteFileArgs = {
+export type FsWriteFileArguments = {
   readonly path: string;
   readonly data: Uint8Array<ArrayBuffer> | string;
 };
@@ -88,8 +88,8 @@ export type FsFileChangedNotify = {
  */
 export type FsProtocol = {
   readonly calls: {
-    readonly readFile: { args: FsReadFileArgs; result: Uint8Array<ArrayBuffer> | string };
-    readonly writeFile: { args: FsWriteFileArgs; result: void };
+    readonly readFile: { args: FsReadFileArguments; result: Uint8Array<ArrayBuffer> | string };
+    readonly writeFile: { args: FsWriteFileArguments; result: void };
     readonly readDir: { args: { path: string }; result: readonly string[] };
     readonly stat: { args: { path: string }; result: FileStat };
     readonly exists: { args: { path: string }; result: boolean };

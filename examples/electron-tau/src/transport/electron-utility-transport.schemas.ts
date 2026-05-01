@@ -1,10 +1,10 @@
 /**
  * Zod schemas for {@link electronUtilityTransport} options.
  *
- * - `electronUtilityClientOptionsSchema` — supplied to `transport.client(...)`
+ * - `electronUtilityClientOptionsSchema` — supplied to {@link electronUtilityTransport}
  *   from the renderer; carries the renderer-received `MessagePort`
  *   that main shipped via `webContents.postMessage`.
- * - `electronUtilityHostOptionsSchema` — supplied to `transport.host(...)`
+ * - `electronUtilityHostOptionsSchema` — supplied to {@link electronUtilityHost}
  *   inside the utility process. Requires opaque `fileSystem` (e.g.
  *   `fromNodeFs(projectRoot)`).
  */
@@ -34,3 +34,9 @@ export const electronUtilityClientOptionsSchema = z.object({
 export const electronUtilityHostOptionsSchema = z.object({
   fileSystem: runtimeFileSystemSchema,
 });
+
+/** Renderer-side validated options inferred from schema. */
+export type ElectronUtilityClientOptions = z.input<typeof electronUtilityClientOptionsSchema>;
+
+/** Utility-process validated options inferred from schema. */
+export type ElectronUtilityHostOptions = z.input<typeof electronUtilityHostOptionsSchema>;

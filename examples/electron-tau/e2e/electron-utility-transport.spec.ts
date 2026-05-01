@@ -31,12 +31,11 @@ test.describe('Tau Electron PoC transport (Topology C)', () => {
     const app = await electron.launch({
       args: [MAIN_ENTRY],
       cwd: APP_ROOT,
-      // The renderer gates `__taucadTransportDescriptor` behind
-      // `TAU_ELECTRON_DEBUG=1` so production builds don't ship the
-      // descriptor (R10). The descriptor probe below requires the
-      // flag, so launch electron with the same env that
-      // `render.spec.ts` uses.
-      env: { ...process.env, TAU_ELECTRON_DEBUG: '1' } as Record<string, string>,
+      /* The renderer gates `__taucadTransportDescriptor` behind
+       * `TAU_ELECTRON_DEBUG=1` so production builds don't ship the
+       * descriptor. The descriptor probe below requires the flag, so
+       * launch electron with the same env that `render.spec.ts` uses. */
+      env: { ...process.env, TAU_ELECTRON_DEBUG: '1' },
     });
     try {
       const window = await app.firstWindow();

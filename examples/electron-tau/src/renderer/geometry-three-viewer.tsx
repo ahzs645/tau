@@ -81,6 +81,8 @@ export function MinimalGlbThreeViewer({ glb }: MinimalGlbThreeViewerProperties):
       return undefined;
     }
 
+    const surface = host;
+
     let disposed = false;
     let animationFrameIdentifier = 0;
     let loadedRoot: THREE.Object3D | undefined;
@@ -91,7 +93,10 @@ export function MinimalGlbThreeViewer({ glb }: MinimalGlbThreeViewerProperties):
     scene.add(new THREE.HemisphereLight(0xfc_fc_fc, 0x44_44_44, 0.9));
     scene.add(new THREE.DirectionalLight(0xff_ff_ff, 0.45));
 
-    const camera = new THREE.PerspectiveCamera(42, Math.max(host.clientWidth, 1) / Math.max(host.clientHeight, 1));
+    const camera = new THREE.PerspectiveCamera(
+      42,
+      Math.max(surface.clientWidth, 1) / Math.max(surface.clientHeight, 1),
+    );
 
     const renderer = new THREE.WebGLRenderer({ alpha: false, antialias: true, powerPreference: 'high-performance' });
     renderer.domElement.style.display = 'block';
@@ -99,7 +104,7 @@ export function MinimalGlbThreeViewer({ glb }: MinimalGlbThreeViewerProperties):
     renderer.domElement.style.width = '100%';
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    host.append(renderer.domElement);
+    surface.append(renderer.domElement);
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
@@ -130,8 +135,8 @@ export function MinimalGlbThreeViewer({ glb }: MinimalGlbThreeViewerProperties):
     );
 
     function resizeRendererToHost(): void {
-      const clampedHeight = Math.max(host.clientHeight, 1);
-      const clampedWidth = Math.max(host.clientWidth, 1);
+      const clampedHeight = Math.max(surface.clientHeight, 1);
+      const clampedWidth = Math.max(surface.clientWidth, 1);
       renderer.setPixelRatio(globalThis.window.devicePixelRatio);
       renderer.setSize(clampedWidth, clampedHeight, false);
       camera.aspect = clampedWidth / clampedHeight;
@@ -142,7 +147,7 @@ export function MinimalGlbThreeViewer({ glb }: MinimalGlbThreeViewerProperties):
     const resizeObserver = new ResizeObserver(() => {
       resizeRendererToHost();
     });
-    resizeObserver.observe(host);
+    resizeObserver.observe(surface);
 
     resizeRendererToHost();
 

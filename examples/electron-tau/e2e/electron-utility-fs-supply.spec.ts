@@ -58,13 +58,13 @@ test.describe('Electron utility FS supply (host-local)', () => {
   });
 
   test('built renderer chunks do not import vitest (`from "vitest"`)', () => {
-    const assetsDir = join(APP_ROOT, 'dist/renderer/assets');
+    const assetsDirectory = join(APP_ROOT, 'dist/renderer/assets');
     const vitestImport = /\bfrom\s+["']vitest["']/;
     const vitestRequire = /\brequire\s*\(\s*["']vitest["']\s*\)/;
-    const entries = readdirSync(assetsDir).filter((name) => name.endsWith('.js'));
+    const entries = readdirSync(assetsDirectory).filter((name) => name.endsWith('.js'));
     expect(entries.length).toBeGreaterThan(0);
     for (const name of entries) {
-      const text = readFileSync(join(assetsDir, name), 'utf8');
+      const text = readFileSync(join(assetsDirectory, name), 'utf8');
       expect(vitestImport.test(text)).toBe(false);
       expect(vitestRequire.test(text)).toBe(false);
     }

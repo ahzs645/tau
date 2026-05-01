@@ -154,7 +154,7 @@ export function createFsBridgeHost(port: Port<unknown>, fileSystem: RuntimeFileS
    * in a single-property object so the binding itself is `const` (its
    * `current` field is the late-bound function reference). */
   const notifyReference: {
-    current: ((name: 'fileChanged', args: FsProtocol['notifies']['fileChanged']['args']) => void) | undefined;
+    current: ((name: 'fileChanged', arguments_: FsProtocol['notifies']['fileChanged']['args']) => void) | undefined;
   } = { current: undefined };
 
   /* Typed dispatch map: each handler is bound to a single call name so
@@ -169,38 +169,38 @@ export function createFsBridgeHost(port: Port<unknown>, fileSystem: RuntimeFileS
    * non-binary branches. */
   type CallHandlers = {
     readonly [N in keyof FsProtocol['calls']]: (
-      args: FsProtocol['calls'][N]['args'],
+      arguments_: FsProtocol['calls'][N]['args'],
     ) => Promise<FsProtocol['calls'][N]['result'] | WithTransferables<FsProtocol['calls'][N]['result']>>;
   };
 
   const callHandlers: CallHandlers = {
-    readFile: async (a) => {
-      if (a.encoding === 'utf8') {
-        return fileSystem.readFile(a.path, 'utf8');
+    readFile: async (request) => {
+      if (request.encoding === 'utf8') {
+        return fileSystem.readFile(request.path, 'utf8');
       }
-      const bytes = await fileSystem.readFile(a.path);
+      const bytes = await fileSystem.readFile(request.path);
       return wrapBinaryWithTransferables(bytes);
     },
-    writeFile: async (a) => {
-      await fileSystem.writeFile(a.path, a.data);
-      notifyReference.current?.('fileChanged', { path: a.path, kind: 'updated' });
+    writeFile: async (request) => {
+      await fileSystem.writeFile(request.path, request.data);
+      notifyReference.current?.('fileChanged', { path: request.path, kind: 'updated' });
     },
-    readDir: async (a) => fileSystem.readdir(a.path),
-    stat: async (a) => fileSystem.stat(a.path),
-    exists: async (a) => fileSystem.exists(a.path),
-    delete: async (a) => {
-      await fileSystem.unlink(a.path);
-      notifyReference.current?.('fileChanged', { path: a.path, kind: 'deleted' });
+    readDir: async (request) => fileSystem.readdir(request.path),
+    stat: async (request) => fileSystem.stat(request.path),
+    exists: async (request) => fileSystem.exists(request.path),
+    delete: async (request) => {
+      await fileSystem.unlink(request.path);
+      notifyReference.current?.('fileChanged', { path: request.path, kind: 'deleted' });
     },
   };
 
   const impl: ChannelServer<FsProtocol> = {
-    async call(_context, name, args) {
+    async call(_context, name, arguments_) {
       const handler = callHandlers[name];
-      return handler(args);
+      return handler(arguments_);
     },
     // oxlint-disable-next-line max-params -- ChannelServer.listen impl signature is fixed at 4 params (context, eventName, args, signal)
-    listen(_context, _event, args, signal) {
+    listen(_context, _event, arguments_, signal) {
       /* `_event` is the listens-name union — narrowed structurally to
        * `'watch'` by the `FsProtocol` declaration. There are no other
        * listens, so an exhaustiveness branch here would be dead code. */
@@ -209,7 +209,7 @@ export function createFsBridgeHost(port: Port<unknown>, fileSystem: RuntimeFileS
       }
       return subscribeWatch({
         fileSystem,
-        request: args as RuntimeWatchRequest,
+        request: arguments_ as RuntimeWatchRequest,
         signal,
         activeWatches,
       });

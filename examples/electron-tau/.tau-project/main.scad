@@ -1,2 +1,3 @@
-len=200;
-cube(len);
+$fn=48;
+
+cylinder(5);

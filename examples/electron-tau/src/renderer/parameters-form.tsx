@@ -1,12 +1,16 @@
-import type { ScadParam as ScadParameter } from './openscad-params.js';
+/** Single row consumed by {@link ParametersForm}; mapped from runtime `parametersResolved`. */
+export type ParametersFormRow = {
+  readonly name: string;
+  readonly defaultValue: number | string;
+};
 
-export type ParametersFormProps = {
-  readonly params: readonly ScadParameter[];
+export type ParametersFormProperties = {
+  readonly params: readonly ParametersFormRow[];
   readonly override?: { name: string; value: number };
   readonly onChange: (name: string, value: number) => void;
 };
 
-export function ParametersForm({ params, override, onChange }: ParametersFormProps) {
+export function ParametersForm({ params, override, onChange }: ParametersFormProperties): React.ReactElement {
   if (params.length === 0) {
     return (
       <p data-testid='parameters-empty' style={emptyStyles}>
@@ -34,8 +38,8 @@ export function ParametersForm({ params, override, onChange }: ParametersFormPro
               data-testid={`param-input-${parameter.name}`}
               type='number'
               value={value}
-              onChange={(e) => {
-                onChange(parameter.name, Number(e.target.value));
+              onChange={(event) => {
+                onChange(parameter.name, Number(event.target.value));
               }}
               style={inputStyles}
             />
@@ -48,6 +52,7 @@ export function ParametersForm({ params, override, onChange }: ParametersFormPro
 
 const emptyStyles: React.CSSProperties = {
   fontSize: '0.85rem',
+  // oxlint-disable-next-line tau-lint/no-hardcoded-color -- standalone Electron PoC: no design-token system, inline-only React style sheet
   color: '#777',
 };
 

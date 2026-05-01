@@ -29,12 +29,12 @@ import type { GetParametersResult, HashedGeometryResult, RuntimeClient } from '@
 import { openscad } from '@taucad/openscad';
 
 import { electronUtilityTransport } from '../transport/electron-utility-transport.js';
+import type { ParametersFormRow } from './parameters-form.js';
 import { ParametersForm } from './parameters-form.js';
 import { resolveElectronNumericParameterOverride } from './parameter-override-sync.js';
 import { BoundingBoxViewer } from './bounding-box-viewer.js';
 import { MinimalGlbThreeViewer } from './geometry-three-viewer.js';
 import type { GltfInspection } from './gltf-inspector.js';
-import type { ScadParam as ScadParameter } from './openscad-params.js';
 import { inspectGlb } from './gltf-inspector.js';
 
 const INITIAL_SOURCE = 'len=200;\ncube(len);\n';
@@ -57,7 +57,8 @@ const debugLog = (origin: string, message: string, data?: Record<string, unknown
  * boolean so packaged renderer builds still see the runtime env flag (the
  * Vite bundle does not retain `process.env` the way dev‑server SSR does).
  */
-const tauPreloadDebug = (globalThis as Window & { __TAU_ELECTRON_DEBUG?: boolean }).__TAU_ELECTRON_DEBUG === true;
+const tauPreloadDebug =
+  (globalThis as unknown as Window & { __TAU_ELECTRON_DEBUG?: boolean }).__TAU_ELECTRON_DEBUG === true;
 const tauProcessReflect = Reflect.get(globalThis as unknown as Record<string, unknown>, 'process') as
   | { env?: Readonly<Record<string, string | undefined>> }
   | undefined;
@@ -111,34 +112,35 @@ const awaitRelayedPort = async (relayTag: string): Promise<MessagePort> =>
       if (!port) {
         return;
       }
-      (globalThis as Window).removeEventListener('message', handler);
+      (globalThis as unknown as Window).removeEventListener('message', handler);
       resolve(port);
     };
-    (globalThis as Window).addEventListener('message', handler);
+    (globalThis as unknown as Window).addEventListener('message', handler);
   });
 
 type SchemaProperties = Record<string, { default?: unknown; type?: string } | undefined>;
 
-const parametersFromResult = (result: GetParametersResult): readonly ScadParameter[] => {
+/** Maps runtime `GetParametersResult` rows for {@link ParametersForm}. */
+const parametersFromResult = (result: GetParametersResult): readonly ParametersFormRow[] => {
   if (!result.success) {
     return [];
   }
   const { defaultParameters, jsonSchema } = result.data;
   const properties = (jsonSchema as { properties?: SchemaProperties } | undefined)?.properties ?? {};
   const seen = new Set<string>();
-  const out: ScadParameter[] = [];
+  const out: ParametersFormRow[] = [];
   for (const [name, descriptor] of Object.entries(properties)) {
     seen.add(name);
     out.push({
       name,
-      defaultValue: (defaultParameters[name] ?? descriptor?.default ?? 0) as ScadParameter['defaultValue'],
+      defaultValue: (defaultParameters[name] ?? descriptor?.default ?? 0) as ParametersFormRow['defaultValue'],
     });
   }
   for (const [name, value] of Object.entries(defaultParameters)) {
     if (seen.has(name)) {
       continue;
     }
-    out.push({ name, defaultValue: value as ScadParameter['defaultValue'] });
+    out.push({ name, defaultValue: value as ParametersFormRow['defaultValue'] });
   }
   return out;
 };
@@ -214,7 +216,7 @@ const gltfPayloadFromGeometry = (
 
 export function App(): React.ReactElement {
   const [source, setSource] = useState(INITIAL_SOURCE);
-  const [parameters, setParameters] = useState<readonly ScadParameter[]>([]);
+  const [parameters, setParameters] = useState<readonly ParametersFormRow[]>([]);
   const [inspection, setInspection] = useState<GltfInspection>(emptyInspection);
   const [geometryGlbBuffer, setGeometryGlbBuffer] = useState<ArrayBuffer | undefined>();
   const [override, setOverride] = useState<{ name: string; value: number } | undefined>();
@@ -234,13 +236,13 @@ export function App(): React.ReactElement {
       const message = error instanceof Error ? error.message : String(error);
       const stack = error instanceof Error ? error.stack : undefined;
       const payload = `[${where}] ${message}${stack ? `\n${stack}` : ''}`;
-      (globalThis as Window).__taucadLastError = payload;
+      (globalThis as unknown as Window).__taucadLastError = payload;
       setErrorMessage(payload);
       debugLog('bootstrap', `error-at-${where}`, { message });
     };
 
     const bootstrap = async (): Promise<void> => {
-      const bridge = (globalThis as Window).taucad;
+      const bridge = (globalThis as unknown as Window).taucad;
       if (!bridge) {
         recordError('bridge-missing', new Error('window.taucad bridge unavailable (preload failed)'));
         if (!cancelled) {
@@ -266,7 +268,7 @@ export function App(): React.ReactElement {
         }
 
         const client = createRuntimeClient({
-          transport: electronUtilityTransport.client({ port }),
+          transport: electronUtilityTransport({ port }),
           kernels: [openscad()],
         }) as unknown as RuntimeClient;
         clientReference.current = client;
@@ -282,7 +284,7 @@ export function App(): React.ReactElement {
             return;
           }
           // oxlint-disable-next-line unicorn/prefer-global-this -- ambient renderer-only diagnostic surface
-          (globalThis as Window).__taucadTransportDescriptor = {
+          (globalThis as unknown as Window).__taucadTransportDescriptor = {
             id: client.transport.id,
             wire: client.transport.descriptor.wire,
             geometryDelivery: client.transport.descriptor.memory.geometryDelivery,

@@ -8,8 +8,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-const srcDir = dirname(fileURLToPath(import.meta.url));
-const transportSource = join(srcDir, 'electron-utility-transport.ts');
+const sourceDirectory = dirname(fileURLToPath(import.meta.url));
+const transportSource = join(sourceDirectory, 'electron-utility-transport.ts');
 
 describe('electronUtilityTransport source hygiene', () => {
   it('never imports `@taucad/runtime/testing`', () => {
