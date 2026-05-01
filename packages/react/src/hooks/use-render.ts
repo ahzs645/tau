@@ -7,6 +7,7 @@ import type {
   ExportResult,
   KernelPlugin,
   TranscoderPlugin,
+  HashedGeometryResult,
 } from '@taucad/runtime';
 import { createRuntimeClient } from '@taucad/runtime';
 import type { JSONSchema7 } from '@taucad/json-schema';
@@ -67,10 +68,25 @@ const emptyGeometries: Geometry[] = [];
 const emptyParameters: Record<string, unknown> = {};
 
 /**
- * Headless hook for transient, in-memory CAD rendering.
+ * Headless hook for transient, in-memory CAD rendering using the v5
+ * event-driven `RuntimeClient` surface.
  *
- * Creates a `RuntimeClient` internally, calls `client.render({ code })` reactively
- * when inputs change, and returns geometry results. Uses an in-memory filesystem.
+ * The hook owns the four-step lifecycle on the consumer's behalf:
+ *
+ * 1. **Construct** — `createRuntimeClient(clientOptions)` on `clientOptions`
+ *    change (or first mount).
+ * 2. **Connect** — subscribes to `client.on('geometry' | 'error' | 'parametersResolved' | 'capabilities', …)`
+ *    and lets the runtime client establish its transport handshake.
+ * 3. **Command** — `client.openFile({ code, file, parameters })` is invoked
+ *    whenever `code`, `file`, `parameters`, or `enabled` changes. Multiple
+ *    rapid changes naturally supersede each other via `RenderOutcome` —
+ *    the prior settlement resolves with `{ superseded: true }` and the
+ *    latest call's geometry arrives over the `'geometry'` event channel.
+ * 4. **Consume** — geometries, status, parameter schema, and capabilities
+ *    are exposed as React state, updating reactively as worker events
+ *    flow through the event surface.
+ *
+ * Cleanup terminates the client on unmount. Subscriptions auto-dispose.
  *
  * @param options - Render configuration including code, kernels, and parameters
  * @returns Reactive render state including geometries, status, error, and parameter schema
@@ -88,12 +104,21 @@ const emptyParameters: Record<string, unknown> = {};
  *   bundlers: [esbuild()],
  * });
  *
- * const code = 'export default () => ({ type: "box", size: 10 })';
+ * const code = `
+ *   import { drawCircle } from 'replicad';
+ *   export default () => drawCircle(10).sketchOnPlane().extrude(20);
+ * `;
  *
- * const { geometries, status } = useRender({
+ * const { geometries, status, error } = useRender({
  *   clientOptions: options,
- *   code: { 'main.ts': code },
+ *   code: { '/main.ts': code },
+ *   file: '/main.ts',
+ *   parameters: { height: 20 },
  * });
+ *
+ * if (status === 'success') {
+ *   // geometries[0].format === 'gltf' for the default replicad pipeline
+ * }
  * ```
  */
 export function useRender(options: UseRenderOptions): UseRenderResult {
@@ -106,27 +131,47 @@ export function useRender(options: UseRenderOptions): UseRenderResult {
   const [jsonSchema, setJsonSchema] = useState<JSONSchema7 | undefined>();
 
   const [capabilities, setCapabilities] = useState<CapabilitiesManifest | undefined>();
-  // oxlint-disable-next-line @typescript-eslint/no-unnecessary-type-arguments -- intentional: documents the wide-default erasure form per R6
+  // oxlint-disable-next-line @typescript-eslint/no-unnecessary-type-arguments -- intentional: documents the wide-default erasure form
   const clientRef = useRef<RuntimeClient<KernelPlugin[], TranscoderPlugin[]> | undefined>(undefined);
 
   useEffect(() => {
     const client = createRuntimeClient(clientOptions);
     clientRef.current = client;
 
-    const unsubParams = client.on('parametersResolved', (result) => {
-      if (result.success) {
-        setDefaultParameters(result.data.defaultParameters);
-        setJsonSchema(result.data.jsonSchema as JSONSchema7);
-      }
-    });
+    const unsubscribers: Array<() => void> = [];
 
-    const unsubCaps = client.on('capabilities', (manifest) => {
-      setCapabilities(manifest);
-    });
+    unsubscribers.push(
+      client.on('parametersResolved', (result) => {
+        if (result.success) {
+          setDefaultParameters(result.data.defaultParameters);
+          setJsonSchema(result.data.jsonSchema as JSONSchema7);
+        }
+      }),
+      client.on('capabilities', (manifest) => {
+        setCapabilities(manifest);
+      }),
+      client.on('geometry', (result: HashedGeometryResult) => {
+        if (result.success) {
+          setGeometries(result.data);
+          setError(undefined);
+          setStatus('success');
+        } else {
+          const firstIssue = result.issues[0];
+          setError(new Error(firstIssue?.message ?? 'Render failed'));
+          setStatus('error');
+        }
+      }),
+      client.on('error', (issues) => {
+        const firstIssue = issues[0];
+        setError(new Error(firstIssue?.message ?? 'Render failed'));
+        setStatus('error');
+      }),
+    );
 
     return () => {
-      unsubParams();
-      unsubCaps();
+      for (const unsub of unsubscribers) {
+        unsub();
+      }
       client.terminate();
       clientRef.current = undefined;
     };
@@ -138,51 +183,21 @@ export function useRender(options: UseRenderOptions): UseRenderResult {
       return;
     }
 
-    let cancelled = false;
     setStatus('loading');
 
     const resolvedFile = file ?? Object.keys(code)[0]!;
 
-    void (async () => {
-      try {
-        const result = await client.render({ code, file: resolvedFile, parameters });
-
-        // oxlint-disable-next-line eslint/no-constant-condition, typescript/no-unnecessary-condition -- cancelled is mutated by cleanup after await
-        if (cancelled) {
-          return;
-        }
-
-        if (result.success) {
-          setGeometries(result.data);
-          setError(undefined);
-          setStatus('success');
-          setCapabilities(client.capabilities);
-        } else {
-          const firstIssue = result.issues[0];
-          setError(new Error(firstIssue?.message ?? 'Render failed'));
-          setStatus('error');
-        }
-      } catch (error) {
-        // oxlint-disable-next-line eslint/no-constant-condition, typescript/no-unnecessary-condition -- cancelled is mutated by cleanup after await
-        if (cancelled) {
-          return;
-        }
-
-        setError(error instanceof Error ? error : new Error(String(error)));
-        setStatus('error');
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
+    void client.openFile({ code, file: resolvedFile, parameters });
   }, [code, file, parameters, enabled]);
 
   const exportGeometry = useCallback(
     async (format: FileExtension, formatOptions?: Record<string, unknown>): Promise<ExportResult> => {
       const client = clientRef.current;
       if (!client) {
-        return { success: false, issues: [{ message: 'Runtime client not initialized', severity: 'error' }] };
+        return {
+          success: false,
+          issues: [{ message: 'Runtime client not initialized', code: 'RUNTIME', severity: 'error' }],
+        };
       }
       return client.export(format, formatOptions);
     },
