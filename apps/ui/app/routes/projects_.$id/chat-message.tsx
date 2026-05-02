@@ -605,7 +605,14 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
               <AssistantParts parts={displayMessage.parts} messageId={displayMessage.id} />
             )}
             {showUserBubbleStopShortcut ? (
-              <div className='absolute right-1 bottom-1 z-10'>
+              <div
+                className={cn(
+                  'absolute right-1 bottom-1 z-10 transition-opacity duration-150',
+                  'pointer-events-none opacity-0',
+                  'group-hover/chat-message:pointer-events-auto group-hover/chat-message:opacity-100',
+                  'group-focus-within/chat-message:pointer-events-auto group-focus-within/chat-message:opacity-100',
+                )}
+              >
                 <ChatStreamingStopButton
                   variant='compact'
                   formattedCancelKeyCombination={formattedCancelKeyCombination}
