@@ -57,7 +57,12 @@ export class ProviderService {
         },
         inputTokensIncludesCacheReadTokens: true,
         inputTokensIncludesCacheWriteTokens: false,
-        createClass: (options) => new ChatOpenAI({ useResponsesApi: true, ...options }),
+        createClass: (options) =>
+          new ChatOpenAI({
+            useResponsesApi: true,
+            outputVersion: 'v1',
+            ...options,
+          }),
       },
       ollama: {
         provider: 'ollama',
@@ -81,6 +86,7 @@ export class ProviderService {
         createClass: (options) =>
           new ChatAnthropic({
             ...options,
+            outputVersion: 'v1',
             betas: [
               // Stream tool use parameters without buffering / JSON validation, reducing the latency to begin receiving large parameters.
               // @see https://platform.claude.com/docs/en/agents-and-tools/tool-use/fine-grained-tool-streaming
@@ -108,6 +114,7 @@ export class ProviderService {
 
           return new ChatVertexAI({
             ...options,
+            outputVersion: 'v1',
             location: 'global',
             streaming: true,
             streamUsage: true,
@@ -138,7 +145,11 @@ export class ProviderService {
         },
         inputTokensIncludesCacheReadTokens: false,
         inputTokensIncludesCacheWriteTokens: false,
-        createClass: (options) => new ChatOpenAI(options),
+        createClass: (options) =>
+          new ChatOpenAI({
+            outputVersion: 'v1',
+            ...options,
+          }),
       },
     };
   }

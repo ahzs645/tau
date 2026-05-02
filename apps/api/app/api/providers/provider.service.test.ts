@@ -19,7 +19,7 @@ describe('OpenAI Responses API converter', () => {
     const result = convertMessagesToResponsesInput({
       messages,
       zdrEnabled: false,
-      model: 'gpt-5.4',
+      model: 'gpt-5.5',
     });
 
     expect(result).toEqual(

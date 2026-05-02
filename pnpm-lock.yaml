@@ -449,8 +449,9 @@ catalogs:
       version: 4.3.6
 
 overrides:
-  '@langchain/google-common': https://github.com/taucad/langchainjs/raw/0f065cb8c363ff95a2fdddfbe28bbac1970068cd/langchain-google-common-2.1.32.tgz
-  '@langchain/google-vertexai': https://github.com/taucad/langchainjs/raw/0f065cb8c363ff95a2fdddfbe28bbac1970068cd/langchain-google-vertexai-2.1.27.tgz
+  '@langchain/google-common': file:tarballs/langchain-fork/langchain-google-common-2.1.32.tgz
+  '@langchain/google-gauth': 2.1.20
+  '@langchain/google-vertexai': file:tarballs/langchain-fork/langchain-google-vertexai-2.1.27.tgz
   '@types/express': ^5.0.0
   vitest: 4.1.0-beta.6
 
@@ -545,8 +546,8 @@ importers:
         specifier: 'catalog:'
         version: 1.1.37(@opentelemetry/api@1.9.0)(@opentelemetry/exporter-trace-otlp-proto@0.213.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.6.0(@opentelemetry/api@1.9.0))(openai@4.104.0(encoding@0.1.13)(ws@8.19.0)(zod@4.3.6))
       '@langchain/google-vertexai':
-        specifier: https://github.com/taucad/langchainjs/raw/0f065cb8c363ff95a2fdddfbe28bbac1970068cd/langchain-google-vertexai-2.1.27.tgz
-        version: https://github.com/taucad/langchainjs/raw/0f065cb8c363ff95a2fdddfbe28bbac1970068cd/langchain-google-vertexai-2.1.27.tgz(@langchain/core@1.1.37(@opentelemetry/api@1.9.0)(@opentelemetry/exporter-trace-otlp-proto@0.213.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.6.0(@opentelemetry/api@1.9.0))(openai@4.104.0(encoding@0.1.13)(ws@8.19.0)(zod@4.3.6)))
+        specifier: file:tarballs/langchain-fork/langchain-google-vertexai-2.1.27.tgz
+        version: file:tarballs/langchain-fork/langchain-google-vertexai-2.1.27.tgz(@langchain/core@1.1.37(@opentelemetry/api@1.9.0)(@opentelemetry/exporter-trace-otlp-proto@0.213.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.6.0(@opentelemetry/api@1.9.0))(openai@4.104.0(encoding@0.1.13)(ws@8.19.0)(zod@4.3.6)))
       '@langchain/langgraph':
         specifier: 'catalog:'
         version: 1.1.5(@langchain/core@1.1.37(@opentelemetry/api@1.9.0)(@opentelemetry/exporter-trace-otlp-proto@0.213.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.6.0(@opentelemetry/api@1.9.0))(openai@4.104.0(encoding@0.1.13)(ws@8.19.0)(zod@4.3.6)))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(zod-to-json-schema@3.25.1(zod@4.3.6))(zod@4.3.6)
@@ -4684,19 +4685,19 @@ packages:
     resolution: {integrity: sha512-HkXKhtu8KqInPMtn0gNwwUwQtIL2exDhqEo0Ee8NByKuceoAXii+d0j3dbhOJrz43v4QKdB22H0QTSrFAzx5sA==}
     engines: {node: '>=20'}
 
-  '@langchain/google-common@https://github.com/taucad/langchainjs/raw/0f065cb8c363ff95a2fdddfbe28bbac1970068cd/langchain-google-common-2.1.32.tgz':
-    resolution: {tarball: https://github.com/taucad/langchainjs/raw/0f065cb8c363ff95a2fdddfbe28bbac1970068cd/langchain-google-common-2.1.32.tgz}
+  '@langchain/google-common@file:tarballs/langchain-fork/langchain-google-common-2.1.32.tgz':
+    resolution: {integrity: sha512-t8Kb8IWiBQcrGSzJLQaRjveafwPTb8UzBHDDPsbIHeYEYCCWAQe5B2xXSMEEpUsq2zy3Wh0NI+9HmMeOJ5hl2g==, tarball: file:tarballs/langchain-fork/langchain-google-common-2.1.32.tgz}
     version: 2.1.32
     engines: {node: '>=20'}
     peerDependencies:
-      '@langchain/core': ^1.1.27
+      '@langchain/core': workspace:^
 
   '@langchain/google-gauth@2.1.20':
     resolution: {integrity: sha512-q3+C9M9oH0tpDL/UIIMWAvt6s6lfk82+ohDgVOT/UMToIw+p9N1U3LHCfy65nh6IXVVfgB0TK7uqPWqQjNz4oQ==}
     engines: {node: '>=20'}
 
-  '@langchain/google-vertexai@https://github.com/taucad/langchainjs/raw/0f065cb8c363ff95a2fdddfbe28bbac1970068cd/langchain-google-vertexai-2.1.27.tgz':
-    resolution: {integrity: sha512-jphzPu9yU5YEO5A0fN4SByJGJ0sCIrkIfObLhzKuVcdbzVgtqpvD8zJZtterGqjP92uddcBsZGfJpT1kKdAKXQ==, tarball: https://github.com/taucad/langchainjs/raw/0f065cb8c363ff95a2fdddfbe28bbac1970068cd/langchain-google-vertexai-2.1.27.tgz}
+  '@langchain/google-vertexai@file:tarballs/langchain-fork/langchain-google-vertexai-2.1.27.tgz':
+    resolution: {integrity: sha512-9BOZsPIal9si5wTyhXtkLpW8V2Tt3a6adEEViP2ftSo3/6bdnar03V2JhFe16C5XkugjtDrtEorHo8OHWnJV6w==, tarball: file:tarballs/langchain-fork/langchain-google-vertexai-2.1.27.tgz}
     version: 2.1.27
     engines: {node: '>=20'}
 
@@ -23961,20 +23962,20 @@ snapshots:
       - '@opentelemetry/sdk-trace-base'
       - openai
 
-  '@langchain/google-common@https://github.com/taucad/langchainjs/raw/0f065cb8c363ff95a2fdddfbe28bbac1970068cd/langchain-google-common-2.1.32.tgz(@langchain/core@1.1.37(@opentelemetry/api@1.9.0)(@opentelemetry/exporter-trace-otlp-proto@0.213.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.6.0(@opentelemetry/api@1.9.0))(openai@4.104.0(encoding@0.1.13)(ws@8.19.0)(zod@4.3.6)))':
+  '@langchain/google-common@file:tarballs/langchain-fork/langchain-google-common-2.1.32.tgz(@langchain/core@1.1.37(@opentelemetry/api@1.9.0)(@opentelemetry/exporter-trace-otlp-proto@0.213.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.6.0(@opentelemetry/api@1.9.0))(openai@4.104.0(encoding@0.1.13)(ws@8.19.0)(zod@4.3.6)))':
     dependencies:
       '@langchain/core': 1.1.37(@opentelemetry/api@1.9.0)(@opentelemetry/exporter-trace-otlp-proto@0.213.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.6.0(@opentelemetry/api@1.9.0))(openai@4.104.0(encoding@0.1.13)(ws@8.19.0)(zod@4.3.6))
       uuid: 10.0.0
 
   '@langchain/google-gauth@2.1.20(@langchain/core@1.1.37(@opentelemetry/api@1.9.0)(@opentelemetry/exporter-trace-otlp-proto@0.213.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.6.0(@opentelemetry/api@1.9.0))(openai@4.104.0(encoding@0.1.13)(ws@8.19.0)(zod@4.3.6)))':
     dependencies:
-      '@langchain/google-common': https://github.com/taucad/langchainjs/raw/0f065cb8c363ff95a2fdddfbe28bbac1970068cd/langchain-google-common-2.1.32.tgz(@langchain/core@1.1.37(@opentelemetry/api@1.9.0)(@opentelemetry/exporter-trace-otlp-proto@0.213.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.6.0(@opentelemetry/api@1.9.0))(openai@4.104.0(encoding@0.1.13)(ws@8.19.0)(zod@4.3.6)))
+      '@langchain/google-common': file:tarballs/langchain-fork/langchain-google-common-2.1.32.tgz(@langchain/core@1.1.37(@opentelemetry/api@1.9.0)(@opentelemetry/exporter-trace-otlp-proto@0.213.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.6.0(@opentelemetry/api@1.9.0))(openai@4.104.0(encoding@0.1.13)(ws@8.19.0)(zod@4.3.6)))
       google-auth-library: 10.6.1
     transitivePeerDependencies:
       - '@langchain/core'
       - supports-color
 
-  '@langchain/google-vertexai@https://github.com/taucad/langchainjs/raw/0f065cb8c363ff95a2fdddfbe28bbac1970068cd/langchain-google-vertexai-2.1.27.tgz(@langchain/core@1.1.37(@opentelemetry/api@1.9.0)(@opentelemetry/exporter-trace-otlp-proto@0.213.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.6.0(@opentelemetry/api@1.9.0))(openai@4.104.0(encoding@0.1.13)(ws@8.19.0)(zod@4.3.6)))':
+  '@langchain/google-vertexai@file:tarballs/langchain-fork/langchain-google-vertexai-2.1.27.tgz(@langchain/core@1.1.37(@opentelemetry/api@1.9.0)(@opentelemetry/exporter-trace-otlp-proto@0.213.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.6.0(@opentelemetry/api@1.9.0))(openai@4.104.0(encoding@0.1.13)(ws@8.19.0)(zod@4.3.6)))':
     dependencies:
       '@langchain/google-gauth': 2.1.20(@langchain/core@1.1.37(@opentelemetry/api@1.9.0)(@opentelemetry/exporter-trace-otlp-proto@0.213.0(@opentelemetry/api@1.9.0))(@opentelemetry/sdk-trace-base@2.6.0(@opentelemetry/api@1.9.0))(openai@4.104.0(encoding@0.1.13)(ws@8.19.0)(zod@4.3.6)))
     transitivePeerDependencies:

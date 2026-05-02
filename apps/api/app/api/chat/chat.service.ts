@@ -25,6 +25,7 @@ import { getCadSystemPrompt } from '#api/chat/prompts/cad-agent.prompt.js';
 import { toolResultTrimmerMiddleware } from '#api/chat/middleware/tool-result-trimmer.middleware.js';
 import { promptCachingMiddleware } from '#api/chat/middleware/prompt-caching.middleware.js';
 import { messageContentSanitizerMiddleware } from '#api/chat/middleware/message-content-sanitizer.middleware.js';
+import { createCrossProviderContentNormalizerMiddleware } from '#api/chat/middleware/cross-provider-content-normalizer.middleware.js';
 import { latexDelimiterMiddleware } from '#api/chat/middleware/latex-delimiter.middleware.js';
 import { newlineTrimmerMiddleware } from '#api/chat/middleware/newline-trimmer.middleware.js';
 import { createAgentSafeguardsMiddleware } from '#api/chat/middleware/agent-safeguards.middleware.js';
@@ -70,6 +71,11 @@ export class ChatService {
     const checkpointer = this.checkpointerService.getCheckpointer();
 
     const { model } = this.modelService.buildModel(modelId);
+
+    const providerId = this.modelService.getProviderId(modelId);
+    if (!providerId) {
+      throw new Error(`Could not resolve provider for model ${modelId}`);
+    }
 
     // Combine all tools into a single array for the unified agent
     const allTools = [
@@ -162,6 +168,7 @@ export class ChatService {
         createAgentSafeguardsMiddleware(this.metricsService, this.chatRpcService),
 
         // --- Message processing ---
+        createCrossProviderContentNormalizerMiddleware(providerId),
         messageContentSanitizerMiddleware,
         newlineTrimmerMiddleware,
         latexDelimiterMiddleware,

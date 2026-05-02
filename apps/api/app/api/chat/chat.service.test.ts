@@ -196,6 +196,51 @@ describe('ChatService', () => {
       expect(mockToolService.getTools).toHaveBeenCalledWith('auto', 'replicad');
     });
 
+    it('calls ModelService.getProviderId for the requested model', async () => {
+      await service.createAgent({
+        chatId: 'test-chat-1',
+        modelId: 'model-1',
+        kernel: 'openscad',
+        tools: { choice: 'auto' },
+      });
+
+      expect(mockModelService.getProviderId).toHaveBeenCalledWith('model-1');
+    });
+
+    it('orders CrossProviderContentNormalizer before MessageContentSanitizer', async () => {
+      await service.createAgent({
+        chatId: 'test-chat-order',
+        modelId: 'model-1',
+        kernel: 'openscad',
+        tools: { choice: 'auto' },
+      });
+
+      const createAgentMock = vi.mocked(createAgent);
+      const middleware = createAgentMock.mock.calls.at(-1)?.[0]?.middleware ?? [];
+
+      const indexByName = (name: string): number =>
+        middleware.findIndex((m) => (m as { name?: string } | undefined)?.name === name);
+
+      const normalizerIndex = indexByName('CrossProviderContentNormalizer');
+      const sanitizerIndex = indexByName('MessageContentSanitizer');
+
+      expect(normalizerIndex).toBeGreaterThanOrEqual(0);
+      expect(sanitizerIndex).toBeGreaterThan(normalizerIndex);
+    });
+
+    it('throws when getProviderId returns undefined', async () => {
+      vi.mocked(mockModelService.getProviderId).mockImplementationOnce(() => undefined);
+
+      await expect(
+        service.createAgent({
+          chatId: 'test-chat-provider',
+          modelId: 'orphan-model',
+          kernel: 'openscad',
+          tools: { choice: 'auto' },
+        }),
+      ).rejects.toThrow('Could not resolve provider for model orphan-model');
+    });
+
     it('should include latex delimiter normalization middleware for checkpointed state', async () => {
       await service.createAgent({
         chatId: 'test-chat-1',

@@ -7,6 +7,7 @@ updated: '2026-04-23'
 related:
   - docs/research/interrupted-tool-call-validation-failure.md
   - docs/policy/testing-policy.md
+  - docs/policy/cross-provider-content-contract.md
 ---
 
 # Interrupted Tool-Call Contract Policy
