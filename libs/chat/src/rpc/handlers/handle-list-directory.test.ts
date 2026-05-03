@@ -37,6 +37,17 @@ describe('handleListDirectory', () => {
     });
   });
 
+  it('should return FILE_NOT_FOUND when readdir fails with ENOENT', async () => {
+    const fileSystem = mock<RpcFileSystem>();
+    const error = new Error('ENOENT: no such file');
+    (error as NodeJS.ErrnoException).code = 'ENOENT';
+    fileSystem.readdir.mockRejectedValue(error);
+
+    const result = await handleListDirectory({ path: 'missing-dir' }, fileSystem);
+
+    expect(result).toMatchObject({ success: false, errorCode: rpcClientErrorCode.fileNotFound });
+  });
+
   it('should return error on readdir failure', async () => {
     const fileSystem = mock<RpcFileSystem>();
     fileSystem.readdir.mockRejectedValue(new Error('disk full'));

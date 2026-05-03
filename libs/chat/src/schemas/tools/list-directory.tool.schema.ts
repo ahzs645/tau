@@ -2,9 +2,7 @@ import { z } from 'zod';
 
 /** @public */
 export const listDirectoryInputSchema = z.object({
-  path: z
-    .string()
-    .describe('The path of the directory to list, relative to the project root. Use empty string for root.'),
+  path: z.string().describe('The path of the directory to list, relative to the project root.'),
 });
 
 const directoryEntrySchema = z.object({
