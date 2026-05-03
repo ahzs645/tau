@@ -35,6 +35,8 @@ export const cookieName = {
   chatWebSearch: 'chat-web-search',
   // The last selected model.
   chatModel: 'chat-model',
+  // Per-user model availability overrides (sparse; values differ from model.recommended).
+  chatModelOverrides: 'chat-model-overrides',
   // Whether to show the model cost in the chat-history.
   chatModelCost: 'chat-model-cost',
 

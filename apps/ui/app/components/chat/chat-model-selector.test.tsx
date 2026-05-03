@@ -53,7 +53,10 @@ const modelCatalogue: Model[] = [
 // useModels anymore — only the catalogue. A getter-trap on those keys
 // makes any regression fail loudly with a clear message.
 const trappedKeys = new Set(['selectedModel', 'selectedModelId', 'setSelectedModelId']);
-const useModelsBacking: { data: Model[] } = { data: modelCatalogue };
+const useModelsBacking: { data: Model[]; availableModels: Model[] } = {
+  data: modelCatalogue,
+  availableModels: modelCatalogue,
+};
 vi.mock('#hooks/use-models.js', () => ({
   useModels: () =>
     new Proxy(useModelsBacking, {

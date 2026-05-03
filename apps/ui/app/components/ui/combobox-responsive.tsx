@@ -59,6 +59,8 @@ type ComboBoxResponsiveProperties<T> = Omit<React.HTMLAttributes<HTMLDivElement>
    * Defaults to always closing.
    */
   readonly shouldCloseOnSelect?: (value: string) => boolean;
+  /** Rendered below the command list (outside keyboard navigation). */
+  readonly footer?: ReactNode;
 };
 
 export function ComboBoxResponsive<T>({
@@ -87,6 +89,7 @@ export function ComboBoxResponsive<T>({
   onLoadMore,
   isNested = false,
   shouldCloseOnSelect,
+  footer,
   ...properties
 }: ComboBoxResponsiveProperties<T>): React.JSX.Element {
   const [open, setOpen] = React.useState(false);
@@ -140,6 +143,40 @@ export function ComboBoxResponsive<T>({
           <DrawerDescription className='sr-only' id='drawer-description'>
             {description}
           </DrawerDescription>
+          <>
+            <ItemList
+              groupedItems={groupedItems}
+              setSelectedItem={handleSelect}
+              selectedItem={selectedItem}
+              renderLabel={renderLabel}
+              getValue={getValue}
+              searchPlaceHolder={searchPlaceHolder}
+              asChildLabel={asChildLabel}
+              labelClassName={labelClassName}
+              isDisabled={isDisabled}
+              emptyListMessage={emptyListMessage}
+              isSearchEnabled={isSearchEnabled}
+              withVirtualization={withVirtualization}
+              virtualizationHeight={virtualizationHeight}
+              isLoadingMore={isLoadingMore}
+              onLoadMore={onLoadMore}
+            />
+            {footer}
+          </>
+        </DrawerContent>
+      </DrawerRoot>
+    );
+  }
+
+  return (
+    <Popover open={open} onOpenChange={handleOpenChange}>
+      <PopoverTrigger asChild>{children}</PopoverTrigger>
+      <PopoverContent
+        {...properties}
+        {...popoverProperties}
+        className={cn('w-[200px] p-0', className, popoverProperties?.className)}
+      >
+        <>
           <ItemList
             groupedItems={groupedItems}
             setSelectedItem={handleSelect}
@@ -157,36 +194,8 @@ export function ComboBoxResponsive<T>({
             isLoadingMore={isLoadingMore}
             onLoadMore={onLoadMore}
           />
-        </DrawerContent>
-      </DrawerRoot>
-    );
-  }
-
-  return (
-    <Popover open={open} onOpenChange={handleOpenChange}>
-      <PopoverTrigger asChild>{children}</PopoverTrigger>
-      <PopoverContent
-        {...properties}
-        {...popoverProperties}
-        className={cn('w-[200px] p-0', className, popoverProperties?.className)}
-      >
-        <ItemList
-          groupedItems={groupedItems}
-          setSelectedItem={handleSelect}
-          selectedItem={selectedItem}
-          renderLabel={renderLabel}
-          getValue={getValue}
-          searchPlaceHolder={searchPlaceHolder}
-          asChildLabel={asChildLabel}
-          labelClassName={labelClassName}
-          isDisabled={isDisabled}
-          emptyListMessage={emptyListMessage}
-          isSearchEnabled={isSearchEnabled}
-          withVirtualization={withVirtualization}
-          virtualizationHeight={virtualizationHeight}
-          isLoadingMore={isLoadingMore}
-          onLoadMore={onLoadMore}
-        />
+          {footer}
+        </>
       </PopoverContent>
     </Popover>
   );

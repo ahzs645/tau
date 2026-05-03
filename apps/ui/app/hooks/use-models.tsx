@@ -52,6 +52,7 @@ export const getModels = async (): Promise<Model[]> => {
 export const useModels = () => {
   const loaderData = useRouteLoaderData<typeof loader>('root');
   const [selectedModelId, setSelectedModelId] = useCookie(cookieName.chatModel, defaultChatModel);
+  const [overrides, setOverrides] = useCookie<Record<string, boolean>>(cookieName.chatModelOverrides, {});
 
   const { data, isLoading } = useQuery({
     queryKey: ['models'],
@@ -59,6 +60,30 @@ export const useModels = () => {
     refetchInterval: 1000 * 60 * 5, // 5 minutes
     initialData: loaderData?.models,
   });
+
+  const isAvailable = useCallback(
+    (model: Model): boolean => overrides[model.id] ?? model.recommended ?? false,
+    [overrides],
+  );
+
+  const setAvailable = useCallback(
+    (model: Model, enabled: boolean): void => {
+      const recommendedDefault = model.recommended ?? false;
+      setOverrides((previous) => {
+        const entries = Object.entries(previous).filter(([key]) => key !== model.id);
+        if (enabled !== recommendedDefault) {
+          entries.push([model.id, enabled]);
+        }
+
+        return Object.fromEntries(entries);
+      });
+    },
+    [setOverrides],
+  );
+
+  const availableModels = useMemo(() => (data ?? []).filter((model) => isAvailable(model)), [data, isAvailable]);
+
+  const recommendedModels = useMemo(() => (data ?? []).filter((model) => model.recommended === true), [data]);
 
   const modelById = useMemo(() => new Map((data ?? []).map((m) => [m.id, m])), [data]);
 
@@ -76,5 +101,10 @@ export const useModels = () => {
     selectedModelId,
     setSelectedModelId,
     resolveModel,
+    overrides,
+    isAvailable,
+    setAvailable,
+    availableModels,
+    recommendedModels,
   };
 };

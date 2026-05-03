@@ -1,14 +1,16 @@
-import { memo, useCallback } from 'react';
+import { memo, useCallback, useMemo } from 'react';
 import type { ReactNode } from 'react';
-import { Check } from 'lucide-react';
+import { Check, Plus } from 'lucide-react';
 import type { Model } from '@taucad/chat';
 import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
+import { Button } from '#components/ui/button.js';
 import { Badge } from '#components/ui/badge.js';
 import { SvgIcon } from '#components/icons/svg-icon.js';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '#components/ui/hover-card.js';
 import { useModels } from '#hooks/use-models.js';
 import type { ResolvedModel } from '#hooks/use-models.js';
 import { useActiveChatModel } from '#hooks/use-active-chat-model.js';
+import { openSettingsDialog } from '#hooks/use-settings-dialog.js';
 
 type ChatModelSelectorProps = Omit<React.HTMLAttributes<HTMLDivElement>, 'children' | 'onSelect'> & {
   readonly onSelect?: (modelId: string) => void;
@@ -46,10 +48,19 @@ export const ChatModelSelector = memo(function ({
   // future new chats. Reads `data: models` from the global hook because the
   // catalogue itself is not chat-scoped.
   const { model: selectedModel, setActiveModel } = useActiveChatModel();
-  const { data: models = [] } = useModels();
+  const { data: allModels = [], availableModels } = useModels();
+
+  const visibleModels = useMemo(() => {
+    const currentInCatalog = allModels.find((entry) => entry.id === selectedModel.id);
+    if (currentInCatalog && !availableModels.some((entry) => entry.id === currentInCatalog.id)) {
+      return [...availableModels, currentInCatalog];
+    }
+
+    return availableModels;
+  }, [allModels, availableModels, selectedModel.id]);
 
   const providerModelsMap = new Map<string, Model[]>();
-  for (const model of models) {
+  for (const model of visibleModels) {
     if (!providerModelsMap.has(model.provider.name)) {
       providerModelsMap.set(model.provider.name, []);
     }
@@ -59,14 +70,14 @@ export const ChatModelSelector = memo(function ({
 
   const handleSelectModel = useCallback(
     (item: string) => {
-      const model = models.find((m) => m.id === item);
+      const model = allModels.find((entry) => entry.id === item);
 
       if (model) {
         setActiveModel(model.id);
         onSelect?.(model.id);
       }
     },
-    [models, onSelect, setActiveModel],
+    [allModels, onSelect, setActiveModel],
   );
 
   return (
@@ -78,9 +89,9 @@ export const ChatModelSelector = memo(function ({
       searchPlaceHolder='Search models...'
       title='Select a model'
       description='Select the model to use for the chat. This will be used to generate a response.'
-      groupedItems={[...providerModelsMap.entries()].map(([provider, models]) => ({
+      groupedItems={[...providerModelsMap.entries()].map(([provider, providerModels]) => ({
         name: provider,
-        items: models,
+        items: providerModels,
       }))}
       renderLabel={(item, selectedItem) => (
         <HoverCard>
@@ -130,6 +141,19 @@ export const ChatModelSelector = memo(function ({
       isNested={isNested}
       onSelect={handleSelectModel}
       onClose={onClose}
+      footer={
+        <Button
+          type='button'
+          variant='ghost'
+          className='w-full justify-start gap-2 rounded-none border-t'
+          onClick={() => {
+            openSettingsDialog('models');
+          }}
+        >
+          <Plus className='size-4' />
+          Add models
+        </Button>
+      }
     >
       {children({ selectedModel })}
     </ComboBoxResponsive>
