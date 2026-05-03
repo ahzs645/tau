@@ -121,55 +121,171 @@ function registerOcModule(oc: OpenCascadeInstance, runtime: KernelRuntime): void
   runtime.bundler.registerModule('opencascade.js', { code, version: '3.0.0' });
 }
 
+function shapeEntryFromKernelReturnItem(item: unknown): ShapeEntry | undefined {
+  if (isOpenCascadeShape(item)) {
+    return { shape: item };
+  }
+
+  if (!isRecordObject(item) || !('shape' in item) || !isOpenCascadeShape(item['shape'])) {
+    return undefined;
+  }
+
+  return {
+    shape: item['shape'],
+    name: typeof item['name'] === 'string' ? item['name'] : undefined,
+    color: typeof item['color'] === 'string' ? item['color'] : undefined,
+    opacity: typeof item['opacity'] === 'number' ? item['opacity'] : undefined,
+    metalness: typeof item['metalness'] === 'number' ? item['metalness'] : undefined,
+    roughness: typeof item['roughness'] === 'number' ? item['roughness'] : undefined,
+    density: typeof item['density'] === 'number' ? item['density'] : undefined,
+  };
+}
+
 function normalizeShapes(value: unknown): ShapeEntry[] {
   if (!value) {
     return [];
   }
 
-  if (isOpenCascadeShape(value)) {
-    return [{ shape: value }];
-  }
-
   if (Array.isArray(value)) {
     const entries: ShapeEntry[] = [];
     for (const item of value) {
-      if (isOpenCascadeShape(item)) {
-        entries.push({ shape: item });
-      } else if (isRecordObject(item) && 'shape' in item && isOpenCascadeShape(item['shape'])) {
-        entries.push({
-          shape: item['shape'],
-          name: typeof item['name'] === 'string' ? item['name'] : undefined,
-          color: typeof item['color'] === 'string' ? item['color'] : undefined,
-          opacity: typeof item['opacity'] === 'number' ? item['opacity'] : undefined,
-          metalness: typeof item['metalness'] === 'number' ? item['metalness'] : undefined,
-          roughness: typeof item['roughness'] === 'number' ? item['roughness'] : undefined,
-          density: typeof item['density'] === 'number' ? item['density'] : undefined,
-        });
+      const entry = shapeEntryFromKernelReturnItem(item);
+      if (entry) {
+        entries.push(entry);
       }
     }
 
     return entries;
   }
 
-  if (isRecordObject(value) && 'shape' in value && isOpenCascadeShape(value['shape'])) {
-    return [
-      {
-        shape: value['shape'],
-        name: typeof value['name'] === 'string' ? value['name'] : undefined,
-        color: typeof value['color'] === 'string' ? value['color'] : undefined,
-        opacity: typeof value['opacity'] === 'number' ? value['opacity'] : undefined,
-        metalness: typeof value['metalness'] === 'number' ? value['metalness'] : undefined,
-        roughness: typeof value['roughness'] === 'number' ? value['roughness'] : undefined,
-        density: typeof value['density'] === 'number' ? value['density'] : undefined,
-      },
-    ];
-  }
-
-  return [];
+  const entry = shapeEntryFromKernelReturnItem(value);
+  return entry ? [entry] : [];
 }
 
 function isOpenCascadeShape(value: unknown): value is TopoDS_Shape {
   return isRecordObject(value) && typeof value['IsNull'] === 'function' && typeof value['delete'] === 'function';
+}
+
+/**
+ * XCAF STEP assembly export (`STEPCAFControl_Writer.Perform` — must not use `Transfer(..., '', ...)`:
+ * an empty string is a non-null `const char*` and enables multi-file mode with no geometry in the main file).
+ *
+ * @param oc - WASM OpenCascade instance
+ * @param nativeHandle - shapes and metadata from the last `createGeometry`
+ * @returns STEP file bytes on success, or `{ ok: false }` when `Perform` fails
+ */
+function exportOpencascadeStepAssembly(
+  oc: OpenCascadeInstance,
+  nativeHandle: ShapeEntry[],
+): { ok: true; bytes: Uint8Array<ArrayBuffer> } | { ok: false } {
+  const documentName = new oc.TCollection_ExtendedString();
+  const document = new oc.TDocStd_Document(documentName);
+  const mainLabel = document.Main();
+  const shapeTool = oc.XCAFDoc_DocumentTool.ShapeTool(mainLabel);
+  const colorTool = oc.XCAFDoc_DocumentTool.ColorTool(mainLabel);
+
+  for (const entry of nativeHandle) {
+    if (entry.shape.IsNull()) {
+      continue;
+    }
+
+    const label = shapeTool.NewShape();
+    shapeTool.SetShape(label, entry.shape);
+
+    if (entry.name) {
+      const entryName = new oc.TCollection_ExtendedString(entry.name, true);
+      oc.TDataStd_Name.Set(label, entryName);
+      entryName.delete();
+    }
+
+    if (entry.color) {
+      const [r, g, b] = parseHexColor(entry.color);
+      const color = new oc.Quantity_Color(r, g, b, oc.Quantity_TypeOfColor.Quantity_TOC_sRGB);
+      colorTool.SetColor(label, color, oc.XCAFDoc_ColorType.XCAFDoc_ColorSurf);
+      color.delete();
+    }
+
+    if (entry.metalness !== undefined || entry.roughness !== undefined) {
+      const visTool = oc.XCAFDoc_DocumentTool.VisMaterialTool(mainLabel);
+      const pbrMat = new oc.XCAFDoc_VisMaterialPBR();
+      if (entry.color) {
+        const [r, g, b] = parseHexColor(entry.color);
+        const baseColor = new oc.Quantity_ColorRGBA(r, g, b, entry.opacity ?? 1);
+        pbrMat.BaseColor = baseColor;
+        baseColor.delete();
+      }
+      pbrMat.Metallic = entry.metalness ?? cadMaterialDefaults.metalnessFactor;
+      pbrMat.Roughness = entry.roughness ?? cadMaterialDefaults.roughnessFactor;
+      pbrMat.IsDefined = true;
+      const visMat = new oc.XCAFDoc_VisMaterial();
+      visMat.SetPbrMaterial(pbrMat);
+      const matName = new oc.TCollection_AsciiString(entry.name ?? 'material');
+      const visMatLabel = visTool.AddMaterial(visMat, matName);
+      visTool.SetShapeMaterial(label, visMatLabel);
+      matName.delete();
+      visMatLabel.delete();
+      visMat.delete();
+      pbrMat.delete();
+      visTool.delete();
+    }
+
+    if (entry.density !== undefined) {
+      const matTool = oc.XCAFDoc_DocumentTool.MaterialTool(mainLabel);
+      const materialName = new oc.TCollection_HAsciiString(entry.name ?? 'material');
+      const description = new oc.TCollection_HAsciiString('');
+      const densityName = new oc.TCollection_HAsciiString('g/cm3');
+      const densityValueType = new oc.TCollection_HAsciiString('POSITIVE_RATIO_MEASURE');
+      matTool.SetMaterial(label, materialName, description, entry.density, densityName, densityValueType);
+      densityValueType.delete();
+      densityName.delete();
+      description.delete();
+      materialName.delete();
+      matTool.delete();
+    }
+
+    label.delete();
+  }
+
+  shapeTool.UpdateAssemblies();
+
+  const session = new oc.XSControl_WorkSession();
+  const writer = new oc.STEPCAFControl_Writer(session, false);
+  writer.SetColorMode(true);
+  writer.SetNameMode(true);
+  writer.SetMaterialMode(true);
+  oc.Interface_Static.SetIVal('write.surfacecurve.mode', 1);
+  oc.Interface_Static.SetIVal('write.step.assembly', 2);
+  oc.Interface_Static.SetIVal('write.step.schema', 5);
+
+  const progress = new oc.Message_ProgressRange();
+  const filePath = `/tmp/export_${Date.now()}.step`;
+  const ok = writer.Perform(document, filePath, progress);
+  if (!ok) {
+    progress.delete();
+    writer.delete();
+    session.delete();
+    colorTool.delete();
+    shapeTool.delete();
+    mainLabel.delete();
+    documentName.delete();
+    document.delete();
+    return { ok: false };
+  }
+
+  const rawData = oc.FS.readFile(filePath) as Uint8Array<ArrayBuffer>;
+  const bytes = new Uint8Array(rawData);
+  oc.FS.unlink(filePath);
+
+  progress.delete();
+  writer.delete();
+  session.delete();
+  colorTool.delete();
+  shapeTool.delete();
+  mainLabel.delete();
+  documentName.delete();
+  document.delete();
+
+  return { ok: true, bytes };
 }
 
 // =============================================================================
@@ -366,105 +482,14 @@ export default defineKernel({
       }
 
       case 'step': {
-        const { oc } = context;
-        const documentName = new oc.TCollection_ExtendedString();
-        const document = new oc.TDocStd_Document(documentName);
-        const mainLabel = document.Main();
-        const shapeTool = oc.XCAFDoc_DocumentTool.ShapeTool(mainLabel);
-        const colorTool = oc.XCAFDoc_DocumentTool.ColorTool(mainLabel);
-
-        for (const entry of nativeHandle) {
-          if (entry.shape.IsNull()) {
-            continue;
-          }
-
-          const label = shapeTool.NewShape();
-          shapeTool.SetShape(label, entry.shape);
-
-          if (entry.name) {
-            const entryName = new oc.TCollection_ExtendedString(entry.name, true);
-            oc.TDataStd_Name.Set(label, entryName);
-            entryName.delete();
-          }
-
-          if (entry.color) {
-            const [r, g, b] = parseHexColor(entry.color);
-            const color = new oc.Quantity_Color(r, g, b, oc.Quantity_TypeOfColor.Quantity_TOC_sRGB);
-            colorTool.SetColor(label, color, oc.XCAFDoc_ColorType.XCAFDoc_ColorSurf);
-            color.delete();
-          }
-
-          if (entry.metalness !== undefined || entry.roughness !== undefined) {
-            const visTool = oc.XCAFDoc_DocumentTool.VisMaterialTool(mainLabel);
-            const pbrMat = new oc.XCAFDoc_VisMaterialPBR();
-            if (entry.color) {
-              const [r, g, b] = parseHexColor(entry.color);
-              const baseColor = new oc.Quantity_ColorRGBA(r, g, b, entry.opacity ?? 1);
-              pbrMat.BaseColor = baseColor;
-              baseColor.delete();
-            }
-            pbrMat.Metallic = entry.metalness ?? cadMaterialDefaults.metalnessFactor;
-            pbrMat.Roughness = entry.roughness ?? cadMaterialDefaults.roughnessFactor;
-            pbrMat.IsDefined = true;
-            const visMat = new oc.XCAFDoc_VisMaterial();
-            visMat.SetPbrMaterial(pbrMat);
-            const matName = new oc.TCollection_AsciiString(entry.name ?? 'material');
-            const visMatLabel = visTool.AddMaterial(visMat, matName);
-            visTool.SetShapeMaterial(label, visMatLabel);
-            matName.delete();
-            visMatLabel.delete();
-            visMat.delete();
-            pbrMat.delete();
-            visTool.delete();
-          }
-
-          if (entry.density !== undefined) {
-            const matTool = oc.XCAFDoc_DocumentTool.MaterialTool(mainLabel);
-            const materialName = new oc.TCollection_HAsciiString(entry.name ?? 'material');
-            const description = new oc.TCollection_HAsciiString('');
-            const densityName = new oc.TCollection_HAsciiString('g/cm3');
-            const densityValueType = new oc.TCollection_HAsciiString('POSITIVE_RATIO_MEASURE');
-            matTool.SetMaterial(label, materialName, description, entry.density, densityName, densityValueType);
-            densityValueType.delete();
-            densityName.delete();
-            description.delete();
-            materialName.delete();
-            matTool.delete();
-          }
-
-          label.delete();
+        const result = exportOpencascadeStepAssembly(context.oc, nativeHandle);
+        if (!result.ok) {
+          return createKernelError([
+            { message: 'STEP write failed', code: 'RUNTIME', type: 'runtime', severity: 'error' },
+          ]);
         }
 
-        shapeTool.UpdateAssemblies();
-
-        const session = new oc.XSControl_WorkSession();
-        const writer = new oc.STEPCAFControl_Writer(session, false);
-        writer.SetColorMode(true);
-        writer.SetNameMode(true);
-        writer.SetMaterialMode(true);
-        oc.Interface_Static.SetIVal('write.surfacecurve.mode', 1);
-        oc.Interface_Static.SetIVal('write.step.assembly', 2);
-        oc.Interface_Static.SetIVal('write.step.schema', 5);
-
-        const progress = new oc.Message_ProgressRange();
-        writer.Transfer(document, oc.STEPControl_StepModelType.STEPControl_AsIs, '', progress);
-
-        const filePath = `/tmp/export_${Date.now()}.step`;
-        writer.Write(filePath);
-        const rawData = oc.FS.readFile(filePath) as Uint8Array<ArrayBuffer>;
-        const data = new Uint8Array(rawData);
-        oc.FS.unlink(filePath);
-
-        progress.delete();
-        writer.delete();
-        session.delete();
-        colorTool.delete();
-        shapeTool.delete();
-        mainLabel.delete();
-        documentName.delete();
-        document.delete();
-
-        return createKernelSuccess([createExportFile('step', 'assembly', data)]);
+        return createKernelSuccess([createExportFile('step', 'assembly', result.bytes)]);
       }
 
       case 'stl': {

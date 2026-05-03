@@ -1,8 +1,11 @@
 // @vitest-environment node
+/* oxlint-disable eslint(new-cap) -- OpenCascade API uses PascalCase method names */
 /* eslint-disable @typescript-eslint/naming-convention -- File names use extensions like 'box.ts' */
 /* oxlint-disable @typescript-eslint/no-unsafe-assignment -- vitest asymmetric matchers return any */
 import { describe, it, expect, beforeAll } from 'vitest';
 import opencascadeKernel from '#kernels/opencascade/opencascade.kernel.js';
+import { getModuleRegistry } from '#kernels/kernel-module-helpers.js';
+import type { OpenCascadeInstance } from '#kernels/opencascade/wasm/opencascade_full.js';
 import { assertFailure, assertSuccess, createGeometryFile, createTestWorker } from '#testing/kernel-testing.utils.js';
 import { createGeometryTestHelpers } from '#testing/kernel-geometry-testing.utils.js';
 
@@ -11,6 +14,34 @@ import { createGeometryTestHelpers } from '#testing/kernel-geometry-testing.util
 // =============================================================================
 
 const geometryHelpers = createGeometryTestHelpers();
+
+function assertStepRoundTripVolumeMm3(stepBytes: Uint8Array<ArrayBuffer>, expectedMm3: number): void {
+  const oc = getModuleRegistry().get('opencascade.js') as unknown as OpenCascadeInstance | undefined;
+  expect(oc, 'expected worker to have registered opencascade.js module').toBeDefined();
+  const cascade = oc!;
+
+  const importPath = `/tmp/roundtrip_${Date.now()}_${String(expectedMm3).replace('.', '_')}.step`;
+  cascade.FS.writeFile(importPath, stepBytes);
+
+  const reader = new cascade.STEPControl_Reader();
+  const status = reader.ReadFile(importPath);
+  expect(status).toBe(cascade.IFSelect_ReturnStatus.IFSelect_RetDone);
+
+  const progress = new cascade.Message_ProgressRange();
+  reader.TransferRoots(progress);
+  const importedShape = reader.OneShape();
+  expect(importedShape.IsNull()).toBe(false);
+
+  const props = new cascade.GProp_GProps();
+  cascade.BRepGProp.VolumeProperties(importedShape, props, true, false, false);
+  expect(props.Mass()).toBeCloseTo(expectedMm3, 0);
+
+  importedShape.delete();
+  cascade.FS.unlink(importPath);
+  props.delete();
+  progress.delete();
+  reader.delete();
+}
 
 // =============================================================================
 // All tests share a single worker to avoid Embind type registry conflicts
@@ -260,6 +291,11 @@ export default function main() {
       expect(exportResult.data.length).toBeGreaterThan(0);
       expect(exportResult.data[0]?.bytes).toBeInstanceOf(Uint8Array);
       expect(exportResult.data[0]?.mimeType).toBe('application/step');
+
+      const stepContent = new TextDecoder().decode(exportResult.data[0]!.bytes);
+      expect(stepContent).toContain('CLOSED_SHELL');
+      expect(stepContent).toContain('ADVANCED_BREP_SHAPE_REPRESENTATION');
+      expect(stepContent).toContain('MANIFOLD_SOLID_BREP');
     });
 
     it('should export to STL format', async () => {
@@ -312,6 +348,34 @@ export default function main() {
       assertSuccess(exportResult, 'STEP export');
       expect(exportResult.data.length).toBe(1);
       expect(exportResult.data[0]?.name).toBe('assembly');
+
+      const stepContent = new TextDecoder().decode(exportResult.data[0]!.bytes);
+      expect(stepContent).toContain('CLOSED_SHELL');
+      expect(stepContent).toContain('ADVANCED_BREP_SHAPE_REPRESENTATION');
+      expect(stepContent).toContain('MANIFOLD_SOLID_BREP');
+      expect(stepContent).toContain('SmallBox');
+      expect(stepContent).toContain('LargeBox');
+    });
+
+    it('should round-trip STEP export/import preserving box volume', async () => {
+      const geometryFile = createGeometryFile('box.ts');
+      const createResult = await worker.createGeometry({ file: geometryFile, parameters: {} });
+      assertSuccess(createResult, 'createGeometry for STEP round-trip');
+
+      const exportResult = await worker.exportGeometry('step');
+      assertSuccess(exportResult, 'STEP export');
+      assertStepRoundTripVolumeMm3(exportResult.data[0]!.bytes, 6000);
+    });
+
+    it('should round-trip STEP export/import preserving assembly volume', async () => {
+      const geometryFile = createGeometryFile('assembly.ts');
+      const createResult = await worker.createGeometry({ file: geometryFile, parameters: {} });
+      assertSuccess(createResult, 'createGeometry for assembly STEP round-trip');
+
+      const exportResult = await worker.exportGeometry('step');
+      assertSuccess(exportResult, 'STEP assembly export');
+      // SmallBox 10³ + LargeBox 20³
+      assertStepRoundTripVolumeMm3(exportResult.data[0]!.bytes, 9000);
     });
 
     it('should return error for unsupported export format', async () => {
