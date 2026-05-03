@@ -11,9 +11,9 @@ import {
 } from '#components/chat/chat-tool-card.js';
 import { ChatToolDescription } from '#components/chat/chat-tool-text.js';
 import { ChatToolLabel } from '#components/chat/chat-tool-label.js';
-import { ExternalLink } from '#components/external-link.js';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '#components/ui/collapsible.js';
-import { extractDomainFromUrl, createFaviconUrl } from '#utils/url.utils.js';
+import { WebFavicon } from '#routes/projects_.$id/web-favicon.js';
+import { WebSourceLink } from '#routes/projects_.$id/web-source-link.js';
 import { cn } from '#utils/ui.utils.js';
 import { ChatToolError } from '#components/chat/chat-tool-error.js';
 
@@ -24,24 +24,6 @@ type WebSource = {
   title: string;
   content: string;
 };
-
-function SourceItem({ source }: { readonly source: WebSource }): React.JSX.Element {
-  const domain = extractDomainFromUrl(source.url);
-  const faviconUrl = createFaviconUrl(source.url);
-
-  return (
-    <ExternalLink
-      href={source.url}
-      arrowSize='xs'
-      className='flex w-full min-w-0 items-center gap-2 py-0.5 text-xs text-muted-foreground no-underline hover:text-foreground hover:underline'
-    >
-      <img src={faviconUrl} alt={domain} className='size-3.5 shrink-0 rounded-sm' />
-      <span className='shrink-0 font-medium'>{domain}</span>
-      <span className='text-muted-foreground/50'>-</span>
-      <span className='min-w-0 truncate'>{source.title}</span>
-    </ExternalLink>
-  );
-}
 
 function SourcesList({ sources }: { readonly sources: WebSource[] }): React.JSX.Element {
   const [isExpanded, setIsExpanded] = useState(false);
@@ -54,7 +36,7 @@ function SourcesList({ sources }: { readonly sources: WebSource[] }): React.JSX.
     <div className='flex flex-col'>
       {/* Always visible sources */}
       {visibleSources.map((source) => (
-        <SourceItem key={source.url} source={source} />
+        <WebSourceLink key={source.url} url={source.url} title={source.title} />
       ))}
 
       {/* Expandable section for additional sources */}
@@ -66,14 +48,9 @@ function SourcesList({ sources }: { readonly sources: WebSource[] }): React.JSX.
             />
             <span>...and {hiddenSources.length} more</span>
             <div className='flex items-center gap-0.5'>
-              {hiddenSources.slice(0, 6).map((source) => {
-                const domain = extractDomainFromUrl(source.url);
-                const faviconUrl = createFaviconUrl(source.url);
-
-                return (
-                  <img key={source.url} src={faviconUrl} alt={domain} className='size-3.5 rounded-sm opacity-60' />
-                );
-              })}
+              {hiddenSources.slice(0, 6).map((source) => (
+                <WebFavicon key={source.url} url={source.url} className='size-3.5 rounded-sm opacity-60' />
+              ))}
               {hiddenSources.length > 6 ? (
                 <span className='ml-0.5 text-[10px] text-muted-foreground/50'>+{hiddenSources.length - 6}</span>
               ) : undefined}
@@ -82,7 +59,7 @@ function SourcesList({ sources }: { readonly sources: WebSource[] }): React.JSX.
           <CollapsibleContent>
             <div className='flex flex-col pl-4'>
               {hiddenSources.map((source) => (
-                <SourceItem key={source.url} source={source} />
+                <WebSourceLink key={source.url} url={source.url} title={source.title} />
               ))}
             </div>
           </CollapsibleContent>
