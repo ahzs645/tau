@@ -13,6 +13,7 @@ import type { DeleteFileInput, DeleteFileOutput } from '#schemas/tools/delete-fi
 import type { GrepInput, GrepOutput } from '#schemas/tools/grep.tool.schema.js';
 import type { GlobSearchInput, GlobSearchOutput } from '#schemas/tools/glob-search.tool.schema.js';
 import type { GetKernelResultInput, GetKernelResultOutput } from '#schemas/tools/get-kernel-result.tool.schema.js';
+import type { ExportGeometryInput, ExportGeometryOutput } from '#schemas/tools/export-geometry.tool.schema.js';
 import type { ScreenshotInput, ScreenshotOutput } from '#schemas/tools/screenshot.tool.schema.js';
 import type {
   TransferToCadExpertInput,
@@ -186,6 +187,7 @@ export type MyTools = InferUITools<{
   [toolName.grep]: AiTool<GrepInput, GrepOutput>;
   [toolName.globSearch]: AiTool<GlobSearchInput, GlobSearchOutput>;
   [toolName.getKernelResult]: AiTool<GetKernelResultInput, GetKernelResultOutput>;
+  [toolName.exportGeometry]: AiTool<ExportGeometryInput, ExportGeometryOutput>;
   [toolName.screenshot]: AiTool<ScreenshotInput, ScreenshotOutput>;
   [toolName.transferToCadExpert]: AiTool<TransferToCadExpertInput, TransferToCadExpertOutput>;
   [toolName.transferToResearchExpert]: AiTool<TransferToResearchExpertInput, TransferToResearchExpertOutput>;

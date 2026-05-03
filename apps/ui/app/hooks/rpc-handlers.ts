@@ -327,6 +327,46 @@ function createBrowserGraphicsClient(
       return { success: true, glb: geometry.content };
     },
 
+    async exportGeometry({
+      targetFile,
+      format,
+    }: {
+      targetFile: string;
+      format: string;
+    }): Promise<RpcGraphicsExportGeometryResult> {
+      const resolved = await ensureGeometryUnit(projectRef, targetFile);
+      if (!resolved.ok) {
+        return { success: false, errorCode: resolved.errorCode, message: resolved.message };
+      }
+
+      const { cadSnapshot } = resolved;
+      const { kernelClient } = cadSnapshot.context;
+      if (!kernelClient) {
+        return {
+          success: false,
+          errorCode: rpcClientErrorCode.unknown,
+          message: `Runtime client not connected for ${targetFile}`,
+        };
+      }
+
+      try {
+        const exportResult = await kernelClient.export(format as FileExtension);
+        if (!exportResult.success) {
+          const message = exportResult.issues.map((issue) => issue.message).join('; ') || 'Geometry export failed';
+          return { success: false, errorCode: rpcClientErrorCode.unknown, message };
+        }
+
+        const { bytes, mimeType } = exportResult.data;
+        return { success: true, bytes, mimeType };
+      } catch (error) {
+        return {
+          success: false,
+          errorCode: rpcClientErrorCode.unknown,
+          message: error instanceof Error ? error.message : 'Geometry export failed',
+        };
+      }
+    },
+
     async captureScreenshot({ targetFile }): Promise<CaptureScreenshotRpcResult> {
       const graphicsRef = resolveGraphicsForFile(targetFile);
       if (!graphicsRef) {

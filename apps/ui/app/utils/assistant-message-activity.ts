@@ -21,10 +21,11 @@
  * while text or reasoning between tools forces a split. Empty/whitespace text
  * parts and `step-start` are transparent (they neither render nor split).
  *
- * File edits always render as singletons so their rich per-call diff cards
- * remain visible. CAD verification (kernel checks, screenshots, tests) is part
- * of the `research` exploration phase — its tool cards still render their full
- * diagnostics inline when the aggregated group is expanded.
+ * File edits and persisted interchange exports (`export_geometry`) render as
+ * `write` singletons so rich cards stay top-level. CAD verification (kernel
+ * checks, screenshots, tests) is part of the `research` exploration phase —
+ * its tool cards still render their full diagnostics inline when the
+ * aggregated group is expanded.
  */
 
 import type { MyMessagePart } from '@taucad/chat';
@@ -35,7 +36,8 @@ import type { MyMessagePart } from '@taucad/chat';
  * Activity categories for message part classification.
  *
  * - `text` / `reasoning` / `data` / `transfer` → rendered as singletons (no aggregation).
- * - `write` → singleton preserving the rich per-call diff card.
+ * - `write` → singleton preserving the rich per-call diff card (includes
+ *   `export_geometry` deliverables persisted under `.tau/artifacts`).
  * - `research` → aggregatable (web search + file exploration + CAD verification combined).
  * - `skip` → invisible parts (`step-start`, `data-usage`, `data-context-usage`,
  *   empty/whitespace text).
@@ -86,6 +88,7 @@ const partTypeCategoryMap = new Map<string, ActivityCategory>([
   ['tool-create_file', 'write'],
   ['tool-delete_file', 'write'],
   ['tool-edit_tests', 'write'],
+  ['tool-export_geometry', 'write'],
 
   // Transfer tools
   ['tool-transfer_to_cad_expert', 'transfer'],
@@ -194,8 +197,8 @@ const countTestCases = (part: MyMessagePart): number => {
  * into a single `searches` count (they are conceptually the same operation
  * from the consumer's perspective). Web URL visits become `fetches`. File
  * reads + directory listings become `files`. CAD verification adds
- * `renders` (kernel checks), `images` (screenshots, with composite
- * multi-angle = 6), and `tests` (passes + failures across test_model calls).
+ * `renders` (kernel checks), `images` (screenshots, with composite multi-angle =
+ * 6), and `tests` (passes + failures across test_model calls).
  *
  * Segments are emitted in the stable order
  * `files → searches → fetches → renders → images → tests`.

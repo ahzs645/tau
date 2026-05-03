@@ -82,6 +82,7 @@ export class ChatService {
       // CAD tools (testing tools conditionally included)
       ...(testingEnabled ? [tools.test_model, tools.edit_tests] : []),
       tools.get_kernel_result,
+      tools.export_geometry,
       tools.screenshot,
       // Filesystem tools
       tools.edit_file,

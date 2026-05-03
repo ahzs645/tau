@@ -194,6 +194,7 @@ const targetFileTools = new Set<string>([
   toolName.deleteFile,
   toolName.readFile,
   toolName.getKernelResult,
+  toolName.exportGeometry,
   toolName.screenshot,
   toolName.editTests,
   toolName.testModel,

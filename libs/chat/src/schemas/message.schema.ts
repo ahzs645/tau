@@ -24,6 +24,7 @@ import {
   getKernelResultInputSchema,
   getKernelResultOutputSchema,
 } from '#schemas/tools/get-kernel-result.tool.schema.js';
+import { exportGeometryInputSchema, exportGeometryOutputSchema } from '#schemas/tools/export-geometry.tool.schema.js';
 import { screenshotInputSchema, screenshotOutputSchema } from '#schemas/tools/screenshot.tool.schema.js';
 import { toolName } from '#constants/tool.constants.js';
 import type { ToolName } from '#types/tool.types.js';
@@ -271,6 +272,7 @@ const toolPartSchemas = [
   ...createToolSchemas(toolName.globSearch, globSearchInputSchema, globSearchOutputSchema),
   // Kernel tools
   ...createToolSchemas(toolName.getKernelResult, getKernelResultInputSchema, getKernelResultOutputSchema),
+  ...createToolSchemas(toolName.exportGeometry, exportGeometryInputSchema, exportGeometryOutputSchema),
   // Screenshot tool
   ...createToolSchemas(toolName.screenshot, screenshotInputSchema, screenshotOutputSchema),
   // Transfer tools use empty input schemas with string output

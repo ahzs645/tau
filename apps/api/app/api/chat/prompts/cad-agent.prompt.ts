@@ -17,6 +17,8 @@
 // EVAL(system-rules): pending benchmark-2026-04-20 — new <system_rules> static section codifies no-identical-retry on permission denial and bans URL hallucination. Validates zero retries after denial errors and zero invented URLs in citations.
 // EVAL(safety): pending benchmark-2026-04-20 — new condensed <safety> static section codifies destructive-action confirmation for delete_file, export overwrite, and mount-path mutation. Validates zero un-confirmed destructive operations.
 // EVAL(when-not-to-use-trim): pending benchmark-2026-04-21 — removes universal "When NOT to use" sections from 11 tool descriptions (6 dropped entirely, 5 collapsed to a single positive trailing redirect), keeps trimmed single-bullet form on test_model + edit_tests only. Validates no regression in tool-selection accuracy on tool-use,smoke benchmarks, with measurable static-prompt token reduction. New context-engineering-policy `Negative Guidance Is Selective` rule codifies the ratio (≤ 20% of toolbelt).
+// EVAL(intent-capture): pending benchmark-2026-05-03 — adds <intent_capture> and tightens workflow step 0 so the agent preserves dimensions, part hierarchy, reference-image features, assumptions, and verification targets before coding. Validates fewer omitted components and closer visual/measurement fidelity on multi-part reference-image prompts.
+// EVAL(export-geometry-workflow): pending benchmark — surfaces export_geometry as an optional interchange deliverables step distinct from iterative verification; validates fewer wrong-format guesses and aligns with MIME-registry extensions only.
 
 import type { KernelProvider } from '@taucad/runtime';
 import { toolName } from '@taucad/chat/constants';
@@ -104,12 +106,14 @@ export async function getCadSystemPrompt(
 3. **Implement**: Use \`${toolName.editFile}\` to write code in \`main${config.fileExtension}\`
 4. **Verify**: Call \`${toolName.getKernelResult}\` after file changes
 5. **Test**: Call \`${toolName.testModel}\` to validate all requirements
-6. **Inspect & iterate**: After tests pass, switch to quality-inspector mindset — use \`${toolName.screenshot}\` (multi_angle) and evaluate as if reviewing someone else's work against the \`<visual_inspection>\` checklist. If any defect is found, fix and re-render. Continue iterating until no defects remain — do not declare done after a single render when defects were observed.`
+6. **Inspect & iterate**: After tests pass, switch to quality-inspector mindset — use \`${toolName.screenshot}\` (multi_angle) and evaluate as if reviewing someone else's work against the \`<visual_inspection>\` checklist. If any defect is found, fix and re-render. Continue iterating until no defects remain — do not declare done after a single render when defects were observed.
+7. **Deliver interchange** (skip unless the user requests a downloadable file): Call \`${toolName.exportGeometry}\` with explicit \`targetFile\` and \`format\` (bare extension from the Tau MIME/extension registry — e.g. \`stl\`, \`step\`, \`stp\`, \`glb\`, \`3mf\`; never invent formats the kernel cannot emit). Confirm the geometry unit renders successfully (\`${toolName.getKernelResult}\`) before exporting.`
     : `${decomposeStep}
 1. **Plan**: Outline parameters, components, and assembly order
 2. **Implement**: Use \`${toolName.editFile}\` to write code in \`main${config.fileExtension}\`
 3. **Verify**: Call \`${toolName.getKernelResult}\` after file changes
-4. **Inspect & iterate**: Use \`${toolName.screenshot}\` and evaluate as if reviewing someone else's work against the \`<visual_inspection>\` checklist. If any defect is found, fix and re-render. Continue iterating until no defects remain — do not declare done after a single render when defects were observed.`;
+4. **Inspect & iterate**: Use \`${toolName.screenshot}\` and evaluate as if reviewing someone else's work against the \`<visual_inspection>\` checklist. If any defect is found, fix and re-render. Continue iterating until no defects remain — do not declare done after a single render when defects were observed.
+5. **Deliver interchange** (skip unless the user requests a downloadable file): Call \`${toolName.exportGeometry}\` with explicit \`targetFile\` and \`format\` (bare extension from the Tau MIME/extension registry — e.g. \`stl\`, \`step\`, \`stp\`, \`glb\`, \`3mf\`; never invent formats the kernel cannot emit). Confirm the geometry unit renders successfully (\`${toolName.getKernelResult}\`) before exporting.`;
 
   const tddNote = testingEnabled
     ? `\n\n**TDD Pattern**: Update tests BEFORE implementing. This ensures you don't forget requirements and catches regressions.`

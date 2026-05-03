@@ -18,6 +18,7 @@ import { grepTool } from '#api/tools/tools/tool-grep.js';
 import { globSearchTool } from '#api/tools/tools/tool-glob-search.js';
 import { getKernelResultTool } from '#api/tools/tools/tool-get-kernel-result.js';
 import { screenshotTool } from '#api/tools/tools/tool-screenshot.js';
+import { exportGeometryTool } from '#api/tools/tools/tool-export-geometry.js';
 
 export const toolChoiceFromToolName = {
   // eslint-disable-next-line @typescript-eslint/naming-convention -- Tavily search tool name
@@ -63,6 +64,7 @@ export class ToolService {
       [toolName.grep]: grepTool,
       [toolName.globSearch]: globSearchTool,
       [toolName.getKernelResult]: getKernelResultTool,
+      [toolName.exportGeometry]: exportGeometryTool,
       [toolName.screenshot]: screenshotTool,
     } as const satisfies Partial<Record<ToolName, StructuredTool>>;
 
@@ -79,6 +81,7 @@ export class ToolService {
       [toolName.grep]: toolCategoryToTool[toolName.grep].name,
       [toolName.globSearch]: toolCategoryToTool[toolName.globSearch].name,
       [toolName.getKernelResult]: toolCategoryToTool[toolName.getKernelResult].name,
+      [toolName.exportGeometry]: toolCategoryToTool[toolName.exportGeometry].name,
       [toolName.screenshot]: toolCategoryToTool[toolName.screenshot].name,
     } as const satisfies Partial<Record<ToolName, string>>;
 

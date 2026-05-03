@@ -52,6 +52,7 @@ import { ChatMessageToolGrep } from '#routes/projects_.$id/chat-message-tool-gre
 import { ChatMessageToolGlobSearch } from '#routes/projects_.$id/chat-message-tool-glob-search.js';
 import { ChatMessageToolGetKernelResult } from '#routes/projects_.$id/chat-message-tool-get-kernel-result.js';
 import { ChatMessageToolScreenshot } from '#routes/projects_.$id/chat-message-tool-screenshot.js';
+import { ChatMessageToolExportGeometry } from '#routes/projects_.$id/chat-message-tool-export-geometry.js';
 import { ChatMessagePartUnknown } from '#routes/projects_.$id/chat-message-tool-unknown.js';
 import { ChatMessageToolTransfer } from '#routes/projects_.$id/chat-message-tool-transfer.js';
 import { ChatMessageFile } from '#routes/projects_.$id/chat-message-file.js';
@@ -255,6 +256,10 @@ function renderAssistantPart(
 
     case 'tool-screenshot': {
       return <ChatMessageToolScreenshot key={part.toolCallId} part={part} />;
+    }
+
+    case 'tool-export_geometry': {
+      return <ChatMessageToolExportGeometry key={part.toolCallId} part={part} />;
     }
 
     case 'data-context-compaction': {
@@ -550,7 +555,7 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
           // ChatScroller reserves a fixed scrollbar gutter, so dropping the
           // right margin here lets bubbles use that space when the scrollbar
           // is hidden, and the gutter doubles as the right margin when shown.
-          isUser ? 'ml-2' : 'ml-4 mr-1.5',
+          isUser ? 'mx-2' : 'mx-4',
         )}
       >
         <When shouldRender={isUser ? isEditing : false}>

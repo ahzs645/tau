@@ -203,6 +203,16 @@ const toolSerializers = {
       return joinLines(...lines);
     },
   },
+  [toolName.exportGeometry]: {
+    input: (input) => joinLines(`targetFile: ${input.targetFile}`, `format: ${input.format}`),
+    output: (output) =>
+      joinLines(
+        `artifactPath: ${output.artifactPath}`,
+        `format: ${output.format}`,
+        `${output.mimeType}`,
+        `${output.byteLength} bytes`,
+      ),
+  },
   [toolName.screenshot]: {
     input: (input) => `mode: ${input.mode}`,
     output: (output) => `Captured ${output.images.length} image(s)`,
@@ -229,6 +239,38 @@ const serializeToolPart = (part: MyToolPart): string => {
     '</tool_result>',
   );
 };
+
+function serializeDynamicToolPart(part: Extract<MyMessagePart, { type: 'dynamic-tool' }>): string {
+  const rawInput = part.input;
+  const inputString =
+    rawInput === null
+      ? '(none)'
+      : typeof rawInput === 'object'
+        ? JSON.stringify(rawInput, null, 2)
+        : typeof rawInput === 'string'
+          ? rawInput
+          : `[Unserializable input: ${Object.prototype.toString.call(rawInput)}]`;
+  const resultString =
+    part.state === 'output-error'
+      ? `[Error: ${part.errorText}]`
+      : part.state === 'output-available' && part.output !== undefined
+        ? typeof part.output === 'string'
+          ? part.output
+          : JSON.stringify(part.output, null, 2)
+        : part.state === 'input-streaming'
+          ? '[Streaming...]'
+          : '[Pending...]';
+
+  return joinLines(
+    `<tool_call name="${part.toolName}">`,
+    'input:',
+    inputString,
+    '</tool_call>',
+    '<tool_result>',
+    resultString,
+    '</tool_result>',
+  );
+}
 
 function serializePart(part: MyMessagePart): string {
   switch (part.type) {
@@ -272,34 +314,7 @@ function serializePart(part: MyMessagePart): string {
     }
 
     case 'dynamic-tool': {
-      const rawInput = part.input;
-      const inputString =
-        rawInput === null
-          ? '(none)'
-          : typeof rawInput === 'object'
-            ? JSON.stringify(rawInput, null, 2)
-            : typeof rawInput === 'string'
-              ? rawInput
-              : `[Unserializable input: ${Object.prototype.toString.call(rawInput)}]`;
-      const resultString =
-        part.state === 'output-error'
-          ? `[Error: ${part.errorText}]`
-          : part.state === 'output-available' && part.output !== undefined
-            ? typeof part.output === 'string'
-              ? part.output
-              : JSON.stringify(part.output, null, 2)
-            : part.state === 'input-streaming'
-              ? '[Streaming...]'
-              : '[Pending...]';
-      return joinLines(
-        `<tool_call name="${part.toolName}">`,
-        'input:',
-        inputString,
-        '</tool_call>',
-        '<tool_result>',
-        resultString,
-        '</tool_result>',
-      );
+      return serializeDynamicToolPart(part);
     }
 
     default: {

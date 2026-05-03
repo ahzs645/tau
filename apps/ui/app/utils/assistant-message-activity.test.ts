@@ -36,6 +36,7 @@ const editFilePart = (state?: string) => toolPart('tool-edit_file', state);
 const createFilePart = (state?: string) => toolPart('tool-create_file', state);
 const deleteFilePart = (state?: string) => toolPart('tool-delete_file', state);
 const editTestsPart = (state?: string) => toolPart('tool-edit_tests', state);
+const exportGeometryPart = (state?: string) => toolPart('tool-export_geometry', state);
 const webSearchPart = (state?: string) => toolPart('tool-web_search', state);
 const webBrowserPart = (state?: string) => toolPart('tool-web_browser', state);
 const screenshotPart = (state?: string): Part =>
@@ -172,11 +173,12 @@ describe('classifyActivityPart', () => {
     expect(classifyActivityPart(globPart())).toBe('research');
   });
 
-  it('should classify edit_file, create_file, delete_file, edit_tests into write category', () => {
+  it('should classify edit_file, create_file, delete_file, edit_tests, export_geometry into write category', () => {
     expect(classifyActivityPart(editFilePart())).toBe('write');
     expect(classifyActivityPart(createFilePart())).toBe('write');
     expect(classifyActivityPart(deleteFilePart())).toBe('write');
     expect(classifyActivityPart(editTestsPart())).toBe('write');
+    expect(classifyActivityPart(exportGeometryPart())).toBe('write');
   });
 
   it('should classify get_kernel_result, screenshot, test_model into research category', () => {
