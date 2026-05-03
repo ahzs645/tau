@@ -29,7 +29,7 @@ import type {
   RpcGraphicsClient,
   RpcGraphicsExportGeometryResult,
 } from '@taucad/chat/rpc';
-import type { FileEntry, FileExtension } from '@taucad/types';
+import type { FileExtension } from '@taucad/types';
 import { idPrefix } from '@taucad/types/constants';
 import { generatePrefixedId } from '@taucad/utils/id';
 
@@ -53,6 +53,16 @@ type FileWriteSource = 'editor' | 'user' | 'machine';
 export type ResolveGraphicsForFile = (targetFile: string) => ActorRefFrom<typeof graphicsMachine> | undefined;
 
 /**
+ * Tree facade surface used by {@link createBrowserRpcFileSystem} after {@link RpcHandlerDependencies.fileManager.whenServicesReady}.
+ */
+type RpcHandlerTreeService = {
+  exists(path: string): Promise<boolean>;
+  readDirectoryEntriesWithStats(
+    path: string,
+  ): Promise<Array<{ name: string; type: 'file' | 'dir'; size: number; mtimeMs: number }>>;
+};
+
+/**
  * Dependencies required for RPC execution.
  */
 export type RpcHandlerDependencies = {
@@ -61,6 +71,7 @@ export type RpcHandlerDependencies = {
     writeFile: (path: string, data: Uint8Array<ArrayBuffer>, options: { source: FileWriteSource }) => Promise<void>;
     deleteFile: (path: string, options: { source: FileWriteSource }) => Promise<void>;
     stat: (path: string) => Promise<{ type: 'file' | 'dir'; size: number; mtimeMs: number }>;
+    whenServicesReady: () => Promise<{ treeService: RpcHandlerTreeService }>;
   };
   /**
    * Function that maps a source file path to its viewer panel's graphics actor.
@@ -68,22 +79,8 @@ export type RpcHandlerDependencies = {
    */
   resolveGraphicsForFile: ResolveGraphicsForFile | undefined;
   projectRef: ActorRefFrom<typeof projectMachine>;
-  treeService:
-    | {
-        getTreeSnapshot(): Map<string, FileEntry>;
-        exists(path: string): Promise<boolean>;
-        readDirectoryEntries(path: string): Promise<Array<{ id?: string; name: string; children?: unknown[] }>>;
-        readDirectoryEntriesWithStats(
-          path: string,
-        ): Promise<Array<{ name: string; type: 'file' | 'dir'; size: number; mtimeMs: number }>>;
-      }
-    | undefined;
   screenshotQuality: number;
 };
-
-/**
- * RPC call input structure with toolCallId.
- */
 export type RpcCallInput = RpcCall & {
   toolCallId: string;
 };
@@ -95,10 +92,7 @@ export type RpcHandlers = {
   executeRpcCall<C extends RpcCallInput>(rpcCall: C): Promise<RpcResult<C['rpcName']>>;
 };
 
-function createBrowserRpcFileSystem(
-  fileManager: RpcHandlerDependencies['fileManager'],
-  treeService: RpcHandlerDependencies['treeService'],
-): RpcFileSystem {
+function createBrowserRpcFileSystem(fileManager: RpcHandlerDependencies['fileManager']): RpcFileSystem {
   return {
     async readFile(path: string): Promise<string> {
       const data = await fileManager.readFile(path);
@@ -118,9 +112,7 @@ function createBrowserRpcFileSystem(
     async readdir(
       path: string,
     ): Promise<Array<{ name: string; type: 'file' | 'dir'; size: number; modifiedAt?: string }>> {
-      if (!treeService) {
-        return [];
-      }
+      const { treeService } = await fileManager.whenServicesReady();
       const entries = await treeService.readDirectoryEntriesWithStats(path);
       return entries.map((entry) => ({
         name: entry.name,
@@ -130,9 +122,7 @@ function createBrowserRpcFileSystem(
       }));
     },
     async exists(path: string): Promise<boolean> {
-      if (!treeService) {
-        return false;
-      }
+      const { treeService } = await fileManager.whenServicesReady();
       return treeService.exists(path);
     },
     async appendFile(path: string, content: string): Promise<void> {
@@ -515,10 +505,10 @@ function createBrowserGraphicsClient(
  * to createRpcDispatcher from @taucad/chat/rpc.
  */
 export function createRpcHandlers(deps: RpcHandlerDependencies): RpcHandlers {
-  const { fileManager, resolveGraphicsForFile, projectRef, treeService, screenshotQuality } = deps;
+  const { fileManager, resolveGraphicsForFile, projectRef, screenshotQuality } = deps;
 
   const rpcDeps: RpcDependencies = {
-    fileSystem: createBrowserRpcFileSystem(fileManager, treeService),
+    fileSystem: createBrowserRpcFileSystem(fileManager),
     kernelClient: createBrowserRuntimeClient(projectRef),
     graphics: resolveGraphicsForFile
       ? createBrowserGraphicsClient(resolveGraphicsForFile, projectRef, screenshotQuality)
@@ -529,7 +519,9 @@ export function createRpcHandlers(deps: RpcHandlerDependencies): RpcHandlers {
 
   return {
     async executeRpcCall<C extends RpcCallInput>(rpcCall: C): Promise<RpcResult<C['rpcName']>> {
-      return dispatcher.dispatch(rpcCall);
+      const call = { rpcName: rpcCall.rpcName, args: rpcCall.args };
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- wire/union `RpcRequest` does not keep `rpcName`↔`args` paired in a fresh object for tsgo; handlers still correlate at runtime
+      return dispatcher.dispatch<C['rpcName']>(call as RpcCall<C['rpcName']>);
     },
   };
 }

@@ -392,12 +392,12 @@ export type RpcResult<T extends keyof RpcSchemasRegistry> = z.infer<RpcSchemasRe
  * }
  * ```
  */
-export type RpcCall = {
-  [K in keyof RpcSchemasRegistry]: {
-    rpcName: K;
-    args: RpcInput<K>;
+export type RpcCall<K extends keyof RpcSchemasRegistry = keyof RpcSchemasRegistry> = {
+  [P in K]: {
+    rpcName: P;
+    args: RpcInput<P>;
   };
-}[keyof RpcSchemasRegistry];
+}[K];
 
 // =============================================================================
 // Inferred Types

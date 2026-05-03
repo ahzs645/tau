@@ -264,8 +264,7 @@ export class ChatRpcService implements OnModuleDestroy {
 
     const requestId = generatePrefixedId(idPrefix.request);
     const traceContext = injectTraceContext();
-    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- generic `T` prevents `satisfies RpcRequest`; Zod validated args
-    const rpcRequest = {
+    const rpcRequest: RpcRequest<T> = {
       type: 'rpc_request',
       chatId,
       requestId,
@@ -273,7 +272,7 @@ export class ChatRpcService implements OnModuleDestroy {
       rpcName,
       args: inputValidation.data,
       ...(Object.keys(traceContext).length > 0 ? { traceContext } : {}),
-    } as RpcRequest;
+    };
 
     this.logger.debug(`Sending RPC request ${requestId} for ${rpcName} to chat ${chatId}`);
 

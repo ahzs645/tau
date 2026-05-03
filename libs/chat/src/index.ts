@@ -28,8 +28,6 @@ export * from '#types/rpc.types.js';
 export * from '#utils/tool-error.utils.js';
 export * from '#utils/chat-error.utils.js';
 export * from '#utils/tool-part.utils.js';
-export * from '#utils/rpc-wire.utils.js';
-
 export type * from '#types/message.types.js';
 export type * from '#types/tool.types.js';
 export type * from '#types/chat.types.js';

@@ -241,6 +241,13 @@ describe.skip(`Middleware Integration: ${modelId}`, () => {
           message: 'Deterministic broken fetch_geometry: geometry unavailable',
         };
       },
+      async exportGeometry() {
+        return {
+          success: false,
+          errorCode: 'IO_ERROR',
+          message: 'Deterministic broken exportGeometry: graphics surface offline',
+        };
+      },
       async captureScreenshot() {
         return {
           success: false,

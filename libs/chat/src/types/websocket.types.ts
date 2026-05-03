@@ -17,8 +17,8 @@ export type WsCloseCode = (typeof wsCloseCode)[keyof typeof wsCloseCode];
  * (mirrors `RpcCall` plus transport metadata).
  * @public
  */
-export type RpcRequest = {
-  [K in RpcName]: {
+export type RpcRequest<K extends RpcName = RpcName> = {
+  [P in K]: {
     type: 'rpc_request';
     /** The chat ID this request is for */
     chatId: string;
@@ -27,33 +27,13 @@ export type RpcRequest = {
     /** The tool call ID from the LLM */
     toolCallId: string;
     /** The name of the RPC operation to execute */
-    rpcName: K;
+    rpcName: P;
     /** The arguments for the RPC operation */
-    args: RpcInput<K>;
+    args: RpcInput<P>;
     /** W3C trace context for distributed tracing propagation */
     traceContext?: Record<string, string>;
   };
-}[RpcName];
-
-/**
- * Builds a correlated success ack for the wire after handler execution.
- *
- * `RpcResponse` discriminates `result` on `rpcName`, but TypeScript does not prove that a
- * `RpcResult<RpcName>` value matches `request.rpcName` when both originate from one dispatch — this
- * helper is the single sanctioned narrowing point at the browser/WS boundary.
- *
- * @public
- */
-export function rpcWireSuccessResponse(request: RpcRequest, result: RpcResult<RpcName>): RpcResponse {
-  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- correlated rpcName ↔ result; see JSDoc
-  return {
-    type: 'rpc_response',
-    rpcName: request.rpcName,
-    requestId: request.requestId,
-    toolCallId: request.toolCallId,
-    result,
-  } as RpcResponse;
-}
+}[K];
 
 /**
  * Client -> Server: Result of an RPC operation execution (success path).
@@ -93,6 +73,23 @@ export type RpcResponseError<T extends RpcName> = {
  * @public
  */
 export type RpcResponseFor<T extends RpcName> = RpcResponseSuccess<T> | RpcResponseError<T>;
+
+/**
+ * Builds a correlated success ack for the wire after handler execution.
+ *
+ * @public
+ */
+export function rpcWireSuccessResponse<K extends RpcName>(request: RpcRequest<K>, result: RpcResult<K>): RpcResponse {
+  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- widen RpcResponseFor<K> to wire union for Socket.IO ack typing
+  return {
+    type: 'rpc_response',
+    rpcName: request.rpcName,
+    requestId: request.requestId,
+    toolCallId: request.toolCallId,
+    result,
+    ...(request.traceContext === undefined ? {} : { traceContext: request.traceContext }),
+  } as RpcResponse;
+}
 
 /**
  * Client -> Server: Result of an RPC operation execution (all methods).

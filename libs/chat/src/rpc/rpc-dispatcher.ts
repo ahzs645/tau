@@ -1,4 +1,4 @@
-import type { RpcCall, RpcResult } from '#schemas/rpc.schema.js';
+import type { RpcCall, RpcInput, RpcResult, RpcSchemasRegistry } from '#schemas/rpc.schema.js';
 import { rpcName } from '#constants/rpc.constants.js';
 import type { RpcName } from '#types/rpc.types.js';
 import type { RpcDependencies } from '#rpc/rpc-dependencies.js';
@@ -16,9 +16,13 @@ import { handleCaptureScreenshot } from '#rpc/handlers/handle-capture-screenshot
 import { handleAppendFile } from '#rpc/handlers/handle-append-file.js';
 import { handleEditFile } from '#rpc/handlers/handle-edit-file.js';
 
+type RpcHandlerMap = {
+  [K in RpcName]: (args: RpcInput<K>) => Promise<RpcResult<K>>;
+};
+
 /** @public */
 export type RpcDispatcher = {
-  dispatch<C extends RpcCall>(call: C): Promise<RpcResult<C['rpcName']>>;
+  dispatch<K extends keyof RpcSchemasRegistry>(call: RpcCall<K>): Promise<RpcResult<K>>;
 };
 
 /**
@@ -33,68 +37,27 @@ export type RpcDispatcher = {
  * @public
  */
 export function createRpcDispatcher(deps: RpcDependencies): RpcDispatcher {
-  async function dispatch(rpcCall: RpcCall): Promise<RpcResult<RpcName>> {
-    switch (rpcCall.rpcName) {
-      case rpcName.readFile: {
-        return handleReadFile(rpcCall.args, deps.fileSystem);
-      }
+  const handlers: RpcHandlerMap = {
+    [rpcName.readFile]: async (args) => handleReadFile(args, deps.fileSystem),
+    [rpcName.createFile]: async (args) => handleCreateFile(args, deps.fileSystem),
+    [rpcName.deleteFile]: async (args) => handleDeleteFile(args, deps.fileSystem),
+    [rpcName.listDirectory]: async (args) => handleListDirectory(args, deps.fileSystem),
+    [rpcName.grep]: async (args) => handleGrep(args, deps.fileSystem),
+    [rpcName.globSearch]: async (args) => handleGlobSearch(args, deps.fileSystem),
+    [rpcName.getKernelResult]: async (args) => handleGetKernelResult(args, deps.kernelClient),
+    [rpcName.captureObservations]: async (args) => handleCaptureObservations(args, deps.graphics),
+    [rpcName.fetchGeometry]: async (args) => handleFetchGeometry(args, deps.graphics, deps.fileSystem),
+    [rpcName.exportGeometry]: async (args) => handleExportGeometry(args, deps.graphics, deps.fileSystem),
+    [rpcName.captureScreenshot]: async (args) => handleCaptureScreenshot(args, deps.graphics),
+    [rpcName.appendFile]: async (args) => handleAppendFile(args, deps.fileSystem),
+    [rpcName.editFile]: async (args) => handleEditFile(args, deps.fileSystem),
+  };
 
-      case rpcName.createFile: {
-        return handleCreateFile(rpcCall.args, deps.fileSystem);
-      }
+  const dispatch = async <K extends keyof RpcSchemasRegistry>(call: RpcCall<K>): Promise<RpcResult<K>> => {
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- tsgo widens indexed handler; `K` pins rpcName ↔ args on RpcCall<K>
+    const run = handlers[call.rpcName] as (args: RpcInput<K>) => Promise<RpcResult<K>>;
+    return run(call.args);
+  };
 
-      case rpcName.deleteFile: {
-        return handleDeleteFile(rpcCall.args, deps.fileSystem);
-      }
-
-      case rpcName.listDirectory: {
-        return handleListDirectory(rpcCall.args, deps.fileSystem);
-      }
-
-      case rpcName.grep: {
-        return handleGrep(rpcCall.args, deps.fileSystem);
-      }
-
-      case rpcName.globSearch: {
-        return handleGlobSearch(rpcCall.args, deps.fileSystem);
-      }
-
-      case rpcName.getKernelResult: {
-        return handleGetKernelResult(rpcCall.args, deps.kernelClient);
-      }
-
-      case rpcName.captureObservations: {
-        return handleCaptureObservations(rpcCall.args, deps.graphics);
-      }
-
-      case rpcName.fetchGeometry: {
-        return handleFetchGeometry(rpcCall.args, deps.graphics, deps.fileSystem);
-      }
-
-      case rpcName.exportGeometry: {
-        return handleExportGeometry(rpcCall.args, deps.graphics, deps.fileSystem);
-      }
-
-      case rpcName.captureScreenshot: {
-        return handleCaptureScreenshot(rpcCall.args, deps.graphics);
-      }
-
-      case rpcName.appendFile: {
-        return handleAppendFile(rpcCall.args, deps.fileSystem);
-      }
-
-      case rpcName.editFile: {
-        return handleEditFile(rpcCall.args, deps.fileSystem);
-      }
-
-      default: {
-        const exhaustive: never = rpcCall;
-        throw new Error(`Unexpected RPC: ${String((exhaustive as RpcCall).rpcName)}`);
-      }
-    }
-  }
-
-  // Implementations return RpcResult<RpcName>; the public type keeps per-call narrowing for consumers.
-  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- implementation width vs generic RpcDispatcher.dispatch
-  return { dispatch } as RpcDispatcher;
+  return { dispatch };
 }

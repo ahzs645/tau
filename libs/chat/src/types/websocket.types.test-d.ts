@@ -1,6 +1,6 @@
 import { describe, it, expectTypeOf } from 'vitest';
-import type { RpcResponse, RpcResponseFor } from '#types/websocket.types.js';
-import type { RpcResult } from '#schemas/rpc.schema.js';
+import type { RpcResponse, RpcResponseFor, RpcRequest } from '#types/websocket.types.js';
+import type { RpcResult, ReadFileRpcInput } from '#schemas/rpc.schema.js';
 
 describe('RpcResponse discriminated by rpcName (R5)', () => {
   it('should narrow result to RpcResult<read_file> on success variant', () => {
@@ -14,6 +14,10 @@ describe('RpcResponse discriminated by rpcName (R5)', () => {
       type: 'rpc_response';
       rpcName: 'get_kernel_result';
     }>();
+  });
+
+  it('should narrow RpcRequest read_file args to ReadFileRpcInput', () => {
+    expectTypeOf<RpcRequest<'read_file'>['args']>().toEqualTypeOf<ReadFileRpcInput>();
   });
 
   it('should preserve the error branch with result: undefined', () => {

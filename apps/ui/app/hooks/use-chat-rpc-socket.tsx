@@ -14,7 +14,7 @@ import type { ReactNode } from 'react';
 import { createContext, useContext, useEffect, useMemo, useState, useCallback, useRef } from 'react';
 
 import type { RpcRequest, RpcResponse } from '@taucad/chat';
-import { rpcRequestToCallInput, rpcWireSuccessResponse } from '@taucad/chat';
+import { rpcWireSuccessResponse } from '@taucad/chat';
 import { rpcNames } from '@taucad/chat/constants';
 import { ChatRpcSocketService } from '#services/chat-rpc-socket.service.js';
 import type { ConnectionStatus, RpcRequestHandler } from '#services/chat-rpc-socket.service.js';
@@ -136,7 +136,6 @@ export function useChatRpcConnection(options: UseChatRpcConnectionOptions): UseC
   const { projectRef } = useProject();
   const resolveGraphicsForFile = useResolveGraphicsForFile();
   const fileManager = useFileManager();
-  const { treeService } = fileManager;
   const { quality: screenshotQuality } = useImageQuality();
 
   // Store dependencies in a ref so handler always uses current values
@@ -146,7 +145,6 @@ export function useChatRpcConnection(options: UseChatRpcConnectionOptions): UseC
     fileManager,
     resolveGraphicsForFile,
     projectRef,
-    treeService,
     screenshotQuality,
   };
 
@@ -180,12 +178,10 @@ export function useChatRpcConnection(options: UseChatRpcConnectionOptions): UseC
       };
     }
 
-    const rpcCall = rpcRequestToCallInput(request);
-
     try {
       const handlers = createRpcHandlers(deps);
 
-      const result = await handlers.executeRpcCall(rpcCall);
+      const result = await handlers.executeRpcCall(request);
 
       return rpcWireSuccessResponse(request, result);
     } catch (execError) {

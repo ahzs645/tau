@@ -53,6 +53,20 @@ function createFileEntry(options: FileEntryOptions): FileEntry {
 
 type FileManagerWriteCall = [string, Uint8Array<ArrayBuffer>, { source: string }];
 
+function createMockTreeService(tree?: Map<string, FileEntry>) {
+  const _tree = tree ?? new Map<string, FileEntry>();
+  return {
+    getTreeSnapshot: () => _tree,
+    exists: vi.fn(async (path: string) => _tree.has(path)),
+    readDirectoryEntries: vi.fn(async () => []),
+    readDirectoryEntriesWithStats: vi.fn<
+      (path: string) => Promise<Array<{ name: string; type: 'file' | 'dir'; size: number; mtimeMs: number }>>
+    >(async () => []),
+  };
+}
+
+type MockTreeService = ReturnType<typeof createMockTreeService>;
+
 function createMockFileManager() {
   return {
     readFile: vi.fn<(path: string) => Promise<Uint8Array<ArrayBuffer>>>(),
@@ -63,6 +77,7 @@ function createMockFileManager() {
     stat: vi
       .fn<(path: string) => Promise<{ type: 'file' | 'dir'; size: number; mtimeMs: number }>>()
       .mockResolvedValue({ type: 'file', size: 0, mtimeMs: Date.now() }),
+    whenServicesReady: vi.fn<() => Promise<{ treeService: MockTreeService }>>(),
   };
 }
 
@@ -115,17 +130,7 @@ function createMockCadUnit(options?: {
   };
 }
 
-function createMockTreeService(tree?: Map<string, FileEntry>): RpcHandlerDependencies['treeService'] {
-  const _tree = tree ?? new Map<string, FileEntry>();
-  return {
-    getTreeSnapshot: () => _tree,
-    exists: vi.fn(async (path: string) => _tree.has(path)),
-    readDirectoryEntries: vi.fn(async () => []),
-    readDirectoryEntriesWithStats: vi.fn(async () => []),
-  };
-}
-
-let lastTreeService: ReturnType<typeof createMockTreeService> | undefined;
+let lastTreeService: MockTreeService | undefined;
 
 function buildDeps(overrides?: {
   fileManager?: ReturnType<typeof createMockFileManager>;
@@ -133,18 +138,20 @@ function buildDeps(overrides?: {
   projectRef?: ReturnType<typeof createMockBuildRef>;
   resolveGraphicsForFile?: ResolveGraphicsForFile;
   screenshotQuality?: number;
-  treeService?: ReturnType<typeof createMockTreeService>;
+  treeService?: MockTreeService;
 }): RpcDependencies {
   capturedDeps = undefined;
 
   const ts = overrides?.treeService ?? createMockTreeService(overrides?.fileTree);
   lastTreeService = ts;
 
+  const mockFm = overrides?.fileManager ?? createMockFileManager();
+  vi.mocked(mockFm.whenServicesReady).mockResolvedValue({ treeService: ts });
+
   createRpcHandlers({
-    fileManager: (overrides?.fileManager ?? createMockFileManager()) as RpcHandlerDependencies['fileManager'],
+    fileManager: mockFm as RpcHandlerDependencies['fileManager'],
     projectRef: (overrides?.projectRef ?? createMockBuildRef()) as unknown as RpcHandlerDependencies['projectRef'],
     resolveGraphicsForFile: overrides?.resolveGraphicsForFile,
-    treeService: ts,
     screenshotQuality: overrides?.screenshotQuality ?? 0.8,
   });
 
@@ -341,6 +348,38 @@ describe('rpc-handlers', () => {
 
         expect(entries).toEqual([expect.objectContaining({ name: 'components', type: 'dir' })]);
       });
+
+      it('should await whenServicesReady before listing directory entries', async () => {
+        vi.mocked(lastTreeService!.readDirectoryEntriesWithStats).mockResolvedValueOnce([
+          { name: 'a.txt', type: 'file', size: 1, mtimeMs: 1 },
+        ]);
+        let resolveReady!: (value: { treeService: MockTreeService }) => void;
+        mockFm.whenServicesReady.mockImplementation(async () => {
+          return new Promise<{ treeService: MockTreeService }>((resolve) => {
+            resolveReady = resolve;
+          });
+        });
+
+        const pending = fileSystem.readdir('src');
+        expect(mockFm.whenServicesReady).toHaveBeenCalledOnce();
+        resolveReady({ treeService: lastTreeService! });
+
+        await expect(pending).resolves.toEqual([expect.objectContaining({ name: 'a.txt' })]);
+      });
+
+      it.each(['.', '/', './', ''] as const)(
+        'should pass root alias %j through to readDirectoryEntriesWithStats unchanged',
+        async (pathArgument) => {
+          vi.mocked(lastTreeService!.readDirectoryEntriesWithStats).mockResolvedValueOnce([]);
+          await fileSystem.readdir(pathArgument);
+          expect(lastTreeService!.readDirectoryEntriesWithStats).toHaveBeenCalledWith(pathArgument);
+        },
+      );
+
+      it('should reject when whenServicesReady rejects', async () => {
+        mockFm.whenServicesReady.mockRejectedValue(new Error('File manager initialization failed'));
+        await expect(fileSystem.readdir('any')).rejects.toThrow('File manager initialization failed');
+      });
     });
 
     // ----- exists -----
@@ -354,6 +393,11 @@ describe('rpc-handlers', () => {
 
       it('should return false when path does not exist', async () => {
         expect(await fileSystem.exists('missing.txt')).toBe(false);
+      });
+
+      it('should reject when whenServicesReady rejects', async () => {
+        mockFm.whenServicesReady.mockRejectedValue(new Error('File manager initialization failed'));
+        await expect(fileSystem.exists('any')).rejects.toThrow('File manager initialization failed');
       });
     });
   });
@@ -970,11 +1014,14 @@ describe('rpc-handlers', () => {
     });
 
     it('should return an object with executeRpcCall method', () => {
+      const mockFm = createMockFileManager();
+      const ts = createMockTreeService();
+      vi.mocked(mockFm.whenServicesReady).mockResolvedValue({ treeService: ts });
+
       const handlers = createRpcHandlers({
-        fileManager: createMockFileManager() as RpcHandlerDependencies['fileManager'],
+        fileManager: mockFm as RpcHandlerDependencies['fileManager'],
         projectRef: createMockBuildRef() as unknown as RpcHandlerDependencies['projectRef'],
         resolveGraphicsForFile: undefined,
-        treeService: createMockTreeService(),
         screenshotQuality: 0.8,
       });
 
