@@ -83,6 +83,16 @@ const toolPartSchemas = [
 ];
 ```
 
+### Step 5b: Register Strict Tool Inputs (interrupt healing)
+
+Interrupted streams can persist partial tool inputs that no longer satisfy the per-tool schema. The API preprocess reads **`libs/chat/src/schemas/tool-input.registry.ts`** — add:
+
+```typescript
+my_tool: myToolInputSchema,
+```
+
+(Use the exported Zod schema from Step 1; keep catalog keys aligned with `toolName` string literals.)
+
 ### Step 6: Create Backend Tool Definition
 
 Create `apps/api/app/api/tools/tools/tool-my-tool.ts`:
@@ -146,7 +156,7 @@ const toolNameFromToolCategory = {
 
 ### Step 8: Add Tool to Agent
 
-Update `apps/api/app/api/chat/chat.service.ts`:
+Update **`apps/api/app/api/chat/chat.service.ts`** (`cadTools` array) so the CAD agent receives the LangChain tool:
 
 ```typescript
 const cadTools = [
@@ -154,6 +164,8 @@ const cadTools = [
   tools.my_tool,
 ].filter((tool) => tool !== undefined);
 ```
+
+If the tool uses `targetFile` (or similar fingerprinted inputs), add it to **`agent-safeguards.middleware.ts`** `targetFileTools` so identical repeated failures get one-shot remediation guidance.
 
 ### Step 9: Implement RPC Handler (if new RPC needed)
 
@@ -163,13 +175,16 @@ If your tool needs a new RPC (e.g., for a new client-side operation), add the RP
 2. Add RPC schema to `libs/chat/src/schemas/rpc.schema.ts` using `defineRpc()`
 3. Create handler at `libs/chat/src/rpc/handlers/handle-my-rpc.ts`
 4. Register in `libs/chat/src/rpc/rpc-dispatcher.ts`
-5. Add browser implementation in `apps/ui/app/hooks/rpc-handlers.ts`
+5. If the RPC depends on `RpcGraphicsClient` / CAD snapshot types, extend **`libs/chat/src/rpc/rpc-dependencies.ts`** accordingly
+6. Add browser implementation in **`apps/ui/app/hooks/rpc-handlers.ts`**
 
 Most tools reuse existing RPCs (e.g., `readFile`, `createFile`, `getKernelResult`, `captureObservations`).
 
+**Browser adapter split:** operations that need the live CAD unit, kernel export/render, or viewer-adjacent work belong on **`RpcGraphicsClient`** (see `createBrowserGraphicsClient` in `rpc-handlers.ts`). Pure kernel compile/status without graphics should stay on **`RpcRuntimeClient`**. **`ensureGeometryUnit`** in `rpc-handlers.ts` is the canonical lazy-bootstrap when the LLM names a `targetFile` that may not have an open geometry unit yet.
+
 ### Step 10: Create UI Component
 
-Create `apps/ui/app/routes/builds_.$id/chat-message-tool-my-tool.tsx`:
+Create `apps/ui/app/routes/projects_.$id/chat-message-tool-my-tool.tsx`:
 
 ```typescript
 import { CheckCircle, XCircle, Loader2 } from 'lucide-react';
@@ -217,7 +232,7 @@ export function ChatMessageToolMyTool({ part }: Props): React.JSX.Element {
 
 ### Step 11: Register UI Component
 
-Update `apps/ui/app/routes/builds_.$id/chat-message.tsx`:
+Update `apps/ui/app/routes/projects_.$id/chat-message.tsx`:
 
 ```typescript
 import { ChatMessageToolMyTool } from './chat-message-tool-my-tool.js';
@@ -230,11 +245,15 @@ case 'tool-my_tool': {
 
 ### Step 12: Update System Prompt (if needed)
 
-Update `apps/api/app/api/chat/prompts/chat-prompt-cad.ts` to document the new tool:
+Update **`apps/api/app/api/chat/prompts/cad-agent.prompt.ts`** (static/dynamic CAD agent prompt builders) when the workflow or safety copy should mention the tool. Prefer terse references aligned with `<tool_usage_policy>` / `<workflow>` — duplicating full tool prose belongs in the LangChain **`description`** in Step 6.
 
-```typescript
-- **\`${toolName.myTool}\`**: Description of what it does and when to use it.
-```
+### Step 13: Serialize Tool Parts (UI copy / compaction)
+
+Extend **`apps/ui/app/utils/chat.utils.ts`** `toolSerializers` with an entry keyed by **`toolName.myTool`** so `serializePart`/`serializeMessage` stay exhaustive over `MyTools` (workspace enforces `{ [K in keyof MyTools]: ToolSerializer<K> }`).
+
+### Step 14: Activity Summaries (optional)
+
+If the tool should affect exploration-phase grouping or counts (e.g. research runs), review **`apps/ui/app/utils/assistant-message-activity.ts`** and related activity components.
 
 ## Testing
 
@@ -255,19 +274,9 @@ await waitFor(machineRef, (state) => state.matches('ready') || state.matches('er
 
 ### Error Handling
 
-Always catch errors and return them in the output schema format:
+**API tools:** after `chatRpcService.sendRpcRequest(...)`, validate the discriminated RPC result with **`assertRpcSuccess`** from `@taucad/chat/utils` (see existing tools under `apps/api/app/api/tools/tools/`). Failures surface as AI SDK **`output-error`** tool parts automatically — do not manually push tool outputs unless you are intentionally bypassing that path.
 
-```typescript
-try {
-  // tool logic
-} catch (error) {
-  const output: MyToolOutput = {
-    success: false,
-    message: `Failed: ${getErrorMessage(error)}`,
-  };
-  void addToolOutput({ tool: toolName.myTool, toolCallId: toolCall.toolCallId, output });
-}
-```
+Handle transport / unexpected **`catch`** blocks by throwing or wrapping in a **`ToolRuntime`-visible** error consistent with LangChain conventions for that tool.
 
 ### File Operations
 
@@ -277,3 +286,14 @@ Use the file manager for file operations:
 const fileContent = await fileManager.readFile(path);
 await fileManager.writeFile(path, content, { source: 'external' });
 ```
+
+`useFileManager().readFile` returns **`Uint8Array`** (binary-safe); pair with **`downloadBlob`** from `@taucad/utils/file` for user downloads.
+
+### Chat artifacts — `.tau/artifacts` + `writeArtifact`
+
+When an RPC persists bytes for later UI download (e.g. fetched GLB snapshots, interchange exports):
+
+1. Prefer **`libs/chat/src/rpc/handlers/write-artifact.ts`** **`writeArtifact({ toolCallId, targetFile, extension, bytes }, fileSystem)`** — canonical path **``.tau/artifacts/${toolCallId}__${slugifyTargetFile(targetFile)}.${ext}`**.
+2. Return **`artifactPath`**, **`mimeType`**, and **`byteLength`** (or analogous) in the RPC success payload so the chat card can render size + type without re-reading disk.
+3. On **Download**, the UI reads **`artifactPath`** via **`fileManager.readFile`**, wraps a **`Blob`**, and calls **`downloadBlob(blob, basename)`**.
+4. Passing **`toolCallId`** into RPC args alongside LLM-visible fields keeps filenames deterministic across retries (mirror **`fetch_geometry`**’s `artifactId` pattern where applicable).
