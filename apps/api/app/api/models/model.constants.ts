@@ -1,12 +1,27 @@
 import type { Model } from '#api/models/model.schema.js';
-import type { CloudProviderId } from '#api/models/model.service.js';
+import type { ProviderId } from '#api/providers/provider.schema.js';
 
-export const modelList: Record<CloudProviderId, Record<string, Model>> = {
+type CloudCatalogProviderId = Exclude<ProviderId, 'ollama'>;
+
+/** Catalog row; omit {@link ModelListEntry.enabled} or set `true` to expose via GET `/v1/models`. */
+export type ModelListEntry = Model & { readonly enabled?: boolean };
+
+export function modelListEntryToModel(entry: ModelListEntry): Model {
+  const { enabled: _enabled, ...model } = entry;
+  return model;
+}
+
+export function isModelListEntryEnabled(entry: ModelListEntry): boolean {
+  return entry.enabled !== false;
+}
+
+export const modelList: Record<CloudCatalogProviderId, Record<string, ModelListEntry>> = {
   anthropic: {
     'claude-4.7-opus': {
       id: 'anthropic-claude-opus-4.7',
       name: 'Opus 4.7',
       slug: 'claude-opus-4.7',
+      recommended: true,
       description:
         "Anthropic's most powerful model with adaptive reasoning and 1M context, great for designing complex multi-part assemblies.",
       provider: {
@@ -49,6 +64,7 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       id: 'anthropic-claude-sonnet-4.6',
       name: 'Sonnet 4.6',
       slug: 'claude-sonnet-4.6',
+      recommended: true,
       description: 'Best combination of speed and intelligence, great for most design tasks.',
       provider: {
         id: 'anthropic',
@@ -89,6 +105,7 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       id: 'anthropic-claude-haiku-4.5',
       name: 'Haiku 4.5',
       slug: 'claude-haiku-4.5',
+      recommended: true,
       description: 'Fastest Claude model, ideal for quick design tasks or small changes.',
       provider: {
         id: 'anthropic',
@@ -130,6 +147,7 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       id: 'openai-gpt-5.5',
       name: 'GPT-5.5',
       slug: 'gpt-5.5',
+      recommended: true,
       description:
         "OpenAI's newest frontier model for complex professional work — reasoning, coding, and a 1M+ context window.",
       provider: {
@@ -163,6 +181,7 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       id: 'openai-gpt-5.3-codex',
       name: 'GPT-5.3 Codex',
       slug: 'gpt-5.3-codex',
+      recommended: true,
       description: 'Agentic coding model optimized for code generation and multi-step programming tasks.',
       provider: {
         id: 'openai',
@@ -195,6 +214,7 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       id: 'openai-gpt-4.1',
       name: 'GPT-4.1',
       slug: 'gpt-4.1',
+      recommended: true,
       description: 'Reliable and cost-effective for general-purpose design tasks.',
       provider: {
         id: 'openai',
@@ -224,6 +244,7 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       id: 'google-gemini-3.1-pro',
       name: 'Gemini 3.1 Pro',
       slug: 'gemini-3.1-pro',
+      recommended: true,
       description: "Google's most advanced Pro-tier model with deep reasoning and parallel tool call streaming.",
       provider: {
         id: 'vertexai',
@@ -253,6 +274,7 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       id: 'google-gemini-3-flash',
       name: 'Gemini 3 Flash',
       slug: 'gemini-3-flash',
+      recommended: true,
       description: 'Fast and efficient, great for quick design tasks or small changes.',
       provider: {
         id: 'vertexai',
@@ -282,6 +304,7 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
 
   together: {
     'deepseek-v3.1': {
+      enabled: false,
       id: 'together-deepseek-v3.1',
       name: 'DeepSeek V3.1',
       slug: 'deepseek-v3.1',
@@ -312,6 +335,7 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       },
     },
     'deepseek-r1': {
+      enabled: false,
       id: 'together-deepseek-r1',
       name: 'DeepSeek R1',
       slug: 'deepseek-r1',
@@ -342,6 +366,7 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       },
     },
     'glm-5.1': {
+      enabled: false,
       id: 'together-glm-5.1',
       name: 'GLM-5.1',
       slug: 'glm-5.1',
@@ -371,6 +396,7 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       },
     },
     'qwen-3.5-397b': {
+      enabled: false,
       id: 'together-qwen-3.5-397b',
       name: 'Qwen 3.5 397B',
       slug: 'qwen-3.5-397b',
@@ -400,6 +426,7 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       },
     },
     'llama-4-maverick': {
+      enabled: false,
       id: 'together-llama-4-maverick',
       name: 'Llama 4 Maverick',
       slug: 'llama-4-maverick',
@@ -433,6 +460,7 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
 
   cerebras: {
     'qwen-3-235b': {
+      enabled: false,
       id: 'cerebras-qwen-3-235b',
       name: 'Qwen 3 235B',
       slug: 'cerebras-qwen-3-235b',
@@ -462,4 +490,4 @@ export const modelList: Record<CloudProviderId, Record<string, Model>> = {
       },
     },
   },
-} as const;
+} as const satisfies Record<CloudCatalogProviderId, Record<string, ModelListEntry>>;

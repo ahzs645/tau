@@ -76,6 +76,10 @@ export const modelSchema = z.object({
   name: z.string().describe('The human readable name of the model'),
   slug: z.string().describe('The slug of the model'),
   description: z.string().describe('A human-readable description of the model').optional(),
+  recommended: z
+    .boolean()
+    .describe('Whether the model is shown in the compact Models list by default (vs hidden behind "View All Models")')
+    .optional(),
   model: z.string().describe('The identifier of the model for the provider'),
   modifiedAt: z.string().describe('The modified at of the model').optional(),
   size: z.number().describe('The size of the model in bytes').optional(),

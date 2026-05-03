@@ -2,7 +2,8 @@ import process from 'node:process';
 import type { Model } from '#api/models/model.schema.js';
 import type { ProviderId } from '#api/providers/provider.schema.js';
 import type { CloudProviderId } from '#api/models/model.service.js';
-import { modelList } from '#api/models/model.constants.js';
+import type { ModelListEntry } from '#api/models/model.constants.js';
+import { isModelListEntryEnabled, modelList, modelListEntryToModel } from '#api/models/model.constants.js';
 import type { BenchmarkGeometryExpectation } from '#benchmarks/model-benchmark-geometry.js';
 
 // =============================================================================
@@ -70,9 +71,14 @@ export type FilterOptions = {
 
 export function flattenModels(): FlatModel[] {
   const result: FlatModel[] = [];
-  for (const [providerId, models] of Object.entries(modelList) as Array<[CloudProviderId, Record<string, Model>]>) {
-    for (const model of Object.values(models)) {
-      result.push({ ...model, providerId });
+  for (const [providerId, models] of Object.entries(modelList) as Array<
+    [CloudProviderId, Record<string, ModelListEntry>]
+  >) {
+    for (const entry of Object.values(models)) {
+      if (!isModelListEntryEnabled(entry)) {
+        continue;
+      }
+      result.push({ ...modelListEntryToModel(entry), providerId });
     }
   }
   return result;

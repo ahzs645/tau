@@ -8,7 +8,7 @@ import type { Environment } from '#config/environment.config.ts';
 import type { ModelFamily, ProviderId } from '#api/providers/provider.schema.js';
 import { ProviderService } from '#api/providers/provider.service.js';
 import type { Model, ModelSupport } from '#api/models/model.schema.js';
-import { modelList } from '#api/models/model.constants.js';
+import { isModelListEntryEnabled, modelList, modelListEntryToModel } from '#api/models/model.constants.js';
 import { Span } from '#telemetry/tracer.service.js';
 
 export type CloudProviderId = Exclude<ProviderId, 'ollama'>;
@@ -53,10 +53,13 @@ export class ModelService implements OnModuleInit {
   public async getModels(): Promise<Model[]> {
     const ollamaEnabled = this.configService.get('OLLAMA_ENABLED', { infer: true });
     const ollamaModels = ollamaEnabled ? await this.getOllamaModels() : [];
-    const models = Object.values(modelList).flatMap((model) => Object.values(model));
-    const combinedModels = [...models, ...ollamaModels];
-    this.models = combinedModels;
-    return combinedModels;
+    const cloudEntries = Object.values(modelList).flatMap((modelsBySlug) => Object.values(modelsBySlug));
+    const cloudModels = cloudEntries.map((entry) => modelListEntryToModel(entry));
+    this.models = [...cloudModels, ...ollamaModels];
+    const listedCloud = cloudEntries
+      .filter((entry) => isModelListEntryEnabled(entry))
+      .map((entry) => modelListEntryToModel(entry));
+    return [...listedCloud, ...ollamaModels];
   }
 
   public getOtelProviderName(modelId: string): string | undefined {
@@ -144,6 +147,7 @@ export class ModelService implements OnModuleInit {
             id: model.name,
             name: model.name,
             slug: model.name,
+            recommended: true,
             model: model.name,
             modifiedAt: String(model.modified_at),
             size: model.size,
