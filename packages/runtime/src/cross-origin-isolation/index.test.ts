@@ -1,11 +1,10 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import {
   apiHeaders,
   applyApiHeaders,
   applyDocumentHeaders,
   applySubresourceHeaders,
   documentHeaders,
-  inspectCrossOriginIsolation,
   subresourceHeaders,
 } from '#cross-origin-isolation/index.js';
 

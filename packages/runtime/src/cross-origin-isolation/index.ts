@@ -68,7 +68,8 @@ export const subresourceHeaders: Readonly<Record<string, string>> = Object.freez
 export type IsolationFailureReason = 'no-secure-context' | 'no-coep' | 'no-sab-constructor';
 
 /**
- * Result of {@link inspectCrossOriginIsolation}.
+ * Runtime snapshot of cross-origin isolation readiness (`crossOriginIsolated`
+ * plus whether `SharedArrayBuffer` is available).
  *
  * @public
  */
