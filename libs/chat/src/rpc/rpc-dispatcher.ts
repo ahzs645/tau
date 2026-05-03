@@ -1,5 +1,6 @@
-import type { RpcCall } from '#schemas/rpc.schema.js';
+import type { RpcCall, RpcResult } from '#schemas/rpc.schema.js';
 import { rpcName } from '#constants/rpc.constants.js';
+import type { RpcName } from '#types/rpc.types.js';
 import type { RpcDependencies } from '#rpc/rpc-dependencies.js';
 import { handleReadFile } from '#rpc/handlers/handle-read-file.js';
 import { handleCreateFile } from '#rpc/handlers/handle-create-file.js';
@@ -10,13 +11,14 @@ import { handleGlobSearch } from '#rpc/handlers/handle-glob-search.js';
 import { handleGetKernelResult } from '#rpc/handlers/handle-get-kernel-result.js';
 import { handleCaptureObservations } from '#rpc/handlers/handle-capture-observations.js';
 import { handleFetchGeometry } from '#rpc/handlers/handle-fetch-geometry.js';
+import { handleExportGeometry } from '#rpc/handlers/handle-export-geometry.js';
 import { handleCaptureScreenshot } from '#rpc/handlers/handle-capture-screenshot.js';
 import { handleAppendFile } from '#rpc/handlers/handle-append-file.js';
 import { handleEditFile } from '#rpc/handlers/handle-edit-file.js';
 
 /** @public */
 export type RpcDispatcher = {
-  dispatch(rpcCall: RpcCall): Promise<unknown>;
+  dispatch<C extends RpcCall>(call: C): Promise<RpcResult<C['rpcName']>>;
 };
 
 /**
@@ -31,57 +33,68 @@ export type RpcDispatcher = {
  * @public
  */
 export function createRpcDispatcher(deps: RpcDependencies): RpcDispatcher {
-  return {
-    async dispatch(rpcCall: RpcCall): Promise<unknown> {
-      switch (rpcCall.rpcName) {
-        case rpcName.readFile: {
-          return handleReadFile(rpcCall.args, deps.fileSystem);
-        }
-
-        case rpcName.createFile: {
-          return handleCreateFile(rpcCall.args, deps.fileSystem);
-        }
-
-        case rpcName.deleteFile: {
-          return handleDeleteFile(rpcCall.args, deps.fileSystem);
-        }
-
-        case rpcName.listDirectory: {
-          return handleListDirectory(rpcCall.args, deps.fileSystem);
-        }
-
-        case rpcName.grep: {
-          return handleGrep(rpcCall.args, deps.fileSystem);
-        }
-
-        case rpcName.globSearch: {
-          return handleGlobSearch(rpcCall.args, deps.fileSystem);
-        }
-
-        case rpcName.getKernelResult: {
-          return handleGetKernelResult(rpcCall.args, deps.kernelClient);
-        }
-
-        case rpcName.captureObservations: {
-          return handleCaptureObservations(rpcCall.args, deps.graphics);
-        }
-
-        case rpcName.fetchGeometry: {
-          return handleFetchGeometry(rpcCall.args, deps.graphics, deps.fileSystem);
-        }
-
-        case rpcName.captureScreenshot: {
-          return handleCaptureScreenshot(rpcCall.args, deps.graphics);
-        }
-
-        case rpcName.appendFile: {
-          return handleAppendFile(rpcCall.args, deps.fileSystem);
-        }
-
-        case rpcName.editFile: {
-          return handleEditFile(rpcCall.args, deps.fileSystem);
-        }
+  async function dispatch(rpcCall: RpcCall): Promise<RpcResult<RpcName>> {
+    switch (rpcCall.rpcName) {
+      case rpcName.readFile: {
+        return handleReadFile(rpcCall.args, deps.fileSystem);
       }
-    },
-  };
+
+      case rpcName.createFile: {
+        return handleCreateFile(rpcCall.args, deps.fileSystem);
+      }
+
+      case rpcName.deleteFile: {
+        return handleDeleteFile(rpcCall.args, deps.fileSystem);
+      }
+
+      case rpcName.listDirectory: {
+        return handleListDirectory(rpcCall.args, deps.fileSystem);
+      }
+
+      case rpcName.grep: {
+        return handleGrep(rpcCall.args, deps.fileSystem);
+      }
+
+      case rpcName.globSearch: {
+        return handleGlobSearch(rpcCall.args, deps.fileSystem);
+      }
+
+      case rpcName.getKernelResult: {
+        return handleGetKernelResult(rpcCall.args, deps.kernelClient);
+      }
+
+      case rpcName.captureObservations: {
+        return handleCaptureObservations(rpcCall.args, deps.graphics);
+      }
+
+      case rpcName.fetchGeometry: {
+        return handleFetchGeometry(rpcCall.args, deps.graphics, deps.fileSystem);
+      }
+
+      case rpcName.exportGeometry: {
+        return handleExportGeometry(rpcCall.args, deps.graphics, deps.fileSystem);
+      }
+
+      case rpcName.captureScreenshot: {
+        return handleCaptureScreenshot(rpcCall.args, deps.graphics);
+      }
+
+      case rpcName.appendFile: {
+        return handleAppendFile(rpcCall.args, deps.fileSystem);
+      }
+
+      case rpcName.editFile: {
+        return handleEditFile(rpcCall.args, deps.fileSystem);
+      }
+
+      default: {
+        const exhaustive: never = rpcCall;
+        throw new Error(`Unexpected RPC: ${String((exhaustive as RpcCall).rpcName)}`);
+      }
+    }
+  }
+
+  // Implementations return RpcResult<RpcName>; the public type keeps per-call narrowing for consumers.
+  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- implementation width vs generic RpcDispatcher.dispatch
+  return { dispatch } as RpcDispatcher;
 }

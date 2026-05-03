@@ -13,6 +13,7 @@ export type Model = {
   name: string;
   slug: string;
   description?: string;
+  recommended?: boolean;
   provider: {
     id: ModelProvider;
     name: string;

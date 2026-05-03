@@ -14,11 +14,12 @@ import type { ReactNode } from 'react';
 import { createContext, useContext, useEffect, useMemo, useState, useCallback, useRef } from 'react';
 
 import type { RpcRequest, RpcResponse } from '@taucad/chat';
+import { rpcRequestToCallInput, rpcWireSuccessResponse } from '@taucad/chat';
 import { rpcNames } from '@taucad/chat/constants';
 import { ChatRpcSocketService } from '#services/chat-rpc-socket.service.js';
 import type { ConnectionStatus, RpcRequestHandler } from '#services/chat-rpc-socket.service.js';
 import { createRpcHandlers } from '#hooks/rpc-handlers.js';
-import type { RpcHandlerDependencies, RpcCallInput } from '#hooks/rpc-handlers.js';
+import type { RpcHandlerDependencies } from '#hooks/rpc-handlers.js';
 import { useProject, useResolveGraphicsForFile } from '#hooks/use-project.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import { useImageQuality } from '#hooks/use-image-quality.js';
@@ -155,6 +156,7 @@ export function useChatRpcConnection(options: UseChatRpcConnectionOptions): UseC
     if (!deps) {
       return {
         type: 'rpc_response',
+        rpcName: request.rpcName,
         requestId: request.requestId,
         toolCallId: request.toolCallId,
         result: undefined,
@@ -162,46 +164,36 @@ export function useChatRpcConnection(options: UseChatRpcConnectionOptions): UseC
       };
     }
 
-    const { requestId, toolCallId, rpcName: currentRpcName, args } = request;
+    const { requestId, toolCallId, rpcName: currentRpcName } = request;
 
-    // Verify this is a valid RPC operation
+    // Verify this is a valid RPC operation (runtime guard for malformed wire payloads).
     const isValidRpc = rpcNames.includes(currentRpcName);
     if (!isValidRpc) {
-      console.warn(`[ChatRpcSocket] Received request for unknown RPC: ${currentRpcName}`);
+      console.warn(`[ChatRpcSocket] Received request for unknown RPC: ${String(currentRpcName)}`);
       return {
         type: 'rpc_response',
+        rpcName: currentRpcName,
         requestId,
         toolCallId,
         result: undefined,
-        error: `Unknown RPC: ${currentRpcName}`,
+        error: `Unknown RPC: ${String(currentRpcName)}`,
       };
     }
 
-    // After validation, we can safely construct the typed RPC call.
-    // The server has validated the args against the schema before sending.
-    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- Boundary assertion after runtime validation
-    const rpcCall = {
-      toolCallId,
-      rpcName: currentRpcName,
-      args,
-    } as RpcCallInput;
+    const rpcCall = rpcRequestToCallInput(request);
 
     try {
       const handlers = createRpcHandlers(deps);
 
       const result = await handlers.executeRpcCall(rpcCall);
 
-      return {
-        type: 'rpc_response',
-        requestId,
-        toolCallId,
-        result,
-      };
+      return rpcWireSuccessResponse(request, result);
     } catch (execError) {
       return {
         type: 'rpc_response',
-        requestId,
-        toolCallId,
+        rpcName: request.rpcName,
+        requestId: request.requestId,
+        toolCallId: request.toolCallId,
         result: undefined,
         error: execError instanceof Error ? execError.message : 'Unknown error',
       };

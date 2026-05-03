@@ -11,6 +11,7 @@ import { grepInputSchema } from '#schemas/tools/grep.tool.schema.js';
 import { globSearchInputSchema } from '#schemas/tools/glob-search.tool.schema.js';
 import { getKernelResultInputSchema } from '#schemas/tools/get-kernel-result.tool.schema.js';
 import { screenshotInputSchema } from '#schemas/tools/screenshot.tool.schema.js';
+import { exportGeometryInputSchema } from '#schemas/tools/export-geometry.tool.schema.js';
 import type { ToolName } from '#types/tool.types.js';
 
 /**
@@ -59,6 +60,7 @@ export const toolInputSchemas: Record<ToolPartType, z.ZodType> = {
   'tool-grep': grepInputSchema,
   'tool-glob_search': globSearchInputSchema,
   'tool-get_kernel_result': getKernelResultInputSchema,
+  'tool-export_geometry': exportGeometryInputSchema,
   'tool-screenshot': screenshotInputSchema,
   'tool-transfer_to_cad_expert': emptyInputSchema,
   'tool-transfer_to_research_expert': emptyInputSchema,

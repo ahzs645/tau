@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { mock } from 'vitest-mock-extended';
 import type { RpcGraphicsClient } from '#rpc/rpc-dependencies.js';
-import { rpcSchemasRegistry } from '#schemas/rpc.schema.js';
+import { rpcSchemasRegistry, rpcClientErrorCode } from '#schemas/rpc.schema.js';
 import { rpcName } from '#constants/rpc.constants.js';
 import { handleCaptureObservations } from '#rpc/handlers/handle-capture-observations.js';
 
@@ -35,7 +35,7 @@ describe('handleCaptureObservations', () => {
 
     expect(result).toEqual({
       success: false,
-      errorCode: 'UNKNOWN',
+      errorCode: rpcClientErrorCode.unknown,
       message: 'No graphics view is currently mounted for screenshots',
     });
   });
@@ -44,7 +44,7 @@ describe('handleCaptureObservations', () => {
     const graphics = mock<RpcGraphicsClient>();
     graphics.captureObservations.mockResolvedValue({
       success: false,
-      errorCode: 'UNKNOWN_GEOMETRY_UNIT',
+      errorCode: rpcClientErrorCode.unknownGeometryUnit,
       message: 'No viewer panel currently displays unmounted.ts',
     });
 
@@ -52,7 +52,7 @@ describe('handleCaptureObservations', () => {
 
     expect(result).toEqual({
       success: false,
-      errorCode: 'UNKNOWN_GEOMETRY_UNIT',
+      errorCode: rpcClientErrorCode.unknownGeometryUnit,
       message: 'No viewer panel currently displays unmounted.ts',
     });
   });

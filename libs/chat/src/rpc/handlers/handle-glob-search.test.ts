@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { mock } from 'vitest-mock-extended';
 import type { RpcFileSystem } from '#rpc/rpc-dependencies.js';
+import { rpcClientErrorCode } from '#schemas/rpc.schema.js';
 import { handleGlobSearch } from '#rpc/handlers/handle-glob-search.js';
 
 describe('handleGlobSearch', () => {
@@ -63,6 +64,6 @@ describe('handleGlobSearch', () => {
 
     const result = await handleGlobSearch({ pattern: '*.ts' }, fileSystem);
 
-    expect(result).toMatchObject({ success: false, errorCode: 'IO_ERROR' });
+    expect(result).toMatchObject({ success: false, errorCode: rpcClientErrorCode.ioError });
   });
 });

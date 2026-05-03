@@ -12,11 +12,14 @@ import type { ActorRefFrom, SnapshotFrom } from 'xstate';
 import { awaitFreshRender, AwaitFreshRenderTimeoutError } from '#lib/await-fresh-render.js';
 import type {
   RpcCall,
+  RpcClientErrorCode,
+  RpcResult,
   GetKernelResultRpcResult,
   CaptureObservationsRpcResult,
   CaptureScreenshotRpcResult,
   FetchGeometryRpcResult,
 } from '@taucad/chat';
+import { rpcClientErrorCode } from '@taucad/chat';
 import { createRpcDispatcher } from '@taucad/chat/rpc';
 import type {
   RpcDependencies,
@@ -24,8 +27,9 @@ import type {
   RpcFileStat,
   RpcRuntimeClient,
   RpcGraphicsClient,
+  RpcGraphicsExportGeometryResult,
 } from '@taucad/chat/rpc';
-import type { FileEntry } from '@taucad/types';
+import type { FileEntry, FileExtension } from '@taucad/types';
 import { idPrefix } from '@taucad/types/constants';
 import { generatePrefixedId } from '@taucad/utils/id';
 
@@ -82,6 +86,13 @@ export type RpcHandlerDependencies = {
  */
 export type RpcCallInput = RpcCall & {
   toolCallId: string;
+};
+
+/**
+ * Return type for createRpcHandlers
+ */
+export type RpcHandlers = {
+  executeRpcCall<C extends RpcCallInput>(rpcCall: C): Promise<RpcResult<C['rpcName']>>;
 };
 
 function createBrowserRpcFileSystem(
@@ -188,7 +199,10 @@ function createBrowserRpcFileSystem(
  * unit error for a path it just asked the harness to evaluate, and never sees
  * a stale geometry from a prior render generation.
  */
-type EnsureGeometryUnitResult =
+/** Subset of {@link RpcClientErrorCode} emitted by `ensureGeometryUnit` only. */
+export type EnsureGeometryUnitErrorCode = Extract<RpcClientErrorCode, 'UNKNOWN' | 'RENDER_TIMEOUT'>;
+
+export type EnsureGeometryUnitResult =
   | {
       ok: true;
       cadUnit: ActorRefFrom<typeof cadMachine>;
@@ -196,7 +210,7 @@ type EnsureGeometryUnitResult =
     }
   | {
       ok: false;
-      errorCode: 'UNKNOWN' | 'RENDER_TIMEOUT';
+      errorCode: EnsureGeometryUnitErrorCode;
       message: string;
     };
 
@@ -221,7 +235,7 @@ async function ensureGeometryUnit(
     if (!cadUnit) {
       return {
         ok: false,
-        errorCode: 'UNKNOWN',
+        errorCode: rpcClientErrorCode.unknown,
         message: `Failed to create geometry unit for ${targetFile}`,
       };
     }
@@ -233,13 +247,13 @@ async function ensureGeometryUnit(
     if (error instanceof AwaitFreshRenderTimeoutError) {
       return {
         ok: false,
-        errorCode: 'RENDER_TIMEOUT',
+        errorCode: rpcClientErrorCode.renderTimeout,
         message: `Render for ${targetFile} did not settle in time. Try a simpler model or wait and retry.`,
       };
     }
     return {
       ok: false,
-      errorCode: 'UNKNOWN',
+      errorCode: rpcClientErrorCode.unknown,
       message: error instanceof Error ? error.message : 'Unknown error',
     };
   }
@@ -304,7 +318,7 @@ function createBrowserGraphicsClient(
         if (fileNotFoundIssue) {
           return {
             success: false,
-            errorCode: 'FILE_NOT_FOUND',
+            errorCode: rpcClientErrorCode.fileNotFound,
             message: `${targetFile} does not exist on disk. Create it with create_file before testing or fix the path.`,
           };
         }
@@ -312,14 +326,14 @@ function createBrowserGraphicsClient(
         if (cadSnapshot.value === 'idle') {
           return {
             success: false,
-            errorCode: 'NO_TOP_LEVEL_GEOMETRY',
+            errorCode: rpcClientErrorCode.noTopLevelGeometry,
             message: `${targetFile} compiled but produced no top-level geometry to render.`,
           };
         }
 
         return {
           success: false,
-          errorCode: 'UNKNOWN',
+          errorCode: rpcClientErrorCode.unknown,
           message: `No GLTF geometry available for ${targetFile}`,
         };
       }
@@ -372,7 +386,7 @@ function createBrowserGraphicsClient(
       if (!graphicsRef) {
         return {
           success: false,
-          errorCode: 'UNKNOWN_GEOMETRY_UNIT',
+          errorCode: rpcClientErrorCode.unknownGeometryUnit,
           message: `No viewer panel currently displays ${targetFile}`,
         };
       }
@@ -420,7 +434,7 @@ function createBrowserGraphicsClient(
       } catch (error) {
         return {
           success: false,
-          errorCode: error instanceof Error ? 'IO_ERROR' : 'UNKNOWN',
+          errorCode: error instanceof Error ? rpcClientErrorCode.ioError : rpcClientErrorCode.unknown,
           message: error instanceof Error ? error.message : 'Unknown error',
         };
       }
@@ -431,7 +445,7 @@ function createBrowserGraphicsClient(
       if (!graphicsRef) {
         return {
           success: false,
-          errorCode: 'UNKNOWN_GEOMETRY_UNIT',
+          errorCode: rpcClientErrorCode.unknownGeometryUnit,
           message: `No viewer panel currently displays ${targetFile}`,
         };
       }
@@ -487,20 +501,13 @@ function createBrowserGraphicsClient(
       } catch (error) {
         return {
           success: false,
-          errorCode: error instanceof Error ? 'IO_ERROR' : 'UNKNOWN',
+          errorCode: error instanceof Error ? rpcClientErrorCode.ioError : rpcClientErrorCode.unknown,
           message: error instanceof Error ? error.message : 'Unknown error',
         };
       }
     },
   };
 }
-
-/**
- * Return type for createRpcHandlers
- */
-export type RpcHandlers = {
-  executeRpcCall: (rpcCall: RpcCallInput) => Promise<unknown>;
-};
 
 /**
  * Creates RPC handlers with the given browser dependencies.
@@ -521,7 +528,7 @@ export function createRpcHandlers(deps: RpcHandlerDependencies): RpcHandlers {
   const dispatcher = createRpcDispatcher(rpcDeps);
 
   return {
-    async executeRpcCall(rpcCall: RpcCallInput): Promise<unknown> {
+    async executeRpcCall<C extends RpcCallInput>(rpcCall: C): Promise<RpcResult<C['rpcName']>> {
       return dispatcher.dispatch(rpcCall);
     },
   };

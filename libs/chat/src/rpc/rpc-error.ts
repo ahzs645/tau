@@ -1,4 +1,5 @@
 import type { RpcClientErrorCode } from '#schemas/rpc.schema.js';
+import { rpcClientErrorCode } from '#schemas/rpc.schema.js';
 import type { RpcHandlerError } from '#rpc/rpc-dependencies.js';
 
 /**
@@ -10,9 +11,9 @@ import type { RpcHandlerError } from '#rpc/rpc-dependencies.js';
  */
 /* eslint-disable @typescript-eslint/naming-convention -- POSIX errno codes are uppercase by convention */
 const errnoToRpcCode: Record<string, RpcClientErrorCode> = {
-  ENOENT: 'FILE_NOT_FOUND',
-  EACCES: 'PERMISSION_DENIED',
-  EPERM: 'PERMISSION_DENIED',
+  ENOENT: rpcClientErrorCode.fileNotFound,
+  EACCES: rpcClientErrorCode.permissionDenied,
+  EPERM: rpcClientErrorCode.permissionDenied,
 };
 /* eslint-enable @typescript-eslint/naming-convention -- end POSIX errno block */
 
@@ -35,21 +36,21 @@ export function getErrorCode(error: unknown): RpcClientErrorCode {
 
     const message = error.message.toLowerCase();
     if (message.includes('not found') || message.includes('enoent') || message.includes('no such file')) {
-      return 'FILE_NOT_FOUND';
+      return rpcClientErrorCode.fileNotFound;
     }
 
     if (message.includes('permission') || message.includes('eacces')) {
-      return 'PERMISSION_DENIED';
+      return rpcClientErrorCode.permissionDenied;
     }
 
     if (message.includes('parse') || message.includes('json')) {
-      return 'PARSE_ERROR';
+      return rpcClientErrorCode.parseError;
     }
 
-    return 'IO_ERROR';
+    return rpcClientErrorCode.ioError;
   }
 
-  return 'UNKNOWN';
+  return rpcClientErrorCode.unknown;
 }
 
 /** @public */

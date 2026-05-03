@@ -569,6 +569,7 @@ describe('Chat RPC WebSocket Transport Resilience', () => {
 
     client.emit('rpc_response', {
       type: 'rpc_response',
+      rpcName: 'fetch_geometry',
       requestId: 'req_geometry_001',
       toolCallId: 'tool_test_model_001',
       result: { success: true, glb: largeGlb },
@@ -825,6 +826,7 @@ describe('Chat RPC WebSocket Transport Resilience', () => {
     client.on('rpc_request', (request: { requestId: string }, ack: (response: unknown) => void) => {
       ack({
         type: 'rpc_response',
+        rpcName: 'fetch_geometry',
         requestId: request.requestId,
         toolCallId: 'tool_001',
         result: { success: true, glb: largeGlb },
@@ -886,6 +888,7 @@ describe('Chat RPC WebSocket Transport Resilience', () => {
     client.on('rpc_request', (request: { requestId: string; toolCallId: string }, ack: (response: unknown) => void) => {
       ack({
         type: 'rpc_response',
+        rpcName: 'fetch_geometry',
         requestId: request.requestId,
         toolCallId: request.toolCallId,
         result: { success: true, glb: glbPayload },

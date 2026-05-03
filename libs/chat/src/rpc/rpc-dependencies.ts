@@ -10,6 +10,7 @@
 import type {
   CaptureObservationsRpcResult,
   CaptureScreenshotRpcResult,
+  ExportGeometryRpcInput,
   FetchGeometryRpcResult,
   GetKernelResultRpcResult,
   RpcClientErrorCode,
@@ -53,6 +54,20 @@ export type RpcRuntimeClient = {
 };
 
 /**
+ * Success/failure surface for {@link RpcGraphicsClient.exportGeometry} before
+ * the RPC handler persists bytes to `.tau/artifacts/`.
+ *
+ * @public
+ */
+export type RpcGraphicsExportGeometryResult =
+  | { success: true; bytes: Uint8Array<ArrayBuffer>; mimeType: string }
+  | {
+      success: false;
+      errorCode: RpcClientErrorCode;
+      message: string;
+    };
+
+/**
  * Abstract graphics client for capturing observations (screenshots).
  * Only available in browser environments with a mounted 3D view.
  *
@@ -63,6 +78,7 @@ export type RpcRuntimeClient = {
 export type RpcGraphicsClient = {
   captureObservations(args: { targetFile: string }): Promise<CaptureObservationsRpcResult>;
   fetchGeometry(args: { targetFile: string }): Promise<FetchGeometryRpcResult>;
+  exportGeometry(args: Pick<ExportGeometryRpcInput, 'targetFile' | 'format'>): Promise<RpcGraphicsExportGeometryResult>;
   captureScreenshot(args: { targetFile: string }): Promise<CaptureScreenshotRpcResult>;
 };
 

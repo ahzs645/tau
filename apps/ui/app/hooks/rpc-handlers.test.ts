@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { RpcDependencies, RpcFileSystem } from '@taucad/chat/rpc';
-import type { FileEntry } from '@taucad/types';
+import { rpcClientErrorCodeSchema } from '@taucad/chat';
+import type { FileEntry, FileExtension } from '@taucad/types';
 import type { RpcHandlerDependencies, ResolveGraphicsForFile } from '#hooks/rpc-handlers.js';
 
 // ===================================================================
@@ -91,6 +92,7 @@ function createMockCadUnit(options?: {
   geometries?: Array<{ format: string; content: Uint8Array<ArrayBuffer>; hash: string }>;
   kernelIssues?: Map<string, Array<{ message: string; type: string; severity: string }>>;
   value?: string;
+  kernelClient?: unknown;
 }) {
   return {
     getSnapshot: vi.fn().mockReturnValue({
@@ -99,6 +101,7 @@ function createMockCadUnit(options?: {
         geometries: options?.geometries ?? [],
         kernelIssues:
           options?.kernelIssues ?? new Map<string, Array<{ message: string; type: string; severity: string }>>(),
+        ...(options?.kernelClient === undefined ? {} : { kernelClient: options.kernelClient }),
       },
     }),
     on: vi.fn().mockReturnValue({ unsubscribe: vi.fn() }),
@@ -441,6 +444,9 @@ describe('rpc-handlers', () => {
           errorCode: 'UNKNOWN',
           message: 'Failed to create geometry unit for lib/main_rotor.scad',
         });
+        if (!result.success) {
+          expect(rpcClientErrorCodeSchema.safeParse(result.errorCode).success).toBe(true);
+        }
         expect(projectRef.send).toHaveBeenCalledWith({
           type: 'createGeometryUnit',
           entryFile: 'lib/main_rotor.scad',
@@ -636,6 +642,7 @@ describe('rpc-handlers', () => {
         if (!result.success) {
           expect(result.errorCode).toBe('RENDER_TIMEOUT');
           expect(result.message).toContain('main.scad');
+          expect(rpcClientErrorCodeSchema.safeParse(result.errorCode).success).toBe(true);
         }
       });
 
@@ -655,6 +662,9 @@ describe('rpc-handlers', () => {
           errorCode: 'UNKNOWN',
           message: 'Actor stopped',
         });
+        if (!result.success) {
+          expect(rpcClientErrorCodeSchema.safeParse(result.errorCode).success).toBe(true);
+        }
       });
 
       it('should handle getSnapshot throwing by returning UNKNOWN error', async () => {
@@ -672,6 +682,106 @@ describe('rpc-handlers', () => {
           errorCode: 'UNKNOWN',
           message: 'Actor not running',
         });
+        if (!result.success) {
+          expect(rpcClientErrorCodeSchema.safeParse(result.errorCode).success).toBe(true);
+        }
+      });
+    });
+
+    describe('exportGeometry', () => {
+      const glbContent = new Uint8Array([0x67, 0x6c, 0x54, 0x46]);
+
+      const cadSnapshotForExport = (kernelClient: unknown) => ({
+        value: 'idle',
+        context: {
+          geometries: [{ format: 'gltf', content: glbContent, hash: 'h1' }],
+          kernelIssues: new Map<string, Array<{ message: string; type: string; severity: string }>>(),
+          kernelClient,
+        },
+      });
+
+      it('should return STEP bytes after kernel export resolves', async () => {
+        const stepBytes = new Uint8Array([0x53, 0x54, 0x45, 0x50]);
+        const kernelClient = {
+          export: vi.fn<(format: FileExtension | string) => Promise<unknown>>().mockResolvedValue({
+            success: true,
+            data: { bytes: stepBytes, name: 'mesh.step', mimeType: 'application/step' },
+            issues: [],
+          }),
+        };
+
+        const cadUnit = createMockCadUnit({
+          geometries: [{ format: 'gltf', content: glbContent, hash: 'h1' }],
+          kernelClient,
+        });
+        const geometryUnits = new Map<string, unknown>([['main.scad', cadUnit]]);
+        const projectRef = createMockBuildRef({ geometryUnits });
+        mockWaitFor.mockResolvedValue(cadSnapshotForExport(kernelClient));
+
+        const deps = buildDeps({ projectRef, resolveGraphicsForFile: stubResolver });
+        const graphics = deps.graphics!;
+
+        const result = await graphics.exportGeometry({ targetFile: 'main.scad', format: 'step' });
+
+        expect(kernelClient.export).toHaveBeenCalledWith('step');
+        expect(result).toEqual({
+          success: true,
+          bytes: stepBytes,
+          mimeType: 'application/step',
+        });
+      });
+
+      it('should return UNKNOWN when runtime client is not connected yet', async () => {
+        const cadUnit = createMockCadUnit({
+          geometries: [{ format: 'gltf', content: glbContent, hash: 'h1' }],
+        });
+        const geometryUnits = new Map<string, unknown>([['main.scad', cadUnit]]);
+        const projectRef = createMockBuildRef({ geometryUnits });
+
+        mockWaitFor.mockResolvedValue({
+          value: 'idle',
+          context: {
+            geometries: [{ format: 'gltf', content: glbContent, hash: 'h1' }],
+            kernelIssues: new Map<string, Array<{ message: string; type: string; severity: string }>>(),
+          },
+        });
+
+        const deps = buildDeps({ projectRef, resolveGraphicsForFile: stubResolver });
+        const graphics = deps.graphics!;
+
+        const result = await graphics.exportGeometry({ targetFile: 'main.scad', format: 'stl' });
+
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          expect(result.errorCode).toBe('UNKNOWN');
+          expect(result.message).toContain('Runtime client not connected');
+        }
+      });
+
+      it('should map unsuccessful export pipeline issues into UNKNOWN RPC errors', async () => {
+        const kernelClient = {
+          export: vi.fn<(format: FileExtension | string) => Promise<unknown>>().mockResolvedValue({
+            success: false,
+            issues: [{ severity: 'error', message: 'No exporters match', code: 'KERNEL_CAPABILITY_MISSING' }],
+          }),
+        };
+        const cadUnit = createMockCadUnit({
+          geometries: [{ format: 'gltf', content: glbContent, hash: 'h1' }],
+          kernelClient,
+        });
+        const geometryUnits = new Map<string, unknown>([['main.scad', cadUnit]]);
+        const projectRef = createMockBuildRef({ geometryUnits });
+        mockWaitFor.mockResolvedValue(cadSnapshotForExport(kernelClient));
+
+        const deps = buildDeps({ projectRef, resolveGraphicsForFile: stubResolver });
+        const graphics = deps.graphics!;
+
+        const result = await graphics.exportGeometry({ targetFile: 'main.scad', format: 'stl' });
+
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          expect(result.message).toContain('No exporters match');
+        }
       });
     });
 

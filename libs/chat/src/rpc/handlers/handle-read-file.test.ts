@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { mock } from 'vitest-mock-extended';
 import type { RpcFileSystem } from '#rpc/rpc-dependencies.js';
+import { rpcClientErrorCode } from '#schemas/rpc.schema.js';
 import { handleReadFile } from '#rpc/handlers/handle-read-file.js';
 
 describe('handleReadFile', () => {
@@ -83,6 +84,6 @@ describe('handleReadFile', () => {
 
     const result = await handleReadFile({ targetFile: 'missing.txt' }, fileSystem);
 
-    expect(result).toMatchObject({ success: false, errorCode: 'FILE_NOT_FOUND' });
+    expect(result).toMatchObject({ success: false, errorCode: rpcClientErrorCode.fileNotFound });
   });
 });

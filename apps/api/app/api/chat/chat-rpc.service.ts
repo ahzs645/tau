@@ -9,7 +9,7 @@ import type {
   RpcInput,
   RpcResult,
   RpcRequest,
-  RpcResponse,
+  RpcResponseFor,
   RpcExecutionError,
   RpcValidationError,
 } from '@taucad/chat';
@@ -264,7 +264,8 @@ export class ChatRpcService implements OnModuleDestroy {
 
     const requestId = generatePrefixedId(idPrefix.request);
     const traceContext = injectTraceContext();
-    const rpcRequest: RpcRequest = {
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- generic `T` prevents `satisfies RpcRequest`; Zod validated args
+    const rpcRequest = {
       type: 'rpc_request',
       chatId,
       requestId,
@@ -272,7 +273,7 @@ export class ChatRpcService implements OnModuleDestroy {
       rpcName,
       args: inputValidation.data,
       ...(Object.keys(traceContext).length > 0 ? { traceContext } : {}),
-    };
+    } as RpcRequest;
 
     this.logger.debug(`Sending RPC request ${requestId} for ${rpcName} to chat ${chatId}`);
 
@@ -286,8 +287,9 @@ export class ChatRpcService implements OnModuleDestroy {
     });
 
     try {
-      /* oxlint-disable-next-line @typescript-eslint/no-unsafe-assignment -- emitWithAck returns untyped ack */
-      const response: RpcResponse = await socket.timeout(rpcExecutionTimeout).emitWithAck('rpc_request', rpcRequest);
+      const response = (await socket
+        .timeout(rpcExecutionTimeout)
+        .emitWithAck('rpc_request', rpcRequest)) as RpcResponseFor<T>;
 
       const inboundSize = estimateJsonSize(response);
       this.metrics.wsMessageSize.record(inboundSize, {
@@ -295,9 +297,22 @@ export class ChatRpcService implements OnModuleDestroy {
         [AttributeKey.RPC_METHOD]: rpcName,
       });
 
-      if (response.error) {
+      if ('error' in response) {
         this.recordRpcDuration(startTime, rpcName, { status: 'error' });
         return { errorCode: 'UNHANDLED_CLIENT_ERROR', message: response.error, rpcName };
+      }
+
+      if (response.rpcName !== rpcName) {
+        this.recordRpcDuration(startTime, rpcName, { status: 'error' });
+        const validationError: RpcValidationError = {
+          errorCode: 'OUTPUT_VALIDATION_FAILED',
+          message: `RPC response rpcName mismatch: expected ${String(rpcName)}, received ${String(response.rpcName)}.`,
+          rpcName,
+          validationErrors: [{ path: 'rpcName', message: 'Mismatched rpcName on wire' }],
+          rawOutput: response,
+        };
+        this.logger.warn(`RPC protocol mismatch for ${requestId}:`, validationError.validationErrors);
+        return validationError;
       }
 
       const validated = this.validateRpcResult(rpcName, response.result);
@@ -305,7 +320,7 @@ export class ChatRpcService implements OnModuleDestroy {
       if (validated.success) {
         this.recordRpcDuration(startTime, rpcName, { status: 'ok' });
         this.logger.debug(`Resolved RPC call ${requestId} for ${rpcName}`);
-        return validated.data as RpcResult<T>;
+        return validated.data;
       }
 
       this.recordRpcDuration(startTime, rpcName, { status: 'error' });
@@ -389,15 +404,15 @@ export class ChatRpcService implements OnModuleDestroy {
    * Validate RPC result against its Zod schema.
    * Returns the validated data if successful, or an RpcValidationError if validation fails.
    */
-  private validateRpcResult(
-    rpcName: keyof RpcSchemasRegistry,
+  private validateRpcResult<T extends keyof RpcSchemasRegistry>(
+    rpcName: T,
     result: unknown,
-  ): { success: true; data: unknown } | { success: false; error: RpcValidationError } {
+  ): { success: true; data: RpcResult<T> } | { success: false; error: RpcValidationError } {
     const schemas = rpcSchemasRegistry[rpcName];
     const parseResult = schemas.resultSchema.safeParse(result);
 
     if (parseResult.success) {
-      return { success: true, data: parseResult.data };
+      return { success: true, data: parseResult.data as RpcResult<T> };
     }
 
     // Build validation error

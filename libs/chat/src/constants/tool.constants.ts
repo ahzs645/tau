@@ -12,6 +12,7 @@ export const toolName = {
   grep: 'grep',
   globSearch: 'glob_search',
   getKernelResult: 'get_kernel_result',
+  exportGeometry: 'export_geometry',
   screenshot: 'screenshot',
   transferToCadExpert: 'transfer_to_cad_expert',
   transferToResearchExpert: 'transfer_to_research_expert',

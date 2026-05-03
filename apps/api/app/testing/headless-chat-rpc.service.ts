@@ -40,10 +40,13 @@ export class HeadlessChatRpcService extends ChatRpcService {
     }
 
     try {
-      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- Generic T narrowed at runtime
-      const rpcCall = { rpcName: request.rpcName, args: request.args } as RpcCall;
-      const result = await this.dispatcher.dispatch(rpcCall);
-      return result as RpcResult<T>;
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- generic `T` prevents correlated `RpcCall`; args validated upstream
+      const rpcCall = {
+        rpcName: request.rpcName,
+        args: request.args,
+      } as RpcCall;
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- dispatcher widens; return narrowed by caller's T
+      return (await this.dispatcher.dispatch(rpcCall)) as RpcResult<T>;
     } catch (error) {
       return {
         errorCode: 'UNHANDLED_CLIENT_ERROR',

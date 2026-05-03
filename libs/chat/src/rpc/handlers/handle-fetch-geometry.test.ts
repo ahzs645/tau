@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { mock } from 'vitest-mock-extended';
 import type { RpcFileSystem, RpcGraphicsClient } from '#rpc/rpc-dependencies.js';
-import { rpcSchemasRegistry } from '#schemas/rpc.schema.js';
+import { rpcSchemasRegistry, rpcClientErrorCode } from '#schemas/rpc.schema.js';
 import { rpcName } from '#constants/rpc.constants.js';
 import { handleFetchGeometry } from '#rpc/handlers/handle-fetch-geometry.js';
 
@@ -71,19 +71,23 @@ describe('handleFetchGeometry', () => {
 
     expect(result).toEqual({
       success: false,
-      errorCode: 'UNKNOWN',
+      errorCode: rpcClientErrorCode.unknown,
       message: 'No graphics view is currently mounted',
     });
   });
 
   it('should propagate the underlying graphics failure unchanged', async () => {
     const graphics = mock<RpcGraphicsClient>();
-    graphics.fetchGeometry.mockResolvedValue({ success: false, errorCode: 'IO_ERROR', message: 'boom' });
+    graphics.fetchGeometry.mockResolvedValue({
+      success: false,
+      errorCode: rpcClientErrorCode.ioError,
+      message: 'boom',
+    });
     const fileSystem = mock<RpcFileSystem>();
 
     const result = await handleFetchGeometry({ artifactId: 'tc-1', targetFile: 'main.ts' }, graphics, fileSystem);
 
-    expect(result).toEqual({ success: false, errorCode: 'IO_ERROR', message: 'boom' });
+    expect(result).toEqual({ success: false, errorCode: rpcClientErrorCode.ioError, message: 'boom' });
     expect(fileSystem.writeBinaryFile).not.toHaveBeenCalled();
   });
 

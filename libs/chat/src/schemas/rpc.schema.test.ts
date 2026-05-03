@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { rpcClientErrorCodeSchema } from '#schemas/rpc.schema.js';
+import { rpcClientErrorCode, rpcClientErrorCodeSchema } from '#schemas/rpc.schema.js';
 
 describe('rpcClientErrorCodeSchema', () => {
   it('should parse FILE_NOT_FOUND', () => {
@@ -16,5 +16,15 @@ describe('rpcClientErrorCodeSchema', () => {
 
   it('should still expose UNKNOWN as a generic catch-all', () => {
     expect(rpcClientErrorCodeSchema.parse('UNKNOWN')).toBe('UNKNOWN');
+  });
+});
+
+describe('rpcClientErrorCode', () => {
+  it('should enumerate every schema enum member exactly once', () => {
+    const fromObject = new Set(Object.values(rpcClientErrorCode));
+    expect(fromObject.size).toBe(rpcClientErrorCodeSchema.options.length);
+    for (const code of rpcClientErrorCodeSchema.options) {
+      expect(fromObject.has(code)).toBe(true);
+    }
   });
 });

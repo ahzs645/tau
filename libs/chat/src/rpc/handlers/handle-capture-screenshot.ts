@@ -1,4 +1,5 @@
 import type { CaptureScreenshotRpcInput, CaptureScreenshotRpcResult } from '#schemas/rpc.schema.js';
+import { rpcClientErrorCode } from '#schemas/rpc.schema.js';
 import type { RpcGraphicsClient } from '#rpc/rpc-dependencies.js';
 
 export async function handleCaptureScreenshot(
@@ -8,7 +9,7 @@ export async function handleCaptureScreenshot(
   if (!graphics) {
     return {
       success: false,
-      errorCode: 'UNKNOWN',
+      errorCode: rpcClientErrorCode.unknown,
       message: 'No graphics view is currently mounted for screenshots',
     };
   }

@@ -1,9 +1,9 @@
 /**
  * RPC Constants
  *
- * Constants for RPC operation names and infrastructure error codes.
- * These are distinct from RPC client errors (business errors like FILE_NOT_FOUND)
- * which are defined in rpc.schema.ts.
+ * RPC operation names and infrastructure (transport) error codes.
+ * Business-level client error codes (`FILE_NOT_FOUND`, etc.) live in
+ * `rpcClientErrorCode` / `rpcClientErrorCodeSchema` in `rpc.schema.ts`.
  */
 
 /**
@@ -21,6 +21,7 @@ export const rpcName = {
   getKernelResult: 'get_kernel_result',
   captureObservations: 'capture_observations',
   fetchGeometry: 'fetch_geometry',
+  exportGeometry: 'export_geometry',
   captureScreenshot: 'capture_screenshot',
   appendFile: 'append_file',
   editFile: 'edit_file',

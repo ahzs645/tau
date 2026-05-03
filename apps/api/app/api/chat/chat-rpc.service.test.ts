@@ -112,6 +112,7 @@ describe('ChatRpcService', () => {
       const ack = getEmitWithAck(socket);
       ack.mockResolvedValueOnce({
         type: 'rpc_response',
+        rpcName: 'read_file',
         requestId: 'req_test_1',
         toolCallId: 'call_1',
         result: { content: 'hello' },
@@ -186,6 +187,7 @@ describe('ChatRpcService', () => {
       const ack = getEmitWithAck(socket);
       ack.mockResolvedValueOnce({
         type: 'rpc_response',
+        rpcName: 'read_file',
         requestId: 'req_test_1',
         toolCallId: 'call_1',
         result: { content: 'hello' },
@@ -296,6 +298,7 @@ describe('ChatRpcService', () => {
       const ack = getEmitWithAck(socket);
       ack.mockResolvedValueOnce({
         type: 'rpc_response',
+        rpcName: 'read_file',
         requestId: 'req_test_1',
         toolCallId: 'call_1',
         result: undefined,
@@ -312,6 +315,32 @@ describe('ChatRpcService', () => {
       expect(result).toMatchObject({
         errorCode: 'UNHANDLED_CLIENT_ERROR',
         message: 'Something went wrong on the client',
+        rpcName: 'read_file',
+      });
+    });
+
+    it('should return OUTPUT_VALIDATION_FAILED when ack rpcName mismatches the request', async () => {
+      const socket = createMockSocket('s1');
+      service.registerConnection('chat_1', socket, defaultUserId);
+
+      const ack = getEmitWithAck(socket);
+      ack.mockResolvedValueOnce({
+        type: 'rpc_response',
+        rpcName: 'grep',
+        requestId: 'req_test_1',
+        toolCallId: 'call_1',
+        result: { matches: [] },
+      });
+
+      const result = await service.sendRpcRequest({
+        chatId: 'chat_1',
+        toolCallId: 'call_1',
+        rpcName: 'read_file',
+        args: { targetFile: 'a.txt' },
+      });
+
+      expect(result).toMatchObject({
+        errorCode: 'OUTPUT_VALIDATION_FAILED',
         rpcName: 'read_file',
       });
     });
@@ -365,6 +394,7 @@ describe('ChatRpcService', () => {
       const ack = getEmitWithAck(socket);
       ack.mockResolvedValueOnce({
         type: 'rpc_response',
+        rpcName: 'read_file',
         requestId: 'req_test_2',
         toolCallId: 'call_2',
         result: { content: 'hello' },
@@ -405,6 +435,7 @@ describe('ChatRpcService', () => {
       const ack = getEmitWithAck(socket);
       ack.mockResolvedValueOnce({
         type: 'rpc_response',
+        rpcName: 'read_file',
         requestId: 'req_test_2',
         toolCallId: 'call_2',
         result: { content: 'hello' },
@@ -445,6 +476,7 @@ describe('ChatRpcService', () => {
       const ack = getEmitWithAck(socket);
       ack.mockResolvedValueOnce({
         type: 'rpc_response',
+        rpcName: 'read_file',
         requestId: 'req_test_2',
         toolCallId: 'call_2',
         result: { content: 'hello' },
@@ -497,6 +529,7 @@ describe('ChatRpcService', () => {
       const ack = getEmitWithAck(socket);
       ack.mockResolvedValueOnce({
         type: 'rpc_response',
+        rpcName: 'read_file',
         requestId: 'req_test_1',
         toolCallId: 'call_1',
         result: { content: 'success' },
@@ -584,6 +617,7 @@ describe('ChatRpcService', () => {
       const ack = getEmitWithAck(socket);
       ack.mockResolvedValueOnce({
         type: 'rpc_response',
+        rpcName: 'read_file',
         requestId: 'req_test_2',
         toolCallId: 'call_2',
         result: { content: 'hello' },
@@ -638,6 +672,7 @@ describe('ChatRpcService', () => {
       const ack = getEmitWithAck(socket);
       ack.mockResolvedValueOnce({
         type: 'rpc_response',
+        rpcName: 'read_file',
         requestId: 'req_test_2',
         toolCallId: 'call_2',
         result: { content: 'hello' },
@@ -684,6 +719,7 @@ describe('ChatRpcService', () => {
       const ack = getEmitWithAck(socket);
       ack.mockResolvedValueOnce({
         type: 'rpc_response',
+        rpcName: 'read_file',
         requestId: 'req_test_2',
         toolCallId: 'call_2',
         result: { content: 'hello' },
@@ -819,6 +855,7 @@ describe('ChatRpcService', () => {
       const ack2 = getEmitWithAck(socket2);
       ack2.mockResolvedValueOnce({
         type: 'rpc_response',
+        rpcName: 'read_file',
         requestId: 'req_test_1',
         toolCallId: 'call_1',
         result: { content: 'hello' },

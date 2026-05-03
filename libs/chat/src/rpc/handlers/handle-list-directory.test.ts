@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { mock } from 'vitest-mock-extended';
 import type { RpcFileSystem } from '#rpc/rpc-dependencies.js';
+import { rpcClientErrorCode } from '#schemas/rpc.schema.js';
 import { handleListDirectory } from '#rpc/handlers/handle-list-directory.js';
 
 describe('handleListDirectory', () => {
@@ -42,6 +43,6 @@ describe('handleListDirectory', () => {
 
     const result = await handleListDirectory({ path: 'restricted' }, fileSystem);
 
-    expect(result).toMatchObject({ success: false, errorCode: 'IO_ERROR' });
+    expect(result).toMatchObject({ success: false, errorCode: rpcClientErrorCode.ioError });
   });
 });

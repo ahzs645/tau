@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { mock } from 'vitest-mock-extended';
 import type { RpcFileSystem } from '#rpc/rpc-dependencies.js';
+import { rpcClientErrorCode } from '#schemas/rpc.schema.js';
 import { handleEditFile } from '#rpc/handlers/handle-edit-file.js';
 
 describe('handleEditFile', () => {
@@ -43,7 +44,7 @@ describe('handleEditFile', () => {
 
     const result = await handleEditFile({ targetFile: 'missing.ts', oldString: 'a', newString: 'b' }, fileSystem);
 
-    expect(result).toMatchObject({ success: false, errorCode: 'FILE_NOT_FOUND' });
+    expect(result).toMatchObject({ success: false, errorCode: rpcClientErrorCode.fileNotFound });
   });
 
   it('should return IO_ERROR for generic filesystem errors', async () => {
@@ -52,6 +53,6 @@ describe('handleEditFile', () => {
 
     const result = await handleEditFile({ targetFile: 'main.ts', oldString: 'a', newString: 'b' }, fileSystem);
 
-    expect(result).toMatchObject({ success: false, errorCode: 'IO_ERROR' });
+    expect(result).toMatchObject({ success: false, errorCode: rpcClientErrorCode.ioError });
   });
 });

@@ -4,7 +4,7 @@ import { ToolMessage, HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { z } from 'zod';
 import { rpcName } from '@taucad/chat/constants';
-import type { ChatRpcService } from '#api/chat/chat-rpc.service.js';
+import { ChatRpcService } from '#api/chat/chat-rpc.service.js';
 
 const transcriptContextSchema = z.object({
   chatId: z.string(),

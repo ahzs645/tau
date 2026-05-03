@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { mock } from 'vitest-mock-extended';
 import type { RpcFileSystem } from '#rpc/rpc-dependencies.js';
+import { rpcClientErrorCode } from '#schemas/rpc.schema.js';
 import { handleAppendFile } from '#rpc/handlers/handle-append-file.js';
 
 describe('handleAppendFile', () => {
@@ -43,7 +44,7 @@ describe('handleAppendFile', () => {
 
     expect(result).toMatchObject({
       success: false,
-      errorCode: 'FILE_NOT_FOUND',
+      errorCode: rpcClientErrorCode.fileNotFound,
     });
   });
 
@@ -55,7 +56,7 @@ describe('handleAppendFile', () => {
 
     expect(result).toMatchObject({
       success: false,
-      errorCode: 'IO_ERROR',
+      errorCode: rpcClientErrorCode.ioError,
       message: 'Disk full',
     });
   });

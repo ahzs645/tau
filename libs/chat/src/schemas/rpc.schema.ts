@@ -14,6 +14,7 @@ import { rpcName } from '#constants/rpc.constants.js';
 import { diffStatsWithContentSchema } from '#schemas/tools/diff.schema.js';
 import { kernelIssueSchema } from '#schemas/tools/issue.schema.js';
 import { observationSchema } from '#schemas/tools/test-model.tool.schema.js';
+import { exportGeometryFormatSchema } from '#schemas/tools/export-geometry.tool.schema.js';
 
 // =============================================================================
 // RPC Error Types
@@ -203,6 +204,20 @@ const captureObservationsRpc = defineRpc({
   }),
 });
 
+const exportGeometryRpc = defineRpc({
+  input: zod.object({
+    toolCallId: zod.string(),
+    targetFile: zod.string(),
+    format: exportGeometryFormatSchema,
+  }),
+  success: zod.object({
+    artifactPath: zod.string(),
+    format: exportGeometryFormatSchema,
+    mimeType: zod.string(),
+    byteLength: zod.number().int().nonnegative(),
+  }),
+});
+
 const fetchGeometryRpc = defineRpc({
   input: zod.object({
     artifactId: zod.string().optional(),
@@ -276,6 +291,7 @@ export type RpcSchemasRegistry = {
   [rpcName.getKernelResult]: RpcSchemaEntry<GetKernelResultRpcInput, GetKernelResultRpcResult>;
   [rpcName.captureObservations]: RpcSchemaEntry<CaptureObservationsRpcInput, CaptureObservationsRpcResult>;
   [rpcName.fetchGeometry]: RpcSchemaEntry<FetchGeometryRpcInput, FetchGeometryRpcResult>;
+  [rpcName.exportGeometry]: RpcSchemaEntry<ExportGeometryRpcInput, ExportGeometryRpcResult>;
   [rpcName.captureScreenshot]: RpcSchemaEntry<CaptureScreenshotRpcInput, CaptureScreenshotRpcResult>;
   [rpcName.appendFile]: RpcSchemaEntry<AppendFileRpcInput, AppendFileRpcResult>;
   [rpcName.editFile]: RpcSchemaEntry<EditFileRpcInput, EditFileRpcResult>;
@@ -322,6 +338,10 @@ export const rpcSchemasRegistry: RpcSchemasRegistry = {
   [rpcName.fetchGeometry]: {
     inputSchema: fetchGeometryRpc.inputSchema,
     resultSchema: fetchGeometryRpc.resultSchema,
+  },
+  [rpcName.exportGeometry]: {
+    inputSchema: exportGeometryRpc.inputSchema,
+    resultSchema: exportGeometryRpc.resultSchema,
   },
   [rpcName.captureScreenshot]: {
     inputSchema: captureScreenshotRpc.inputSchema,
@@ -388,6 +408,23 @@ export type RpcClientErrorCode = z.infer<typeof rpcClientErrorCodeSchema>;
 /** @public */
 export type RpcClientError = z.infer<typeof rpcClientErrorSchema>;
 
+/**
+ * Named identifiers for wire `errorCode` values (mirrors `rpcClientErrorCodeSchema`).
+ * Use this instead of bare string literals so additions/removals stay aligned with Zod.
+ *
+ * @public
+ */
+export const rpcClientErrorCode = {
+  fileNotFound: 'FILE_NOT_FOUND',
+  noTopLevelGeometry: 'NO_TOP_LEVEL_GEOMETRY',
+  permissionDenied: 'PERMISSION_DENIED',
+  ioError: 'IO_ERROR',
+  parseError: 'PARSE_ERROR',
+  renderTimeout: 'RENDER_TIMEOUT',
+  unknown: 'UNKNOWN',
+  unknownGeometryUnit: 'UNKNOWN_GEOMETRY_UNIT',
+} as const satisfies Record<string, RpcClientErrorCode>;
+
 /** @public */
 export type ReadFileRpcInput = z.infer<typeof readFileRpc.inputSchema>;
 /** @public */
@@ -443,6 +480,13 @@ export type CaptureObservationsRpcInput = z.infer<typeof captureObservationsRpc.
 export type CaptureObservationsRpcSuccess = z.infer<typeof captureObservationsRpc.successSchema>;
 /** @public */
 export type CaptureObservationsRpcResult = z.infer<typeof captureObservationsRpc.resultSchema>;
+
+/** @public */
+export type ExportGeometryRpcInput = z.infer<typeof exportGeometryRpc.inputSchema>;
+/** @public */
+export type ExportGeometryRpcSuccess = z.infer<typeof exportGeometryRpc.successSchema>;
+/** @public */
+export type ExportGeometryRpcResult = z.infer<typeof exportGeometryRpc.resultSchema>;
 
 /** @public */
 export type FetchGeometryRpcInput = z.infer<typeof fetchGeometryRpc.inputSchema>;

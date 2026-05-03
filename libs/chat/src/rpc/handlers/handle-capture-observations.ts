@@ -1,4 +1,5 @@
 import type { CaptureObservationsRpcInput, CaptureObservationsRpcResult } from '#schemas/rpc.schema.js';
+import { rpcClientErrorCode } from '#schemas/rpc.schema.js';
 import type { RpcGraphicsClient } from '#rpc/rpc-dependencies.js';
 
 /** @public */
@@ -9,7 +10,7 @@ export async function handleCaptureObservations(
   if (!graphics) {
     return {
       success: false,
-      errorCode: 'UNKNOWN',
+      errorCode: rpcClientErrorCode.unknown,
       message: 'No graphics view is currently mounted for screenshots',
     };
   }

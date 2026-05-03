@@ -3,6 +3,7 @@ export type {
   RpcFileStat,
   RpcRuntimeClient,
   RpcGraphicsClient,
+  RpcGraphicsExportGeometryResult,
   RpcDependencies,
   RpcHandlerError,
 } from '#rpc/rpc-dependencies.js';
