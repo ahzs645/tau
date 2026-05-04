@@ -26,7 +26,14 @@ export type RpcFileSystem = {
   writeFile(path: string, content: string): Promise<void>;
   writeBinaryFile(path: string, data: Uint8Array<ArrayBuffer>): Promise<void>;
   deleteFile(path: string): Promise<void>;
-  readdir(path: string): Promise<Array<{ name: string; type: 'file' | 'dir'; size: number; modifiedAt?: string }>>;
+  readdir(path: string): Promise<
+    Array<{
+      name: string;
+      type: 'file' | 'dir';
+      size: number;
+      modifiedAt?: string;
+    }>
+  >;
   exists(path: string): Promise<boolean>;
   appendFile(path: string, content: string): Promise<void>;
   editFile(path: string, oldString: string, newString: string, replaceAll?: boolean): Promise<{ occurrences: number }>;

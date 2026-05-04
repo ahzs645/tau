@@ -59,7 +59,7 @@ export type ResolveGraphicsForFile = (targetFile: string) => ActorRefFrom<typeof
  */
 type RpcHandlerTreeService = {
   exists(path: string): Promise<boolean>;
-  listDirectory(path: string, options?: { signal?: AbortSignal }): ReturnType<FileTreeService['listDirectory']>;
+  listDirectory(path: string): ReturnType<FileTreeService['listDirectory']>;
 };
 
 /**
@@ -109,39 +109,32 @@ function createBrowserRpcFileSystem(fileManager: RpcHandlerDependencies['fileMan
     async deleteFile(path: string): Promise<void> {
       await fileManager.deleteFile(path, { source: 'machine' });
     },
-    async readdir(
-      path: string,
-      options?: { signal?: AbortSignal },
-    ): Promise<
+    async readdir(path: string): Promise<
       Array<{
         name: string;
         type: 'file' | 'dir';
         size: number;
         modifiedAt?: string;
-        listingIssue?: { code: string; message: string };
       }>
     > {
       const { treeService } = await fileManager.whenServicesReady();
       try {
-        const entries = await treeService.listDirectory(path, { signal: options?.signal });
+        const entries = await treeService.listDirectory(path);
         return entries.map((entry) => ({
           name: entry.name,
           type: entry.isFolder ? 'dir' : 'file',
           size: entry.size,
           ...(entry.mtimeMs > 0 ? { modifiedAt: new Date(entry.mtimeMs).toISOString() } : {}),
-          ...(entry.listingError
-            ? { listingIssue: { code: entry.listingError.code, message: entry.listingError.message } }
-            : {}),
         }));
-      } catch (cause: unknown) {
-        if (cause instanceof DirectoryListingFailedError) {
-          const err = new Error(cause.message) as Error & { code?: string };
-          if (cause.listing.code === DirectoryListingErrorCode.NotFound) {
-            err.code = 'ENOENT';
+      } catch (error) {
+        if (error instanceof DirectoryListingFailedError) {
+          const mappedError = new Error(error.message) as Error & { code?: string };
+          if (error.listing.code === DirectoryListingErrorCode.NotFound) {
+            mappedError.code = 'ENOENT';
           }
-          throw err;
+          throw mappedError;
         }
-        throw cause;
+        throw error;
       }
     },
     async exists(path: string): Promise<boolean> {

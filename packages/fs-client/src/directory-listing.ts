@@ -11,7 +11,6 @@ export type ListedDirectoryEntry = {
   size: number;
   /** Last-modified timestamp in milliseconds since the Unix epoch. */
   mtimeMs: number;
-  listingError?: DirectoryListingError;
 };
 
 /**

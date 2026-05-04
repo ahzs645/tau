@@ -59,9 +59,7 @@ function createMockTreeService(tree?: Map<string, FileEntry>) {
   return {
     getTreeSnapshot: () => _tree,
     exists: vi.fn(async (path: string) => _tree.has(path)),
-    listDirectory: vi.fn(
-      async (_path: string, _options?: { signal?: AbortSignal }): Promise<readonly ListedDirectoryEntry[]> => [],
-    ),
+    listDirectory: vi.fn(async (_path: string): Promise<readonly ListedDirectoryEntry[]> => []),
   };
 }
 
@@ -313,10 +311,7 @@ describe('rpc-handlers', () => {
 
         const entries = await fileSystem.readdir('src');
 
-        expect(lastTreeService!.listDirectory).toHaveBeenCalledWith(
-          'src',
-          expect.objectContaining({ signal: undefined }),
-        );
+        expect(lastTreeService!.listDirectory).toHaveBeenCalledWith('src');
         expect(entries).toEqual([
           { name: 'main.ts', type: 'file', size: 1234, modifiedAt: new Date(writtenAt).toISOString() },
           { name: 'utils.ts', type: 'file', size: 56, modifiedAt: new Date(writtenAt).toISOString() },
@@ -375,10 +370,7 @@ describe('rpc-handlers', () => {
         async (pathArgument) => {
           vi.mocked(lastTreeService!.listDirectory).mockResolvedValueOnce([]);
           await fileSystem.readdir(pathArgument);
-          expect(lastTreeService!.listDirectory).toHaveBeenCalledWith(
-            pathArgument,
-            expect.objectContaining({ signal: undefined }),
-          );
+          expect(lastTreeService!.listDirectory).toHaveBeenCalledWith(pathArgument);
         },
       );
 
