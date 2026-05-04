@@ -163,8 +163,8 @@ export type HostAbortBinding = {
  * @public
  */
 export type HostGeometryDeliveryBinding = {
-  publish(geometry: Geometry): EncodedGeometry;
   readonly tier: 'pool' | 'transfer' | 'copy';
+  publish(geometry: Geometry): EncodedGeometry;
 };
 
 /**
@@ -174,8 +174,8 @@ export type HostGeometryDeliveryBinding = {
  * @public
  */
 export type HostFileDeliveryBinding = {
-  publish(file: Uint8Array<ArrayBuffer>): EncodedFileBytes;
   readonly tier: 'pool' | 'transfer' | 'copy';
+  publish(file: Uint8Array<ArrayBuffer>): EncodedFileBytes;
 };
 
 /**
@@ -258,6 +258,19 @@ export type RuntimeTransportClient<
   /** Literal id (matches the plugin's `id`). */
   readonly id: Id;
 
+  /** Resolves once the transport is closed (for any reason). */
+  readonly closed: Promise<void>;
+
+  /**
+   * Phantom carrier so RuntimeClient can project BindingsExtra.
+   * Marked `@internal` so doc generators filter it before serialization
+   * (the symbol's TS-internal display name contains literal `@`
+   * characters that break MDX/JSX parsers).
+   *
+   * @internal
+   */
+  readonly [__transportBindingsExtra]?: BindingsExtra;
+
   /** Human/diagnostic descriptor; never used to branch runtime behaviour. */
   describe(): TransportDescriptor<Id>;
 
@@ -299,19 +312,6 @@ export type RuntimeTransportClient<
    * transport is unusable; callers must construct a new instance.
    */
   close(reason?: string): Promise<void>;
-
-  /** Resolves once the transport is closed (for any reason). */
-  readonly closed: Promise<void>;
-
-  /**
-   * Phantom carrier so RuntimeClient can project BindingsExtra.
-   * Marked `@internal` so doc generators filter it before serialization
-   * (the symbol's TS-internal display name contains literal `@`
-   * characters that break MDX/JSX parsers).
-   *
-   * @internal
-   */
-  readonly [__transportBindingsExtra]?: BindingsExtra;
 };
 
 /**
@@ -330,6 +330,7 @@ export type RuntimeTransportHost<
   Id extends string = string,
 > = {
   readonly id: Id;
+  readonly closed: Promise<void>;
 
   /**
    * Open the host-side wire, advertise hello. After `open()` resolves
@@ -359,7 +360,6 @@ export type RuntimeTransportHost<
   encodeFile(file: Uint8Array<ArrayBuffer>): EncodedFileBytes;
 
   close(reason?: string): Promise<void>;
-  readonly closed: Promise<void>;
 };
 
 /* ============================================================ *
@@ -387,11 +387,6 @@ export type TransportPlugin<
   Id extends string = string,
 > = {
   readonly id: Id;
-  /** Pure diagnostic snapshot — never allocates SAB, spawns workers, or opens wires. */
-  describe(): TransportDescriptor<Id>;
-
-  /** @internal */
-  materialize(): RuntimeTransportClient<Protocol, BindingsExtra, Id>;
 
   /** @internal */
   readonly [__transportId]?: Id;
@@ -399,6 +394,12 @@ export type TransportPlugin<
   readonly [__transportProtocol]?: Protocol;
   /** @internal */
   readonly [__transportBindingsExtra]?: BindingsExtra;
+
+  /** Pure diagnostic snapshot — never allocates SAB, spawns workers, or opens wires. */
+  describe(): TransportDescriptor<Id>;
+
+  /** @internal */
+  materialize(): RuntimeTransportClient<Protocol, BindingsExtra, Id>;
 };
 
 /* ============================================================ *
@@ -412,8 +413,8 @@ export type TransportPlugin<
  *
  * @internal
  */
-export type _TransportIdSlot = typeof __transportId;
+export type TransportIdPhantomSlot = typeof __transportId;
 /** */
-export type _TransportProtocolSlot = typeof __transportProtocol;
+export type TransportProtocolPhantomSlot = typeof __transportProtocol;
 /** */
-export type _TransportBindingsExtraSlot = typeof __transportBindingsExtra;
+export type TransportBindingsExtraPhantomSlot = typeof __transportBindingsExtra;

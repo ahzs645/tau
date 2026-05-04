@@ -50,7 +50,7 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
   } = useChatInterfaceState();
 
   const { projectRef } = useProject();
-  const isProjectError = useSelector(projectRef, (state) => state.matches('error'));
+  const isProjectError = useSelector(projectRef, ({ matches }) => matches('error'));
 
   const isTauDebugEnabled = useFeature('tauDebug');
   const isExplorerPaneVisible = isTauDebugEnabled && isExplorerOpen;

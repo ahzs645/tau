@@ -87,7 +87,12 @@ describe('createCrossProviderContentNormalizerMiddleware', () => {
   it('does not modify HumanMessage, ToolMessage, or string AIMessage content', async () => {
     const middleware = createCrossProviderContentNormalizerMiddleware('vertexai');
     const human = new HumanMessage('hello');
-    const tool = new ToolMessage({ content: '{}', tool_call_id: 't1', name: 'read_file' });
+    const tool = new ToolMessage({
+      content: '{}',
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
+      tool_call_id: 't1',
+      name: 'read_file',
+    });
     const aiString = new AIMessage('plain');
 
     await invokeWrapModelCall(middleware, { messages: [human, tool, aiString] }, handler);

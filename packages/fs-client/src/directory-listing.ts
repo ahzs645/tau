@@ -36,7 +36,10 @@ export type DirectoryListingError = {
   original?: unknown;
 };
 
+/* eslint-disable @typescript-eslint/naming-convention -- Directory listing uses PascalCase string codes aligned with worker errors */
 /**
+ * Canonical string codes for {@link DirectoryListingError} discrimination.
+ *
  * @public
  */
 export const DirectoryListingErrorCode = {
@@ -47,13 +50,18 @@ export const DirectoryListingErrorCode = {
   Unavailable: 'Unavailable',
   Unknown: 'Unknown',
 } as const;
+/* eslint-enable @typescript-eslint/naming-convention -- resume default naming for the rest of the module */
 
 /**
+ * Union of known listing error codes.
+ *
  * @public
  */
 export type DirectoryListingErrorCode = (typeof DirectoryListingErrorCode)[keyof typeof DirectoryListingErrorCode];
 
 /**
+ * Carrier error when listing fails at the transport or policy layer.
+ *
  * @public
  */
 export class DirectoryListingFailedError extends Error {
@@ -70,6 +78,9 @@ export class DirectoryListingFailedError extends Error {
  * Classify a thrown value from `readDirectory` / transport into a
  * {@link DirectoryListingError}.
  *
+ * @param cause - Thrown value or rejection reason from the worker / path layer.
+ * @param path - Workspace-relative directory path being listed.
+ * @returns Normalized {@link DirectoryListingError} for UI and error boundaries.
  * @public
  */
 export function classifyDirectoryListingError(cause: unknown, path: string): DirectoryListingError {
@@ -94,7 +105,7 @@ export function classifyDirectoryListingError(cause: unknown, path: string): Dir
     return { code: DirectoryListingErrorCode.Aborted, message: cause.message, path, original: cause };
   }
   if (typeof cause === 'object' && cause !== null && 'code' in cause) {
-    const code = (cause as { code?: string }).code;
+    const { code } = cause as { code?: string };
     if (code === 'ENOENT') {
       return { code: DirectoryListingErrorCode.NotFound, message: 'Path not found', path, original: cause };
     }

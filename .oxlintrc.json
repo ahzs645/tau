@@ -1184,6 +1184,54 @@
       }
     },
     {
+      /*
+       * `@taucad/runtime` exposes several subpath entry points that intentionally
+       * aggregate symbols (worker bootstrap facades, filesystem surface shims,
+       * transport projections). Consumers import these modules directly; keeping
+       * the re-exports localized avoids duplicating the policy exception on
+       * every downstream import site.
+       */
+      "files": [
+        "packages/runtime/src/worker-internals.ts",
+        "packages/runtime/src/filesystem/runtime-filesystem.ts",
+        "packages/runtime/src/transport/define-runtime-transport.ts",
+        "packages/runtime/src/transport/in-process-transport.ts",
+        "packages/runtime/src/transport/transport-projections.ts",
+        "packages/runtime/src/transport/_internal/runtime-worker-dispatcher.ts"
+      ],
+      "rules": {
+        "no-barrel-files/no-barrel-files": "off"
+      }
+    },
+    {
+      "files": ["packages/runtime/src/transport/_internal/abort-channel.ts"],
+      "rules": {
+        "no-await-in-loop": "off",
+        "no-unmodified-loop-condition": "off",
+        "@typescript-eslint/no-unnecessary-condition": "off"
+      }
+    },
+    {
+      "files": [
+        "packages/runtime/**/*.integration.test.ts",
+        "packages/runtime/src/kernels/zoo/kcl-utils-reconnect.test.ts",
+        "packages/runtime/src/filesystem/from-browser-fs.ts"
+      ],
+      "rules": {
+        "no-await-in-loop": "off",
+        "@typescript-eslint/no-extraneous-class": "off"
+      }
+    },
+    {
+      "files": ["packages/runtime/**/*.test-d.ts"],
+      "rules": {
+        "@typescript-eslint/no-deprecated": "off",
+        "@typescript-eslint/consistent-type-assertions": "off",
+        "no-empty-function": "off",
+        "promise/prefer-await-to-then": "off"
+      }
+    },
+    {
       // CAD examples may not always follow typical conventions. For example, it's
       // easier to read d_x rather than dX, so we relax the rules here.
       "files": ["libs/tau-examples/src/kernels/**/*.ts"],

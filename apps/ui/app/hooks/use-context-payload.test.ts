@@ -27,7 +27,13 @@ function makeSkillMd(name: string, description: string): Uint8Array<ArrayBuffer>
   return encoder.encode(`---\nname: ${name}\ndescription: '${description}'\n---\n\n# ${name}\n\nSkill content.`);
 }
 
-function skillDirRow(name: string): { name: string; path: string; isFolder: boolean; size: number; mtimeMs: number } {
+function skillDirectoryRow(name: string): {
+  name: string;
+  path: string;
+  isFolder: boolean;
+  size: number;
+  mtimeMs: number;
+} {
   return { name, path: `.tau/skills/${name}`, isFolder: true, size: 0, mtimeMs: 0 };
 }
 
@@ -70,7 +76,7 @@ describe('useContextPayload', () => {
   });
 
   it('should discover skills from .tau/skills/ subdirectories', async () => {
-    mockListDirectory.mockResolvedValue([skillDirRow('cad-expert'), skillDirRow('testing')]);
+    mockListDirectory.mockResolvedValue([skillDirectoryRow('cad-expert'), skillDirectoryRow('testing')]);
     mockReadFile.mockImplementation(async (path: string) => {
       if (path.includes('cad-expert')) {
         return makeSkillMd('cad-expert', 'CAD modeling expertise');
@@ -128,7 +134,7 @@ describe('useContextPayload', () => {
   });
 
   it('should skip SKILL.md files with malformed frontmatter', async () => {
-    mockListDirectory.mockResolvedValue([skillDirRow('good'), skillDirRow('bad')]);
+    mockListDirectory.mockResolvedValue([skillDirectoryRow('good'), skillDirectoryRow('bad')]);
     mockReadFile.mockImplementation(async (path: string) => {
       if (path.includes('good')) {
         return makeSkillMd('good-skill', 'Works correctly');
@@ -153,7 +159,7 @@ describe('useContextPayload', () => {
   });
 
   it('should return both skills and memory when both present', async () => {
-    mockListDirectory.mockResolvedValue([skillDirRow('my-skill')]);
+    mockListDirectory.mockResolvedValue([skillDirectoryRow('my-skill')]);
     mockGetEntry.mockResolvedValue(makeFileEntry('.tau/AGENTS.md'));
     mockReadFile.mockImplementation(async (path: string) => {
       if (path.includes('SKILL.md')) {
@@ -177,7 +183,7 @@ describe('useContextPayload', () => {
   });
 
   it('should handle readFile errors gracefully for individual skills', async () => {
-    mockListDirectory.mockResolvedValue([skillDirRow('good'), skillDirRow('broken')]);
+    mockListDirectory.mockResolvedValue([skillDirectoryRow('good'), skillDirectoryRow('broken')]);
     mockReadFile.mockImplementation(async (path: string) => {
       if (path.includes('good')) {
         return makeSkillMd('good-skill', 'Works');

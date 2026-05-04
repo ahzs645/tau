@@ -2,6 +2,8 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { Document, NodeIO } from '@gltf-transform/core';
 import { createRuntimeClient } from '@taucad/runtime';
+import { inProcessTransport } from '@taucad/runtime/transport/in-process';
+import { fromMemoryFs } from '@taucad/runtime/filesystem';
 import { replicad } from '@taucad/runtime/kernels';
 import { esbuild } from '@taucad/runtime/bundler';
 import { countConnectedComponents } from '#geometry/connected-components.js';
@@ -10,13 +12,17 @@ import { evaluateRequirement } from '#geometry/evaluate-requirement.js';
 import type { MeasurementTestRequirement } from '#schemas.js';
 
 async function renderGlb(filename: string, code: string): Promise<Uint8Array<ArrayBuffer>> {
+  const filePath = filename.startsWith('/') ? filename : `/${filename}`;
   const client = createRuntimeClient({
+    transport: inProcessTransport({
+      fileSystem: fromMemoryFs({ [filePath]: code }),
+    }),
     kernels: [replicad()],
     bundlers: [esbuild()],
   });
 
   try {
-    const result = await client.export('glb', { code: { [filename]: code }, file: filename });
+    const result = await client.export('glb', { file: filePath });
     if (!result.success) {
       throw new Error(`Export failed: ${result.issues.map((issue) => issue.message).join('; ')}`);
     }

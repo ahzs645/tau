@@ -47,6 +47,7 @@ function ResolvedChip({ path }: { readonly path: string }): React.JSX.Element {
     }
 
     let cancelled = false;
+    // async-iife: bootstrap — resolve @-reference against lazy tree entry
     void (async () => {
       const entry = await treeService.getEntry(path);
       // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- cleanup sets cancelled before async continuation resumes

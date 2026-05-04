@@ -46,13 +46,14 @@ For server-side usage, workers run as Node.js worker threads. Use `fromNodeFs` f
 ```typescript
 import { createRuntimeClient } from '@taucad/runtime';
 import { fromNodeFs } from '@taucad/runtime/filesystem/node';
+import { inProcessTransport } from '@taucad/runtime/transport/in-process';
 import { replicad } from '@taucad/runtime/kernels';
 import { esbuild } from '@taucad/runtime/bundler';
 
 const client = createRuntimeClient({
+  transport: inProcessTransport({ fileSystem: fromNodeFs('/path/to/project') }),
   kernels: [replicad()],
   bundlers: [esbuild()],
-  fileSystem: fromNodeFs('/path/to/project'),
 });
 ```
 
@@ -72,10 +73,14 @@ The package exposes multiple subpath imports for tree-shaking:
 | `@taucad/runtime/transport/in-process` | Same-isolate transport (`inProcessTransport`) — cross-environment                                              |
 | `@taucad/runtime/transport/web`        | Browser-only transport (`webWorkerTransport`) — DOM `Worker` host                                              |
 | `@taucad/runtime/transport/node`       | Node-only transport (`nodeWorkerTransport`) — gated so browser bundles don't externalize `node:worker_threads` |
-| `@taucad/runtime/filesystem`           | `fromNodeFs` (Node.js-only), plus `fromMemoryFs`, `fromFsLike`, `fromChannelFs`, `fromBrowserFs`               |
+| `@taucad/runtime/filesystem`           | `fromMemoryFs`, `fromFsLike`, `fromChannelFs`, `fromBrowserFs`                                                 |
+| `@taucad/runtime/filesystem/node`      | `fromNodeFs` (Node-only)                                                                                       |
+| `@taucad/runtime/filesystem/browser`   | Browser File System Access helpers where split from the main `filesystem` entry                                |
 | `@taucad/runtime/types`                | All TypeScript type exports                                                                                    |
 | `@taucad/runtime/testing`              | Testing utilities for kernel and middleware development                                                        |
-| `@taucad/runtime/worker`               | Runtime worker entry point ([`KernelRuntimeWorker`](../concepts/worker-model))                                 |
+| `@taucad/runtime/worker/web`           | Browser worker entry / bootstrap                                                                               |
+| `@taucad/runtime/worker/node`          | Node worker entry / bootstrap                                                                                  |
+| `@taucad/runtime/worker-internals`     | `KernelRuntimeWorker` ([worker model](../concepts/worker-model))                                               |
 
 `fromMemoryFs` and `fromFsLike` are available from both the main `@taucad/runtime` entry and `@taucad/runtime/filesystem`. `fromNodeFs` is only available from `@taucad/runtime/filesystem/node` because it depends on Node.js APIs; `fromBrowserFs` is only available from `@taucad/runtime/filesystem/browser` because it depends on the browser-only File System Access API.
 

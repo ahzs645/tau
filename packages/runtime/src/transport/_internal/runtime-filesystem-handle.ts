@@ -96,8 +96,7 @@ type InternalRuntimeFileSystem = RuntimeFileSystem & {
  * @internal
  */
 export const wrapAsRuntimeFileSystem = (handle: RuntimeFileSystemHandle): RuntimeFileSystem => {
-  const wrapped = { [handleSymbol]: handle } as InternalRuntimeFileSystem;
-  return wrapped;
+  return { [handleSymbol]: handle } as unknown as RuntimeFileSystem;
 };
 
 /**
@@ -108,12 +107,10 @@ export const wrapAsRuntimeFileSystem = (handle: RuntimeFileSystemHandle): Runtim
  * @internal
  */
 export const resolveRuntimeFileSystem = (fs: RuntimeFileSystem): RuntimeFileSystemHandle => {
-  const internal = fs as InternalRuntimeFileSystem;
-  const handle = internal[handleSymbol];
-  if (!handle) {
-    throw new Error('RuntimeFileSystem: missing internal handle — value was not produced by a fromX factory');
+  if (!(handleSymbol in fs)) {
+    throw new TypeError('RuntimeFileSystem: missing internal handle — value was not produced by a fromX factory');
   }
-  return handle;
+  return (fs as InternalRuntimeFileSystem)[handleSymbol];
 };
 
 /**

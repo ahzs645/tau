@@ -49,7 +49,7 @@ describe('transport descriptor snapshot (C6)', () => {
 });
 
 function makeBlankWorkerCtor(): typeof Worker {
-  return function FakeWorker(
+  function blankWorker(
     this: Record<string, unknown>,
     _url: string | URL,
     _options?: WorkerOptions,
@@ -68,5 +68,6 @@ function makeBlankWorkerCtor(): typeof Worker {
         /* No-op */
       },
     };
-  } as unknown as typeof Worker;
+  }
+  return blankWorker as unknown as typeof Worker;
 }

@@ -86,7 +86,7 @@ describe('Replicad kernel', () => {
 When you need more control over worker initialization (e.g., custom middleware, telemetry):
 
 ```typescript
-import { KernelRuntimeWorker } from '@taucad/runtime/worker';
+import { KernelRuntimeWorker } from '@taucad/runtime/worker-internals';
 import { initializeWorkerForTesting, seedTestFileSystem } from '@taucad/runtime/testing';
 import replicadDefinition from '@taucad/runtime/kernels/replicad';
 

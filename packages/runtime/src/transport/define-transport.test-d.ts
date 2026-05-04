@@ -58,7 +58,7 @@ describe('defineRuntimeTransport generic inference (C11)', () => {
     const emptyClientSchema = z.object({}).strict();
     const emptyHostSchema = z.object({}).strict();
 
-    const stubClientBind = (_opts: z.infer<typeof emptyClientSchema>): RuntimeTransportClient =>
+    const stubClientBind = (_options: z.infer<typeof emptyClientSchema>): RuntimeTransportClient =>
       stubClient('my-transport');
     stubClientBind.describe = (): TransportDescriptor<'my-transport'> => stubDescribe('my-transport')();
 
@@ -104,7 +104,7 @@ describe('defineRuntimeTransport generic inference (C11)', () => {
   });
 
   it('wiring call returns a TransportPlugin', () => {
-    const clientFactory = (_opts: z.infer<typeof empty>): RuntimeTransportClient => stubClient('shape-check');
+    const clientFactory = (_options: z.infer<typeof empty>): RuntimeTransportClient => stubClient('shape-check');
     clientFactory.describe = (): TransportDescriptor<'shape-check'> => stubDescribe('shape-check')();
 
     const empty = z.object({}).strict();

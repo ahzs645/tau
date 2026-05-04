@@ -545,7 +545,7 @@ describe('groupAssistantParts', () => {
         'tool-screenshot',
       ]);
       expect(aggregated.partIndices).toEqual([1, 2, 3, 4, 5]);
-      expect(aggregated.summary).toBe('Explored 1 render, 6 images, 4 tests');
+      expect(aggregated.summary).toBe('Explored 1 render, 6 screenshots, 4 tests');
 
       const trailing = groups[2]!;
       expect(trailing.kind).toBe('singleton');
@@ -766,14 +766,14 @@ describe('groupAssistantParts', () => {
       const groups = groupAssistantParts(parts);
 
       const group = expectAggregated(groups[0]!);
-      expect(group.summary).toBe('Explored 2 images');
+      expect(group.summary).toBe('Explored 2 screenshots');
     });
 
-    it('should expand a composite multi-angle screenshot to 6 images', () => {
+    it('should expand a composite multi-angle screenshot to 6 screenshots', () => {
       const groups = groupAssistantParts([compositeScreenshotPart()]);
 
       const group = expectAggregated(groups[0]!);
-      expect(group.summary).toBe('Explored 6 images');
+      expect(group.summary).toBe('Explored 6 screenshots');
     });
 
     it('should sum image counts across multiple screenshot calls (composite + single)', () => {
@@ -784,14 +784,14 @@ describe('groupAssistantParts', () => {
       const groups = groupAssistantParts(parts);
 
       const group = expectAggregated(groups[0]!);
-      expect(group.summary).toBe('Explored 7 images');
+      expect(group.summary).toBe('Explored 7 screenshots');
     });
 
     it('should contribute a 1-image streaming placeholder for screenshots before output is available', () => {
       const groups = groupAssistantParts([screenshotPart('input-streaming')]);
 
       const group = expectAggregated(groups[0]!);
-      expect(group.summary).toBe('Explored 1 image');
+      expect(group.summary).toBe('Explored 1 screenshot');
     });
 
     it('should count test cases as passes + failures from test_model output', () => {
@@ -823,7 +823,7 @@ describe('groupAssistantParts', () => {
       expect(group.summary).toBe('Explored 1 test');
     });
 
-    it('should emit segments in order files, searches, fetches, renders, images, tests', () => {
+    it('should emit segments in order files, searches, fetches, renders, screenshots, tests', () => {
       const parts: Parts = [
         webBrowserPart(),
         testModelPartWithCounts(2, 1),
@@ -835,15 +835,15 @@ describe('groupAssistantParts', () => {
       const groups = groupAssistantParts(parts);
 
       const group = expectAggregated(groups[0]!);
-      expect(group.summary).toBe('Explored 1 file, 1 search, 1 fetch, 1 render, 6 images, 3 tests');
+      expect(group.summary).toBe('Explored 1 file, 1 search, 1 fetch, 1 render, 6 screenshots, 3 tests');
     });
 
-    it('should produce the screenshot-scenario summary "Explored 1 render, 6 images, 4 tests"', () => {
+    it('should produce the screenshot-scenario summary "Explored 1 render, 6 screenshots, 4 tests"', () => {
       const parts: Parts = [kernelResultPart(), testModelPartWithCounts(4, 0), compositeScreenshotPart()];
       const groups = groupAssistantParts(parts);
 
       const group = expectAggregated(groups[0]!);
-      expect(group.summary).toBe('Explored 1 render, 6 images, 4 tests');
+      expect(group.summary).toBe('Explored 1 render, 6 screenshots, 4 tests');
     });
   });
 });

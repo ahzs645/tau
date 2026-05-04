@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import type { MDXComponents } from 'mdx/types.js';
 import defaultMdxComponents from 'fumadocs-ui/mdx';
 import { TypeTable } from 'fumadocs-ui/components/type-table';
@@ -7,7 +8,6 @@ import { MarkdownHyperlink } from '#components/markdown/markdown-hyperlink.js';
 import { Mermaid } from '#components/docs/mermaid.js';
 import { InteractiveDiagram } from '#components/docs/interactive-diagram.js';
 import { ReplicadReference } from '#components/docs/replicad-reference.js';
-import { cn } from '#utils/ui.utils.js';
 import { extractTextFromChildren } from '#utils/react.utils.js';
 
 export function getMdxComponents(): MDXComponents {
@@ -37,23 +37,14 @@ export function getMdxComponents(): MDXComponents {
     },
     code(properties) {
       const { children, className } = properties as {
-        children: string;
-        className: string;
+        children: ReactNode;
+        className?: string;
       };
 
-      // Only render InlineCode for inline code (strings)
-      if (typeof children === 'string') {
-        return (
-          <InlineCode {...properties} className={className}>
-            {children}
-          </InlineCode>
-        );
-      }
-
       return (
-        <code {...properties} className={cn(className, 'flex flex-col')}>
+        <InlineCode {...properties} className={className}>
           {children}
-        </code>
+        </InlineCode>
       );
     },
   };

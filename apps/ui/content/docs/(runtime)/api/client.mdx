@@ -40,7 +40,7 @@ Smart-merges a base with overrides using three strategies based on field type:
 | Field type    | Examples                            | Strategy                                                                                                                   |
 | ------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | Plugin arrays | `kernels`, `middleware`, `bundlers` | **ID-based merge** -- plugins with a matching `id` are replaced in-place (preserving priority order); new IDs are appended |
-| Opaque fields | `transport`, `fileSystem`           | **Full replacement** -- the override replaces the base value entirely                                                      |
+| Opaque fields | `transport`                         | **Full replacement** -- the override replaces the base value entirely                                                      |
 
 ```typescript
 import { createRuntimeClientOptions } from '@taucad/runtime';
@@ -99,10 +99,11 @@ Merge with additional options:
 ```typescript
 import { createRuntimeClient, presets } from '@taucad/runtime';
 import { fromNodeFs } from '@taucad/runtime/filesystem/node';
+import { inProcessTransport } from '@taucad/runtime/transport/in-process';
 
 const client = createRuntimeClient({
   ...presets.all(),
-  fileSystem: fromNodeFs('/path/to/project'),
+  transport: inProcessTransport({ fileSystem: fromNodeFs('/path/to/project') }),
 });
 ```
 
@@ -121,9 +122,8 @@ Bundled transports are **`TransportPlugin`** callables (`webWorkerTransport`, `n
 Lifecycle errors:
 
 - **`RuntimeNotConnectedError`** -- a command was issued before `connect()` resolved.
-- **`RuntimeConnectionError`** -- the transport handshake failed. Carries a typed `cause`: `'protocol-mismatch' | 'transport-failure' | 'invalid-options' | 'aborted'`.
-- **`RuntimeReconnectError`** -- `connect()` was called a second time with options that differ from the first call. Carries a typed `causeKind`: `'fileSystem-mismatch' | 'filePool-mismatch'`. A second call with **identical** options is idempotent (resolves immediately).
-- **`RuntimeTerminatedError`** -- a command was issued after `terminate()`, or an in-flight Promise was rejected because `terminate()` happened mid-flight. Carries a typed `cause`: `'explicit' | 'transport-closed' | 'fatal-error'`.
+- **`RuntimeConnectionError`** -- the transport handshake failed. Carries a typed `causeKind`: `'transport-open' | 'capabilities-resolution' | 'kernel-binding'`.
+- **`RuntimeTerminatedError`** -- a command was issued after `terminate()`, or an in-flight Promise was rejected because `terminate()` happened mid-flight. Carries a typed `causeKind`: `'explicit' | 'connection-failed' | 'transport-closed'`.
 
 Render errors:
 
@@ -131,31 +131,28 @@ Render errors:
 - **`RenderAbortedError`** -- the render was aborted (typically because a newer command superseded it before settlement).
 - **`NoRenderOutcomeError`** -- `client.export(format)` (single-arg) was called without a prior render result.
 
-Transport errors (uncommon — surface only when the SAB-backed geometry pool returns an unexpected key, or a transport rejects an unsupported capability):
+Geometry pool errors (uncommon — surface when the SAB-backed geometry pool returns an unexpected key):
 
 - **`SharedPoolEntryNotFoundError`** -- the worker emitted a `pooled` geometry key the runtime client could not resolve.
-- **`TransportCapabilityError`** -- a transport implementation rejected an operation it does not support (e.g. a future WebSocket transport rejecting `signalAbort` because the wire protocol has not been finalised).
 
 Use the realm-safe `isRuntimeNotConnectedError`, `isRuntimeConnectionError`,
-`isRuntimeReconnectError`, `isRuntimeTerminatedError`, `isRenderTimeoutError`,
-`isRenderAbortedError`, `isNoRenderOutcomeError`, `isSharedPoolEntryNotFoundError`,
-and `isTransportCapabilityError` guards for cross-realm detection.
+`isRuntimeTerminatedError`, `isRenderTimeoutError`,
+`isRenderAbortedError`, `isNoRenderOutcomeError`, and `isSharedPoolEntryNotFoundError`
+guards for cross-realm detection.
 
 ### Error Code Reference
 
 Every runtime error class exposes a stable `code` getter so callers can branch on the error kind without depending on `Error.message` or `instanceof` (the message is human prose; the code is the contract).
 
-| Error class                    | `code`                          | Notes                                         |
-| ------------------------------ | ------------------------------- | --------------------------------------------- |
-| `RuntimeNotConnectedError`     | `'RUNTIME_NOT_CONNECTED'`       | —                                             |
-| `RuntimeConnectionError`       | `'RUNTIME_CONNECTION'`          | Pair with the `cause` discriminator           |
-| `RuntimeReconnectError`        | `'RUNTIME_RECONNECT'`           | Pair with the `causeKind` discriminator       |
-| `RuntimeTerminatedError`       | `'RUNTIME_TERMINATED'`          | Pair with the `cause` discriminator           |
-| `RenderTimeoutError`           | `'RENDER_TIMEOUT'`              | —                                             |
-| `RenderAbortedError`           | `'RENDER_ABORTED'`              | —                                             |
-| `NoRenderOutcomeError`         | `'NO_RENDER_OUTCOME'`           | Renamed from the legacy `NoRenderResultError` |
-| `SharedPoolEntryNotFoundError` | `'SHARED_POOL_ENTRY_NOT_FOUND'` | —                                             |
-| `TransportCapabilityError`     | `'TRANSPORT_CAPABILITY'`        | —                                             |
+| Error class                    | `code`                              | Notes                           |
+| ------------------------------ | ----------------------------------- | ------------------------------- |
+| `RuntimeNotConnectedError`     | `'RUNTIME_NOT_CONNECTED'`           | —                               |
+| `RuntimeConnectionError`       | `'RUNTIME_CONNECTION_FAILED'`       | Pair with the `causeKind` field |
+| `RuntimeTerminatedError`       | `'RUNTIME_TERMINATED'`              | Pair with the `causeKind` field |
+| `RenderTimeoutError`           | `'RUNTIME_RENDER_TIMEOUT'`          | —                               |
+| `RenderAbortedError`           | `'RUNTIME_RENDER_ABORTED'`          | —                               |
+| `NoRenderOutcomeError`         | `'RUNTIME_NO_RENDER_OUTCOME'`       | —                               |
+| `SharedPoolEntryNotFoundError` | `'RUNTIME_SHARED_POOL_KEY_MISSING'` | —                               |
 
 `KernelIssue` payloads (delivered via the `error` event and on `Geometry` results) carry a parallel `code: KernelIssueCode` field — use it instead of `RegExp`-matching `issue.message`.
 
@@ -184,12 +181,12 @@ Subscribe to client events with `client.on(event, handler)`. Returns an unsubscr
 
 `client.connect()` runs the transport handshake. It takes **no arguments** in v6 — every wire concern (filesystem, file pool SAB, abort signalling) is closed over by the transport supplied at construction. Call it explicitly when your host creates the client before the first command; inline `code:` input auto-connects.
 
-| Scenario                                      | Transport construction                                                                         | See                                                  |
-| --------------------------------------------- | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| Inline `code:` -- one-shot or live re-renders | `presets.all()` default (`inProcessTransport`)                                                 | [Quick Start](../getting-started/quick-start)        |
-| Filesystem on disk (Node.js)                  | `inProcessTransport({ fileSystem: fromNodeFs(path) })`                                         | [Set Up the Filesystem](../guides/filesystem-setup)  |
-| Browser editor with FS worker                 | `webWorkerTransport({ url, fileSystem: fromChannelFs(fsWorker) })`                             | [Embedding in a Host](../guides/embedding-in-a-host) |
-| Zero-copy file content (filePool SAB)         | `webWorkerTransport({ fileSystem, filePoolBuffer })` (same fields on every transport callable) | [Embedding in a Host](../guides/embedding-in-a-host) |
+| Scenario                                      | Transport construction                                                                                                                                               | See                                                  |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| Inline `code:` -- one-shot or live re-renders | `presets.all()` default (`inProcessTransport`)                                                                                                                       | [Quick Start](../getting-started/quick-start)        |
+| Filesystem on disk (Node.js)                  | `inProcessTransport({ fileSystem: fromNodeFs(path) })`                                                                                                               | [Set Up the Filesystem](../guides/filesystem-setup)  |
+| Browser editor with FS worker                 | `webWorkerTransport({ url, fileSystem: fromChannelFs(fsWorker) })`                                                                                                   | [Embedding in a Host](../guides/embedding-in-a-host) |
+| Zero-copy file content (filePool SAB)         | `webWorkerTransport({ fileSystem, filePoolBuffer })` or `nodeWorkerTransport({ ... })` — host-supplied buffer; `inProcessTransport` uses `files` pool sizing instead | [Embedding in a Host](../guides/embedding-in-a-host) |
 
 ```typescript
 // Auto-connect (the npm-consumer default)

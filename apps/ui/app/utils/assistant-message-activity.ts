@@ -149,7 +149,7 @@ type SummaryParts = { verb: string; verbActive: string; detail: string };
 /**
  * Composite multi-angle screenshot expansion factor: a single output image
  * with `view: 'composite'` is rendered by the screenshot tool card as a
- * 6-angle capture, so it counts as 6 images in the activity summary to keep
+ * 6-angle capture, so it counts as 6 screenshots in the activity summary to keep
  * the summary in sync with the visible card label.
  */
 const compositeImageCount = 6;
@@ -157,8 +157,8 @@ const compositeImageCount = 6;
 /**
  * Image count contributed by a single screenshot tool part. While the call is
  * still streaming we contribute `1` as a placeholder so the summary doesn't
- * stale-display "0 images" mid-flight; once the output is available we count
- * actual images with composite expansion.
+ * stale-display "0 screenshots" mid-flight; once the output is available we count
+ * actual screenshot outputs with composite expansion.
  */
 const countScreenshotImages = (part: MyMessagePart): number => {
   if (part.type !== 'tool-screenshot') {
@@ -197,11 +197,11 @@ const countTestCases = (part: MyMessagePart): number => {
  * into a single `searches` count (they are conceptually the same operation
  * from the consumer's perspective). Web URL visits become `fetches`. File
  * reads + directory listings become `files`. CAD verification adds
- * `renders` (kernel checks), `images` (screenshots, with composite multi-angle =
+ * `renders` (kernel checks), `screenshots` (viewer captures, with composite multi-angle =
  * 6), and `tests` (passes + failures across test_model calls).
  *
  * Segments are emitted in the stable order
- * `files → searches → fetches → renders → images → tests`.
+ * `files → searches → fetches → renders → screenshots → tests`.
  */
 const generateResearchSummary = (parts: readonly MyMessagePart[]): SummaryParts => {
   let files = 0;
@@ -257,7 +257,7 @@ const generateResearchSummary = (parts: readonly MyMessagePart[]): SummaryParts 
     segments.push(pluralize(renders, 'render'));
   }
   if (images > 0) {
-    segments.push(pluralize(images, 'image'));
+    segments.push(pluralize(images, 'screenshot'));
   }
   if (tests > 0) {
     segments.push(pluralize(tests, 'test'));

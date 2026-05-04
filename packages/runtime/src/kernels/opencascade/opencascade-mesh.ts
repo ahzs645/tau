@@ -7,7 +7,6 @@
  */
 
 import { cadMaterialDefaults } from '@taucad/types/constants';
-// eslint-disable-next-line import-x/no-extraneous-dependencies -- internal # imports resolve to self
 import type { OpenCascadeInstance } from '#kernels/opencascade/wasm/opencascade_full.js';
 import type { ShapeEntry } from '#kernels/opencascade/opencascade.types.js';
 import { srgbToLinear } from '#utils/color-space.js';

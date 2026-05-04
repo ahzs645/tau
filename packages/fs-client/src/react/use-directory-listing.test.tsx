@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
 import { mock } from 'vitest-mock-extended';
 import type { FileTreeNode } from '@taucad/filesystem';
-import { useDirectoryListing } from './use-directory-listing.js';
+import { useDirectoryListing } from '#react/use-directory-listing.js';
 import { FileTreeService } from '#file-tree-service.js';
 import type { FileSystemClient } from '#file-system-client.js';
 import { WorkerChangeChannel } from '#worker-change-channel.js';
@@ -52,15 +52,14 @@ describe('useDirectoryListing', () => {
   });
 
   it('should transition unready → loading → ready for a cold directory listing', async () => {
-    const phases: Array<string> = [];
+    const phases: string[] = [];
     const { tree, proxy, disposeChannel } = createTreeHarness();
     let resolveRead!: (value: FileTreeNode[]) => void;
-    vi.mocked(proxy.readDirectory).mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          resolveRead = resolve;
-        }),
-    );
+    vi.mocked(proxy.readDirectory).mockImplementation(async () => {
+      return new Promise<FileTreeNode[]>((resolve) => {
+        resolveRead = resolve;
+      });
+    });
 
     const { result } = renderHook(() => {
       const list = useDirectoryListing(tree, '');
@@ -102,8 +101,8 @@ describe('useDirectoryListing', () => {
 
   it('should surface NotFound as kind error with DirectoryListingErrorCode.NotFound', async () => {
     const { tree, proxy, disposeChannel } = createTreeHarness();
-    const err = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
-    vi.mocked(proxy.readDirectory).mockRejectedValue(err);
+    const error = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    vi.mocked(proxy.readDirectory).mockRejectedValue(error);
 
     const { result } = renderHook(() => useDirectoryListing(tree, 'missing'));
 
@@ -127,7 +126,7 @@ describe('useDirectoryListing', () => {
     });
     const listDirectory = vi.fn().mockRejectedValue(aborted);
     const listDirectorySync = vi.fn().mockReturnValue(undefined);
-    const subscribePath = vi.fn().mockReturnValue(() => {});
+    const subscribePath = vi.fn().mockReturnValue(() => undefined);
 
     const mockTree = {
       listDirectory,
@@ -148,7 +147,7 @@ describe('useDirectoryListing', () => {
   it('should not re-render when subscribePath notifies a different directory path', async () => {
     const pathListeners = new Map<string, Set<() => void>>();
 
-    const dirAEntry = {
+    const fixtureEntryOnlyA = {
       name: 'only-a',
       path: 'dir-a/only-a',
       isFolder: false,
@@ -156,24 +155,24 @@ describe('useDirectoryListing', () => {
       mtimeMs: 2,
     };
 
-    const listDirectorySync = vi.fn((pathArg: string) => {
-      return pathArg === 'dir-a' ? [dirAEntry] : undefined;
+    const listDirectorySync = vi.fn((pathArgument: string) => {
+      return pathArgument === 'dir-a' ? [fixtureEntryOnlyA] : undefined;
     });
-    const listDirectory = vi.fn(async (pathArg: string) => {
-      if (pathArg === 'dir-a') {
-        return [dirAEntry];
+    const listDirectory = vi.fn(async (pathArgument: string) => {
+      if (pathArgument === 'dir-a') {
+        return [fixtureEntryOnlyA];
       }
       return [];
     });
-    const subscribePath = vi.fn((pathArg: string, callback: () => void) => {
-      let set = pathListeners.get(pathArg);
+    const subscribePath = vi.fn((pathArgument: string, callback: () => void) => {
+      let set = pathListeners.get(pathArgument);
       if (!set) {
         set = new Set();
-        pathListeners.set(pathArg, set);
+        pathListeners.set(pathArgument, set);
       }
       set.add(callback);
       return () => {
-        set?.delete(callback);
+        set.delete(callback);
       };
     });
 
@@ -190,9 +189,12 @@ describe('useDirectoryListing', () => {
     });
 
     const snapshot = result.current;
-    pathListeners.get('dir-b')?.forEach((listener) => {
-      listener();
-    });
+    const listeners = pathListeners.get('dir-b');
+    if (listeners) {
+      for (const listener of listeners) {
+        listener();
+      }
+    }
     expect(result.current).toBe(snapshot);
     expect(subscribePath).toHaveBeenCalledWith('dir-a', expect.any(Function));
   });
@@ -200,12 +202,11 @@ describe('useDirectoryListing', () => {
   it('should ignore late async completions after teardown abort', async () => {
     const { tree, proxy, disposeChannel } = createTreeHarness();
     let resolveRead!: (value: FileTreeNode[]) => void;
-    vi.mocked(proxy.readDirectory).mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          resolveRead = resolve;
-        }),
-    );
+    vi.mocked(proxy.readDirectory).mockImplementation(async () => {
+      return new Promise<FileTreeNode[]>((resolve) => {
+        resolveRead = resolve;
+      });
+    });
 
     const { result, unmount } = renderHook(() => useDirectoryListing(tree, 'late'));
 
@@ -215,8 +216,8 @@ describe('useDirectoryListing', () => {
 
     unmount();
     resolveRead([]);
-    await new Promise((r) => {
-      setTimeout(r, 20);
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 20);
     });
 
     disposeChannel();

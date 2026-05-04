@@ -1,12 +1,15 @@
 // @vitest-environment node
 /**
  * Tests for GeometryAnalysisService using real GLB data generated
- * by the replicad kernel via createRuntimeClient + inProcessTransport.
+ * by the replicad kernel via createRuntimeClient + inProcessTransport +
+ * fromMemoryFs.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Test } from '@nestjs/testing';
 import type { TestingModule } from '@nestjs/testing';
 import { createRuntimeClient } from '@taucad/runtime';
+import { inProcessTransport } from '@taucad/runtime/transport/in-process';
+import { fromMemoryFs } from '@taucad/runtime/filesystem';
 import { replicad } from '@taucad/runtime/kernels';
 import { esbuild } from '@taucad/runtime/bundler';
 import type { MeasurementTestRequirement } from '@taucad/testing';
@@ -17,13 +20,17 @@ import { GeometryAnalysisService } from '#api/analysis/geometry-analysis.service
 // =============================================================================
 
 async function exportGlb(filename: string, code: string): Promise<Uint8Array<ArrayBuffer>> {
+  const filePath = filename.startsWith('/') ? filename : `/${filename}`;
   const client = createRuntimeClient({
+    transport: inProcessTransport({
+      fileSystem: fromMemoryFs({ [filePath]: code }),
+    }),
     kernels: [replicad()],
     bundlers: [esbuild()],
   });
 
   try {
-    const result = await client.export('glb', { code: { [filename]: code }, file: filename });
+    const result = await client.export('glb', { file: filePath });
 
     if (!result.success) {
       const messages = result.issues.map((issue) => issue.message).join('; ');

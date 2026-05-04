@@ -302,7 +302,7 @@ export function createWorkerDispatcher(
 
     worker.onError = (issues, rgen) => {
       notify('errorEvent', {
-        issues: issues.map(normaliseIssueForWire),
+        issues: issues.map((issue) => normaliseIssueForWire(issue)),
         ...(rgen === undefined ? {} : { rgen }),
       });
     };

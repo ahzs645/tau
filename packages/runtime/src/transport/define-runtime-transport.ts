@@ -31,9 +31,9 @@ type ClientLike<
   Protocol extends RpcProtocol,
   BindingsExtra extends Readonly<Record<string, unknown>>,
   Id extends string,
-  ClientOpts,
-> = ((options: ClientOpts) => RuntimeTransportClient<Protocol, BindingsExtra, Id>) & {
-  describe: (options: ClientOpts) => TransportDescriptor<Id>;
+  ClientOptions,
+> = ((options: ClientOptions) => RuntimeTransportClient<Protocol, BindingsExtra, Id>) & {
+  describe: (options: ClientOptions) => TransportDescriptor<Id>;
 };
 
 /** */
@@ -41,17 +41,17 @@ const synthTransportCallable = <
   Protocol extends RpcProtocol,
   BindingsExtra extends Readonly<Record<string, unknown>>,
   Id extends string,
-  ClientOpts,
+  ClientOptions,
 >(definition: {
   readonly id: Id;
-  readonly client: ClientLike<Protocol, BindingsExtra, Id, ClientOpts>;
-}): ((options: ClientOpts) => TransportPlugin<Protocol, BindingsExtra, Id>) => {
+  readonly client: ClientLike<Protocol, BindingsExtra, Id, ClientOptions>;
+}): ((options: ClientOptions) => TransportPlugin<Protocol, BindingsExtra, Id>) => {
   const { client: clientFactory, id } = definition;
   if (typeof clientFactory.describe !== 'function') {
-    throw new Error(`${id}: client factory is missing required static .describe(options)`);
+    throw new TypeError(`${id}: client factory is missing required static .describe(options)`);
   }
 
-  return (options: ClientOpts) => ({
+  return (options: ClientOptions) => ({
     id,
     describe: (): TransportDescriptor<Id> => clientFactory.describe(options),
     materialize: () => clientFactory(options),

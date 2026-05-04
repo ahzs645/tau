@@ -1,10 +1,6 @@
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
-import {
-  type DirectoryListing,
-  type DirectoryListingError,
-  DirectoryListingFailedError,
-  classifyDirectoryListingError,
-} from '#directory-listing.js';
+import type { DirectoryListing, DirectoryListingError } from '#directory-listing.js';
+import { DirectoryListingFailedError, classifyDirectoryListingError } from '#directory-listing.js';
 import type { FileTreeService } from '#file-tree-service.js';
 
 type ListingStore = {
@@ -37,14 +33,16 @@ const createListingStore = (): ListingStore => {
 
 const serverSnapshot: DirectoryListing = { kind: 'unready' };
 
-function listingErrorFromUnknown(cause: unknown, path: string): DirectoryListingError {
-  if (cause instanceof DirectoryListingFailedError) {
-    return cause.listing;
+function listingErrorFromUnknown(error: unknown, path: string): DirectoryListingError {
+  if (error instanceof DirectoryListingFailedError) {
+    return error.listing;
   }
-  return classifyDirectoryListingError(cause, path);
+  return classifyDirectoryListingError(error, path);
 }
 
 /**
+ * Options for {@link useDirectoryListing} (retry token, etc.).
+ *
  * @public
  */
 export type UseDirectoryListingOptions = {
@@ -64,6 +62,7 @@ export type UseDirectoryListingOptions = {
  * @param treeService - File tree facade, or `undefined` when the file manager is not mounted.
  * @param path - Directory path (workspace-relative; root aliases accepted by the tree service).
  * @param options - Optional {@link UseDirectoryListingOptions.reloadToken} for explicit retry.
+ * @returns Current {@link DirectoryListing} snapshot for the given path.
  *
  * @public
  */
@@ -75,15 +74,15 @@ export function useDirectoryListing(
   const reloadToken = options?.reloadToken ?? 0;
   const store = useMemo(() => {
     const listingStore = createListingStore();
-    if (!treeService) {
-      listingStore.emit({ kind: 'unready' });
-    } else {
+    if (treeService) {
       const sync = treeService.listDirectorySync(path);
-      if (sync !== undefined) {
-        listingStore.emit({ kind: 'ready', path, entries: sync });
-      } else {
+      if (sync === undefined) {
         listingStore.emit({ kind: 'loading', path });
+      } else {
+        listingStore.emit({ kind: 'ready', path, entries: sync });
       }
+    } else {
+      listingStore.emit({ kind: 'unready' });
     }
     return listingStore;
   }, [treeService, path]);
@@ -91,48 +90,52 @@ export function useDirectoryListing(
   const listing = useSyncExternalStore(store.subscribe, store.getSnapshot, () => serverSnapshot);
 
   useEffect(() => {
-    if (!treeService) {
-      return;
+    if (treeService) {
+      return treeService.subscribePath(path, () => {
+        const next = treeService.listDirectorySync(path);
+        if (next !== undefined) {
+          store.emit({ kind: 'ready', path, entries: next });
+        }
+      });
     }
-
-    return treeService.subscribePath(path, () => {
-      const next = treeService.listDirectorySync(path);
-      if (next !== undefined) {
-        store.emit({ kind: 'ready', path, entries: next });
-      }
-    });
+    return undefined;
   }, [store, treeService, path]);
 
   useEffect(() => {
     if (!treeService) {
-      return;
+      return undefined;
     }
 
     if (treeService.listDirectorySync(path) !== undefined) {
-      return;
+      return undefined;
     }
 
     store.emit({ kind: 'loading', path });
 
+    const service = treeService;
     const abortController = new AbortController();
     const { signal } = abortController;
+    let cancelled = false;
 
-    void treeService.listDirectory(path, { signal }).then(
-      (entries) => {
-        if (signal.aborted) {
+    async function loadDirectory(): Promise<void> {
+      try {
+        const entries = await service.listDirectory(path, { signal });
+        if (cancelled || signal.aborted) {
           return;
         }
         store.emit({ kind: 'ready', path, entries });
-      },
-      (cause: unknown) => {
-        if (signal.aborted) {
+      } catch (rawError) {
+        if (cancelled || signal.aborted) {
           return;
         }
-        store.emit({ kind: 'error', path, cause: listingErrorFromUnknown(cause, path) });
-      },
-    );
+        store.emit({ kind: 'error', path, cause: listingErrorFromUnknown(rawError, path) });
+      }
+    }
+
+    void loadDirectory();
 
     return () => {
+      cancelled = true;
       abortController.abort();
     };
   }, [store, treeService, path, reloadToken]);

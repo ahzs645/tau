@@ -94,7 +94,7 @@ The transport detects the inline arm and wires an in-process bridge that auto-pr
 
 Pair `fileSystem` with `filePoolBuffer` when the host has pre-allocated a `SharedArrayBuffer` for the runtime's file pool. Sharing the buffer across the FS worker, kernel worker, and runtime client gives you zero-copy reads of file contents -- the kernel reads bytes from shared memory rather than postMessage-ing them through the bridge.
 
-`filePoolBuffer` is the **only** `SharedArrayBuffer` exposed on the public runtime API. Geometry-pool and cooperative-abort SABs are owned and allocated by the active [transport](../api/transport) — never by the host. The host owns this one because the file pool's lifetime is bound to the file manager (not the runtime), and crossing that boundary requires the host to allocate the buffer.
+`filePoolBuffer` is the **only** `SharedArrayBuffer` exposed on the public runtime API. Geometry-pool and cooperative-abort SABs are owned and allocated by the active [transport](../api/client) — never by the host. The host owns this one because the file pool's lifetime is bound to the file manager (not the runtime), and crossing that boundary requires the host to allocate the buffer.
 
 ```typescript
 import { createRuntimeClient, presets } from '@taucad/runtime';
@@ -114,7 +114,7 @@ const client = createRuntimeClient({
 await client.connect();
 ```
 
-The same option is supported on every transport — including `inProcessTransport` (e.g. tests) where you still want the FilePool zero-copy contract.
+The same `filePoolBuffer` option is supported on **wire** transports such as `webWorkerTransport` and `nodeWorkerTransport`. `inProcessTransport` does not accept a host `SharedArrayBuffer`; it can size the in-isolate file pool via the `files` option instead.
 
 > Cross-origin isolation is required for any `SharedArrayBuffer` — both the host-allocated `filePoolBuffer` and the transport-owned geometry/abort SABs. See [Cross-Origin Isolation](./cross-origin-isolation) for the COOP/COEP headers your host must serve.
 
@@ -143,14 +143,13 @@ Because every wire concern is closed over at construction time, the client stays
 `client.connect()` is **idempotent**: calling it a second time while already connected resolves immediately without re-running the handshake. To switch a client to a different project, terminate the existing client and create a fresh one with the new transport options.
 
 ```typescript
-import { createRuntimeClient, presets, fromMemoryFs, isRuntimeReconnectError } from '@taucad/runtime';
+import { createRuntimeClient, presets, fromMemoryFs } from '@taucad/runtime';
 import { inProcessTransport } from '@taucad/runtime/transport/in-process';
 
 const client = createRuntimeClient({
   ...presets.all(),
   transport: inProcessTransport({
     fileSystem: fromMemoryFs({ 'main.ts': 'export default () => 1;' }),
-    filePoolBuffer: new SharedArrayBuffer(64 * 1024 * 1024),
   }),
 });
 
@@ -170,21 +169,25 @@ The lifecycle progression is `'unconnected' -> 'connecting' -> 'connected' -> 't
 
 1. `client.lifecycleState` becomes `'terminated'` synchronously.
 2. The transport's `close()` is invoked exactly once.
-3. Every in-flight `connect()` / `openFile()` / `updateParameters()` / `setOptions()` / `export()` Promise rejects on the next microtask with `RuntimeTerminatedError({ cause: 'explicit' })`.
+3. Every in-flight `connect()` / `openFile()` / `updateParameters()` / `setOptions()` / `export()` Promise rejects on the next microtask with `RuntimeTerminatedError` (`causeKind: 'explicit'`).
 4. `client.on(...)` calls made after `terminate()` throw synchronously (subscription is no longer meaningful).
-5. Subsequent commands reject synchronously with `RuntimeTerminatedError({ cause: 'explicit' })`.
+5. Subsequent commands reject synchronously with `RuntimeTerminatedError` (`causeKind: 'explicit'`).
 6. A second `terminate()` call is a no-op (idempotent).
 7. Captured connect options are cleared so a fresh client created from the same host primitives starts from a clean slate.
 
 For orderly shutdown paths (`beforeunload`, server graceful-exit, integration test teardown) the asynchronous `shutdown({ drain? })` companion lets the host await in-flight intents before tearing down:
 
 ```typescript
-window.addEventListener('beforeunload', () => {
-  void client.shutdown({ drain: true });
-});
+function attachShutdown(client: { shutdown: (opts: { drain?: boolean }) => Promise<void> }): void {
+  window.addEventListener('beforeunload', () => {
+    void client.shutdown({ drain: true });
+  });
+}
 ```
 
-`shutdown({ drain: true })` snapshots the in-flight intents, awaits each via `Promise.allSettled`, and then runs the same teardown as `terminate()`. A concurrent `terminate()` cancels the drain — pending intents reject with `RuntimeTerminatedError` and the awaiting `shutdown()` promise still resolves. Both methods are idempotent.
+`shutdown({ drain: true }){:ts}` snapshots the in-flight intents, awaits each via `Promise.allSettled{:ts}`, and then runs the same teardown as `terminate(){:ts}`. A concurrent `terminate(){:ts}` cancels the drain — pending intents reject with `RuntimeTerminatedError{:ts}` and the awaiting `shutdown(){:ts}` promise still resolves. Both methods are idempotent.
+
+Wire this from your host after you construct the client — for example `attachShutdown(client){:ts}` where `client` is your `RuntimeClient{:ts}`.
 
 ## Further Reading
 

@@ -4,10 +4,17 @@
  * Consume the plugin directly on `createRuntimeClient`:
  *
  * ```typescript
- * createRuntimeClient({
- *   ...
- *   transport: electronUtilityTransport({ port }),
- * })
+ * import { createRuntimeClient } from '@taucad/runtime';
+ * import { replicad } from '@taucad/runtime/kernels';
+ * import { esbuild } from '@taucad/runtime/bundler';
+ * import { electronUtilityTransport } from './electron-utility-transport.js';
+ *
+ * const { port1 } = new MessageChannel();
+ * const client = createRuntimeClient({
+ *   transport: electronUtilityTransport({ port: port1 }),
+ *   kernels: [replicad()],
+ *   bundlers: [esbuild()],
+ * });
  * ```
  *
  * **Utility-process host**: use standalone {@link electronUtilityHost}; the
@@ -31,7 +38,7 @@ import {
 
 const electronUtilityId = 'electron-utility';
 
-/** */
+/** Bundled Electron utility-process transport plugin. */
 export const electronUtilityTransport = defineRuntimeTransport({
   id: electronUtilityId,
   clientOptionsSchema: electronUtilityClientOptionsSchema,
@@ -39,8 +46,3 @@ export const electronUtilityTransport = defineRuntimeTransport({
   client: electronUtilityClient,
   host: electronUtilityHost,
 });
-
-export type { ElectronUtilityClientOptions, ElectronUtilityHostOptions } from './electron-utility-transport.schemas.js';
-
-export { electronUtilityClient, electronUtilityClientDescribe } from './electron-utility-client.js';
-export { electronUtilityHost } from './electron-utility-host.js';

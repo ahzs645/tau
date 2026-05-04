@@ -21,30 +21,44 @@ test('probe', async () => {
   proc.stdout?.on('data', (c: Uint8Array<ArrayBuffer>) => log.push(`[stdout] ${c.toString()}`));
   log.push(`[host] launched, pid=${proc.pid}\n`);
   try {
-    const win = await Promise.race([
-      app.firstWindow().then((w) => ({ ok: true as const, win: w })),
-      new Promise<{ ok: false }>((r) => setTimeout(() => r({ ok: false }), 8_000)),
+    type FirstWindowRace = { ok: true; win: Awaited<ReturnType<typeof app.firstWindow>> } | { ok: false };
+
+    const win = await Promise.race<FirstWindowRace>([
+      app.firstWindow().then((w) => ({ ok: true, win: w })),
+      new Promise<FirstWindowRace>((resolve) => {
+        setTimeout(() => {
+          resolve({ ok: false });
+        }, 8000);
+      }),
     ]);
     log.push(`[host] firstWindow result ok=${win.ok}\n`);
     if (win.ok) {
       win.win.on('console', (m) => log.push(`[renderer:${m.type()}] ${m.text()}\n`));
-      win.win.on('pageerror', (e) => log.push(`[renderer:err] ${e.message}\n${e.stack}\n`));
+      win.win.on('pageerror', (error: unknown) => {
+        if (error instanceof Error) {
+          log.push(`[renderer:err] ${error.message}\n${error.stack}\n`);
+        } else {
+          log.push(`[renderer:err] ${String(error)}\n`);
+        }
+      });
       try {
         const url = win.win.url();
         log.push(`[host] url=${url}\n`);
         await win.win
-          .waitForLoadState('domcontentloaded', { timeout: 5_000 })
-          .catch((e) => log.push(`[host] domcontent err ${e}\n`));
-        const html = await win.win.content().catch((e) => `<err: ${e}>`);
+          .waitForLoadState('domcontentloaded', { timeout: 5000 })
+          .catch((error: unknown) => log.push(`[host] domcontent err ${String(error)}\n`));
+        const html = await win.win.content().catch((error: unknown) => `<err: ${String(error)}>`);
         log.push(`[host] html-len=${html.length}\n`);
         log.push(`[host] html-head=${html.slice(0, 500)}\n`);
-      } catch (e) {
-        log.push(`[host] window probe error ${e}\n`);
+      } catch (error) {
+        log.push(`[host] window probe error ${String(error)}\n`);
       }
-      await new Promise((r) => setTimeout(r, 3_000));
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 3000);
+      });
     }
   } finally {
     writeFileSync('/tmp/tau-probe.log', log.join(''));
-    await app.close().catch(() => {});
+    await app.close().catch((error: unknown) => log.push(`[host] close err ${String(error)}\n`));
   }
 });

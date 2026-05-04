@@ -61,6 +61,7 @@ describe('FileTreeService workspace path canonicalization', () => {
         vi.mocked(harness.proxy.readDirectory).mockClear();
         harness.tree.reset(workspaceRoot);
         vi.mocked(harness.proxy.readDirectory).mockResolvedValue([]);
+        // oxlint-disable-next-line no-await-in-loop -- sequential listDirectory avoids race on shared workspace root
         await harness.tree.listDirectory(alias);
         expect(harness.proxy.readDirectory).toHaveBeenCalledWith('/projects/abc');
       }
@@ -261,7 +262,7 @@ describe('FileTreeService listDirectory / subscribePath', () => {
         readDirectory: vi
           .fn()
           .mockResolvedValueOnce([
-            { id: 'doc.ts', name: 'doc.ts', size: 42, mtimeMs: 1700000000000 },
+            { id: 'doc.ts', name: 'doc.ts', size: 42, mtimeMs: 1_700_000_000_000 },
             { id: 'sub', name: 'sub', size: 0, mtimeMs: 2, children: [] },
           ])
           .mockResolvedValue([]),
@@ -273,11 +274,11 @@ describe('FileTreeService listDirectory / subscribePath', () => {
     const rows = await tree.listDirectory('');
     const fileRow = rows.find((r) => r.name === 'doc.ts');
     expect(fileRow?.size).toBe(42);
-    expect(fileRow?.mtimeMs).toBe(1700000000000);
-    const dirRow = rows.find((r) => r.name === 'sub');
-    expect(dirRow?.isFolder).toBe(true);
-    expect(dirRow?.size).toBe(0);
-    expect(dirRow?.mtimeMs).toBe(2);
+    expect(fileRow?.mtimeMs).toBe(1_700_000_000_000);
+    const directoryRow = rows.find((r) => r.name === 'sub');
+    expect(directoryRow?.isFolder).toBe(true);
+    expect(directoryRow?.size).toBe(0);
+    expect(directoryRow?.mtimeMs).toBe(2);
     disposeChannel();
   });
 
@@ -296,7 +297,7 @@ describe('FileTreeService listDirectory / subscribePath', () => {
     });
     const first = tree.listDirectory('');
     const second = tree.listDirectory('');
-    resolveRead!([{ id: 'x', name: 'x', size: 0, mtimeMs: 0 }]);
+    resolveRead([{ id: 'x', name: 'x', size: 0, mtimeMs: 0 }]);
     const [a, b] = await Promise.all([first, second]);
     expect(a).toEqual(b);
     expect(vi.mocked(proxy.readDirectory)).toHaveBeenCalledTimes(1);

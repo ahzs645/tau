@@ -175,11 +175,9 @@ export const nodeWorkerClient = (
 
   let pools: ReturnType<typeof allocatePools> | undefined;
   const ensurePools = (): ReturnType<typeof allocatePools> => {
-    if (!pools) {
-      pools = allocatePools({
-        geometry: options.sharedMemory?.geometry,
-      });
-    }
+    pools ??= allocatePools({
+      geometry: options.sharedMemory?.geometry,
+    });
     return pools;
   };
 

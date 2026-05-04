@@ -13,7 +13,7 @@ import { createChannelClient, wrapMessagePort } from '@taucad/rpc';
 import type { Channel } from '@taucad/rpc';
 import { runtimeProtocolSchemas } from '#types/runtime-protocol.schemas.js';
 import type { Geometry } from '@taucad/types';
-import { inProcessClientOptionsSchema } from '#transport/in-process-transport.schemas.js';
+import type { inProcessClientOptionsSchema } from '#transport/in-process-transport.schemas.js';
 import type { GeometryTransport, RuntimeInitializeResult, RuntimeProtocol } from '#types/runtime-protocol.types.js';
 import type {
   EncodedFileBytes,
@@ -28,13 +28,17 @@ import { runtimeChannelSessionKey } from '#transport/_internal/runtime-worker-di
 import { isRuntimeFileSystem } from '#filesystem/runtime-filesystem.js';
 import { extractInlineFileSystem } from '#transport/_internal/runtime-filesystem-handle.js';
 import { materialiseGeometry } from '#transport/_internal/geometry-materialiser.js';
-import { allocatePools, type AllocatedPools } from '#transport/_internal/sab-pools.js';
+import { allocatePools } from '#transport/_internal/sab-pools.js';
+import type { AllocatedPools } from '#transport/_internal/sab-pools.js';
 import { triggerAbort } from '#transport/_internal/abort-channel.js';
 import { buildHelloPayload } from '#transport/_internal/transport-hello.js';
 
 /** Canonical id literal for bundled in-process transport. */
 export const inProcessId = 'in-process';
 
+/**
+ *
+ */
 export type InProcessClientOptions = z.input<typeof inProcessClientOptionsSchema>;
 
 /**
@@ -53,7 +57,7 @@ export const inProcessClientDescribe = (options: InProcessClientOptions): Transp
       fileDelivery: sabAvailable ? 'pool' : 'copy',
       abortSignal: sabAvailable ? 'sab-atomics' : 'wire-notify',
     },
-    fileSystem: options.fileSystem !== undefined ? 'inline' : 'unbound',
+    fileSystem: options.fileSystem === undefined ? 'unbound' : 'inline',
   };
 };
 

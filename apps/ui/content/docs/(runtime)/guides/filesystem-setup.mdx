@@ -35,13 +35,14 @@ Use `fromNodeFs` when your project files live on disk. Pass the base path; all f
 ```typescript
 import { createRuntimeClient } from '@taucad/runtime';
 import { fromNodeFs } from '@taucad/runtime/filesystem/node';
+import { inProcessTransport } from '@taucad/runtime/transport/in-process';
 import { replicad } from '@taucad/runtime/kernels';
 import { esbuild } from '@taucad/runtime/bundler';
 
 const client = createRuntimeClient({
+  transport: inProcessTransport({ fileSystem: fromNodeFs('/path/to/project') }),
   kernels: [replicad()],
   bundlers: [esbuild()],
-  fileSystem: fromNodeFs('/path/to/project'),
 });
 ```
 
@@ -53,6 +54,7 @@ Use `fromMemoryFs` when file content is passed directly (e.g., from an editor) o
 
 ```typescript
 import { createRuntimeClient, fromMemoryFs } from '@taucad/runtime';
+import { inProcessTransport } from '@taucad/runtime/transport/in-process';
 import { replicad } from '@taucad/runtime/kernels';
 import { esbuild } from '@taucad/runtime/bundler';
 
@@ -67,9 +69,9 @@ const filesystem = fromMemoryFs({
 });
 
 const client = createRuntimeClient({
+  transport: inProcessTransport({ fileSystem: filesystem }),
   kernels: [replicad()],
   bundlers: [esbuild()],
-  fileSystem: filesystem,
 });
 ```
 
@@ -80,15 +82,16 @@ Use `fromFsLike` when you have an fs-compatible object with a `promises` namespa
 ```typescript
 import nodeFs from 'node:fs';
 import { createRuntimeClient, fromFsLike } from '@taucad/runtime';
+import { inProcessTransport } from '@taucad/runtime/transport/in-process';
 import { replicad } from '@taucad/runtime/kernels';
 import { esbuild } from '@taucad/runtime/bundler';
 
 const filesystem = fromFsLike(nodeFs, '/path/to/project');
 
 const client = createRuntimeClient({
+  transport: inProcessTransport({ fileSystem: filesystem }),
   kernels: [replicad()],
   bundlers: [esbuild()],
-  fileSystem: filesystem,
 });
 ```
 

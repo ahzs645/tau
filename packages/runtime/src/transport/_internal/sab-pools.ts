@@ -69,7 +69,7 @@ export const allocatePools = (options: AllocatePoolsOptions): AllocatedPools => 
   const ownedFilePool = options.filePoolBuffer === undefined && options.files !== undefined;
   let { filePoolBuffer } = options;
   let filePool: SharedPool | undefined;
-  if (ownedFilePool && options.files) {
+  if (ownedFilePool) {
     filePoolBuffer = tryAllocateSab(options.files.bytes);
   }
   if (filePoolBuffer) {

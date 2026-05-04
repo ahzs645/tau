@@ -8,7 +8,8 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { electronUtilityClientDescribe, electronUtilityTransport } from './electron-utility-transport.js';
+import { electronUtilityClientDescribe } from './electron-utility-client.js';
+import { electronUtilityTransport } from './electron-utility-transport.js';
 
 describe('electronUtilityTransport — callable TransportPlugin surface', () => {
   it('wired plugin exposes literal id + describe parity with named client factories', () => {

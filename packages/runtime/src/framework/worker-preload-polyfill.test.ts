@@ -158,7 +158,10 @@ describe('worker-preload-polyfill', () => {
      */
     expect(() => {
       const nodes = stubDocument.querySelectorAll();
-      (nodes as unknown as { forEach: (cb: (el: unknown) => void) => void }).forEach(() => {});
+      const iterable = nodes as unknown as Iterable<unknown>;
+      for (const _element of iterable) {
+        void _element;
+      }
     }).not.toThrow();
   });
 

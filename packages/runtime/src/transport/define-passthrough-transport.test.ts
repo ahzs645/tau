@@ -39,13 +39,13 @@ const stubClient = <const Id extends 'foo' | 'bar'>(
       throw new Error('stub');
     },
     abort() {
-      /* noop */
+      /* Noop */
     },
     async resolveGeometry() {
       throw new Error('stub');
     },
     async close() {
-      /* noop */
+      /* Noop */
     },
     closed,
   };

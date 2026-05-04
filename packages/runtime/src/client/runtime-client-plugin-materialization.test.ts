@@ -23,7 +23,8 @@ const stubKernel = (kernelId: string): KernelPlugin => ({
 
 describe('RuntimeClient TransportPlugin materialization', () => {
   it('materializes distinct transport handles across sequential clients that share one plugin reference', async () => {
-    const fs = fromMemoryFs({ '/main.ts': `export default () => true;\n` });
+    const mainPath = '/main.ts';
+    const fs = fromMemoryFs({ [mainPath]: `export default () => true;\n` });
     const plugin = inProcessTransport({ fileSystem: fs });
 
     expect(plugin.materialize()).not.toBe(plugin.materialize());

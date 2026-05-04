@@ -67,21 +67,21 @@ describe('webWorkerHost — real port acquisition (R3)', () => {
         ? options
         : (options as { transfer?: Transferable[] } | undefined)?.transfer;
       postedMessages.push({ data, transfer });
-    }) as never);
+    }) as unknown as Window['postMessage']);
 
     const addSpy = vi.spyOn(globalThis, 'addEventListener');
     addSpy.mockImplementation(((type: string, listener: EventListener) => {
       if (type === 'message') {
         messageListeners.add(listener as unknown as Listener);
       }
-    }) as never);
+    }) as unknown as typeof globalThis.addEventListener);
 
     const removeSpy = vi.spyOn(globalThis, 'removeEventListener');
     removeSpy.mockImplementation(((type: string, listener: EventListener) => {
       if (type === 'message') {
         messageListeners.delete(listener as unknown as Listener);
       }
-    }) as never);
+    }) as unknown as typeof globalThis.removeEventListener);
   });
 
   afterEach(() => {
@@ -130,9 +130,10 @@ describe('webWorkerHost — real port acquisition (R3)', () => {
     await host.open();
 
     let closedFlag = false;
-    const watcher = host.closed.then(() => {
+    const watcher = (async (): Promise<void> => {
+      await host.closed;
       closedFlag = true;
-    });
+    })();
 
     await host.close();
     await watcher;

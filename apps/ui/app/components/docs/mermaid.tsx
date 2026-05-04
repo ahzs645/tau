@@ -150,6 +150,7 @@ function MermaidRenderer({ chart }: { readonly chart: string }): React.JSX.Eleme
     let cancelled = false;
     setSvg(undefined);
 
+    // async-iife: bootstrap — Mermaid is dynamically imported; effect cleanup cancels in-flight render
     void (async () => {
       const { default: mermaid } = await import('mermaid');
 

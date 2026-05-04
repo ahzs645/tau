@@ -714,6 +714,9 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
     this.handleOpenFile(request.file, request.parameters, request.options);
   }
 
+  /**
+   *
+   */
   public handleOpenFile(
     file: GeometryFile,
     parameters?: Record<string, unknown>,

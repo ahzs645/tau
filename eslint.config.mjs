@@ -1,9 +1,49 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import tseslint from 'typescript-eslint';
 import nxEslintPlugin from '@nx/eslint-plugin';
 import * as importXPlugin from 'eslint-plugin-import-x';
 import maxParamsNoConstructorPlugin from 'eslint-plugin-max-params-no-constructor';
 import tauLintPlugin from '@taucad/oxlint/tau-lint';
 import * as mdxParser from '@taucad/oxlint/mdx-parser';
+
+/**
+ * Workspace root plus every workspace member directory that has a `package.json`
+ * (`packages/*`, `kernels/*`, `libs/*`, `apps/*`, `examples/*`), so
+ * `import-x/no-extraneous-dependencies` resolves deps from the owning manifest.
+ */
+const workspacePackageDirectories = () => {
+  const root = import.meta.dirname;
+  const directories = new Set([root]);
+
+  const absorbChildren = (base) => {
+    try {
+      for (const name of fs.readdirSync(base)) {
+        if (name.startsWith('.')) {
+          continue;
+        }
+        const candidate = path.join(base, name);
+        if (!fs.statSync(candidate).isDirectory()) {
+          continue;
+        }
+        if (!fs.existsSync(path.join(candidate, 'package.json'))) {
+          continue;
+        }
+        directories.add(candidate);
+      }
+    } catch {
+      // Ignore missing directories (partial checkouts, sparse fixtures).
+    }
+  };
+
+  absorbChildren(path.join(root, 'packages'));
+  absorbChildren(path.join(root, 'kernels'));
+  absorbChildren(path.join(root, 'libs'));
+  absorbChildren(path.join(root, 'apps'));
+  absorbChildren(path.join(root, 'examples'));
+
+  return [...directories];
+};
 
 /**
  * Minimal ESLint config -- only rules that cannot run in oxlint.
@@ -258,7 +298,7 @@ const config = [
       'import-x/no-extraneous-dependencies': [
         'error',
         {
-          packageDir: ['.', import.meta.dirname],
+          packageDir: workspacePackageDirectories(),
           devDependencies: true,
           optionalDependencies: false,
           peerDependencies: false,
@@ -296,13 +336,13 @@ const config = [
   },
 
   {
-    files: ['packages/**/*.{ts,tsx}'],
-    ignores: ['packages/**/*.{spec,test,config,setup}.{ts,tsx}'],
+    files: ['packages/**/*.{ts,tsx}', 'kernels/**/*.{ts,tsx}'],
+    ignores: ['packages/**/*.{spec,test,config,setup}.{ts,tsx}', 'kernels/**/*.{spec,test,config,setup}.{ts,tsx}'],
     rules: {
       'import-x/no-extraneous-dependencies': [
         'error',
         {
-          packageDir: ['.'],
+          packageDir: workspacePackageDirectories(),
           devDependencies: true,
           optionalDependencies: false,
           peerDependencies: true,

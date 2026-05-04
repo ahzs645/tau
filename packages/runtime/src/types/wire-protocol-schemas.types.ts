@@ -23,6 +23,6 @@ import type { z } from 'zod';
  * @internal
  */
 export type WireProtocolSchemas = {
-  readonly calls: Readonly<Record<string, { readonly args: z.ZodTypeAny; readonly result: z.ZodTypeAny }>>;
-  readonly notifies: Readonly<Record<string, z.ZodTypeAny>>;
+  readonly calls: Readonly<Record<string, { readonly args: z.ZodType; readonly result: z.ZodType }>>;
+  readonly notifies: Readonly<Record<string, z.ZodType>>;
 };

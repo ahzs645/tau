@@ -3,7 +3,7 @@ title: 'Documentation Policy'
 description: 'Standards for writing and maintaining Tau documentation: content types, templates, AI discoverability, API reference, and cross-linking. Applies to apps/ui/content/docs/ and docs/.'
 status: active
 created: '2026-02-23'
-updated: '2026-03-05'
+updated: '2026-05-04'
 ---
 
 # Documentation Policy
@@ -388,6 +388,7 @@ icon: [Optional lucide icon name, e.g., lucide:rocket]
 - Show complete, runnable code -- not fragments.
 - Annotate expected output with comments or a dedicated section.
 - Use code tabs for package manager commands (`npm`, `pnpm`, `yarn`).
+- For inline identifiers in prose (same highlighting as fenced blocks), append `{:ts}` / `{:tsx}` / `{:bash}` / etc. after the closing backtick content: `` `client.shutdown(){:ts}` `` (Fumadocs `@shikijs/rehype` tailing-curly-colon mode). Omitting the suffix is allowed but renders plain monospace.
 
 ### Callouts
 

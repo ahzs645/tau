@@ -8,7 +8,7 @@ icon: lucide:shield-check
 
 `@taucad/runtime` requires `crossOriginIsolated === true` for `SharedArrayBuffer`-backed features. SAB ownership is split across two layers and you should treat them as one isolation requirement:
 
-- **Transport-owned SABs** — the active [transport](../api/transport) allocates the geometry pool and the cooperative-abort channel internally via `RuntimeTransport.configureMemory`. The runtime client, worker client, and your application code never see these.
+- **Transport-owned SABs** — the active [transport](../api/client) allocates the geometry pool and the cooperative-abort channel internally via `RuntimeTransport.configureMemory`. The runtime client, worker client, and your application code never see these.
 - **Host-owned SABs** — the multi-threaded OpenCASCADE WASM heap and the optional `filePool` you pass to `client.connect(...)` are allocated by the WASM kernel and the host respectively.
 
 Either way, browsers only enter `crossOriginIsolated` state when the top-level document is served with the right combination of COOP, COEP, and CORP headers.

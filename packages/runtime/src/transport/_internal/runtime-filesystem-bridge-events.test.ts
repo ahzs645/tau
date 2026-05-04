@@ -3,7 +3,8 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { wrapMessagePort, type Port } from '@taucad/rpc';
+import { wrapMessagePort } from '@taucad/rpc';
+import type { Port } from '@taucad/rpc';
 import {
   createBridgeServer,
   createBridgeCall,

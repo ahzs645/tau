@@ -40,7 +40,6 @@ import { wrapOcForExceptions, wrapOcWithTracing } from '#kernels/occt/oc-tracing
 import type { OcTracingSummary } from '#kernels/occt/oc-tracing.js';
 import type { KernelIssue } from '#types/runtime.types.js';
 
-// eslint-disable-next-line import-x/no-extraneous-dependencies -- internal # imports resolve to self
 import type { OpenCascadeInstance, TopoDS_Shape } from '#kernels/opencascade/wasm/opencascade_full.js';
 
 const fullWasmUrl = new URL('wasm/opencascade_full.wasm', import.meta.url).href;
@@ -92,7 +91,6 @@ async function resolveWasm(wasm: 'full' | OpenCascadeWasmConfig): Promise<{
   moduleExports: OpenCascadeModule;
 }> {
   if (wasm === 'full') {
-    // eslint-disable-next-line import-x/no-extraneous-dependencies -- internal # imports resolve to self
     const moduleExports = await import('#kernels/opencascade/wasm/opencascade_full.js');
     return { wasmUrl: fullWasmUrl, moduleExports };
   }

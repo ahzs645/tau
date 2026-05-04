@@ -187,7 +187,15 @@ export function useRender(options: UseRenderOptions): UseRenderResult {
 
     const resolvedFile = file ?? Object.keys(code)[0]!;
 
-    void client.openFile({ code, file: resolvedFile, parameters });
+    // async-iife: bootstrap — openFile from effect; surface errors without blocking render
+    void (async (): Promise<void> => {
+      try {
+        await client.openFile({ code, file: resolvedFile, parameters });
+      } catch (error) {
+        setError(error instanceof Error ? error : new Error(String(error)));
+        setStatus('error');
+      }
+    })();
   }, [code, file, parameters, enabled]);
 
   const exportGeometry = useCallback(

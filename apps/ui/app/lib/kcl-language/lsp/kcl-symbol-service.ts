@@ -1169,9 +1169,7 @@ export function formatKclValue(value: KclValue): string {
     }
 
     case 'Object': {
-      const entries = Object.entries(value.value)
-        .filter(([, v]) => v !== undefined)
-        .map(([k, v]) => `${k}: ${formatKclValue(v!)}`);
+      const entries = Object.entries(value.value).map(([k, v]) => `${k}: ${formatKclValue(v)}`);
       return `{ ${entries.join(', ')} }`;
     }
 

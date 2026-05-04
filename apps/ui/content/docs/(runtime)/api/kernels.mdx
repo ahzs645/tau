@@ -38,11 +38,13 @@ Use kernel factories when registering CAD engines with `createRuntimeClient`. Ea
 
 ```typescript
 import { createRuntimeClient, fromMemoryFs } from '@taucad/runtime';
+import { inProcessTransport } from '@taucad/runtime/transport/in-process';
 import { replicad, opencascade, manifold, jscad, zoo, tau } from '@taucad/runtime/kernels';
 import { openscad } from '@taucad/openscad';
 import { esbuild } from '@taucad/runtime/bundler';
 
 const client = createRuntimeClient({
+  transport: inProcessTransport({ fileSystem: fromMemoryFs() }),
   kernels: [
     replicad({ withBrepEdges: true }),
     opencascade(),
@@ -53,7 +55,6 @@ const client = createRuntimeClient({
     tau(),
   ],
   bundlers: [esbuild()],
-  fileSystem: fromMemoryFs(),
 });
 ```
 

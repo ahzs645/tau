@@ -141,10 +141,10 @@ export function registerMonacoNavigation(options: {
       }, 5000);
 
       // Ensure the target model exists (async, fire-and-forget)
-      // oxlint-disable-next-line promise/prefer-await-to-then, promise/prefer-catch -- cannot be async here
-      void modelService.getOrEnsureModel(relativePath).then(
-        () => {
-          // Model loaded (or already existed), now open the file
+      // async-iife: bootstrap — ensure model exists before openFile; cannot block navigation hook
+      void (async (): Promise<void> => {
+        try {
+          await modelService.getOrEnsureModel(relativePath);
           const isReadOnly = handler.isReadOnly?.(relativePath) ?? false;
 
           editorRef.send({
@@ -155,16 +155,12 @@ export function registerMonacoNavigation(options: {
             lineNumber,
             column,
           });
-        },
-        () => {
-          // Model load failed -- clear pending navigation
+        } catch {
           pendingNavigation = undefined;
-          if (pendingTimerId !== undefined) {
-            clearTimeout(pendingTimerId);
-            pendingTimerId = undefined;
-          }
-        },
-      );
+          clearTimeout(pendingTimerId);
+          pendingTimerId = undefined;
+        }
+      })();
 
       // Return true to indicate we're handling this navigation
       return true;

@@ -34,7 +34,9 @@ export const buildFileSystemBridge = (fs: RuntimeFileSystem | undefined): Resolv
     return {
       port: bridge.port,
       kind: 'inline',
-      dispose: () => bridge.dispose(),
+      dispose: () => {
+        bridge.dispose();
+      },
     };
   }
   return {

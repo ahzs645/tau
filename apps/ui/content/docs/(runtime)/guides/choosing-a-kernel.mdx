@@ -63,13 +63,14 @@ Use Replicad when you need:
 
 ```typescript
 import { createRuntimeClient, fromMemoryFs } from '@taucad/runtime';
+import { inProcessTransport } from '@taucad/runtime/transport/in-process';
 import { replicad } from '@taucad/runtime/kernels';
 import { esbuild } from '@taucad/runtime/bundler';
 
 const client = createRuntimeClient({
+  transport: inProcessTransport({ fileSystem: fromMemoryFs() }),
   kernels: [replicad()],
   bundlers: [esbuild()],
-  fileSystem: fromMemoryFs(),
 });
 ```
 
@@ -83,13 +84,14 @@ Use OpenCASCADE when you need:
 
 ```typescript
 import { createRuntimeClient, fromMemoryFs } from '@taucad/runtime';
+import { inProcessTransport } from '@taucad/runtime/transport/in-process';
 import { opencascade } from '@taucad/runtime/kernels';
 import { esbuild } from '@taucad/runtime/bundler';
 
 const client = createRuntimeClient({
+  transport: inProcessTransport({ fileSystem: fromMemoryFs() }),
   kernels: [opencascade()],
   bundlers: [esbuild()],
-  fileSystem: fromMemoryFs(),
 });
 ```
 
@@ -105,11 +107,12 @@ Use OpenSCAD when you have:
 
 ```typescript
 import { createRuntimeClient, fromMemoryFs } from '@taucad/runtime';
+import { inProcessTransport } from '@taucad/runtime/transport/in-process';
 import { openscad } from '@taucad/openscad';
 
 const client = createRuntimeClient({
+  transport: inProcessTransport({ fileSystem: fromMemoryFs() }),
   kernels: [openscad()],
-  fileSystem: fromMemoryFs(),
 });
 ```
 
@@ -123,13 +126,14 @@ Use Manifold when you need:
 
 ```typescript
 import { createRuntimeClient, fromMemoryFs } from '@taucad/runtime';
+import { inProcessTransport } from '@taucad/runtime/transport/in-process';
 import { manifold } from '@taucad/runtime/kernels';
 import { esbuild } from '@taucad/runtime/bundler';
 
 const client = createRuntimeClient({
+  transport: inProcessTransport({ fileSystem: fromMemoryFs() }),
   kernels: [manifold()],
   bundlers: [esbuild()],
-  fileSystem: fromMemoryFs(),
 });
 ```
 
@@ -143,13 +147,14 @@ Use JSCAD when you need:
 
 ```typescript
 import { createRuntimeClient, fromMemoryFs } from '@taucad/runtime';
+import { inProcessTransport } from '@taucad/runtime/transport/in-process';
 import { jscad } from '@taucad/runtime/kernels';
 import { esbuild } from '@taucad/runtime/bundler';
 
 const client = createRuntimeClient({
+  transport: inProcessTransport({ fileSystem: fromMemoryFs() }),
   kernels: [jscad()],
   bundlers: [esbuild()],
-  fileSystem: fromMemoryFs(),
 });
 ```
 
@@ -163,11 +168,12 @@ Use Zoo when you need:
 
 ```typescript
 import { createRuntimeClient, fromMemoryFs } from '@taucad/runtime';
+import { inProcessTransport } from '@taucad/runtime/transport/in-process';
 import { zoo } from '@taucad/runtime/kernels';
 
 const client = createRuntimeClient({
+  transport: inProcessTransport({ fileSystem: fromMemoryFs() }),
   kernels: [zoo({ baseUrl: 'wss://your-zoo-server/v1/kernels/zoo' })],
-  fileSystem: fromMemoryFs(),
 });
 ```
 
@@ -181,11 +187,12 @@ Use Tau when you need:
 
 ```typescript
 import { createRuntimeClient, fromMemoryFs } from '@taucad/runtime';
+import { inProcessTransport } from '@taucad/runtime/transport/in-process';
 import { tau } from '@taucad/runtime/kernels';
 
 const client = createRuntimeClient({
+  transport: inProcessTransport({ fileSystem: fromMemoryFs() }),
   kernels: [tau()],
-  fileSystem: fromMemoryFs(),
 });
 ```
 
@@ -203,14 +210,15 @@ Or configure kernels individually for tree-shaking:
 
 ```typescript
 import { createRuntimeClient, fromMemoryFs } from '@taucad/runtime';
+import { inProcessTransport } from '@taucad/runtime/transport/in-process';
 import { replicad, opencascade, manifold, jscad, tau } from '@taucad/runtime/kernels';
 import { openscad } from '@taucad/openscad';
 import { esbuild } from '@taucad/runtime/bundler';
 
 const client = createRuntimeClient({
+  transport: inProcessTransport({ fileSystem: fromMemoryFs() }),
   kernels: [replicad(), opencascade(), manifold(), openscad(), jscad(), tau()],
   bundlers: [esbuild()],
-  fileSystem: fromMemoryFs(),
 });
 ```
 

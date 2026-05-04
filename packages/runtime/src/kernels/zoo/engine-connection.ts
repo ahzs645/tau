@@ -108,7 +108,7 @@ export class EngineConnection {
   public onSessionClosed(handler: () => void): () => void {
     if (!this.session) {
       return () => {
-        /* no session */
+        /* No session */
       };
     }
 

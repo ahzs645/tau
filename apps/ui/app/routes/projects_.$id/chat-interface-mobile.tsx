@@ -20,7 +20,7 @@ export const ChatInterfaceMobile = memo(function (): React.JSX.Element {
     useChatInterfaceState();
 
   const { projectRef } = useProject();
-  const isProjectError = useSelector(projectRef, (state) => state.matches('error'));
+  const isProjectError = useSelector(projectRef, ({ matches }) => matches('error'));
 
   const isViewerTab = activeTab === 'viewer';
 

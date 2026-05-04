@@ -66,14 +66,16 @@ Three strategies work together:
 
 ### Strategy 1: Proxy-Based Cooperative Abort (OC-Based Kernels)
 
-The OC tracing Proxy intercepts every OpenCASCADE API call -- constructors, methods, and property access. A typical user `main()` makes 500-5000 individual OC calls. The proxy reads the abort generation from the active [transport](../api/transport) (which on SAB-capable transports is backed by an `Atomics.load` against a transport-owned `SharedArrayBuffer`; on SAB-less transports it is bumped from the worker's wire-format `'abort'` handler). This gives sub-millisecond abort granularity during the heaviest synchronous phase. Conceptually, the proxy's checkpoint is just:
+The OC tracing Proxy intercepts every OpenCASCADE API call -- constructors, methods, and property access. A typical user `main()` makes 500-5000 individual OC calls. The proxy reads the abort generation from the active [transport](../api/client) (which on SAB-capable transports is backed by an `Atomics.load` against a transport-owned `SharedArrayBuffer`; on SAB-less transports it is bumped from the worker's wire-format `'abort'` handler). This gives sub-millisecond abort granularity during the heaviest synchronous phase. Conceptually, the proxy's checkpoint is just:
 
 ```typescript
 // Internal worker-side sketch — the abort throw is plumbing the consumer
 // never sees. From the consumer's point of view, the superseded render's
 // Promise resolves to `RenderOutcome.superseded === true`.
 
-declare function readAbortGeneration(): number; // transport-owned
+const readAbortGeneration = (): number => {
+  return 0; // worker implementation: transport-owned SAB / wire-backed slot
+};
 
 class InternalRenderAbort extends Error {}
 

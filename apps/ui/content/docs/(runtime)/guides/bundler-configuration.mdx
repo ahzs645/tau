@@ -34,13 +34,14 @@ Pass the bundler in the `bundlers` array. JS/TS kernels (Replicad, OpenCASCADE, 
 
 ```typescript
 import { createRuntimeClient, fromMemoryFs } from '@taucad/runtime';
+import { inProcessTransport } from '@taucad/runtime/transport/in-process';
 import { replicad } from '@taucad/runtime/kernels';
 import { esbuild } from '@taucad/runtime/bundler';
 
 const client = createRuntimeClient({
+  transport: inProcessTransport({ fileSystem: fromMemoryFs() }),
   kernels: [replicad()],
   bundlers: [esbuild()],
-  fileSystem: fromMemoryFs(),
 });
 ```
 

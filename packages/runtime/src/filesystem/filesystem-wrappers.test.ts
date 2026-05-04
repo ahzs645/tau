@@ -4,7 +4,8 @@
 
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { mock } from 'vitest-mock-extended';
-import { wrapMessagePort, type Port } from '@taucad/rpc';
+import { wrapMessagePort } from '@taucad/rpc';
+import type { Port } from '@taucad/rpc';
 import { _fromMemoryFsHandle as fromMemoryFS } from '#transport/_internal/from-memory-fs-handle.js';
 import type { RuntimeFileSystemBase } from '#types/runtime-kernel.types.js';
 import { createBridgeProxy } from '#transport/_internal/runtime-filesystem-bridge.js';

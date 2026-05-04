@@ -25,7 +25,7 @@ export function PreviewDebugPanel({ cadRef }: Props): React.JSX.Element {
 
   const inspection = useMemo<GltfInspection | undefined>(() => {
     const first = geometries[0];
-    if (!first || first.format !== 'gltf') {
+    if (first?.format !== 'gltf') {
       return undefined;
     }
     try {

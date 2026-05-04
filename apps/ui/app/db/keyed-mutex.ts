@@ -52,12 +52,13 @@ export class KeyedMutex<K> {
 
     this.tails.set(key, newTail);
 
-    // oxlint-disable-next-line promise/prefer-await-to-then -- chain-based queue, see method JSDoc
-    void newTail.then(() => {
+    // async-iife: bootstrap — await chain tail so cleanup runs without `.then` chaining
+    void (async (): Promise<void> => {
+      await newTail;
       if (this.tails.get(key) === newTail) {
         this.tails.delete(key);
       }
-    });
+    })();
 
     return taskPromise;
   }

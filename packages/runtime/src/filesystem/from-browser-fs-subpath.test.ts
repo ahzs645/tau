@@ -28,14 +28,18 @@ describe('filesystem/browser subpath (R20)', () => {
     const stubRoot = {
       kind: 'directory',
       name: 'root',
-      async *entries() {},
+      async *entries() {
+        yield* [];
+      },
       async getDirectoryHandle() {
         throw new Error('stub');
       },
       async getFileHandle() {
         throw new Error('stub');
       },
-      async removeEntry() {},
+      async removeEntry() {
+        await Promise.resolve();
+      },
     } as unknown as FileSystemDirectoryHandle;
 
     const fs = fromBrowserFs(stubRoot);

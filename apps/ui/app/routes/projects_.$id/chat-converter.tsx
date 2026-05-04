@@ -513,6 +513,7 @@ function useExportPreferences(fileManager: ReturnType<typeof useFileManager>) {
     }
     loadedRef.current = true;
 
+    // async-iife: bootstrap — hydrate export preferences from workspace JSON once
     void (async () => {
       try {
         const content = await fileManager.readFile(preferencesPath);
@@ -543,6 +544,7 @@ function useExportPreferences(fileManager: ReturnType<typeof useFileManager>) {
         clearTimeout(writeTimerRef.current);
       }
       writeTimerRef.current = setTimeout(() => {
+        // async-iife: bootstrap — debounced preference persist; timer already tracks lifecycle
         void (async () => {
           const content = new TextEncoder().encode(JSON.stringify(next, null, 2));
           try {

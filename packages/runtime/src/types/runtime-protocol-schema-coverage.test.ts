@@ -11,19 +11,19 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { RUNTIME_PROTOCOL_CALL_NAMES, RUNTIME_PROTOCOL_NOTIFY_NAMES } from '#types/runtime-protocol.types.js';
+import { runtimeProtocolCallNames, runtimeProtocolNotifyNames } from '#types/runtime-protocol.types.js';
 import { runtimeProtocolSchemas } from '#types/runtime-protocol.schemas.js';
 
 describe('runtime-protocol schema coverage (C15)', () => {
   it('every protocol call has a matching schema entry', () => {
     const callSchemaNames = new Set(Object.keys(runtimeProtocolSchemas.calls));
-    for (const name of RUNTIME_PROTOCOL_CALL_NAMES) {
+    for (const name of runtimeProtocolCallNames) {
       expect(callSchemaNames.has(name), `missing schema for call '${name}'`).toBe(true);
     }
   });
 
   it('every schema call entry maps to a known protocol call', () => {
-    const protocolCallNames = new Set<string>(RUNTIME_PROTOCOL_CALL_NAMES);
+    const protocolCallNames = new Set<string>(runtimeProtocolCallNames);
     for (const name of Object.keys(runtimeProtocolSchemas.calls)) {
       expect(protocolCallNames.has(name), `unknown schema entry for call '${name}'`).toBe(true);
     }
@@ -38,13 +38,13 @@ describe('runtime-protocol schema coverage (C15)', () => {
 
   it('every protocol notify has a matching schema entry', () => {
     const notifySchemaNames = new Set(Object.keys(runtimeProtocolSchemas.notifies));
-    for (const name of RUNTIME_PROTOCOL_NOTIFY_NAMES) {
+    for (const name of runtimeProtocolNotifyNames) {
       expect(notifySchemaNames.has(name), `missing schema for notify '${name}'`).toBe(true);
     }
   });
 
   it('every schema notify entry maps to a known protocol notify', () => {
-    const protocolNotifyNames = new Set<string>(RUNTIME_PROTOCOL_NOTIFY_NAMES);
+    const protocolNotifyNames = new Set<string>(runtimeProtocolNotifyNames);
     for (const name of Object.keys(runtimeProtocolSchemas.notifies)) {
       expect(protocolNotifyNames.has(name), `unknown schema entry for notify '${name}'`).toBe(true);
     }

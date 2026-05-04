@@ -317,9 +317,14 @@ export const ChatEditorFileTree = memo(function ({
         if (treeService && newlyExpanded.length > 0) {
           for (const path of newlyExpanded) {
             if (!treeService.hasChildrenLoaded(path)) {
-              void treeService.listDirectory(path).catch((error: unknown) => {
-                console.error('[ChatEditorFileTree] listDirectory failed:', error);
-              });
+              // async-iife: bootstrap — warm directory listing from expansion update; failures logged only
+              void (async (): Promise<void> => {
+                try {
+                  await treeService.listDirectory(path);
+                } catch (error) {
+                  console.error('[ChatEditorFileTree] listDirectory failed:', error);
+                }
+              })();
             }
           }
         }
@@ -367,9 +372,14 @@ export const ChatEditorFileTree = memo(function ({
       if (treeService) {
         for (const path of parentPaths) {
           if (!treeService.hasChildrenLoaded(path)) {
-            void treeService.listDirectory(path).catch((error: unknown) => {
-              console.error('[ChatEditorFileTree] listDirectory failed:', error);
-            });
+            // async-iife: bootstrap — warm ancestor directories for reveal-active-file; failures logged only
+            void (async (): Promise<void> => {
+              try {
+                await treeService.listDirectory(path);
+              } catch (error) {
+                console.error('[ChatEditorFileTree] listDirectory failed:', error);
+              }
+            })();
           }
         }
       }

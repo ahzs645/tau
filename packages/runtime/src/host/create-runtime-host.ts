@@ -23,12 +23,16 @@ import type { RuntimeHostConfig, RuntimeHostHandle } from '#host/runtime-host.ty
  * @example <caption>Author host config separately from the host bootstrap</caption>
  * ```typescript
  * import { createRuntimeHostConfig } from '@taucad/runtime/host';
- * import { electronUtilityHost } from './my-electron-transport';
- * import { fromNodeFs } from '@taucad/runtime/filesystem/node';
+ * import type { RuntimeTransportHost } from '@taucad/runtime/transport';
+ * import type { RuntimeProtocol } from '@taucad/runtime/types';
  *
- * export const hostConfig = createRuntimeHostConfig({
- *   transport: electronUtilityHost({ fileSystem: fromNodeFs('/tmp/project') }),
- * });
+ * declare const transport: RuntimeTransportHost<
+ *   RuntimeProtocol,
+ *   Readonly<Record<string, never>>,
+ *   string
+ * >;
+ *
+ * export const hostConfig = createRuntimeHostConfig({ transport });
  * ```
  */
 export function createRuntimeHostConfig(config: RuntimeHostConfig): RuntimeHostConfig {
@@ -44,19 +48,19 @@ export function createRuntimeHostConfig(config: RuntimeHostConfig): RuntimeHostC
  *
  * @public
  *
- * @example <caption>Headless Node host with a transport that accepts host options</caption>
+ * @example <caption>Dispose a runtime host created from a prebuilt transport</caption>
  * ```typescript
  * import { createRuntimeHost } from '@taucad/runtime/host';
- * import { fromNodeFs } from '@taucad/runtime/filesystem/node';
- * import { electronUtilityHost } from './electron-utility-transport';
+ * import type { RuntimeTransportHost } from '@taucad/runtime/transport';
+ * import type { RuntimeProtocol } from '@taucad/runtime/types';
  *
- * const host = createRuntimeHost({
- *   transport: electronUtilityHost({
- *     fileSystem: fromNodeFs('/path/to/projects'),
- *   }),
- * });
+ * declare const transport: RuntimeTransportHost<
+ *   RuntimeProtocol,
+ *   Readonly<Record<string, never>>,
+ *   string
+ * >;
  *
- * // ... later
+ * const host = createRuntimeHost({ transport });
  * host.dispose();
  * ```
  */

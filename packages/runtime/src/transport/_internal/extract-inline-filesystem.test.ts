@@ -5,8 +5,7 @@
 import { describe, it, expect } from 'vitest';
 
 import { fromMemoryFs } from '#filesystem/runtime-filesystem.js';
-import { extractInlineFileSystem } from '#transport/_internal/runtime-filesystem-handle.js';
-import { wrapAsRuntimeFileSystem } from '#transport/_internal/runtime-filesystem-handle.js';
+import { extractInlineFileSystem, wrapAsRuntimeFileSystem } from '#transport/_internal/runtime-filesystem-handle.js';
 
 describe('extractInlineFileSystem (R2)', () => {
   it('should return undefined when fs is undefined', () => {
@@ -14,10 +13,11 @@ describe('extractInlineFileSystem (R2)', () => {
   });
 
   it('should return the underlying RuntimeFileSystemBase for inline fs created via fromMemoryFs', async () => {
-    const opaque = fromMemoryFs({ '/a.txt': 'x' });
+    const pathA = '/a.txt';
+    const opaque = fromMemoryFs({ [pathA]: 'x' });
     const base = extractInlineFileSystem(opaque);
     expect(base).toBeDefined();
-    await expect(base!.readFile('/a.txt', 'utf8')).resolves.toBe('x');
+    await expect(base!.readFile(pathA, 'utf8')).resolves.toBe('x');
   });
 
   it('should throw a TypeError with expected message for channel bridged opaque fs', async () => {

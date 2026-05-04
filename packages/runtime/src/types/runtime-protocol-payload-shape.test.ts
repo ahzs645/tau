@@ -36,7 +36,7 @@ describe('runtime-protocol payload-shape coverage (C18)', () => {
 
   describe('abort notify', () => {
     it.each([0, 1, 2] as const)('should accept the AbortReasonCode value %i', (code) => {
-      // abort-channel.ts publishes one of the canonical AbortReasonCode
+      // Abort-channel.ts publishes one of the canonical AbortReasonCode
       // numeric literals (0 = user, 1 = supersede, 2 = timeout).
       expect(() => runtimeProtocolSchemas.notifies.abort.parse({ reason: code })).not.toThrow();
     });

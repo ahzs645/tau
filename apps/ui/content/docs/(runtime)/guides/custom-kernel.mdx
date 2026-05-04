@@ -169,7 +169,7 @@ For UI viewers driving the autonomous render loop against your custom kernel, se
 Return all file paths that affect the geometry. The framework uses this for change detection, cache keys, and (in autonomous mode) watch subscription scoping:
 
 ```typescript
-import type { RuntimeFileSystem } from '@taucad/runtime';
+import type { KernelFileSystem } from '@taucad/runtime/kernel';
 
 function parseImports(code: string): string[] {
   const out: string[] = [];
@@ -190,7 +190,7 @@ function parseImports(code: string): string[] {
 
 async function getDependencies(
   { filePath, basePath }: { filePath: string; basePath: string },
-  { filesystem }: { filesystem: RuntimeFileSystem },
+  { filesystem }: { filesystem: KernelFileSystem },
   _context: unknown,
 ): Promise<string[]> {
   const content = await filesystem.readFile(filePath, 'utf8');
@@ -207,7 +207,7 @@ export { getDependencies };
 Extract parameters and a JSON Schema for UI generation:
 
 ```typescript
-import type { RuntimeFileSystem } from '@taucad/runtime';
+import type { KernelFileSystem } from '@taucad/runtime/kernel';
 import { createKernelSuccess } from '@taucad/runtime';
 
 const PARAM_RE = /^export\s+const\s+([A-Za-z_$][\w$]*)\s*=\s*(\d+(?:\.\d+)?|true|false|"[^"]*")\s*;?/gm;
@@ -230,7 +230,7 @@ function extractParameters(code: string): { defaultParameters: Record<string, un
 
 async function getParameters(
   { filePath }: { filePath: string },
-  { filesystem }: { filesystem: RuntimeFileSystem },
+  { filesystem }: { filesystem: KernelFileSystem },
   _context: unknown,
 ) {
   const code = await filesystem.readFile(filePath, 'utf8');

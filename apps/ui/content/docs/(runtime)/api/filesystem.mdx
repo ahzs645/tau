@@ -14,18 +14,16 @@ Use the filesystem API when configuring how kernels read and write project files
 
 <auto-type-table path='./props/filesystem.ts' name='RuntimeFileSystem' />
 
-<auto-type-table path='./props/filesystem.ts' name='RuntimeFileSystem' />
-
 <auto-type-table path='./props/filesystem.ts' name='FsLike' />
 
 ## Constructors
 
-| Function                        | Import Path                  | Description                                               |
-| ------------------------------- | ---------------------------- | --------------------------------------------------------- |
-| `fromNodeFs(basePath)`          | `@taucad/runtime/filesystem` | Node.js filesystem rooted at `basePath`                   |
-| `fromMemoryFs(files?)`          | `@taucad/runtime`            | In-memory Map-backed filesystem, optionally seeded        |
-| `fromFsLike(fs, rootPath?)`     | `@taucad/runtime`            | Any fs-compatible object (BrowserFS, memfs, polyfills)    |
-| `createRuntimeFileSystem(base)` | `@taucad/runtime/filesystem` | Wrap `RuntimeFileSystemBase` with enhanced helper methods |
+| Function                        | Import Path                       | Description                                               |
+| ------------------------------- | --------------------------------- | --------------------------------------------------------- |
+| `fromNodeFs(basePath)`          | `@taucad/runtime/filesystem/node` | Node.js filesystem rooted at `basePath`                   |
+| `fromMemoryFs(files?)`          | `@taucad/runtime`                 | In-memory Map-backed filesystem, optionally seeded        |
+| `fromFsLike(fs, rootPath?)`     | `@taucad/runtime`                 | Any fs-compatible object (BrowserFS, memfs, polyfills)    |
+| `createRuntimeFileSystem(base)` | `@taucad/runtime/filesystem`      | Wrap `RuntimeFileSystemBase` with enhanced helper methods |
 
 ## Bridge Types
 
@@ -61,13 +59,14 @@ For cross-worker filesystem access, these utilities create MessagePort-based bri
 ```typescript
 import { createRuntimeClient } from '@taucad/runtime';
 import { fromNodeFs } from '@taucad/runtime/filesystem/node';
+import { inProcessTransport } from '@taucad/runtime/transport/in-process';
 import { replicad } from '@taucad/runtime/kernels';
 import { esbuild } from '@taucad/runtime/bundler';
 
 const client = createRuntimeClient({
+  transport: inProcessTransport({ fileSystem: fromNodeFs('/path/to/project') }),
   kernels: [replicad()],
   bundlers: [esbuild()],
-  fileSystem: fromNodeFs('/path/to/project'),
 });
 ```
 
@@ -75,22 +74,25 @@ const client = createRuntimeClient({
 
 ```typescript
 import { createRuntimeClient, fromMemoryFs } from '@taucad/runtime';
+import { inProcessTransport } from '@taucad/runtime/transport/in-process';
 import { replicad } from '@taucad/runtime/kernels';
 import { esbuild } from '@taucad/runtime/bundler';
 
 const client = createRuntimeClient({
+  transport: inProcessTransport({
+    fileSystem: fromMemoryFs({
+      'main.ts': 'export default function main() { return null; }',
+    }),
+  }),
   kernels: [replicad()],
   bundlers: [esbuild()],
-  fileSystem: fromMemoryFs({
-    'main.ts': 'export default function main() { return null; }',
-  }),
 });
 ```
 
 ### Filesystem Bridge
 
 ```typescript
-import { createBridgePort } from '@taucad/runtime/filesystem';
+import { createBridgePort } from '@taucad/runtime/transport-internals';
 import { fromNodeFs } from '@taucad/runtime/filesystem/node';
 
 const fileSystem = fromNodeFs('/path/to/project');
@@ -109,5 +111,5 @@ const cleanup = () => {
 
 - [Set Up the Filesystem](../guides/filesystem-setup) -- Practical guide to filesystem configuration
 - [Worker Model](../concepts/worker-model) -- How the filesystem is bridged to the worker
-- [API: Client](./client) -- `createRuntimeClient` filesystem option
+- [API: Client](./client) -- `createRuntimeClient` and wiring `transport` with a filesystem
 - [API: Types](./types) -- `RuntimeFileSystemBase`, `RuntimeFileSystem` (framework view), `RuntimeFileSystem` (opaque connect-time value)

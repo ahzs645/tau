@@ -255,6 +255,9 @@ type ContributorFor<P, K extends string> =
  * @public
  */
 /* oxlint-disable @typescript-eslint/no-explicit-any -- variance: accepts any KernelPlugin generic */
+/**
+ *
+ */
 export type CollectFormatMap<Plugins extends readonly KernelPlugin<any, any, any>[]> = {
   [K in keyof UnionToIntersection<
     Plugins[number] extends KernelPlugin<infer M, any, any> ? M : never

@@ -120,7 +120,7 @@ The protocol is asymmetric: few commands in, many event types out, plus a transp
 
 ### Transport abort channel (out-of-band)
 
-The active [transport](../api/transport) owns the abort channel end-to-end. The runtime client calls `transport.signalAbort('superseded')` **before** posting `openFile`/`updateParameters`/`setOptions`; the transport bumps its abort generation (backed by `SharedArrayBuffer` + `Atomics` on SAB-capable transports, or serialised as a wire-format `'abort'` command on SAB-less transports) and the worker's OC Proxy observes the new generation at the next WASM call boundary. The stale render throws an internal abort marker — never surfaced as a consumer-visible error. The runtime client itself never reads `Atomics` or touches a SAB. See [Worker Model](./worker-model) for details.
+The active [transport](../api/client) owns the abort channel end-to-end. The runtime client calls `transport.signalAbort('superseded')` **before** posting `openFile`/`updateParameters`/`setOptions`; the transport bumps its abort generation (backed by `SharedArrayBuffer` + `Atomics` on SAB-capable transports, or serialised as a wire-format `'abort'` command on SAB-less transports) and the worker's OC Proxy observes the new generation at the next WASM call boundary. The stale render throws an internal abort marker — never surfaced as a consumer-visible error. The runtime client itself never reads `Atomics` or touches a SAB. See [Worker Model](./worker-model) for details.
 
 ### One-shot Export Mode
 
@@ -173,7 +173,7 @@ The [`RuntimeClient`](../api/client) is the consumer-facing API. `createRuntimeC
 
 ### Transport Layer (MessagePort)
 
-The [`RuntimeTransport`](../api/transport) is a low-level interface: `send(message, transferables?)` and `onMessage(handler)`. The default implementation uses a Web Worker and `postMessage`. For testing or Node.js, `createInProcessTransport()` provides an in-process alternative.
+The [`RuntimeTransport`](../api/client) is a low-level interface: `send(message, transferables?)` and `onMessage(handler)`. The default implementation uses a Web Worker and `postMessage`. For testing or Node.js, `createInProcessTransport()` provides an in-process alternative.
 
 ### Framework Layer (KernelRuntimeWorker)
 
@@ -210,6 +210,6 @@ Kernels are plain objects returned by `defineKernel`. They implement `getDepende
 - [Render Lifecycle](./render-lifecycle) -- Detailed render loop, cancellation strategies, and signal channel
 - [Plugin System](./plugin-system) -- How `defineKernel`, `defineMiddleware`, and `defineBundler` compose
 - [API: Client](../api/client) -- `createRuntimeClient` and `RuntimeClient` types
-- [API: Transport](../api/transport) -- `RuntimeTransport` and `createWorkerTransport`
+- [API: Transport](../api/client) -- `RuntimeTransport` and `createWorkerTransport`
 - [Set Up the Filesystem](../guides/filesystem-setup) -- Connecting a filesystem to the worker
 - [Quick Start](../getting-started/quick-start) -- End-to-end setup

@@ -155,21 +155,21 @@ export function fromSafeAsync<
 >(work: (args: { input: TInput; signal: AbortSignal }) => Promise<TReturn>) {
   return fromEventObservable<TReturn & EventObject, TInput>(({ input }) =>
     createSafeSubscribable<TReturn & EventObject>((subscriber, signal) => {
-      // oxlint-disable-next-line eslint-plugin-promise(prefer-await-to-then) -- Observable executor cannot be async; .then() is intentional
-      void work({ input, signal }).then(
-        (result) => {
+      // async-iife: bootstrap — Observable executor cannot be async; bridge work() into subscriber
+      void (async (): Promise<void> => {
+        try {
+          const result = await work({ input, signal });
           if (result !== undefined) {
-            // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- safe: void case excluded by undefined check above
+            // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- safe: void case excluded by undefined check
             subscriber.next(result as TReturn & EventObject);
           }
           subscriber.complete();
-        },
-        (error: unknown) => {
+        } catch (error) {
           if (!signal.aborted) {
             subscriber.error(error);
           }
-        },
-      );
+        }
+      })();
     }),
   );
 }

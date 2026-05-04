@@ -109,7 +109,8 @@ export class RenderTimeoutError extends Error {
   }
 
   /**
-   *
+   * The code for the error.
+   * @returns The code for the error.
    */
   public get code(): 'RUNTIME_RENDER_TIMEOUT' {
     return 'RUNTIME_RENDER_TIMEOUT';

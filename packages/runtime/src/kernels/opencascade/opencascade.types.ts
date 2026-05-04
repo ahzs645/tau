@@ -1,4 +1,3 @@
-// eslint-disable-next-line import-x/no-extraneous-dependencies -- internal # imports resolve to self
 import type { TopoDS_Shape } from '#kernels/opencascade/wasm/opencascade_full.js';
 
 /**

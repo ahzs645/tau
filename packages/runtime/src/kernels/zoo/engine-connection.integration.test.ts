@@ -124,7 +124,7 @@ describe('EngineConnection (transport + session wiring)', () => {
       fileSystemManager: new FileSystemManager(noopFs(), '/'),
     });
     const unsub = conn.onSessionClosed(() => {
-      /* no session */
+      /* No Session */
     });
     expect(() => {
       unsub();

@@ -4,7 +4,7 @@
 import type { Port } from '@taucad/rpc';
 import { describe, expectTypeOf, it } from 'vitest';
 
-import {
+import type {
   createBridgeCall,
   createBridgeProxy,
   createBridgeServer,

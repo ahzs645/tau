@@ -1,4 +1,6 @@
 import { createRuntimeClient } from '@taucad/runtime';
+import { inProcessTransport } from '@taucad/runtime/transport/in-process';
+import { fromMemoryFs } from '@taucad/runtime/filesystem';
 import type { HashedGeometryResult } from '@taucad/runtime';
 import { openscad } from '@taucad/openscad';
 import { gltfCoordinateTransform } from '@taucad/runtime/middleware';
@@ -41,6 +43,9 @@ const defaultGeometryTolerance = 1;
 
 export function createGeometryRenderer(): ApiRuntimeClient {
   return createRuntimeClient({
+    transport: inProcessTransport({
+      fileSystem: fromMemoryFs({}),
+    }),
     kernels: [openscad()],
     middleware: [gltfCoordinateTransform()],
   });

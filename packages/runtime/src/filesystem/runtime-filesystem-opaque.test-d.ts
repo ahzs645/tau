@@ -37,8 +37,9 @@ describe('RuntimeFileSystem opacity (C9)', () => {
   });
 
   it('every bundled fromX factory returns RuntimeFileSystem', () => {
+    const pathA = '/a.ts';
     assertType<RuntimeFileSystem>(fromMemoryFs());
-    assertType<RuntimeFileSystem>(fromMemoryFs({ '/a.ts': 'x' }));
+    assertType<RuntimeFileSystem>(fromMemoryFs({ [pathA]: 'x' }));
     assertType<RuntimeFileSystem>(
       fromFsLike({
         promises: {} as unknown as Parameters<typeof fromFsLike>[0]['promises'],

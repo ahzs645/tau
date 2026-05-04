@@ -82,7 +82,7 @@ The File Manager Worker is the single owner of the virtual filesystem. It accept
 
 **Bridge A (main thread):** The editor and file manager UI use `createFileSystemBridge(fsWorker)` + `createBridgeProxy<FileManagerProtocol>(port)` to write files, read directory trees, and perform file management operations. When a file is written, `FileService` persists it via the active provider and emits a `fileWritten` event on the EventBus.
 
-**Bridge B (kernel worker):** The active [transport](../api/transport) owns the kernel-worker bridge end-to-end. Consumers pass an opaque `RuntimeFileSystem` to the transport at construction — `fromChannelFs(fsWorker)` for the worker arm, `fromMemoryFs()`/`fromFsLike()`/`fromNodeFs()`/`fromBrowserFs()` for inline arms — and the transport constructs the `MessagePort` internally, transferring it to the kernel worker as part of `initialize`. The kernel worker creates a `createBridgeProxy<RuntimeFileSystemBase>(port)` for file reads, dependency resolution, and watch subscriptions. Bridge ports are disposed automatically when the runtime client terminates; consumers never call `createFileSystemBridge` themselves.
+**Bridge B (kernel worker):** The active [transport](../api/client) owns the kernel-worker bridge end-to-end. Consumers pass an opaque `RuntimeFileSystem` to the transport at construction — `fromChannelFs(fsWorker)` for the worker arm, `fromMemoryFs()`/`fromFsLike()`/`fromNodeFs()`/`fromBrowserFs()` for inline arms — and the transport constructs the `MessagePort` internally, transferring it to the kernel worker as part of `initialize`. The kernel worker creates a `createBridgeProxy<RuntimeFileSystemBase>(port)` for file reads, dependency resolution, and watch subscriptions. Bridge ports are disposed automatically when the runtime client terminates; consumers never call `createFileSystemBridge` themselves.
 
 This dual-bridge design means editor writes (Bridge A) trigger watch events to the kernel worker (Bridge B) without any main-thread relay. The main thread never sits on the hot path between a file change and a re-render.
 
@@ -90,7 +90,7 @@ For environments without a separate filesystem worker (e.g., Node.js or testing)
 
 ### Transport Abort Channel
 
-The abort signal must be readable during **synchronous WASM execution**, when the worker's event loop is blocked and cannot process messages. The active [transport](../api/transport) owns this channel end-to-end — on SAB-capable transports it backs the channel with a `SharedArrayBuffer` so the kernel can see the abort generation while the event loop is blocked; on transports without shared memory (e.g. a future websocket transport) the same `signalAbort(reason)` API instead serialises a wire-format `'abort'` command. Either way, the runtime client and worker client never read `Atomics` or touch a SAB directly:
+The abort signal must be readable during **synchronous WASM execution**, when the worker's event loop is blocked and cannot process messages. The active [transport](../api/client) owns this channel end-to-end — on SAB-capable transports it backs the channel with a `SharedArrayBuffer` so the kernel can see the abort generation while the event loop is blocked; on transports without shared memory (e.g. a future websocket transport) the same `signalAbort(reason)` API instead serialises a wire-format `'abort'` command. Either way, the runtime client and worker client never read `Atomics` or touch a SAB directly:
 
 ```mermaid
 flowchart LR
@@ -101,7 +101,7 @@ flowchart LR
 When the main thread calls `openFile()`, `updateParameters()`, or
 `setOptions()`:
 
-1. The active [transport](../api/transport) raises the abort generation via `signalAbort('superseded')` **before** posting the wire-format command.
+1. The active [transport](../api/client) raises the abort generation via `signalAbort('superseded')` **before** posting the wire-format command.
 2. The worker may be mid-WASM. Its event loop is blocked. The message queues.
 3. The next OC Proxy call observes the new abort generation -- throws an internal abort marker (never surfaced to consumers; supersession is observed via `RenderOutcome.superseded`).
 4. The render aborts. The worker's event loop resumes and processes the queued message.
@@ -132,7 +132,7 @@ fanned out by `RuntimeTransport.onWorkerStateChange` and `client.on(...)`.
 
 ### MessagePort-Based Communication Protocol
 
-The [RuntimeTransport](../api/transport) interface abstracts the channel: `send(message, transferables?)` and `onMessage(handler)`. The default implementation uses `worker.postMessage()` and `worker.addEventListener('message')`. Messages are typed as `RuntimeCommand` (main -> worker) and `RuntimeResponse` (worker -> main).
+The [RuntimeTransport](../api/client) interface abstracts the channel: `send(message, transferables?)` and `onMessage(handler)`. The default implementation uses `worker.postMessage()` and `worker.addEventListener('message')`. Messages are typed as `RuntimeCommand` (main -> worker) and `RuntimeResponse` (worker -> main).
 
 ### Transferable Support for Zero-Copy Binary Data
 
@@ -177,7 +177,7 @@ The runtime architecture exposes two orthogonal planes — **transport** (the wi
 
 The host page owns a kernel `Worker` and a file-manager `Worker`. The transport runs the wire in the kernel worker; the runner hosts kernel modules in the same worker; the filesystem lives in the FM worker, accessed over a `MessagePort` bridge.
 
-```typescript @ts-nocheck
+```typescript
 import { createRuntimeClient, presets } from '@taucad/runtime';
 import { webWorkerTransport } from '@taucad/runtime/transport/web';
 import { fromChannelFs } from '@taucad/runtime/filesystem';
@@ -203,36 +203,27 @@ A single Node process owns everything. The transport bridges main thread ⇄ in-
 import { createNodeClient } from '@taucad/runtime/node';
 
 const client = await createNodeClient('/path/to/project');
-// inferred:
-//   transport: inProcessTransport({ fileSystem: fromNodeFs('/path/to/project') }),
-//   cache:     lruCache({ max: 1024 }),
+// under the hood: presets.all() + inProcessTransport({ fileSystem: fromNodeFs('/path/to/project') })
 ```
 
 ### T3 — Electron renderer + main + worker_thread kernel (Phase 1)
 
 The main process owns the FS authority and a `worker_threads.Worker` kernel host. The renderer is purely a display client — it speaks the kernel protocol over an Electron `MessagePortMain` pair. No kernel code, no FS access, and no bundler ever runs in the renderer.
 
-```typescript @ts-nocheck
-// renderer.ts — transport is a wired plugin callable supplied by your app
-// package (Electron example: `electronUtilityTransport({ port })` from an
-// app-local module built with defineRuntimeTransport).
+```typescript
 import { createRuntimeClient, presets } from '@taucad/runtime';
+import type { TransportPlugin } from '@taucad/runtime/transport';
 
-const port = await window.taucad.connectKernel();
-const client = createRuntimeClient({
-  ...presets.all(),
-  transport: electronUtilityTransport({ port }),
-});
-
-// main / utility host — consumes a RuntimeTransportHost from nodeWorkerHost
-// or electronUtilityHost (see `@taucad/runtime/host` + examples/electron-tau).
-import { createRuntimeHost } from '@taucad/runtime/host';
-import { nodeWorkerHost } from '@taucad/runtime/transport/node-worker-host';
-
-const host = createRuntimeHost({
-  transport: nodeWorkerHost({ worker: kernelWorker }),
-});
+/** Electron apps supply a wired transport plugin (e.g. app-local `electronUtilityTransport` — see `examples/electron-tau`). */
+export function createElectronRendererClient(transport: TransportPlugin): ReturnType<typeof createRuntimeClient> {
+  return createRuntimeClient({
+    ...presets.all(),
+    transport,
+  });
+}
 ```
+
+On the main / utility-process side, pair this with `createRuntimeHost` from `@taucad/runtime/host` and the worker transport host factory that matches your topology (`nodeWorkerHost` wiring lives next to the Node worker entry — follow `examples/electron-tau` for a complete IPC host).
 
 ### T4 — Multi-window Electron (single source of truth)
 
@@ -254,6 +245,6 @@ A topology is `{ transport, fileSystem }`. The transport knows about the wire an
 - [Architecture](./architecture) -- How the transport fits in the layered design
 - [Render Lifecycle](./render-lifecycle) -- Detailed render loop, cancellation strategies, and concurrency model
 - [Kernel Selection](./kernel-selection) -- How the runtime worker selects kernels
-- [API: Transport](../api/transport) -- `RuntimeTransport` and `createWorkerTransport`
+- [API: Transport](../api/client) -- `RuntimeTransport` and `createWorkerTransport`
 - [Configure the Bundler](../guides/bundler-configuration) -- Worker and bundler setup
 - [Set Up the Filesystem](../guides/filesystem-setup) -- Connecting a filesystem to the worker

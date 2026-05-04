@@ -34,6 +34,8 @@ export default defineConfig({
         light: 'github-light',
         dark: 'github-dark',
       },
+      defaultColor: false,
+      inline: 'tailing-curly-colon',
       // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- precompiled Shiki grammars are compatible at runtime but don't match LanguageInput type
       langs: [...kclLang, ...openscadLang] as unknown as LanguageInput[],
     },

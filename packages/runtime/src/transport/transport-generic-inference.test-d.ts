@@ -21,7 +21,11 @@ import type {
 import type { RuntimeProtocol } from '#types/runtime-protocol.types.js';
 
 const stubClient = (): RuntimeTransportClient<RuntimeProtocol, Readonly<Record<string, unknown>>, 'web-worker'> =>
-  ({ id: 'web-worker' }) as never;
+  ({ id: 'web-worker' }) as unknown as RuntimeTransportClient<
+    RuntimeProtocol,
+    Readonly<Record<string, unknown>>,
+    'web-worker'
+  >;
 
 /** */
 const bundledTransport = defineRuntimeTransport({

@@ -19,7 +19,7 @@ import { join } from 'node:path';
 import { fromNodeFs } from '@taucad/runtime/filesystem/node';
 import { createRuntimeHost } from '@taucad/runtime/host';
 
-import { electronUtilityHost } from '../transport/electron-utility-transport.js';
+import { electronUtilityHost } from '../transport/electron-utility-host.js';
 
 const DEBUG_ENABLED = process.env['TAU_ELECTRON_DEBUG'] === '1';
 const debugLog = (origin: string, message: string, data?: Record<string, unknown>): void => {

@@ -26,13 +26,11 @@ vi.mock('#lib/kcl-language/lsp/kcl-lsp-client.js', () => ({
       },
     });
     Object.assign(this, {
-      initialize: vi.fn(() => {
+      initialize: vi.fn(async () => {
         state.ready = true;
-        return Promise.resolve();
       }),
-      waitForReady: vi.fn(() => {
+      waitForReady: vi.fn(async () => {
         state.ready = true;
-        return Promise.resolve();
       }),
       setFileManager: vi.fn((fm: LspFileManager) => {
         options.fileManager = fm;
@@ -202,7 +200,7 @@ describe('kclContribution', () => {
     expect(client.ready).toBe(true);
 
     // Ensure we hit the didOpen path (not already-opened / didChange only).
-    const onProjectSessionChange = kclContribution.onProjectSessionChange;
+    const { onProjectSessionChange } = kclContribution;
     expect(onProjectSessionChange).toBeDefined();
     if (onProjectSessionChange === undefined) {
       return;

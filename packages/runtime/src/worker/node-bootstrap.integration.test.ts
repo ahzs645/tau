@@ -62,7 +62,7 @@ describe('@taucad/runtime/worker/node bootstrap (Node integration)', () => {
           transport: nodeWorkerTransport({
             url: fileURLToPath(workerEntryUrl),
             workerCtor: class TsxWorker extends NodeWorker {
-              constructor(url: string | URL) {
+              public constructor(url: string | URL) {
                 super(url, {
                   execArgv: ['--import', 'tsx/esm'],
                 });
@@ -77,7 +77,7 @@ describe('@taucad/runtime/worker/node bootstrap (Node integration)', () => {
         const { capabilities } = client;
         expect(capabilities?.transport.descriptor.id).toBe('node-worker');
       } finally {
-        await client.terminate();
+        client.terminate();
       }
     },
   );

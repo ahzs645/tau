@@ -25,7 +25,7 @@ function createLinkedMemoryPorts(): readonly [Port<unknown>, Port<unknown>] {
       return;
     }
     while (toA.length > 0) {
-      subA(toA.shift() as unknown);
+      subA(toA.shift());
     }
   };
 
@@ -34,7 +34,7 @@ function createLinkedMemoryPorts(): readonly [Port<unknown>, Port<unknown>] {
       return;
     }
     while (toB.length > 0) {
-      subB(toB.shift() as unknown);
+      subB(toB.shift());
     }
   };
 
@@ -50,7 +50,9 @@ function createLinkedMemoryPorts(): readonly [Port<unknown>, Port<unknown>] {
         subA = undefined;
       };
     },
-    close(): void {},
+    close(): void {
+      void 0;
+    },
   };
 
   const portB: Port<unknown> = {
@@ -65,7 +67,9 @@ function createLinkedMemoryPorts(): readonly [Port<unknown>, Port<unknown>] {
         subB = undefined;
       };
     },
-    close(): void {},
+    close(): void {
+      void 0;
+    },
   };
 
   return [portA, portB];
@@ -73,13 +77,14 @@ function createLinkedMemoryPorts(): readonly [Port<unknown>, Port<unknown>] {
 
 describe('bridge Port<T> round-trip', () => {
   it('readFile crosses a custom in-memory Port pair', async () => {
-    const fs = makeFs({ '/hello.txt': 'from-port-bridge' });
+    const helloPath = '/hello.txt';
+    const fs = makeFs({ [helloPath]: 'from-port-bridge' });
     const [serverPort, clientPort] = createLinkedMemoryPorts();
 
     createBridgeServer(fs, serverPort);
     const proxy = createBridgeProxy<RuntimeFileSystemBase>(clientPort);
 
-    await expect(proxy.readFile('/hello.txt', 'utf8')).resolves.toBe('from-port-bridge');
+    await expect(proxy.readFile(helloPath, 'utf8')).resolves.toBe('from-port-bridge');
     proxy.dispose();
   });
 });

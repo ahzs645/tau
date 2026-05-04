@@ -266,16 +266,16 @@ export class FileTreeService {
     let relativeKey: string;
     try {
       relativeKey = this.relativeDirectoryKeyFromUserPath(path);
-    } catch (cause) {
-      throw new DirectoryListingFailedError(classifyDirectoryListingError(cause, path));
+    } catch (error) {
+      throw new DirectoryListingFailedError(classifyDirectoryListingError(error, path));
     }
     if (this.isDirectoryResolvedKey(relativeKey)) {
       return this.entriesAtDirectoryLevel(relativeKey);
     }
     try {
       await this.ensureDirectoryLoadedForListing(path, relativeKey, options?.signal);
-    } catch (cause) {
-      const listing = classifyDirectoryListingError(cause, path);
+    } catch (error) {
+      const listing = classifyDirectoryListingError(error, path);
       throw new DirectoryListingFailedError(listing);
     }
     if (!this.isDirectoryResolvedKey(relativeKey)) {
@@ -290,15 +290,15 @@ export class FileTreeService {
 
   /**
    * Synchronous read of listing when the directory has already been merged.
-   * @param path - Directory path.
+   * @param path - Workspace-relative directory (same aliases as {@link FileTreeService.listDirectory}).
    * @returns Children or `undefined` when not yet resolved.
    */
   public listDirectorySync(path: string): readonly ListedDirectoryEntry[] | undefined {
     let relativeKey: string;
     try {
       relativeKey = this.relativeDirectoryKeyFromUserPath(path);
-    } catch (cause) {
-      throw new DirectoryListingFailedError(classifyDirectoryListingError(cause, path));
+    } catch (error) {
+      throw new DirectoryListingFailedError(classifyDirectoryListingError(error, path));
     }
     if (!this.isDirectoryResolvedKey(relativeKey)) {
       return undefined;
@@ -806,6 +806,8 @@ export class FileTreeService {
 
   /**
    * Whether immediate children for `relativeKey` have been merged into the tree.
+   * @param relativeKey - Normalized key from {@link FileTreeService.relativeDirectoryKeyFromUserPath}.
+   * @returns `true` when the directory row exists and is marked resolved.
    */
   private isDirectoryResolvedKey(relativeKey: string): boolean {
     if (relativeKey === '') {
@@ -871,6 +873,37 @@ export class FileTreeService {
     return out.sort((a, b) => a.name.localeCompare(b.name));
   }
 
+  private applyResolvedDirectoryRow(newTree: Map<string, FileEntry>, directoryKey: string): void {
+    if (directoryKey === '') {
+      const existingRoot = newTree.get('');
+      newTree.set('', {
+        path: '',
+        name: '',
+        type: 'dir',
+        size: 0,
+        mtimeMs: existingRoot?.mtimeMs ?? Date.now(),
+        isLoaded: true,
+        isDirectoryResolved: true,
+      });
+      return;
+    }
+    const parent = newTree.get(directoryKey);
+    if (parent?.type === 'dir') {
+      newTree.set(directoryKey, { ...parent, isDirectoryResolved: true });
+      return;
+    }
+    const name = directoryKey.split('/').pop() ?? directoryKey;
+    newTree.set(directoryKey, {
+      path: directoryKey,
+      name,
+      type: 'dir',
+      size: 0,
+      mtimeMs: Date.now(),
+      isLoaded: false,
+      isDirectoryResolved: true,
+    });
+  }
+
   /**
    * Merge fresh `readDirectory` children into the tree. Removes stale
    * direct children, adds new disk entries, preserves {@link FileEntry}
@@ -893,7 +926,7 @@ export class FileTreeService {
       }
     }
 
-    const diskNames = new Set(entries.map((e) => e.name));
+    const diskNames = new Set(entries.map((node) => node.name));
     for (const key of existingChildKeys) {
       const name = prefix === '' ? key : key.slice(prefix.length);
       if (!diskNames.has(name)) {
@@ -905,22 +938,7 @@ export class FileTreeService {
       const entryPath = prefix ? `${prefix}${entry.name}` : entry.name;
       const inferredType: 'file' | 'dir' = entry.children === undefined ? 'file' : 'dir';
       const existing = newTree.get(entryPath);
-      if (existing !== undefined && existing.type === inferredType) {
-        if (existing.size !== entry.size || existing.mtimeMs !== entry.mtimeMs) {
-          newTree.set(entryPath, { ...existing, size: entry.size, mtimeMs: entry.mtimeMs });
-        }
-        continue;
-      }
-      if (existing !== undefined) {
-        newTree.set(entryPath, {
-          ...existing,
-          type: inferredType,
-          name: entry.name,
-          size: entry.size,
-          mtimeMs: entry.mtimeMs,
-          isDirectoryResolved: inferredType === 'dir' ? existing.isDirectoryResolved : undefined,
-        });
-      } else {
+      if (existing === undefined) {
         newTree.set(entryPath, {
           path: entryPath,
           name: entry.name,
@@ -929,37 +947,25 @@ export class FileTreeService {
           mtimeMs: entry.mtimeMs,
           isLoaded: false,
         });
+        continue;
       }
+      if (existing.type === inferredType) {
+        if (existing.size !== entry.size || existing.mtimeMs !== entry.mtimeMs) {
+          newTree.set(entryPath, { ...existing, size: entry.size, mtimeMs: entry.mtimeMs });
+        }
+        continue;
+      }
+      newTree.set(entryPath, {
+        ...existing,
+        type: inferredType,
+        name: entry.name,
+        size: entry.size,
+        mtimeMs: entry.mtimeMs,
+        isDirectoryResolved: inferredType === 'dir' ? existing.isDirectoryResolved : undefined,
+      });
     }
 
-    if (directoryKey === '') {
-      const existingRoot = newTree.get('');
-      newTree.set('', {
-        path: '',
-        name: '',
-        type: 'dir',
-        size: 0,
-        mtimeMs: existingRoot?.mtimeMs ?? Date.now(),
-        isLoaded: true,
-        isDirectoryResolved: true,
-      });
-    } else {
-      const parent = newTree.get(directoryKey);
-      if (parent?.type === 'dir') {
-        newTree.set(directoryKey, { ...parent, isDirectoryResolved: true });
-      } else {
-        const name = directoryKey.split('/').pop() ?? directoryKey;
-        newTree.set(directoryKey, {
-          path: directoryKey,
-          name,
-          type: 'dir',
-          size: 0,
-          mtimeMs: Date.now(),
-          isLoaded: false,
-          isDirectoryResolved: true,
-        });
-      }
-    }
+    this.applyResolvedDirectoryRow(newTree, directoryKey);
 
     this._tree = newTree;
     this._listingPathSubscribers.notifyPath(directoryKey, undefined);

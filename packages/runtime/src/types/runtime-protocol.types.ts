@@ -332,7 +332,7 @@ export type RuntimeStateChangedArgs = {
  * surfaces.
  * @internal
  */
-export const RUNTIME_PROTOCOL_CLIENT_NOTIFY_NAMES = [
+export const runtimeProtocolClientNotifyNames = [
   'openFile',
   'stage-and-render',
   'updateParameters',
@@ -351,7 +351,7 @@ export const RUNTIME_PROTOCOL_CLIENT_NOTIFY_NAMES = [
  * superseded renders.
  * @internal
  */
-export const RUNTIME_PROTOCOL_WORKER_NOTIFY_NAMES = [
+export const runtimeProtocolWorkerNotifyNames = [
   'parametersResolved',
   'geometryComputed',
   'errorEvent',
@@ -368,9 +368,9 @@ export const RUNTIME_PROTOCOL_WORKER_NOTIFY_NAMES = [
  * Combined notify name inventory — exactly 18 keys (8 C→W + 10 W→C).
  * @internal
  */
-export const RUNTIME_PROTOCOL_NOTIFY_NAMES = [
-  ...RUNTIME_PROTOCOL_CLIENT_NOTIFY_NAMES,
-  ...RUNTIME_PROTOCOL_WORKER_NOTIFY_NAMES,
+export const runtimeProtocolNotifyNames = [
+  ...runtimeProtocolClientNotifyNames,
+  ...runtimeProtocolWorkerNotifyNames,
 ] as const;
 
 /**
@@ -380,7 +380,7 @@ export const RUNTIME_PROTOCOL_NOTIFY_NAMES = [
  * `rgen` replaces it (R18, mirrors LSP `didOpen` + diagnostics).
  * @internal
  */
-export const RUNTIME_PROTOCOL_CALL_NAMES = ['initialize', 'export'] as const;
+export const runtimeProtocolCallNames = ['initialize', 'export'] as const;
 
 /**
  * Typed `@taucad/rpc` protocol contract for the kernel runtime worker.

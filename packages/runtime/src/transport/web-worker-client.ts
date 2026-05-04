@@ -177,12 +177,10 @@ export const webWorkerClient = (
   let pools: ReturnType<typeof allocatePools> | undefined;
 
   const ensurePools = (): ReturnType<typeof allocatePools> => {
-    if (!pools) {
-      pools = allocatePools({
-        geometry: options.sharedMemory?.geometry,
-        filePoolBuffer: options.filePoolBuffer,
-      });
-    }
+    pools ??= allocatePools({
+      geometry: options.sharedMemory?.geometry,
+      filePoolBuffer: options.filePoolBuffer,
+    });
     return pools;
   };
 

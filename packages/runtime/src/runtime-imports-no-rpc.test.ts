@@ -37,18 +37,18 @@ const runtimeSource = here;
  * no `type` keyword on the `import` line. Side-effect imports
  * (`import '@taucad/rpc'`) are also flagged.
  */
-const valueImportPattern = /^\s*import\s+(?!type\b)[^;]*?from\s+['"]@taucad\/rpc['"];?/gm;
+const valueImportPattern = /^\s*import\s+(?!type\b)[^;]*?from\s+["']@taucad\/rpc["'];?/gm;
 
 /**
  * Detects a re-export of value bindings from `@taucad/rpc`. A re-export
  * with the `type` keyword is permitted (`export type { Channel } from '...';`).
  */
-const valueReExportPattern = /^\s*export\s+(?!type\b)\{[^}]*\}\s*from\s+['"]@taucad\/rpc['"];?/gm;
+const valueReExportPattern = /^\s*export\s+(?!type\b){[^}]*}\s*from\s+["']@taucad\/rpc["'];?/gm;
 
 /**
  * Detects a require() of `@taucad/rpc` (CJS interop fallback).
  */
-const requirePattern = /\brequire\s*\(\s*['"]@taucad\/rpc['"]\s*\)/g;
+const requirePattern = /\brequire\s*\(\s*["']@taucad\/rpc["']\s*\)/g;
 
 const findFiles = (root: string): string[] => {
   const out: string[] = [];

@@ -11,7 +11,7 @@
  */
 
 import type { RpcProtocol } from '@taucad/rpc';
-import type { TransportPlugin, _TransportBindingsExtraSlot } from '#transport/runtime-transport.types.js';
+import type { TransportPlugin } from '#transport/runtime-transport.types.js';
 
 // oxlint-disable @typescript-eslint/no-explicit-any -- variance: phantom slot projection
 
@@ -70,14 +70,16 @@ export type TransportClientOptions<F extends TransportCallable> = F extends (
  *
  * @public
  */
-export type TransportHostOptions<H extends (options: any) => any> =
-  /* oxlint-disable-next-line @typescript-eslint/no-explicit-any -- generic host factory arity */
-  H extends (options: infer O) => any ? O : Readonly<Record<string, unknown>>;
+export type TransportHostOptions<H extends (...args: never) => unknown> =
+  Parameters<H> extends readonly [infer First, ...infer _Rest] ? First : Readonly<Record<string, unknown>>;
 
 // oxlint-enable @typescript-eslint/no-explicit-any
 
 /* Re-export the phantom slot type alias so conformance tests satisfy
  * structural compatibility checks against {@link TransportPlugin}. */
-export type { _TransportBindingsExtraSlot };
 
-export { type _TransportIdSlot, type _TransportProtocolSlot } from '#transport/runtime-transport.types.js';
+export type {
+  TransportIdPhantomSlot,
+  TransportProtocolPhantomSlot,
+  TransportBindingsExtraPhantomSlot,
+} from '#transport/runtime-transport.types.js';
