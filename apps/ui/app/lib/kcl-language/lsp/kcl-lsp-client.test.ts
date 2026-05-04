@@ -11,8 +11,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { JSONRPCRequest } from 'json-rpc-2.0';
 import { KclLspClient } from '#lib/kcl-language/lsp/kcl-lsp-client.js';
-import { lspWorkerEventType } from '#lib/kcl-language/lsp/kcl-lsp-types.js';
-import type { LspWorkerEvent, KclLspWorkerOptions } from '#lib/kcl-language/lsp/kcl-lsp-types.js';
+import { lspWorkerEventType, kclWorkerType } from '#lib/kcl-language/lsp/kcl-lsp-types.js';
+import type { LspWorkerEvent, KclLspWorkerOptions, FileReadResponse } from '#lib/kcl-language/lsp/kcl-lsp-types.js';
 import { addHeaders } from '#lib/kcl-language/lsp/codec/headers.js';
 import { decodeMessage } from '#lib/kcl-language/lsp/codec/utils.js';
 
@@ -67,6 +67,15 @@ class GenericMockWorker {
 
   public terminate(): void {
     this.terminated = true;
+  }
+
+  /**
+   * Deliver a worker→main message to listeners (same path as a real Worker postMessage to the main thread).
+   */
+  public emitMessageToClient(data: LspWorkerEvent): void {
+    for (const listener of this.messageListeners) {
+      listener(new MessageEvent('message', { data }));
+    }
   }
 
   private respondToMessage(data: Uint8Array<ArrayBuffer>): void {
@@ -278,6 +287,121 @@ describe('KclLspClient', () => {
       const newReadFile = vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3]));
       client.setFileManager({ readFile: newReadFile });
       expect(client.getFileManager()?.readFile).toBe(newReadFile);
+    });
+
+    it('should respond to fileReadRequest with data when fileManager is set', async () => {
+      const bytes = new Uint8Array([1, 2, 3]);
+      const readFile = vi.fn().mockResolvedValue(bytes);
+      const client = new KclLspClient({ fileManager: { readFile } });
+      await client.initialize();
+      await client.waitForReady();
+
+      mockWorker.emitMessageToClient({
+        worker: kclWorkerType,
+        eventType: lspWorkerEventType.fileReadRequest,
+        eventData: { requestId: 42, path: 'public/foo.kcl' },
+      });
+
+      await vi.waitFor(() => {
+        const responseCall = mockWorker.postMessageCalls.find(
+          (call) => (call as LspWorkerEvent).eventType === lspWorkerEventType.fileReadResponse,
+        ) as LspWorkerEvent | undefined;
+        expect(responseCall).toBeDefined();
+        const eventData = responseCall!.eventData as FileReadResponse;
+        expect(eventData.requestId).toBe(42);
+        expect(eventData.data).toEqual(bytes);
+        expect(eventData.error).toBeUndefined();
+      });
+
+      expect(readFile).toHaveBeenCalledWith('public/foo.kcl');
+    });
+
+    it('should join a relative WASM path with setCurrentDocumentDir before readFile', async () => {
+      const bytes = new Uint8Array([9, 9]);
+      const readFile = vi.fn().mockResolvedValue(bytes);
+      const client = new KclLspClient({ fileManager: { readFile } });
+      await client.initialize();
+      await client.waitForReady();
+
+      client.setCurrentDocumentDir('public/kcl-samples/axial-fan');
+
+      mockWorker.emitMessageToClient({
+        worker: kclWorkerType,
+        eventType: lspWorkerEventType.fileReadRequest,
+        eventData: { requestId: 7, path: 'fan-housing.kcl' },
+      });
+
+      await vi.waitFor(() => {
+        const responseCall = mockWorker.postMessageCalls.find(
+          (call) => (call as LspWorkerEvent).eventType === lspWorkerEventType.fileReadResponse,
+        ) as LspWorkerEvent | undefined;
+        expect(responseCall).toBeDefined();
+        const eventData = responseCall!.eventData as FileReadResponse;
+        expect(eventData.requestId).toBe(7);
+        expect(eventData.data).toEqual(bytes);
+        expect(eventData.error).toBeUndefined();
+      });
+
+      expect(readFile).toHaveBeenCalledWith('public/kcl-samples/axial-fan/fan-housing.kcl');
+      expect(readFile).toHaveBeenCalledTimes(1);
+    });
+
+    it('should fall back to another known dir when the current dir read fails', async () => {
+      const bytes = new Uint8Array([8]);
+      const readFile = vi.fn().mockRejectedValueOnce(new Error('ENOENT')).mockResolvedValueOnce(bytes);
+      const client = new KclLspClient({ fileManager: { readFile } });
+      await client.initialize();
+      await client.waitForReady();
+
+      client.setCurrentDocumentDir('public/kcl-samples/axial-fan');
+      client.setCurrentDocumentDir('public/kcl-samples/wrong-dir');
+
+      mockWorker.emitMessageToClient({
+        worker: kclWorkerType,
+        eventType: lspWorkerEventType.fileReadRequest,
+        eventData: { requestId: 8, path: 'fan-housing.kcl' },
+      });
+
+      await vi.waitFor(() => {
+        const responseCall = mockWorker.postMessageCalls.find(
+          (call) => (call as LspWorkerEvent).eventType === lspWorkerEventType.fileReadResponse,
+        ) as LspWorkerEvent | undefined;
+        expect(responseCall).toBeDefined();
+        const eventData = responseCall!.eventData as FileReadResponse;
+        expect(eventData.requestId).toBe(8);
+        expect(eventData.data).toEqual(bytes);
+      });
+
+      expect(readFile).toHaveBeenNthCalledWith(1, 'public/kcl-samples/wrong-dir/fan-housing.kcl');
+      expect(readFile).toHaveBeenNthCalledWith(2, 'public/kcl-samples/axial-fan/fan-housing.kcl');
+    });
+
+    it('should pass absolute slash-prefixed paths through without joining document dirs', async () => {
+      const bytes = new Uint8Array([3]);
+      const readFile = vi.fn().mockResolvedValue(bytes);
+      const client = new KclLspClient({ fileManager: { readFile } });
+      await client.initialize();
+      await client.waitForReady();
+
+      client.setCurrentDocumentDir('public/kcl-samples/axial-fan');
+
+      mockWorker.emitMessageToClient({
+        worker: kclWorkerType,
+        eventType: lspWorkerEventType.fileReadRequest,
+        eventData: { requestId: 9, path: '/abs-root/foo.kcl' },
+      });
+
+      await vi.waitFor(() => {
+        const responseCall = mockWorker.postMessageCalls.find(
+          (call) => (call as LspWorkerEvent).eventType === lspWorkerEventType.fileReadResponse,
+        ) as LspWorkerEvent | undefined;
+        expect(responseCall).toBeDefined();
+        const eventData = responseCall!.eventData as FileReadResponse;
+        expect(eventData.data).toEqual(bytes);
+      });
+
+      expect(readFile).toHaveBeenCalledWith('abs-root/foo.kcl');
+      expect(readFile).toHaveBeenCalledTimes(1);
     });
   });
 

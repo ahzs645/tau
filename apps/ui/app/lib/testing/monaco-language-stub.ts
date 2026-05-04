@@ -8,7 +8,8 @@
  *
  * The stub intentionally exposes ONLY the Monaco surface the registry calls
  * (`monaco.languages.onLanguage`, `monaco.editor.getModels`,
- * `monaco.editor.createModel`, `monaco.editor.onDidCreateModel`,
+ * `monaco.editor.getModel`, `monaco.editor.createModel`,
+ * `monaco.editor.onDidCreateModel`,
  * `monaco.editor.onDidChangeModelLanguage`). Anything else is undefined so a
  * leaky test is loud.
  */
@@ -90,6 +91,12 @@ export function createMonacoTestStub(): MonacoTestStub {
   };
 
   const monaco = {
+    // eslint-disable-next-line @typescript-eslint/naming-convention -- mirrors `monaco.Uri` export shape
+    Uri: {
+      parse(uri: string): { toString(): string } {
+        return { toString: () => uri };
+      },
+    },
     languages: {
       onLanguage(id: string, callback: OnLanguageCallback): Monaco.IDisposable {
         let callbacks = onLanguageCallbacks.get(id);
@@ -154,6 +161,14 @@ export function createMonacoTestStub(): MonacoTestStub {
     editor: {
       getModels(): readonly Monaco.editor.ITextModel[] {
         return [...models.values()] as unknown as Monaco.editor.ITextModel[];
+      },
+      getModel(uri: { toString(): string }): Monaco.editor.ITextModel | undefined {
+        const key = uri.toString();
+        const model = models.get(key);
+        if (!model) {
+          return undefined;
+        }
+        return model as unknown as Monaco.editor.ITextModel;
       },
       createModel(_value: string, languageId?: string, uri?: { toString(): string }): Monaco.editor.ITextModel {
         const resolvedUri = uri?.toString() ?? `inmemory://stub/${models.size}`;

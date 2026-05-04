@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { codeLanguages } from '@taucad/types/constants';
 import type { ActivationContext } from '#lib/monaco-language-registry.js';
+import type { LspFileManager } from '#lib/kcl-language/lsp/kcl-lsp-client.js';
 import type { MonacoTestStub } from '#lib/testing/monaco-language-stub.js';
 import { createMonacoTestStub } from '#lib/testing/monaco-language-stub.js';
 
@@ -14,19 +15,34 @@ const lspConstructorCalls = vi.fn();
 vi.mock('#lib/kcl-language/lsp/kcl-lsp-client.js', () => ({
   KclLspClient: vi.fn(function MockKclLspClient(this: Record<string, unknown>, ...args: unknown[]) {
     lspConstructorCalls(...args);
+    const ctorOptions = (args[0] as { fileManager?: LspFileManager } | undefined) ?? {};
+    const options: { fileManager: LspFileManager | undefined } = { fileManager: ctorOptions.fileManager };
     const state = { ready: false };
-    Object.assign(this, {
-      get isReady(): boolean {
+    Object.defineProperty(this, 'ready', {
+      configurable: true,
+      enumerable: true,
+      get(): boolean {
         return state.ready;
       },
-      initialize: vi.fn(async () => {
+    });
+    Object.assign(this, {
+      initialize: vi.fn(() => {
         state.ready = true;
+        return Promise.resolve();
       }),
-      waitForReady: vi.fn(async () => {
+      waitForReady: vi.fn(() => {
         state.ready = true;
+        return Promise.resolve();
       }),
-      setFileManager: vi.fn(),
-      getFileManager: vi.fn(() => undefined),
+      setFileManager: vi.fn((fm: LspFileManager) => {
+        options.fileManager = fm;
+      }),
+      getFileManager: vi.fn(() => options.fileManager),
+      setCurrentDocumentDir: vi.fn(),
+      /** Escape hatch for tests: `initializeLsp` awaits a real-shaped client; this sets `ready` for `notifyDocumentOpen`. */
+      __testSetLspReady: () => {
+        state.ready = true;
+      },
       textDocumentDidOpen: vi.fn(),
       textDocumentDidChange: vi.fn(),
       textDocumentDidClose: vi.fn(),
@@ -141,5 +157,67 @@ describe('kclContribution', () => {
     await Promise.resolve();
 
     expect(lspConstructorCalls).toHaveBeenCalledTimes(1);
+  });
+
+  it('should pass ActivationContext fileManager into KclLspClient when the activate microtask runs', async () => {
+    const { kclContribution, getKclLspClient } = await import('#lib/kcl-language/kcl-register-language.js');
+    const context = createMockContext(stub);
+
+    kclContribution.register(stub.monaco);
+    kclContribution.activate(context);
+    await Promise.resolve();
+
+    const ctorArgument = lspConstructorCalls.mock.calls[0]?.[0] as { fileManager?: LspFileManager } | undefined;
+    expect(ctorArgument?.fileManager).toBeDefined();
+    expect(ctorArgument?.fileManager?.readFile).toBeTypeOf('function');
+
+    await ctorArgument!.fileManager!.readFile('projects/p/child.kcl');
+    expect(context.fileManager.readFile).toHaveBeenCalledWith('projects/p/child.kcl');
+
+    const client = getKclLspClient();
+    expect(client).toBeDefined();
+    expect(client!.getFileManager()).toBe(ctorArgument?.fileManager);
+  });
+
+  it('calls setCurrentDocumentDir with the parent folder before textDocumentDidOpen in notifyDocumentOpen', async () => {
+    const { kclContribution, getKclLspClient, notifyDocumentOpen } =
+      await import('#lib/kcl-language/kcl-register-language.js');
+    const context = createMockContext(stub);
+
+    kclContribution.register(stub.monaco);
+    kclContribution.activate(context);
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const rawClient = getKclLspClient();
+    expect(rawClient).toBeDefined();
+    const client = rawClient as unknown as {
+      readonly ready: boolean;
+      __testSetLspReady: () => void;
+      setCurrentDocumentDir: ReturnType<typeof vi.fn>;
+      textDocumentDidOpen: ReturnType<typeof vi.fn>;
+    };
+    client.__testSetLspReady();
+    expect(client.ready).toBe(true);
+
+    // Ensure we hit the didOpen path (not already-opened / didChange only).
+    const onProjectSessionChange = kclContribution.onProjectSessionChange;
+    expect(onProjectSessionChange).toBeDefined();
+    if (onProjectSessionChange === undefined) {
+      return;
+    }
+    onProjectSessionChange('test-build-id');
+
+    const testUri = 'file:///public/kcl-samples/axial-fan/main-current-dir-contract.kcl';
+    client.setCurrentDocumentDir.mockClear();
+    client.textDocumentDidOpen.mockClear();
+    notifyDocumentOpen(testUri, 'import "fan-housing.kcl"');
+
+    expect(client.setCurrentDocumentDir).toHaveBeenCalledWith('public/kcl-samples/axial-fan');
+    expect(client.textDocumentDidOpen).toHaveBeenCalledTimes(1);
+    expect(client.setCurrentDocumentDir.mock.invocationCallOrder[0]).toBeLessThan(
+      client.textDocumentDidOpen.mock.invocationCallOrder[0]!,
+    );
   });
 });

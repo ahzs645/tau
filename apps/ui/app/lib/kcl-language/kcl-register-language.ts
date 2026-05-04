@@ -17,6 +17,11 @@ import { createFoldingRangeProvider } from '#lib/kcl-language/lsp/providers/fold
 import { createRenameProvider } from '#lib/kcl-language/lsp/providers/rename-provider.js';
 import { createDefinitionProvider } from '#lib/kcl-language/lsp/providers/definition-provider.js';
 import { createCodeActionProvider } from '#lib/kcl-language/lsp/providers/code-action-provider.js';
+import {
+  kclUriToWorkspacePath,
+  parentDirectoryOfWorkspacePath,
+  resolveKclImportToUri,
+} from '#lib/kcl-language/kcl-register-paths.js';
 import { getKclSymbolService } from '#lib/kcl-language/lsp/kcl-symbol-service.js';
 import type { KclSymbolService } from '#lib/kcl-language/lsp/kcl-symbol-service.js';
 import type { LanguageContribution, ActivationContext, ActivationResult } from '#lib/monaco-language-registry.js';
@@ -27,6 +32,13 @@ const log = createKclLogger('Register');
 
 /** Global LSP client instance */
 let lspClient: KclLspClient | undefined;
+
+/**
+ * File manager supplied before `initializeLsp` runs (e.g. same synchronous
+ * `activate()` task as `queueMicrotask(initializeLsp)`). Consumed when
+ * constructing `KclLspClient`.
+ */
+let pendingFileManager: LspFileManager | undefined;
 
 /** Symbol service instance for WASM-based symbol extraction */
 let symbolService: KclSymbolService | undefined;
@@ -65,8 +77,9 @@ export function getKclLspClient(): KclLspClient | undefined {
 
 /**
  * Set the file manager for the LSP client.
- * This enables the LSP to read imported files and provide go-to-definition.
- * Also triggers re-processing of already opened documents to resolve their imports.
+ * Stores the manager at module scope so a microtask-deferred `initializeLsp`
+ * still receives it on construction. When a client already exists, updates it
+ * and re-processes opened documents for imports.
  */
 export function setKclLspFileManager(fileManager: LspFileManager): void {
   log.debug(' setKclLspFileManager called');
@@ -77,6 +90,8 @@ export function setKclLspFileManager(fileManager: LspFileManager): void {
   log.debug(' - openedDocuments count:', openedDocuments.size);
   log.debug(' - openedDocuments:', [...openedDocuments]);
 
+  pendingFileManager = fileManager;
+
   if (lspClient) {
     lspClient.setFileManager(fileManager);
     log.debug(' File manager set on client, triggering import re-processing');
@@ -84,8 +99,6 @@ export function setKclLspFileManager(fileManager: LspFileManager): void {
     // Re-process all opened documents to parse and open their imports
     // This handles the case where documents were opened before the file manager was set
     void reprocessOpenedDocumentsForImports();
-  } else {
-    log.warn('Cannot set file manager - client not initialized');
   }
 }
 
@@ -126,6 +139,8 @@ async function reprocessOpenedDocumentsForImports(): Promise<void> {
   await Promise.all(
     documentsToProcess.map(async ({ uri, text }) => {
       log.debug(`Re-processing imports for: ${uri}`);
+      const documentDirectory = parentDirectoryOfWorkspacePath(kclUriToWorkspacePath(uri));
+      lspClient?.setCurrentDocumentDir(documentDirectory);
       await openImportedFiles(uri, text);
     }),
   );
@@ -161,6 +176,8 @@ export function notifyDocumentOpen(uri: string, text: string): void {
   log.debug(`Sending textDocument/didOpen for: ${uri} (${text.length} chars)`);
   openedDocuments.add(uri);
   documentVersions.set(uri, 1);
+  const documentDirectory = parentDirectoryOfWorkspacePath(kclUriToWorkspacePath(uri));
+  lspClient.setCurrentDocumentDir(documentDirectory);
   lspClient.textDocumentDidOpen({
     textDocument: {
       uri,
@@ -225,7 +242,7 @@ async function openImportedFiles(currentUri: string, text: string): Promise<void
         return;
       }
 
-      const importUri = resolveImportPath(currentUri, importPath);
+      const importUri = resolveKclImportToUri(currentUri, importPath);
 
       // Skip if already opened
       if (openedDocuments.has(importUri)) {
@@ -235,7 +252,7 @@ async function openImportedFiles(currentUri: string, text: string): Promise<void
 
       try {
         // Convert URI to path for file manager
-        const filePath = uriToPath(importUri);
+        const filePath = kclUriToWorkspacePath(importUri);
         log.debug(' Reading import:', filePath);
 
         // Check if file exists
@@ -273,48 +290,6 @@ async function openImportedFiles(currentUri: string, text: string): Promise<void
     log.debug(' ', importsOpened, 'imports opened, triggering re-parse of parent file:', currentUri);
     notifyDocumentChange(currentUri, text);
   }
-}
-
-// ============================================================================
-// Path Utility Functions
-// ============================================================================
-
-/**
- * Convert URI to file path.
- * The file manager expects paths without leading slashes (e.g., "public/...")
- * but Monaco URIs use "file:///public/..." format.
- */
-function uriToPath(uri: string): string {
-  let path = uri;
-
-  // Remove "file://" scheme
-  if (path.startsWith('file://')) {
-    path = path.slice(7);
-  }
-
-  // Remove leading slash - file manager expects "public/..." not "/public/..."
-  if (path.startsWith('/')) {
-    path = path.slice(1);
-  }
-
-  return path;
-}
-
-/**
- * Resolve an import path relative to the current file's directory.
- *
- * @param currentFileUri The URI of the current file (e.g., "file:///public/kcl-samples/bench/main.kcl")
- * @param importPath The relative import path (e.g., "bench-parts.kcl")
- * @returns The absolute URI of the imported file
- */
-function resolveImportPath(currentFileUri: string, importPath: string): string {
-  // Parse the current file URI to get the directory
-  // Example: "file:///public/kcl-samples/bench/main.kcl" -> "file:///public/kcl-samples/bench/"
-  const lastSlashIndex = currentFileUri.lastIndexOf('/');
-  const directory = currentFileUri.slice(0, lastSlashIndex + 1);
-
-  // Join with the import path
-  return `${directory}${importPath}`;
 }
 
 /**
@@ -427,6 +402,7 @@ async function initializeLsp(monaco: typeof Monaco): Promise<void> {
 
   // Create and initialize LSP client
   lspClient = new KclLspClient({
+    fileManager: pendingFileManager,
     onInitialized() {
       log.debug(' Client initialized successfully');
     },
@@ -446,6 +422,10 @@ async function initializeLsp(monaco: typeof Monaco): Promise<void> {
 
   // Wait for the client to be ready
   await lspClient.waitForReady();
+
+  if (pendingFileManager) {
+    void reprocessOpenedDocumentsForImports();
+  }
 
   // Register Monaco language providers
   const languageId = codeLanguages.kcl;
@@ -697,6 +677,8 @@ function syncDocumentOpen(client: KclLspClient, model: Monaco.editor.ITextModel)
   log.debug('syncDocumentOpen: Document NOT in openedDocuments, sending didOpen');
   openedDocuments.add(uri);
   documentVersions.set(uri, 1);
+  const documentDirectory = parentDirectoryOfWorkspacePath(kclUriToWorkspacePath(uri));
+  client.setCurrentDocumentDir(documentDirectory);
   client.textDocumentDidOpen({
     textDocument: {
       uri,
@@ -784,6 +766,7 @@ export function disposeKclLsp(): void {
   // Clean up LSP client
   lspClient?.dispose();
   lspClient = undefined;
+  pendingFileManager = undefined;
 
   // Clean up symbol service
   symbolService?.clear();
@@ -861,9 +844,9 @@ export const kclContribution: LanguageContribution = {
       void initializeLsp(monaco);
     });
 
-    // Set up file manager for KCL LSP import resolution. `setKclLspFileManager`
-    // tolerates the LSP not being ready yet — it stores the file manager and
-    // re-processes opened documents once the client is ready.
+    // File manager for LSP worker import resolution: stored at module scope
+    // until the microtask runs `initializeLsp`, which passes it into
+    // `KclLspClient`. Re-processing runs once the client is ready.
     setKclLspFileManager({
       readFile: async (path: string) => context.fileManager.readFile(path),
       exists: async (path: string) => context.fileManager.exists(path),
