@@ -264,7 +264,7 @@ describe('evaluateRequirement', () => {
       expect(evaluateRequirement(requirement, boxStats).passed).toBe(true);
     });
 
-    it('should fail for non-watertight mesh and surface the per-CU lib/<part>.ts hint', () => {
+    it('should fail for non-watertight mesh and surface the per-part lib/<part>.ts hint', () => {
       const openStats: GeometryStats = { ...boxStats, watertight: false };
       const requirement: MeasurementTestRequirement = {
         id: 'wt1',
@@ -277,7 +277,7 @@ describe('evaluateRequirement', () => {
       expect(result.passed).toBe(false);
       expect(result.reason).toContain('not watertight');
       expect(result.suggestion).toContain('lib/<part>.ts');
-      expect(result.suggestion).toContain('multi-part assemblies are watertight per CU');
+      expect(result.suggestion).toContain('multi-part assemblies are watertight per part');
       expect(result.suggestion).toContain('failed boolean ops');
     });
   });

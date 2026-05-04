@@ -126,7 +126,7 @@ export const evaluateRequirement = (requirement: MeasurementTestRequirement, sta
               ? `Got ${actual} disjoint chunks at ${ccTolerance}mm tolerance. If parts visibly touch, ` +
                 `raise tolerance (e.g. tolerance: ${raisedTolerance}). If parts are ` +
                 `intentionally separate, raise expected.count to ${actual}. If you want them welded ` +
-                `into one solid, fuse them in the kernel and assert watertight on the resulting CU.`
+                `into one solid, fuse them in the kernel and assert watertight on the resulting part.`
               : `Got ${actual} disjoint chunks (fewer than expected). Either lower expected.count to ` +
                 `${actual} or split the model so it returns ${expected} top-level shapes.`,
         };
@@ -143,7 +143,7 @@ export const evaluateRequirement = (requirement: MeasurementTestRequirement, sta
           suggestion:
             'The surface has gaps. If you are asserting on an assembled main.ts that returns ' +
             'multiple ShapeConfigs, move this requirement into each lib/<part>.ts entry instead — ' +
-            'multi-part assemblies are watertight per CU, not as one mesh. Otherwise check for ' +
+            'multi-part assemblies are watertight per part, not as one mesh. Otherwise check for ' +
             'failed boolean ops (use screenshot to inspect) or replace Compound with proper fuse.',
         };
       }
