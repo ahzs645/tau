@@ -68,8 +68,6 @@ export const cookieName = {
   /* Graphics */
   // Whether the section view status is open.
   viewOpStatus: 'view-op-status',
-  // The user's preferred environment lighting preset.
-  viewerEnvironment: 'viewer-environment',
 
   /* Console */
   // The last selected log level.

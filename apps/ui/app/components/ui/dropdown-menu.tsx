@@ -1,4 +1,5 @@
 import * as React from 'react';
+import type { ClassValue } from 'clsx';
 import { DropdownMenu as DropdownMenuPrimitive } from 'radix-ui';
 import { CheckIcon, ChevronDownIcon, ChevronRightIcon, CircleIcon } from 'lucide-react';
 import { cn } from '#utils/ui.utils.js';
@@ -389,9 +390,20 @@ type DropdownMenuSelectItemProperties<T> = {
   readonly options: T[];
   readonly getOptionValue: (option: T) => string;
   readonly getOptionLabel: (option: T) => string;
+  readonly renderOption?: (option: T, isSelected: boolean) => React.ReactNode;
   readonly onValueChange?: (value: string) => void;
   readonly title?: string;
   readonly description?: string;
+  /**
+   * Merged onto the nested ComboBoxResponsive popover (desktop).
+   * Use for min-width / max-width so multi-line rows stay readable.
+   */
+  readonly selectPopoverContentClassName?: ClassValue;
+  /**
+   * Passed through to ComboBoxResponsive. Return false to keep the nested popover
+   * open after a selection (`chat-parameters.tsx`, `chat-tool-selector.tsx`).
+   */
+  readonly shouldCloseOnSelect?: (value: string) => boolean;
 };
 
 function DropdownMenuSelectItem<T>({
@@ -402,9 +414,12 @@ function DropdownMenuSelectItem<T>({
   options,
   getOptionValue,
   getOptionLabel,
+  renderOption,
   onValueChange,
   title = 'Select option',
   description = 'Choose from available options',
+  selectPopoverContentClassName,
+  shouldCloseOnSelect,
 }: DropdownMenuSelectItemProperties<T>): React.JSX.Element {
   const groupedItems = React.useMemo(
     () => [
@@ -417,8 +432,14 @@ function DropdownMenuSelectItem<T>({
   );
 
   const renderLabel = React.useCallback(
+    // oxlint-disable-next-line @typescript-eslint/promise-function-async -- sync render helper; renderOption cannot return Promise in this synchronous menu context (React.ReactNode includes Promise types in upstream react types)
     (item: T, selectedItem: T | undefined) => {
-      const isSelected = selectedItem && getOptionValue(item) === getOptionValue(selectedItem);
+      const isSelected = selectedItem !== undefined && getOptionValue(item) === getOptionValue(selectedItem);
+
+      if (renderOption) {
+        return renderOption(item, isSelected);
+      }
+
       return (
         <span className='flex w-full items-center justify-between'>
           <span>{getOptionLabel(item)}</span>
@@ -426,7 +447,7 @@ function DropdownMenuSelectItem<T>({
         </span>
       );
     },
-    [getOptionLabel, getOptionValue],
+    [getOptionLabel, getOptionValue, renderOption],
   );
 
   return (
@@ -455,7 +476,9 @@ function DropdownMenuSelectItem<T>({
           align: 'end',
           side: 'bottom',
           sideOffset: 4,
+          ...(selectPopoverContentClassName === undefined ? {} : { className: cn(selectPopoverContentClassName) }),
         }}
+        shouldCloseOnSelect={shouldCloseOnSelect}
         onSelect={onValueChange}
       >
         <Button variant='outline' size='sm' className='h-7 gap-1 px-2 text-xs' role='combobox'>

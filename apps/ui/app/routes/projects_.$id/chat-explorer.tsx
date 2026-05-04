@@ -18,9 +18,8 @@ import { formatKeyCombination } from '#utils/keys.utils.js';
 import { ChatEditorExplorerFiles } from '#routes/projects_.$id/chat-explorer-files.js';
 import { ChatEditorExplorerMaterials } from '#routes/projects_.$id/chat-explorer-materials.js';
 import { ChatEditorExplorerMeshes } from '#routes/projects_.$id/chat-explorer-meshes.js';
-import { ChatEditorExplorerObjects } from '#routes/projects_.$id/chat-explorer-objects.js';
 import { ChatEditorExplorerAnimations } from '#routes/projects_.$id/chat-explorer-animations.js';
-import { ChatEditorExplorerEnvironment } from '#routes/projects_.$id/chat-explorer-environment.js';
+import { ChatEditorExplorerObjects } from '#routes/projects_.$id/chat-explorer-objects.js';
 
 const keyCombinationEditor = {
   key: 'a',
@@ -66,7 +65,6 @@ export function ChatExplorerTree({
   const [isMeshesOpen, setIsMeshesOpen] = useState(false);
   const [isAnimationsOpen, setIsAnimationsOpen] = useState(false);
   const [isObjectsOpen, setIsObjectsOpen] = useState(false);
-  const [isEnvironmentOpen, setIsEnvironmentOpen] = useState(true);
 
   const toggleEditor = () => {
     setIsExpanded?.((current) => !current);
@@ -125,16 +123,6 @@ export function ChatExplorerTree({
           {/* Objects Section */}
           <ExplorerCollapsibleSection title='Objects' count={10} isOpen={isObjectsOpen} onOpenChange={setIsObjectsOpen}>
             <ChatEditorExplorerObjects />
-          </ExplorerCollapsibleSection>
-
-          {/* Environment Section */}
-          <ExplorerCollapsibleSection
-            title='Environment'
-            count={1}
-            isOpen={isEnvironmentOpen}
-            onOpenChange={setIsEnvironmentOpen}
-          >
-            <ChatEditorExplorerEnvironment />
           </ExplorerCollapsibleSection>
         </FloatingPanelContentBody>
       </FloatingPanelContent>
