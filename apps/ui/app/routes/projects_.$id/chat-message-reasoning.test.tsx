@@ -1000,6 +1000,17 @@ describe('ChatMessageReasoning', () => {
       expect(card.textContent).toContain('Thinking...');
     });
 
+    it('should render the Brain icon in the no-text card for visual parity before reasoning deltas arrive', () => {
+      mockChatStatus.current = 'streaming';
+      const { unmount } = renderReasoning({ part: createReasoningPart('') });
+      expect(document.querySelector('svg.lucide-brain')).not.toBeNull();
+
+      unmount();
+      mockChatStatus.current = 'streaming';
+      renderReasoning({ part: createReasoningPart(''), isMessageActive: false });
+      expect(document.querySelector('svg.lucide-brain')).not.toBeNull();
+    });
+
     it('should pass isStreaming=false to MarkdownViewerChat when the message is not active', () => {
       mockChatStatus.current = 'streaming';
       renderReasoning({

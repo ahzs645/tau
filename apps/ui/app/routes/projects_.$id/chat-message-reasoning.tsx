@@ -262,6 +262,7 @@ export function ChatMessageReasoning({
     return (
       <ChatToolCard variant='minimal' status={isMessageActive ? 'loading' : 'ready'} isDefaultOpen={false}>
         <ChatToolCardHeader>
+          <Brain className='size-3 shrink-0' />
           <ChatToolCardTitle>{isMessageActive ? 'Thinking...' : 'Thought briefly'}</ChatToolCardTitle>
         </ChatToolCardHeader>
       </ChatToolCard>
