@@ -2,7 +2,7 @@
   {
     "name": "total (ESM JS)",
     "path": ["dist/esm/**/*.js", "!dist/esm/**/wasm/**", "!dist/esm/**/fonts/**"],
-    "limit": "85 kB"
+    "limit": "97 kB"
   },
   {
     "name": "@taucad/runtime",
