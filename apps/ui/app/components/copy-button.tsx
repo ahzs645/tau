@@ -43,7 +43,7 @@ export function CopyButton({
       <TooltipTrigger asChild>
         <Button size={size} variant='ghost' onClick={handleCopy} {...properties}>
           {size !== 'icon' && <span data-slot='label'>{copied ? copiedText : readyToCopyText}</span>}
-          {copied ? <Check className='text-success' /> : <Copy />}
+          {copied ? <Check className='size-3.5 text-success' /> : <Copy className='size-3.5' />}
         </Button>
       </TooltipTrigger>
       <TooltipContent {...tooltipContentProperties}>{tooltip}</TooltipContent>
