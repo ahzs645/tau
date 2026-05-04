@@ -18,7 +18,7 @@ related:
 
 # Runtime Filesystem Target Architecture
 
-A first-principles review of Tau's filesystem topology across browser (web worker), Electron (renderer + main + worker_threads), and headless (Node CLI/tests), framed around the eigenquestion _"who is the authoritative filesystem and how do consumers across processes/threads agree on that authority?"_. Distils the relevant patterns from VS Code (`repos/vscode`) and proposes a target architecture that keeps kernels location-agnostic while supporting every topology Tau's vision implies.
+A first-principles review of Tau's filesystem topology across browser (web worker), Electron (renderer + main + worker*threads), and headless (Node CLI/tests), framed around the eigenquestion *"who is the authoritative filesystem and how do consumers across processes/threads agree on that authority?"\_. Distils the relevant patterns from VS Code (`repos/vscode`) and proposes a target architecture that keeps kernels location-agnostic while supporting every topology Tau's vision implies.
 
 ## Executive Summary
 

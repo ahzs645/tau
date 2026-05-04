@@ -366,7 +366,7 @@ type RuntimeError =
   | RuntimeTerminatedError
   | RuntimeReconnectError
   | RenderTimeoutError;
-  // Kernel/domain (issues, not throws — already discriminated outcome shape)
+// Kernel/domain (issues, not throws — already discriminated outcome shape)
 ```
 
 ## Backplane Specification
