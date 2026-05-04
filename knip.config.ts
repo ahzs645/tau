@@ -32,6 +32,7 @@ const config: KnipConfig = {
     // Workspace protocol references needed by pnpm
     '@taucad/chat',
     '@taucad/filesystem',
+    '@taucad/fs-client',
     '@taucad/utils',
     // Loaded by Nx plugin or build tooling, not direct imports
     '@typescript/native-preview',
