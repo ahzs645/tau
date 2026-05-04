@@ -1,6 +1,7 @@
+/* eslint-disable @typescript-eslint/naming-convention -- Kittycad wire JSON fixtures use API field names */
 import { describe, it, expect } from 'vitest';
 import { mapErrorToKclError, convertKclErrorToKernelIssue } from '#kernels/zoo/error-mappers.js';
-import { KclError, KclWasmError } from '#kernels/zoo/kcl-errors.js';
+import { KclError, KclWasmError, EXECUTE_INTERRUPTED_ERROR_CODE } from '#kernels/zoo/kcl-errors.js';
 import type { KclErrorKind } from '#kernels/zoo/kcl-errors.js';
 import { createMockWasmKclError } from '#kernels/zoo/zoo-testing.utils.js';
 
@@ -33,6 +34,16 @@ describe('mapErrorToKclError', () => {
     expect(result).toBeInstanceOf(KclError);
     expect(result.kind).toBe('unexpected');
     expect(result.msg).toBe('something broke');
+  });
+
+  it('should map execution_interrupted wire failure JSON to interrupted kind', () => {
+    const json = JSON.stringify({
+      success: false,
+      errors: [{ error_code: EXECUTE_INTERRUPTED_ERROR_CODE, message: 'stopped' }],
+    });
+    const result = mapErrorToKclError(json);
+    expect(result.kind).toBe('interrupted');
+    expect(result.msg).toBe('stopped');
   });
 
   it('should create simple unexpected error from string', () => {
@@ -150,6 +161,12 @@ describe('convertKclErrorToKernelIssue', () => {
     const kclError = KclError.simple({ kind: 'auth', message: 'auth error' });
     const result = convertKclErrorToKernelIssue(kclError);
     expect(result.issues[0]!.type).toBe('connection');
+  });
+
+  it('should map interrupted kind to runtime type', () => {
+    const kclError = KclError.simple({ kind: 'interrupted', message: 'cancelled' });
+    const result = convertKclErrorToKernelIssue(kclError);
+    expect(result.issues[0]!.type).toBe('runtime');
   });
 
   it('should map unknown kind to unknown type', () => {

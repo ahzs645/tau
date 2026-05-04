@@ -1,4 +1,6 @@
+/* eslint-disable @typescript-eslint/naming-convention -- WASM/wire payloads use upstream field names */
 import { describe, it, expect } from 'vitest';
+import type { WasmKclErrorExtraction } from '#kernels/zoo/kcl-errors.js';
 import {
   KclError,
   KclAuthError,
@@ -10,8 +12,10 @@ import {
   isWasmExecutionResultWithError,
   extractWasmKclError,
   extractExecutionError,
+  extractWasmKclErrorDetails,
 } from '#kernels/zoo/kcl-errors.js';
 import type { KclError as WasmKclError } from '@taucad/kcl-wasm-lib/bindings/KclError';
+import type { KclErrorWithOutputs } from '@taucad/kcl-wasm-lib/bindings/KclErrorWithOutputs';
 import { createMockWasmKclError } from '#kernels/zoo/zoo-testing.utils.js';
 
 describe('KclError', () => {
@@ -256,6 +260,29 @@ describe('extractWasmKclError', () => {
     expect(extractWasmKclError('not an error')).toBeUndefined();
     expect(extractWasmKclError(null)).toBeUndefined();
     expect(extractWasmKclError({ message: 'plain' })).toBeUndefined();
+  });
+});
+
+describe('extractWasmKclErrorDetails', () => {
+  it('should return partialOutcome for KclErrorWithOutputs-shaped payloads', () => {
+    const wasmError = createMockWasmKclError();
+    const payload = {
+      error: wasmError,
+      nonFatal: [{ sourceRange: [0, 0, 0], message: 'w', suggestion: null, severity: 'Warning', tag: 'None' }],
+      variables: { a: { type: 'Number', value: 1, ty: { type: 'Unknown' } } },
+      operations: [],
+      artifactCommands: [],
+      artifactGraph: { map: {}, itemCount: 0 },
+      sceneGraph: null,
+      filenames: { 0: { type: 'Local', value: 'main.kcl', original_import_path: null } },
+      sourceFiles: {},
+      defaultPlanes: null,
+    } as unknown as KclErrorWithOutputs;
+
+    const details: WasmKclErrorExtraction | undefined = extractWasmKclErrorDetails(payload);
+    expect(details?.wasmError).toBe(wasmError);
+    expect(details?.partialOutcome?.variables['a']).toEqual({ type: 'Number', value: 1, ty: { type: 'Unknown' } });
+    expect(details?.partialOutcome?.warnings).toHaveLength(1);
   });
 });
 

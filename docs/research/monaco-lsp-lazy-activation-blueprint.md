@@ -3,13 +3,15 @@ title: 'Monaco LSP Lazy Activation Blueprint'
 description: 'Defer KCL/OpenSCAD/JS-TS LSP cost in apps/ui Monaco setup until a model with a matching extension actually exists, using monaco.languages.onLanguage + provider factories instead of eager activation in MonacoModelServiceProvider.'
 status: draft
 created: '2026-04-23'
-updated: '2026-04-23'
+updated: '2026-05-04'
 category: architecture
 related:
   - docs/policy/library-api-policy.md
   - docs/research/monaco-intellisense-jsdoc-rendering.md
   - docs/research/ui-startup-performance-gap-analysis.md
   - docs/research/kernel-plugin-type-linkage.md
+  - docs/research/kcl-monaco-lsp-file-manager-wiring.md
+  - docs/research/kcl-lsp-relative-import-resolution.md
 ---
 
 # Monaco LSP Lazy Activation Blueprint
@@ -473,6 +475,8 @@ The key invariants:
 |                                                                     | Module-level `monacoInstance = monaco` (move to activate)               |
 
 This change preserves correctness for the only existing entry point — `MonacoModelServiceProvider` already calls `registry.activate(...)` after `configureMonaco()` runs `registry.registerAll(...)`.
+
+If additional work inside `activate()` is moved behind `queueMicrotask` (or another deferral) so the method returns synchronously, anything the deferred path needs — especially `ActivationContext.fileManager` and other handles passed only during `activate` — must still be stored before the microtask runs. A real regression from deferring LSP boot without persisting the file manager is analyzed in [`kcl-monaco-lsp-file-manager-wiring.md`](kcl-monaco-lsp-file-manager-wiring.md).
 
 ### Active-Kernel Prefetch Hint (Optional)
 

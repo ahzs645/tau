@@ -4,8 +4,7 @@ import type { Program } from '@taucad/kcl-wasm-lib/bindings/Program';
 import type { KclValue } from '@taucad/kcl-wasm-lib/bindings/KclValue';
 import type { Operation } from '@taucad/kcl-wasm-lib/bindings/Operation';
 import type { ArtifactGraph } from '@taucad/kcl-wasm-lib/bindings/Artifact';
-import type { CompilationError } from '@taucad/kcl-wasm-lib/bindings/CompilationError';
-import type { ModulePath } from '@taucad/kcl-wasm-lib/bindings/ModulePath';
+import type { CompilationIssue as CompilationError } from '@taucad/kcl-wasm-lib/bindings/CompilationIssue';
 import type { DefaultPlanes } from '@taucad/kcl-wasm-lib/bindings/DefaultPlanes';
 import type { Configuration } from '@taucad/kcl-wasm-lib/bindings/Configuration';
 import type { System } from '@taucad/kcl-wasm-lib/bindings/ModelingCmd';
@@ -13,12 +12,22 @@ import type { Context } from '@taucad/kcl-wasm-lib';
 import type { Models } from '@kittycad/lib';
 import type { RuntimeSpanTracer } from '#types/runtime-tracer.types.js';
 import { EngineConnection, MockEngineConnection } from '#kernels/zoo/engine-connection.js';
-import type { WasmModule } from '#kernels/zoo/engine-connection.js';
+import type { WasmModule } from '#kernels/zoo/zoo-wasm-module.types.js';
 import type { FileSystemManager } from '#kernels/zoo/filesystem-manager.js';
-import { KclError, KclExportError, KclWasmError, extractWasmKclError } from '#kernels/zoo/kcl-errors.js';
+import {
+  KclError,
+  KclExportError,
+  KclWasmError,
+  extractWasmKclErrorDetails,
+  EXECUTE_INTERRUPTED_ERROR_CODE,
+} from '#kernels/zoo/kcl-errors.js';
 import { isZooEmptyExportError } from '#kernels/zoo/zoo-error-detection.js';
 import { createZooLogger } from '#kernels/zoo/zoo-logs.js';
 import { compileWasmStreaming } from '#framework/wasm-loader.js';
+import { normalizeSceneGraphDelta } from '#kernels/zoo/types/kcl-scene-graph-delta.js';
+import type { KclSceneGraphDelta } from '#kernels/zoo/types/kcl-scene-graph-delta.js';
+import type { KclExecutionResult } from '#kernels/zoo/types/kcl-execution-result.js';
+import { buildKclSettingsJson } from '#kernels/zoo/kcl-headless-settings.js';
 
 /**
  * URL to the KCL WASM binary, resolved relative to this module for bundler compatibility.
@@ -40,17 +49,54 @@ export type KclParseResult = {
   warnings: CompilationError[];
 };
 
-/**
- * Outcome of executing a KCL program against the Zoo engine, containing the full modeling state.
- */
-export type KclExecutionResult = {
-  variables: Partial<Record<string, KclValue>>;
-  operations: Operation[];
-  artifactGraph: ArtifactGraph;
-  errors: CompilationError[];
-  filenames: Record<number, ModulePath | undefined>;
-  defaultPlanes: DefaultPlanes | undefined;
+const partitionExecutionIssues = (
+  input: CompilationError[],
+): { errors: CompilationError[]; warnings: CompilationError[] } => {
+  const errors = [];
+  const warnings = [];
+  for (const issue of input) {
+    if (issue.severity === 'Warning') {
+      warnings.push(issue);
+    } else {
+      errors.push(issue);
+    }
+  }
+
+  return { errors, warnings };
 };
+
+/**
+ * `ExecOutcome` from kcl-lib serializes diagnostics as `issues` (see `execution/mod.rs`).
+ * Older wasm builds used `errors`; normalize so runtime code can keep using `errors`.
+ *
+ * @param raw - JSON value returned from WASM `executeMock` / `execute`.
+ * @returns Parsed {@link KclExecutionResult} with `errors` / `warnings` partitioned from `issues` or legacy `errors`.
+ */
+function normalizeKclExecutionResult(raw: unknown): KclExecutionResult {
+  if (raw === null || typeof raw !== 'object') {
+    throw KclError.simple({
+      kind: 'engine',
+      message: `KCL execution returned non-object: ${String(raw)}`,
+    });
+  }
+
+  const record = raw as Record<string, unknown>;
+  const fromIssues = record['issues'];
+  const fromLegacyErrors = record['errors'];
+  const errorsRaw = Array.isArray(fromIssues) ? fromIssues : fromLegacyErrors;
+  const allIssues = Array.isArray(errorsRaw) ? (errorsRaw as CompilationError[]) : [];
+  const partitioned = partitionExecutionIssues(allIssues);
+
+  return {
+    variables: (record['variables'] ?? {}) as KclExecutionResult['variables'],
+    operations: (record['operations'] ?? []) as Operation[],
+    artifactGraph: (record['artifactGraph'] ?? { map: {}, itemCount: 0 }) as ArtifactGraph,
+    errors: partitioned.errors,
+    warnings: partitioned.warnings,
+    filenames: (record['filenames'] ?? {}) as KclExecutionResult['filenames'],
+    defaultPlanes: record['defaultPlanes'] as KclExecutionResult['defaultPlanes'],
+  };
+}
 
 /**
  * Configuration for exporting a KCL model to a 3D file format. The `type` field selects the output format (e.g., `step`, `stl`).
@@ -77,8 +123,6 @@ export type KclExportResult = {
 };
 
 type KclUtilitiesOptions = {
-  /** API key for modeling API authentication */
-  apiKey: string;
   /** Base URL for the modeling API */
   baseUrl?: string;
   /** Stream dimensions for engine */
@@ -90,19 +134,8 @@ type KclUtilitiesOptions = {
   fileSystemManager: FileSystemManager;
 };
 
-const splitErrors = (input: CompilationError[]): { errors: CompilationError[]; warnings: CompilationError[] } => {
-  const errors = [];
-  const warnings = [];
-  for (const i of input) {
-    if (i.severity === 'Warning') {
-      warnings.push(i);
-    } else {
-      errors.push(i);
-    }
-  }
-
-  return { errors, warnings };
-};
+const splitErrors = (input: CompilationError[]): { errors: CompilationError[]; warnings: CompilationError[] } =>
+  partitionExecutionIssues(input);
 
 // Dynamic import function to load WASM module
 async function loadWasmModule(tracer?: RuntimeSpanTracer): Promise<WasmModule> {
@@ -244,14 +277,18 @@ export class KclUtilities {
   private isEngineInitialized = false;
   private engineManager: EngineConnection | undefined;
   private mockContext: Context | undefined;
-  private readonly apiKey: string;
   private readonly baseUrl: string;
   private readonly fileSystemManager: FileSystemManager;
   // Add execution state tracking
   private hasExecutedProgram = false;
+  private lastDefaultPlanes: DefaultPlanes | undefined;
+  private executeExclusiveGate: Promise<void> = new Promise<void>((resolve) => {
+    resolve();
+  });
+  /** Unsubscribe for modeling WebSocket idle/remote close; cleared in {@link cleanup} and when the socket drops. */
+  private engineSocketCloseUnsubscribe: (() => void) | undefined;
 
   public constructor(options: KclUtilitiesOptions) {
-    this.apiKey = options.apiKey;
     this.baseUrl = options.baseUrl ?? 'wss://api.zoo.dev';
     this.fileSystemManager = options.fileSystemManager;
   }
@@ -272,6 +309,27 @@ export class KclUtilities {
    */
   public get isEngineReady(): boolean {
     return this.isEngineInitialized;
+  }
+
+  /**
+   * Default modeling planes (xy / yz / xz ids) from the last {@link clearProgram} bust result.
+   *
+   * @returns last normalized default planes, or undefined before the first successful bust
+   */
+  public get defaultPlanes(): DefaultPlanes | undefined {
+    return this.lastDefaultPlanes;
+  }
+
+  /**
+   * Rejects all pending Zoo modeling commands (in-flight WebSocket round-trips).
+   */
+  public async cancel(): Promise<void> {
+    /* eslint-disable @typescript-eslint/naming-convention -- Zoo bridge wire payload */
+    this.engineManager?.bridge?.rejectAllPendingCommand({
+      error_code: EXECUTE_INTERRUPTED_ERROR_CODE,
+      message: 'kcl execution was interrupted',
+    });
+    /* eslint-enable @typescript-eslint/naming-convention -- end cancel bridge payload */
   }
 
   /**
@@ -312,6 +370,11 @@ export class KclUtilities {
     // Create and initialize engine manager
     this.engineManager = await this.createEngineManager();
     await this.engineManager.initialize();
+
+    this.engineSocketCloseUnsubscribe?.();
+    this.engineSocketCloseUnsubscribe = this.engineManager.onSessionClosed(() => {
+      this.invalidateEngineDueToSocketClose();
+    });
 
     this.isEngineInitialized = true;
   }
@@ -385,21 +448,18 @@ export class KclUtilities {
     }
 
     try {
-      const result = (await this.mockContext.executeMock(
-        JSON.stringify(program),
-        path,
-        JSON.stringify(settings ?? {}),
-        false,
-      )) as KclExecutionResult;
+      const programJson = JSON.stringify(program);
+      const settingsJson = buildKclSettingsJson(settings);
+      const outcomeUnknown: unknown = await this.mockContext.executeMock(programJson, path, settingsJson, false);
 
-      return result;
+      return normalizeKclExecutionResult(outcomeUnknown);
     } catch (error) {
       log.error('KCL mock execution error details:', error);
 
       // Check if this is a WASM KclError
-      const wasmError = extractWasmKclError(error);
-      if (wasmError) {
-        throw new KclWasmError(wasmError);
+      const extracted = extractWasmKclErrorDetails(error);
+      if (extracted) {
+        throw new KclWasmError(extracted.wasmError, extracted.partialOutcome);
       }
 
       const errorMessage =
@@ -424,48 +484,108 @@ export class KclUtilities {
     path: string,
     settings?: PartialDeep<Configuration>,
   ): Promise<KclExecutionResult> {
-    if (!this.isEngineInitialized) {
-      await this.initializeEngine();
-    }
-
-    if (!this.wasmModule) {
-      throw KclError.simple({
-        kind: 'engine',
-        message: 'WASM module not loaded',
-      });
-    }
-
-    if (!this.engineManager) {
-      throw KclError.simple({
-        kind: 'engine',
-        message: 'Engine manager not initialized',
-      });
-    }
-
-    try {
-      const result = (await this.engineManager.context?.execute(
-        JSON.stringify(program),
-        path,
-        JSON.stringify(settings ?? {}),
-      )) as KclExecutionResult;
-
-      // Track successful execution
-      this.hasExecutedProgram = true;
-
-      return result;
-    } catch (error) {
-      log.error('KCL execution error details:', error);
-
-      // Check if this is a WASM KclError
-      const wasmError = extractWasmKclError(error);
-      if (wasmError) {
-        throw new KclWasmError(wasmError);
+    return this.serializeExclusive(async () => {
+      if (!this.isEngineInitialized) {
+        await this.initializeEngine();
       }
 
-      const errorMessage =
-        error instanceof Error ? `KCL execution failed: ${error.message}` : `KCL execution failed: ${String(error)}`;
-      throw KclError.simple({ kind: 'engine', message: errorMessage });
-    }
+      if (!this.wasmModule) {
+        throw KclError.simple({
+          kind: 'engine',
+          message: 'WASM module not loaded',
+        });
+      }
+
+      if (!this.engineManager) {
+        throw KclError.simple({
+          kind: 'engine',
+          message: 'Engine manager not initialized',
+        });
+      }
+
+      try {
+        const programJson = JSON.stringify(program);
+        const settingsJson = buildKclSettingsJson(settings);
+        const executeResult: unknown = await this.engineManager.context?.execute(programJson, path, settingsJson);
+
+        this.hasExecutedProgram = true;
+
+        const delta = normalizeSceneGraphDelta(executeResult);
+        const outcome = normalizeKclExecutionResult(delta.execOutcome);
+        await this.engineManager.bridge?.flushPending();
+        return outcome;
+      } catch (error) {
+        log.error('KCL execution error details:', error);
+
+        const extracted = extractWasmKclErrorDetails(error);
+        if (extracted) {
+          throw new KclWasmError(extracted.wasmError, extracted.partialOutcome);
+        }
+
+        const errorMessage =
+          error instanceof Error ? `KCL execution failed: ${error.message}` : `KCL execution failed: ${String(error)}`;
+        throw KclError.simple({ kind: 'engine', message: errorMessage });
+      }
+    });
+  }
+
+  /**
+   * Runs {@link executeProgram} but returns the full scene graph delta for future selection/picking consumers.
+   * Prefer {@link executeProgram} unless you need `newGraph` / `newObjects` / `invalidatesIds`.
+   *
+   * @param program - parsed KCL AST
+   * @param path - entry file path for the engine
+   * @param settings - optional KCL configuration overrides
+   * @returns normalized scene-graph delta including `execOutcome`
+   * @public
+   */
+  public async executeProgramWithSceneDelta(
+    program: Program,
+    path: string,
+    settings?: PartialDeep<Configuration>,
+  ): Promise<KclSceneGraphDelta> {
+    return this.serializeExclusive(async () => {
+      if (!this.isEngineInitialized) {
+        await this.initializeEngine();
+      }
+
+      if (!this.wasmModule) {
+        throw KclError.simple({
+          kind: 'engine',
+          message: 'WASM module not loaded',
+        });
+      }
+
+      if (!this.engineManager) {
+        throw KclError.simple({
+          kind: 'engine',
+          message: 'Engine manager not initialized',
+        });
+      }
+
+      try {
+        const programJson = JSON.stringify(program);
+        const settingsJson = buildKclSettingsJson(settings);
+        const executeResult: unknown = await this.engineManager.context?.execute(programJson, path, settingsJson);
+
+        this.hasExecutedProgram = true;
+
+        const delta = normalizeSceneGraphDelta(executeResult);
+        await this.engineManager.bridge?.flushPending();
+        return delta;
+      } catch (error) {
+        log.error('KCL execution error details:', error);
+
+        const extracted = extractWasmKclErrorDetails(error);
+        if (extracted) {
+          throw new KclWasmError(extracted.wasmError, extracted.partialOutcome);
+        }
+
+        const errorMessage =
+          error instanceof Error ? `KCL execution failed: ${error.message}` : `KCL execution failed: ${String(error)}`;
+        throw KclError.simple({ kind: 'engine', message: errorMessage });
+      }
+    });
   }
 
   /**
@@ -506,7 +626,7 @@ export class KclUtilities {
 
     try {
       // Export the model using operations already in memory
-      const result = (await context.export(JSON.stringify(exportFormat), JSON.stringify(settings))) as Array<{
+      const result = (await context.export(JSON.stringify(exportFormat), buildKclSettingsJson(settings))) as Array<{
         name: string;
         contents: ArrayBuffer;
       }>;
@@ -540,10 +660,15 @@ export class KclUtilities {
    * Releases all resources including the WebSocket connection and WASM contexts.
    */
   public async cleanup(): Promise<void> {
+    this.engineSocketCloseUnsubscribe?.();
+    this.engineSocketCloseUnsubscribe = undefined;
     await this.clearProgram();
 
     if (this.engineManager) {
-      await this.engineManager.cleanup();
+      if (typeof this.engineManager.cleanup === 'function') {
+        await this.engineManager.cleanup();
+      }
+
       this.engineManager = undefined;
     }
 
@@ -558,18 +683,53 @@ export class KclUtilities {
    * @param settings - optional KCL configuration overrides for the scene reset
    */
   public async clearProgram(settings?: PartialDeep<Configuration>): Promise<void> {
-    try {
-      // Get the context used for execution
-      const context = this.engineManager?.context;
-      if (context) {
-        // Reset the scene
-        await context.bustCacheAndResetScene(JSON.stringify(settings ?? {}));
-      }
+    const context = this.engineManager?.context;
+    if (context && typeof context.bustCacheAndResetScene === 'function') {
+      const bustUnknown: unknown = await context.bustCacheAndResetScene(buildKclSettingsJson(settings), null);
+      const normalized = normalizeKclExecutionResult(bustUnknown);
+      this.lastDefaultPlanes = normalized.defaultPlanes;
+    }
 
-      // Reset execution state
-      this.hasExecutedProgram = false;
-    } catch (error) {
-      log.warn('Failed to clear memory:', error);
+    this.hasExecutedProgram = false;
+  }
+
+  /**
+   * Drops cached engine state when the Zoo modeling WebSocket closes (idle timeout, network drop, etc.) so the next
+   * {@link executeProgram} / {@link exportFromMemory} path runs {@link initializeEngine} again with a fresh session.
+   */
+  private invalidateEngineDueToSocketClose(): void {
+    this.engineSocketCloseUnsubscribe?.();
+    this.engineSocketCloseUnsubscribe = undefined;
+    this.isEngineInitialized = false;
+    this.hasExecutedProgram = false;
+    const manager = this.engineManager;
+    this.engineManager = undefined;
+    if (manager) {
+      void manager.cleanup();
+    }
+  }
+
+  /**
+   * Serializes KCL engine executions so overlapping `Context.execute` calls do not interleave.
+   *
+   * @param run - exclusive async work
+   * @returns result of `run`
+   */
+  private async serializeExclusive<T>(run: () => Promise<T>): Promise<T> {
+    return this.withExclusiveLock(run);
+  }
+
+  private async withExclusiveLock<T>(run: () => Promise<T>): Promise<T> {
+    const previous = this.executeExclusiveGate;
+    let resolveRelease!: () => void;
+    this.executeExclusiveGate = new Promise<void>((resolve) => {
+      resolveRelease = resolve;
+    });
+    await previous;
+    try {
+      return await run();
+    } finally {
+      resolveRelease();
     }
   }
 
@@ -587,7 +747,6 @@ export class KclUtilities {
     }
 
     const engineManager = new EngineConnection({
-      apiKey: this.apiKey,
       baseUrl: this.baseUrl,
       wasmModule: this.wasmModule,
       fileSystemManager: this.fileSystemManager,

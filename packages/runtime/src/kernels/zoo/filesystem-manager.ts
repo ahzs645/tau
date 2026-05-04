@@ -24,7 +24,8 @@ export class FileSystemManager {
    * @returns the file contents as a byte array
    */
   public async readFile(path: string): Promise<Uint8Array<ArrayBuffer>> {
-    return this.filesystem.readFile(this.resolvePath(path));
+    const out = await this.filesystem.readFile(this.resolvePath(path));
+    return out;
   }
 
   /**
@@ -35,7 +36,8 @@ export class FileSystemManager {
    * @returns whether the file exists
    */
   public async exists(path: string): Promise<boolean> {
-    return this.filesystem.exists(this.resolvePath(path));
+    const ok = await this.filesystem.exists(this.resolvePath(path));
+    return ok;
   }
 
   /**
@@ -43,10 +45,20 @@ export class FileSystemManager {
    * Lists all files in a directory using a path relative to basePath.
    *
    * @param path - the directory path relative to basePath
-   * @returns array of file names in the directory
+   * @returns JSON array string of file names — matches kcl-lib WASM `getAllFiles` (`value.as_string` + `serde_json::from_str`)
    */
-  public async getAllFiles(path: string): Promise<string[]> {
-    return this.filesystem.readdir(this.resolvePath(path));
+  public async getAllFiles(path: string): Promise<string> {
+    const files = await this.filesystem.readdir(this.resolvePath(path));
+    for (const name of files) {
+      if (name.includes('/')) {
+        throw new Error(
+          `FileSystemManager.getAllFiles: kcl-lib expects single-segment filenames from readdir; got "${name}"`,
+        );
+      }
+    }
+
+    const json = JSON.stringify(files);
+    return json;
   }
 
   /**

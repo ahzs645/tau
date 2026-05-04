@@ -34,6 +34,15 @@ describe('FileSystemManager', () => {
     const result = await manager.getAllFiles('src');
 
     expect(filesystem.mocks.readdir.mock.calls[0]![0]).toBe('/project/src');
-    expect(result).toEqual(['a.kcl', 'b.kcl']);
+    expect(result).toBe(JSON.stringify(['a.kcl', 'b.kcl']));
+  });
+
+  it('should reject getAllFiles when readdir returns multi-segment paths', async () => {
+    const filesystem = createMockFileSystem();
+    filesystem.mocks.readdir.mockResolvedValue(['bottle/main.kcl']);
+
+    const manager = new FileSystemManager(filesystem, '/project');
+
+    await expect(manager.getAllFiles('')).rejects.toThrow(/single-segment/);
   });
 });

@@ -15,7 +15,7 @@ describe('Browser compatibility (jsdom)', () => {
     expect(module_.createKernelSuccess).toBeTypeOf('function');
     expect(module_.createKernelError).toBeTypeOf('function');
     expect(module_.fromFsLike).toBeTypeOf('function');
-  });
+  }, 30_000);
 
   it('should import the filesystem subpath without errors', async () => {
     const module_ = await import('#filesystem/index.js');

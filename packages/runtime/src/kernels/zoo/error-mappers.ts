@@ -6,7 +6,13 @@ import type {
   KernelIssueType,
   KernelStackFrame,
 } from '#types/runtime.types.js';
-import { KclError, KclWasmError, extractWasmKclError } from '#kernels/zoo/kcl-errors.js';
+import {
+  KclError,
+  KclWasmError,
+  EXECUTE_INTERRUPTED_ERROR_CODE,
+  extractWasmKclErrorDetails,
+  tryReadWireFailurePayload,
+} from '#kernels/zoo/kcl-errors.js';
 import { createKernelError } from '#kernels/kernel-helpers.js';
 import { sourceRangeToLineColumn } from '#kernels/zoo/source-range-utils.js';
 
@@ -22,10 +28,19 @@ export function mapErrorToKclError(error: unknown): KclError {
     return error;
   }
 
+  const wireFailure = tryReadWireFailurePayload(error);
+  const firstWireError = wireFailure?.errors[0];
+  if (firstWireError?.error_code === EXECUTE_INTERRUPTED_ERROR_CODE) {
+    return KclError.simple({
+      kind: 'interrupted',
+      message: firstWireError.message,
+    });
+  }
+
   // Try to extract WASM KclError (handles both direct and nested formats)
-  const wasmError = extractWasmKclError(error);
-  if (wasmError) {
-    return new KclWasmError(wasmError);
+  const wasmDetails = extractWasmKclErrorDetails(error);
+  if (wasmDetails) {
+    return new KclWasmError(wasmDetails.wasmError, wasmDetails.partialOutcome);
   }
 
   // For any other error, just create a simple unexpected error
@@ -109,6 +124,11 @@ export function convertKclErrorToKernelIssue(kclError: KclError, code?: string, 
     case 'connection':
     case 'auth': {
       errorType = 'connection';
+      break;
+    }
+
+    case 'interrupted': {
+      errorType = 'runtime';
       break;
     }
 

@@ -1,7 +1,17 @@
 import type { SourceRange } from '@taucad/kcl-wasm-lib/bindings/SourceRange';
 import type { KclError as WasmKclError } from '@taucad/kcl-wasm-lib/bindings/KclError';
+import type { KclErrorWithOutputs } from '@taucad/kcl-wasm-lib/bindings/KclErrorWithOutputs';
 import type { KernelStackFrame } from '#types/runtime.types.js';
+import type { KclExecutionResult } from '#kernels/zoo/types/kcl-execution-result.js';
 import { sourceRangeToLineColumn } from '#kernels/zoo/source-range-utils.js';
+
+/**
+ * Kittycad/zoo modeling WebSocket uses this code when in-flight execution is cancelled upstream.
+ *
+ * @public
+ */
+// eslint-disable-next-line @typescript-eslint/naming-convention -- public wire error_code literal consumed by engine/API clients
+export const EXECUTE_INTERRUPTED_ERROR_CODE = 'execution_interrupted';
 
 /**
  * File metadata from WASM KclError, mapping module IDs to type and path.
@@ -34,6 +44,7 @@ export type KclErrorKind =
   | 'auth'
   | 'export'
   | 'connection'
+  | 'interrupted'
   | 'unknown';
 
 /**
@@ -158,25 +169,152 @@ export class KclConnectionError extends KclError {
 }
 
 /**
+ * When a modeling-command Promise rejects with a JSON string, some wasm-bindgen / JS engine paths
+ * surface the reason as `jsvalue(string)` so Rust's `JsValue::as_string()` returns empty and
+ * kcl-lib emits a generic "Failed to wait for promise…" message. The original JSON often still
+ * contains an `{"error_code","message"}` object — extract it for diagnostics.
+ *
+ * @param message - raw engine hang message from kcl-lib
+ * @returns `error_code: message` when an embedded ApiError-shaped object is found
+ */
+export const healKclEngineHangMessageIfEmbeddedFailureJson = (message: string): string | undefined => {
+  if (!message.includes('Failed to wait for promise from send modeling command')) {
+    return undefined;
+  }
+
+  // oxlint-disable-next-line unicorn-js/better-regex -- intentional strict JSON-literal pattern inside hang strings
+  const match = /{"error_code"\s*:\s*"([^"]*)"\s*,\s*"message"\s*:\s*"((?:[^"\\]|\\.)*)"}/.exec(message);
+  if (match === null) {
+    return undefined;
+  }
+
+  return `${match[1]}: ${match[2]}`;
+};
+
+/**
+ * Parsed {@link KclExecutionResult} fragments when WASM returns {@link KclErrorWithOutputs}.
+ *
+ * @public
+ */
+export type WasmKclErrorExtraction = {
+  wasmError: WasmKclError;
+  partialOutcome?: KclExecutionResult;
+};
+
+type WireFailurePayload = {
+  success: false;
+  errors: Array<{ error_code: string; message: string }>;
+};
+
+const isWireFailurePayload = (value: unknown): value is WireFailurePayload => {
+  if (value === null || typeof value !== 'object') {
+    return false;
+  }
+
+  const record = value as Record<string, unknown>;
+  return record['success'] === false && Array.isArray(record['errors']);
+};
+
+const readWireFailurePayload = (error: unknown): WireFailurePayload | undefined => {
+  const jsonText =
+    typeof error === 'string'
+      ? error
+      : error instanceof Error && error.message.trimStart().startsWith('{')
+        ? error.message
+        : undefined;
+
+  if (jsonText === undefined) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(jsonText) as unknown;
+    if (isWireFailurePayload(parsed)) {
+      return parsed;
+    }
+  } catch {
+    /* Invalid JSON — not a wire failure */
+  }
+
+  return undefined;
+};
+
+/**
+ * Attempts to parse a wire-shaped {@link WireFailurePayload} from a thrown/rejected value.
+ *
+ * @param error - rejection reason (JSON string or `Error` whose `message` is JSON)
+ * @returns parsed failure payload when the shape matches; otherwise `undefined`
+ * @public
+ */
+export const tryReadWireFailurePayload = (error: unknown): WireFailurePayload | undefined =>
+  readWireFailurePayload(error);
+
+const wasmErrorFromWireApiError = (first: { error_code: string; message: string }): WasmKclError => ({
+  kind: 'engine',
+  details: {
+    msg: `${first.error_code}: ${first.message}`,
+    sourceRanges: [],
+    backtrace: [],
+  },
+});
+
+const isKclErrorWithOutputs = (error: unknown): error is KclErrorWithOutputs => {
+  if (error === null || typeof error !== 'object' || !('error' in error)) {
+    return false;
+  }
+
+  if (!isWasmKclError((error as { error: unknown }).error)) {
+    return false;
+  }
+
+  const record = error as Record<string, unknown>;
+  return (
+    'variables' in record && 'operations' in record && 'artifactGraph' in record && Array.isArray(record['nonFatal'])
+  );
+};
+
+function mapKclErrorWithOutputsToPartialExecutionResult(outputs: KclErrorWithOutputs): KclExecutionResult {
+  const { nonFatal } = outputs;
+  const errors = nonFatal.filter((issue) => issue.severity === 'Error' || issue.severity === 'Fatal');
+  const warnings = nonFatal.filter((issue) => issue.severity === 'Warning');
+  return {
+    variables: outputs.variables,
+    operations: outputs.operations,
+    artifactGraph: outputs.artifactGraph,
+    errors,
+    warnings,
+    filenames: outputs.filenames as KclExecutionResult['filenames'],
+    defaultPlanes: outputs.defaultPlanes ?? undefined,
+  };
+}
+
+/**
  * KCL error that wraps the original WASM KclError and preserves its structure for stack traces.
  */
 export class KclWasmError extends KclError {
   public readonly wasmError: WasmKclError;
+  public readonly partialOutcome?: KclExecutionResult;
 
   /**
    * Wraps a WASM KclError, preserving its original structure for stack trace generation.
    *
    * @param wasmError - the original WASM KclError to wrap
+   * @param partialOutcome - optional partial execution state from {@link KclErrorWithOutputs}
    */
-  public constructor(wasmError: WasmKclError) {
+  public constructor(wasmError: WasmKclError, partialOutcome?: KclExecutionResult) {
     const { kind, details } = wasmError;
-    const { msg, sourceRanges } = details;
+    const healedMessage = healKclEngineHangMessageIfEmbeddedFailureJson(details.msg) ?? details.msg;
+    const { sourceRanges } = details;
 
     // Use the first source range if available, otherwise default
     const sourceRange: SourceRange = sourceRanges.length > 0 ? sourceRanges[0]! : [0, 0, 0];
 
-    super(kind as KclErrorKind, msg, sourceRange);
-    this.wasmError = wasmError;
+    super(kind as KclErrorKind, healedMessage, sourceRange);
+    this.partialOutcome = partialOutcome;
+    this.wasmError =
+      healedMessage === details.msg
+        ? wasmError
+        : { ...wasmError, details: { ...wasmError.details, msg: healedMessage } };
   }
 
   /**
@@ -269,27 +407,48 @@ export const isWasmExecutionResultWithError = (
 };
 
 /**
+ * Extracts WASM KCL error details and optional partial execution state.
+ *
+ * @param error - the value to extract from
+ * @returns extraction payload, or undefined if not a recognized format
+ */
+export const extractWasmKclErrorDetails = (error: unknown): WasmKclErrorExtraction | undefined => {
+  if (isKclErrorWithOutputs(error)) {
+    const extended = error.error as ExtendedWasmKclError;
+    extended.filenames = error.filenames as unknown as ExtendedWasmKclError['filenames'];
+    return {
+      wasmError: extended,
+      partialOutcome: mapKclErrorWithOutputsToPartialExecutionResult(error),
+    };
+  }
+
+  if (isWasmExecutionResultWithError(error)) {
+    const extendedError = error.error as ExtendedWasmKclError;
+    extendedError.filenames = error.filenames;
+    return { wasmError: extendedError };
+  }
+
+  if (isWasmKclError(error)) {
+    return { wasmError: error };
+  }
+
+  const wire = readWireFailurePayload(error);
+  const first = wire?.errors[0];
+  if (first !== undefined) {
+    return { wasmError: wasmErrorFromWireApiError(first) };
+  }
+
+  return undefined;
+};
+
+/**
  * Extracts a WasmKclError from direct or nested WASM error formats, attaching filenames when present.
  *
  * @param error - the value to extract a WASM KCL error from
  * @returns the extracted WasmKclError, or undefined if not a recognized format
  */
-export const extractWasmKclError = (error: unknown): WasmKclError | undefined => {
-  // Direct WASM KclError
-  if (isWasmKclError(error)) {
-    return error;
-  }
-
-  // WASM execution result with nested error
-  if (isWasmExecutionResultWithError(error)) {
-    // Create an extended error that includes filenames from the root level
-    const extendedError = error.error as ExtendedWasmKclError;
-    extendedError.filenames = error.filenames;
-    return extendedError;
-  }
-
-  return undefined;
-};
+export const extractWasmKclError = (error: unknown): WasmKclError | undefined =>
+  extractWasmKclErrorDetails(error)?.wasmError;
 
 /**
  * Extracts an error message and source location from a KCL execution error array.

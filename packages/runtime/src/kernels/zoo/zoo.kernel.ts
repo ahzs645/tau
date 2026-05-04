@@ -11,7 +11,7 @@
  */
 
 import type { GeometryGltf } from '@taucad/types';
-import type { CompilationError } from '@taucad/kcl-wasm-lib/bindings/CompilationError';
+import type { CompilationIssue as CompilationError } from '@taucad/kcl-wasm-lib/bindings/CompilationIssue';
 import { asBuffer } from '@taucad/utils/file';
 import { joinPath } from '@taucad/utils/path';
 import { createExportFile } from '@taucad/types/constants';
@@ -107,7 +107,6 @@ function getKclUtilitiesInstance(context: ZooContext): KclUtilities {
     }
 
     context.kclUtils = new KclUtilities({
-      apiKey: '',
       baseUrl: context.baseUrl,
       fileSystemManager: context.fileSystemManager,
     });

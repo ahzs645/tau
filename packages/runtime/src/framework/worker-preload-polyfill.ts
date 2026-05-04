@@ -19,6 +19,11 @@
  * accesses on every Vite upgrade and extend the stub accordingly. The
  * test file pins the contract.
  *
+ * **KCL WASM (`web-time`)** reads high-resolution time from `window.performance`.
+ * This file replaces `window` with a minimal stub for Vite; the stub must expose
+ * `performance` delegated to `globalThis.performance` (which Node worker threads
+ * and browsers already define).
+ *
  * Environment detection (`getEnvironment()`) uses `WorkerGlobalScope` to
  * distinguish workers from browsers, so these stubs don't affect detection.
  *
@@ -73,6 +78,9 @@ if (globalThis.window === undefined) {
       dispatchEvent: noop,
       addEventListener: noop,
       removeEventListener: noop,
+      get performance(): Performance {
+        return globalThis.performance;
+      },
     },
     writable: true,
     configurable: true,
