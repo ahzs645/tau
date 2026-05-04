@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import type { PartialDeep } from 'type-fest';
 import { createContext, useContext, useMemo, useCallback, useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useActorRef, useSelector } from '@xstate/react';
 import { waitFor } from 'xstate';
 import type { ActorRefFrom } from 'xstate';
@@ -92,6 +93,7 @@ type ProjectManagerContextType = {
       noUpdatedAt?: boolean;
     },
   ) => Promise<Project | undefined>;
+  touchProject: (projectId: string) => Promise<Project | undefined>;
   duplicateProject: (projectId: string) => Promise<Project>;
   getProjects: (options?: { includeDeleted?: boolean }) => Promise<Project[]>;
   getProject: (projectId: string) => Promise<Project | undefined>;
@@ -129,7 +131,12 @@ const ProjectManagerContext = createContext<ProjectManagerContextType | undefine
 export function ProjectManagerProvider({ children }: { readonly children: ReactNode }): React.JSX.Element {
   const actorRef = useActorRef(projectManagerMachine);
   const fileManager = useFileManager();
+  const queryClient = useQueryClient();
   const [defaultBackend] = useCookie(cookieName.filesystemBackend, 'indexeddb' as FileSystemBackend);
+
+  const invalidateProjectsList = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: ['projects'] });
+  }, [queryClient]);
 
   // Select state from the machine
   const error = useSelector(actorRef, (state) => state.context.error);
@@ -280,6 +287,14 @@ export function ProjectManagerProvider({ children }: { readonly children: ReactN
     [getReadiedWorker],
   );
 
+  const touchProject = useCallback(
+    async (projectId: string): Promise<Project | undefined> => {
+      const worker = await getReadiedWorker();
+      return worker.touchProject(projectId);
+    },
+    [getReadiedWorker],
+  );
+
   const duplicateProject = useCallback(
     async (projectId: string): Promise<Project> => {
       const worker = await getReadiedWorker();
@@ -328,9 +343,11 @@ export function ProjectManagerProvider({ children }: { readonly children: ReactN
       },
     ): Promise<Chat> => {
       const worker = await getReadiedWorker();
-      return worker.createChat(resourceId, chatData);
+      const chat = await worker.createChat(resourceId, chatData);
+      invalidateProjectsList();
+      return chat;
     },
-    [getReadiedWorker],
+    [getReadiedWorker, invalidateProjectsList],
   );
 
   const updateChat = useCallback(
@@ -342,17 +359,27 @@ export function ProjectManagerProvider({ children }: { readonly children: ReactN
       },
     ): Promise<Chat | undefined> => {
       const worker = await getReadiedWorker();
-      return worker.updateChat(chatId, update, options);
+      const result = await worker.updateChat(chatId, update, options);
+      if (result) {
+        invalidateProjectsList();
+      }
+
+      return result;
     },
-    [getReadiedWorker],
+    [getReadiedWorker, invalidateProjectsList],
   );
 
   const patchChat = useCallback(
     async <K extends keyof Chat>(chatId: string, key: K, value: Chat[K]): Promise<Chat | undefined> => {
       const worker = await getReadiedWorker();
-      return worker.patchChat(chatId, key, value);
+      const result = await worker.patchChat(chatId, key, value);
+      if (result) {
+        invalidateProjectsList();
+      }
+
+      return result;
     },
-    [getReadiedWorker],
+    [getReadiedWorker, invalidateProjectsList],
   );
 
   const setMessageEdit = useCallback(
@@ -362,33 +389,50 @@ export function ProjectManagerProvider({ children }: { readonly children: ReactN
       draft: NonNullable<Chat['messageEdits']>[string],
     ): Promise<Chat | undefined> => {
       const worker = await getReadiedWorker();
-      return worker.setMessageEdit(chatId, messageId, draft);
+      const result = await worker.setMessageEdit(chatId, messageId, draft);
+      if (result) {
+        invalidateProjectsList();
+      }
+
+      return result;
     },
-    [getReadiedWorker],
+    [getReadiedWorker, invalidateProjectsList],
   );
 
   const clearMessageEdit = useCallback(
     async (chatId: string, messageId: string): Promise<Chat | undefined> => {
       const worker = await getReadiedWorker();
-      return worker.clearMessageEdit(chatId, messageId);
+      const result = await worker.clearMessageEdit(chatId, messageId);
+      if (result) {
+        invalidateProjectsList();
+      }
+
+      return result;
     },
-    [getReadiedWorker],
+    [getReadiedWorker, invalidateProjectsList],
   );
 
   const softDeleteChat = useCallback(
     async (chatId: string): Promise<Chat | undefined> => {
       const worker = await getReadiedWorker();
-      return worker.softDeleteChat(chatId);
+      const result = await worker.softDeleteChat(chatId);
+      if (result) {
+        invalidateProjectsList();
+      }
+
+      return result;
     },
-    [getReadiedWorker],
+    [getReadiedWorker, invalidateProjectsList],
   );
 
   const duplicateChat = useCallback(
     async (chatId: string): Promise<Chat> => {
       const worker = await getReadiedWorker();
-      return worker.duplicateChat(chatId);
+      const chat = await worker.duplicateChat(chatId);
+      invalidateProjectsList();
+      return chat;
     },
-    [getReadiedWorker],
+    [getReadiedWorker, invalidateProjectsList],
   );
 
   const getChatsForResource = useCallback(
@@ -410,9 +454,10 @@ export function ProjectManagerProvider({ children }: { readonly children: ReactN
   const deleteChat = useCallback(
     async (chatId: string): Promise<void> => {
       const worker = await getReadiedWorker();
-      return worker.deleteChat(chatId);
+      await worker.deleteChat(chatId);
+      invalidateProjectsList();
     },
-    [getReadiedWorker],
+    [getReadiedWorker, invalidateProjectsList],
   );
 
   const value = useMemo<ProjectManagerContextType>(() => {
@@ -422,6 +467,7 @@ export function ProjectManagerProvider({ children }: { readonly children: ReactN
       projectManagerRef: actorRef,
       createProject,
       updateProject,
+      touchProject,
       duplicateProject,
       getProjects,
       getProject,
@@ -443,6 +489,7 @@ export function ProjectManagerProvider({ children }: { readonly children: ReactN
     actorRef,
     createProject,
     updateProject,
+    touchProject,
     duplicateProject,
     getProjects,
     getProject,

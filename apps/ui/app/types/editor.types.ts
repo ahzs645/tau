@@ -1,4 +1,3 @@
-import type { FileStatus } from '@taucad/types';
 import type { SerializedDockview } from 'dockview-react';
 import type { PanelId, DesktopPanelId, GraphicsViewSettings } from '#constants/editor.constants.js';
 import { allotmentPanelOrder } from '#constants/editor.constants.js';
@@ -35,7 +34,6 @@ export type FileItem = {
   language?: string;
   isDirectory?: boolean;
   children?: FileItem[];
-  gitStatus?: FileStatus;
 };
 
 /**

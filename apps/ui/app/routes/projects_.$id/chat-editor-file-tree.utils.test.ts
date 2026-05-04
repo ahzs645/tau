@@ -66,15 +66,6 @@ describe('getItemData', () => {
     expect(result.isFolder).toBe(true);
     expect(result.name).toBe('src');
   });
-
-  it('should preserve gitStatus from the fileTree entry', () => {
-    const modified: FileItem['gitStatus'] = 'modified';
-    const fileTree = [{ ...createFileItem('index.ts'), gitStatus: modified }];
-
-    const result = getItemData(fileTree, rootId, 'index.ts');
-
-    expect(result.gitStatus).toBe('modified');
-  });
 });
 
 // ===================================================================

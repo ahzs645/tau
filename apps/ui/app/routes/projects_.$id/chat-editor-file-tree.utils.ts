@@ -9,7 +9,6 @@ export type TreeItemData = {
   name: string;
   isFolder: boolean;
   content?: Uint8Array<ArrayBuffer>;
-  gitStatus?: FileItem['gitStatus'];
 };
 
 /**
@@ -36,7 +35,6 @@ export const getItemData = (fileTree: FileItem[], rootId: string, itemId: string
       name: file.name,
       isFolder: file.isDirectory ?? false,
       content: file.content,
-      gitStatus: file.gitStatus,
     };
   }
 

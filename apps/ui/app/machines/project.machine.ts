@@ -8,7 +8,6 @@ import type { GraphicsViewSettings } from '#constants/editor.constants.js';
 import { defaultGraphicsSettings } from '#constants/editor.constants.js';
 import { fromSafeAsync } from '#lib/xstate.lib.js';
 import { cadMachine } from '#machines/cad.machine.js';
-import { gitMachine } from '#machines/git.machine.js';
 import { graphicsMachine } from '#machines/graphics.machine.js';
 import { logMachine } from '#machines/logs.machine.js';
 import type { fileManagerMachine } from '#machines/file-manager.machine.js';
@@ -32,7 +31,6 @@ export type ProjectContext = {
   shouldLoadModelOnStart: boolean;
   kernelOptionsFactory: KernelOptionsFactory;
   fileManagerRef: ActorRefFrom<typeof fileManagerMachine>;
-  gitRef: ActorRefFrom<typeof gitMachine>;
   /** Per-viewer-panel graphics machines, keyed by Dockview panel ID */
   viewGraphics: Map<string, ActorRefFrom<typeof graphicsMachine>>;
   /** Dynamic geometry units keyed by entry file path. Each is a headless CadMachine+KernelMachine. */
@@ -84,7 +82,6 @@ const projectActors = {
   loadProjectActor,
   writeProjectActor,
   writeParameterFileActor,
-  git: gitMachine,
   graphics: graphicsMachine,
   // Having the cadMachine typed results in:
   // `The inferred type of this node exceeds the maximum length the compiler will serialize`.
@@ -341,7 +338,6 @@ export const projectMachine = setup({
     }),
     stopStatefulActors: enqueueActions(({ enqueue, context }) => {
       // Stop the old stateful actors (they'll be garbage collected)
-      enqueue.stopChild(context.gitRef);
 
       // Stop all geometry units
       for (const unit of context.geometryUnits.values()) {
@@ -354,15 +350,6 @@ export const projectMachine = setup({
       }
     }),
     respawnStatefulActors: assign({
-      gitRef({ context, spawn }) {
-        return spawn('git', {
-          id: `git-${context.projectId}`,
-          input: {
-            projectId: context.projectId,
-            fileManagerRef: context.fileManagerRef,
-          },
-        });
-      },
       // Reset geometry units - the primary one will be created during initializeKernelIfNeeded after project load
       geometryUnits: () => new Map(),
       mainEntryFile: () => '',
@@ -624,11 +611,6 @@ export const projectMachine = setup({
   context({ input, spawn }) {
     const { projectId, shouldLoadModelOnStart = true, fileManagerRef, kernelOptionsFactory } = input;
 
-    const gitRef = spawn('git', {
-      id: `git-${projectId}`,
-      input: { projectId, fileManagerRef },
-    });
-
     const logRef = spawn('logs', {
       id: `log-${projectId}`,
     });
@@ -648,7 +630,6 @@ export const projectMachine = setup({
       shouldLoadModelOnStart,
       kernelOptionsFactory,
       fileManagerRef,
-      gitRef,
       viewGraphics,
       geometryUnits,
       mainEntryFile: '',

@@ -196,7 +196,7 @@ export const ChatEditorFileTree = memo(function ({
   // It's necessary to opt out of React Compiler auto-memoization for this component due to:
   // https://headless-tree.lukasbach.com/guides/react-compiler/
   'use no memo'; // Opt out of React Compiler memoization
-  const { projectRef, editorRef, gitRef } = useProject();
+  const { projectRef, editorRef } = useProject();
   const projectId = useSelector(projectRef, (state) => state.context.projectId);
   const fileManager = useFileManager();
   const { contentService, readFile, writeFile, renameFile, duplicateFile, deleteFile, getZippedDirectory } =
@@ -290,9 +290,6 @@ export const ChatEditorFileTree = memo(function ({
       return [];
     }
 
-    const gitSnapshot = gitRef.getSnapshot();
-    const { fileStatuses } = gitSnapshot.context;
-
     return [...fileTreeMap.values()].map((entry) => ({
       id: entry.path,
       name: entry.name,
@@ -300,9 +297,8 @@ export const ChatEditorFileTree = memo(function ({
       content: new Uint8Array(),
       language: getIconIdFromExtension(getFileExtension(entry.path)),
       isDirectory: entry.type === 'dir',
-      gitStatus: fileStatuses.get(entry.path)?.status,
     }));
-  }, [fileTreeMap, gitRef]);
+  }, [fileTreeMap]);
 
   const activeFilePath = useSelector(editorRef, (state) => state.context.activeFilePath);
   const openFiles = useSelector(editorRef, (state) => state.context.openFiles);
@@ -1384,8 +1380,6 @@ function TreeItem({
   onDownload,
   onCopyPath,
 }: TreeItemProps): React.JSX.Element {
-  const data = item.getItemData();
-  const hasGitChanges = Boolean(data.gitStatus && data.gitStatus !== 'clean');
   const itemLevel = item.getItemMeta().level;
   const paddingLeft = itemLevel * 16 + 8;
   const isSelected = item.isSelected();
@@ -1518,13 +1512,6 @@ function TreeItem({
             <span className={cn('truncate', isOpen && 'font-medium', isActive && 'text-primary')}>
               <HighlightText text={item.getItemName()} searchTerm={searchQuery} />
             </span>
-            {hasGitChanges ? (
-              <span
-                aria-label={`File has changes: ${data.gitStatus ?? ''}`}
-                className='size-2 shrink-0 rounded-full bg-yellow'
-                title={`File status: ${data.gitStatus ?? ''}`}
-              />
-            ) : null}
           </div>
           {isFolder ? null : (
             <DropdownMenu modal={false}>

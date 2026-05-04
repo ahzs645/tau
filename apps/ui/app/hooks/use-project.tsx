@@ -10,7 +10,6 @@ import { fromSafeAsync } from '#lib/xstate.lib.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import type { ObjectStoreWorker } from '#hooks/object-store.worker.js';
 import { projectMachine } from '#machines/project.machine.js';
-import type { gitMachine } from '#machines/git.machine.js';
 import { editorMachine } from '#machines/editor.machine.js';
 import type { cadMachine } from '#machines/cad.machine.js';
 import type { graphicsMachine } from '#machines/graphics.machine.js';
@@ -32,7 +31,6 @@ type ProjectContextType = {
   projectId: string;
   projectRef: ActorRefFrom<typeof projectMachine>;
   editorRef: ActorRefFrom<typeof editorMachine>;
-  gitRef: ActorRefFrom<typeof gitMachine>;
   /** Per-viewer-panel graphics machines, keyed by Dockview panel ID */
   viewGraphics: Map<string, ActorRefFrom<typeof graphicsMachine>>;
   /** Dynamic geometry units keyed by entry file path. Each is a headless CadMachine+KernelMachine. */
@@ -202,7 +200,6 @@ export function ProjectProvider({
   );
 
   // Select state from the machine
-  const gitRef = useSelector(actorRef, (state) => state.context.gitRef);
   const viewGraphics = useSelector(actorRef, (state) => state.context.viewGraphics);
   const geometryUnits = useSelector(actorRef, (state) => state.context.geometryUnits);
   const mainEntryFile = useSelector(
@@ -368,7 +365,6 @@ export function ProjectProvider({
       projectId,
       projectRef: actorRef,
       editorRef,
-      gitRef,
       viewGraphics,
       geometryUnits,
       mainEntryFile,
@@ -392,7 +388,6 @@ export function ProjectProvider({
     projectId,
     actorRef,
     editorRef,
-    gitRef,
     viewGraphics,
     geometryUnits,
     mainEntryFile,

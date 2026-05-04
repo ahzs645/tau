@@ -1,4 +1,5 @@
 import { renderHook, act } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ReactNode } from 'react';
 import { createElement } from 'react';
@@ -126,9 +127,16 @@ const { ProjectManagerProvider, useProjectManager } = await import('#hooks/use-p
 // ── Test wrapper ──────────────────────────────────────────────────────────────
 
 function createWrapper() {
-  // eslint-disable-next-line @typescript-eslint/naming-convention -- React component
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  // eslint-disable-next-line @typescript-eslint/naming-convention -- React component export
   return function Wrapper({ children }: { readonly children: ReactNode }) {
-    return createElement(ProjectManagerProvider, undefined, children);
+    return createElement(
+      QueryClientProvider,
+      { client: queryClient },
+      createElement(ProjectManagerProvider, undefined, children),
+    );
   };
 }
 

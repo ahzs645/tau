@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { IDockviewPanelProps } from 'dockview-react';
-import type { FileContentResult } from '#lib/file-content-service.js';
+import type { FileContentResult } from '@taucad/fs-client/file-content-service';
 
 const mockResolve = vi.fn();
 const mockWriteFile = vi.fn();
