@@ -82,6 +82,33 @@ $$`;
     });
   });
 
+  describe('over-escaped TeX commands', () => {
+    it('should collapse LLM doubled backslash before command names (bbox dimensions)', () => {
+      expect(normalizeLatexDelimiters(String.raw`Expected bbox $96\\times66\\times82$ mm`)).toBe(
+        String.raw`Expected bbox $96\times66\times82$ mm`,
+      );
+    });
+
+    it(String.raw`should collapse doubled backslash before \frac`, () => {
+      expect(normalizeLatexDelimiters(String.raw`$\frac{a}{b}$`)).toBe(String.raw`$\frac{a}{b}$`);
+      expect(normalizeLatexDelimiters(String.raw`$\\frac{a}{b}$`)).toBe(String.raw`$\frac{a}{b}$`);
+    });
+
+    it(String.raw`should collapse inside \( \) after delimiter normalization`, () => {
+      expect(normalizeLatexDelimiters(String.raw`\(\\sqrt{x}\)`)).toBe(String.raw`$\sqrt{x}$`);
+    });
+
+    it(String.raw`should not collapse TeX row break when \\ is followed by whitespace`, () => {
+      const input = String.raw`$$\begin{matrix} a \\ b \end{matrix}$$`;
+      expect(normalizeLatexDelimiters(input)).toBe(input);
+    });
+
+    it('should not rewrite doubled backslashes inside fenced code blocks', () => {
+      const input = 'Show `\\times` and also:\n```tex\n$96\\\\times66$\n```\nDone.';
+      expect(normalizeLatexDelimiters(input)).toBe(input);
+    });
+  });
+
   describe('complex mixed content', () => {
     it('should handle reasoning-style text with math and code', () => {
       const input = [

@@ -6,8 +6,9 @@ import { normalizeLatexDelimiters } from '#api/chat/middleware/latex-delimiter.m
  * Creates a TransformStream that normalizes LaTeX-style math delimiters
  * in streaming `text-delta` and `reasoning-delta` chunks.
  *
- * Converts `\(...\)` to `$...$` and `\[...\]` to `$$...$$` so the
- * client-side `remark-math` / `rehype-katex` pipeline can render them.
+ * Converts `\(...\)` to `$...$` and `\[...\]` to `$$...$$`, and collapses
+ * LLM `\\command` over-escapes to `\command`, so the client-side `remark-math`
+ * / `rehype-katex` pipeline can render them.
  */
 export function createLatexDelimiterTransform(): TransformStream<UIMessageChunk, UIMessageChunk> {
   return createDeltaTransform(normalizeLatexDelimiters);

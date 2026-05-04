@@ -77,6 +77,19 @@ describe('createLatexDelimiterTransform', () => {
 
       expect(deltas).toEqual(['where $a$ is the acceleration']);
     });
+
+    it(String.raw`should collapse LLM doubled backslash before \times in a single text-delta`, async () => {
+      const chunks: UIMessageChunk[] = [
+        { type: 'text-start', id: 't1' },
+        { type: 'text-delta', id: 't1', delta: String.raw`bbox $96\\times66\\times82$ mm` },
+        { type: 'text-end', id: 't1' },
+      ];
+
+      const results = await processChunks(chunks);
+      const deltas = extractDeltas(results);
+
+      expect(deltas).toEqual([String.raw`bbox $96\times66\times82$ mm`]);
+    });
   });
 
   describe('no-op', () => {
