@@ -247,7 +247,7 @@
     "tailwind-merge": "^3.5.0",
     "three": "^0.179.1",
     "three-mesh-bvh": "^0.9.8",
-    "three-viewport-gizmo": "https://codeload.github.com/taucad/three-viewport-gizmo/tar.gz/d5ae66010e7f5f067931aaeb6a74880a73d23b5d",
+    "three-viewport-gizmo": "https://codeload.github.com/taucad/three-viewport-gizmo/tar.gz/ba52643f1c5e3f72cfbded53e5fbf93ff9951429",
     "tslib": "catalog:",
     "turndown": "catalog:",
     "typescript-eslint": "catalog:",

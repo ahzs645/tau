@@ -53,6 +53,7 @@ groups:
       - Online3DViewer
       - glTF-Transform
       - assimpjs
+      - three-viewport-gizmo
   dev-tools:
     description: Development tools and frameworks
     repos:
@@ -437,3 +438,8 @@ repos:
   props:
     upstream: tscircuit/props
     description: Zod props for tscircuit React components (BoardProps, ChipProps, ResistorProps)
+  three-viewport-gizmo:
+    upstream: Fennec-hub/three-viewport-gizmo
+    description: Three Viewport Gizmo - interactive three.js view helper
+    fork: taucad/three-viewport-gizmo
+    commit: 3c22fb7b4da17aa5aaa33b169f144d1d3e2254dc

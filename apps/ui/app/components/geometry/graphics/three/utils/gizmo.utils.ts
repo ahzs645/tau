@@ -125,6 +125,7 @@ export function disposeGizmoResources({
   handleChange: () => void;
 }): void {
   gizmo.removeEventListener('change', handleChange);
+  gizmo.removeEventListener('hoverchange', handleChange);
   gizmo.dispose();
 
   if (canvas.parentElement) {

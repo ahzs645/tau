@@ -107,6 +107,7 @@ export function ViewportGizmoAxes({
 
     // Add event listeners for the gizmo
     gizmo.addEventListener('change', handleChange);
+    gizmo.addEventListener('hoverchange', handleChange);
 
     gizmo.scale.multiplyScalar(0.7);
 

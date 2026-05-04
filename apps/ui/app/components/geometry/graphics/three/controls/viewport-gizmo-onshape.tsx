@@ -160,6 +160,7 @@ export function ViewportGizmoOnshape({
 
     // Add event listeners for the gizmo
     gizmo.addEventListener('change', handleChange);
+    gizmo.addEventListener('hoverchange', handleChange);
 
     gizmo.scale.multiplyScalar(0.7);
     gizmo.add(
