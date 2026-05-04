@@ -16,6 +16,7 @@ import { cn } from '#utils/ui.utils.js';
 import { SidebarOffset } from '#components/layout/sidebar-offset.js';
 import { useChatInterfaceState, usePanePositionObserver } from '#routes/projects_.$id/use-chat-interface-state.js';
 import { useProject } from '#hooks/use-project.js';
+import { useFeature } from '#flags/use-feature.js';
 import {
   allotmentPanelOrder,
   panelMinSizeStandard,
@@ -51,6 +52,10 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
   const { projectRef } = useProject();
   const isProjectError = useSelector(projectRef, (state) => state.matches('error'));
 
+  const isTauDebugEnabled = useFeature('tauDebug');
+  const isExplorerPaneVisible = isTauDebugEnabled && isExplorerOpen;
+  const isKernelPaneVisible = isTauDebugEnabled && isKernelOpen;
+
   const allotmentRef = useRef<HTMLDivElement>(null);
   const allotmentInstanceRef = useRef<AllotmentHandle>(null);
   const [isClient, setIsClient] = useState(false);
@@ -62,7 +67,7 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
   }, []);
 
   // Determine if any left/right panels are open for center pane edge treatment
-  const isAnyLeftPanelOpen = isChatOpen || isFileTreeOpen || isExplorerOpen || isKernelOpen;
+  const isAnyLeftPanelOpen = isChatOpen || isFileTreeOpen || isExplorerPaneVisible || isKernelPaneVisible;
   const isAnyRightPanelOpen = isParametersOpen || isEditorOpen || isConverterOpen || isDetailsOpen;
 
   // Map panel IDs to their visibility states
@@ -70,8 +75,8 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
   const panelVisibility: Record<PanelId, boolean> = {
     chat: isChatOpen,
     files: isFileTreeOpen,
-    explorer: isExplorerOpen,
-    kernel: isKernelOpen,
+    explorer: isExplorerPaneVisible,
+    kernel: isKernelPaneVisible,
     viewer: true, // Always visible
     parameters: isParametersOpen,
     editor: isEditorOpen,
@@ -146,8 +151,8 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
     panelSizes,
     isChatOpen,
     isFileTreeOpen,
-    isExplorerOpen,
-    isKernelOpen,
+    isExplorerPaneVisible,
+    isKernelPaneVisible,
     isParametersOpen,
     isEditorOpen,
     isConverterOpen,
@@ -161,8 +166,8 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
     isFileTreeOpen,
     isParametersOpen,
     isEditorOpen,
-    isExplorerOpen,
-    isKernelOpen,
+    isExplorerOpen: isExplorerPaneVisible,
+    isKernelOpen: isKernelPaneVisible,
     isConverterOpen,
     isDetailsOpen,
   });
@@ -257,9 +262,9 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
             minSize={panelMinSizeStandard}
             preferredSize={panelSizes.explorer}
             priority={LayoutPriority.Low}
-            visible={isExplorerOpen}
+            visible={isExplorerPaneVisible}
           >
-            <ChatExplorerTree isExpanded={isExplorerOpen} setIsExpanded={setIsExplorerOpen} />
+            <ChatExplorerTree isExpanded={isExplorerPaneVisible} setIsExpanded={setIsExplorerOpen} />
           </Allotment.Pane>
 
           <Allotment.Pane
@@ -267,9 +272,9 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
             minSize={panelMinSizeStandard}
             preferredSize={panelSizes.kernel}
             priority={LayoutPriority.Low}
-            visible={isKernelOpen}
+            visible={isKernelPaneVisible}
           >
-            <ChatKernel isExpanded={isKernelOpen} setIsExpanded={setIsKernelOpen} />
+            <ChatKernel isExpanded={isKernelPaneVisible} setIsExpanded={setIsKernelOpen} />
           </Allotment.Pane>
 
           {/* Center viewer - High priority so it absorbs all extra space from collapsed panels */}
@@ -293,18 +298,22 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
                   setIsFileTreeOpen((previous) => !previous);
                 }}
               />
-              <ChatExplorerTrigger
-                isOpen={isExplorerOpen}
-                onToggle={() => {
-                  setIsExplorerOpen((previous) => !previous);
-                }}
-              />
-              <ChatKernelTrigger
-                isOpen={isKernelOpen}
-                onToggle={() => {
-                  setIsKernelOpen((previous) => !previous);
-                }}
-              />
+              {isTauDebugEnabled ? (
+                <>
+                  <ChatExplorerTrigger
+                    isOpen={isExplorerOpen}
+                    onToggle={() => {
+                      setIsExplorerOpen((previous) => !previous);
+                    }}
+                  />
+                  <ChatKernelTrigger
+                    isOpen={isKernelOpen}
+                    onToggle={() => {
+                      setIsKernelOpen((previous) => !previous);
+                    }}
+                  />
+                </>
+              ) : null}
             </div>
 
             {/* Top-right Content - positioned above gizmo */}
