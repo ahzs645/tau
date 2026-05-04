@@ -66,13 +66,11 @@ export default function main(p = defaultParams) {}
     backendProvider: 'manifold',
     longDescription:
       'Manifold is a high-performance geometry kernel focused on topological robustness and mesh-first workflows. It is ideal for boolean-heavy modeling, procedural generation, and browser-native CAD experiences.',
-    emptyCode: `import { Manifold } from 'manifold-3d/manifoldCAD';
+    emptyCode: `import {} from 'manifold-3d/manifoldCAD';
 
-export const defaultParams = { size: 20 };
+export const defaultParams = {};
 
-export default function main(p = defaultParams) {
-  return Manifold.cube([p.size, p.size, p.size], true);
-}
+export default function main(p = defaultParams) {}
 `,
     recommended: 'Procedural & Mesh-First CAD',
     tags: ['TypeScript', 'Robust Booleans', 'Mesh Kernel', 'WASM', 'Browser-Native'],
@@ -104,17 +102,11 @@ export default function main(p = defaultParams) {
     backendProvider: 'jscad',
     longDescription:
       'Open-source modular CAD toolkit using JavaScript. Creates parametric 2D & 3D designs with CSG operations. Perfect for browser-based modeling, 3D printing, and programmatic design generation.',
-    emptyCode: `// JSCAD minimal starter
-// This code requires the @jscad/modeling API at runtime.
-import { primitives } from '@jscad/modeling';
-const { cube } = primitives;
+    emptyCode: `import {} from '@jscad/modeling';
 
-export const defaultParams = { size: 20 };
+export const defaultParams = {};
 
-export default function main(p = defaultParams) {
-  
-  return cube({ size: p.size });
-}
+export default function main(p = defaultParams) {}
 `,
     recommended: '3D Printing & Web-Based CAD',
     tags: ['TypeScript', 'CSG', 'Browser-Native', '3D Printing'],
@@ -135,18 +127,11 @@ export default function main(p = defaultParams) {
     backendProvider: 'opencascade',
     longDescription:
       'Direct access to the OpenCASCADE Technology (OCCT) kernel via opencascade.js. Full control over BRep operations, precise geometry, and advanced CAD algorithms without abstraction layers.',
-    emptyCode: `import { BRepPrimAPI_MakeBox } from 'opencascade.js';
+    emptyCode: `import {} from 'opencascade.js';
 
-export const defaultParams = { width: 20, height: 20, depth: 20 };
+export const defaultParams = {};
 
-export default function main(p = defaultParams) {
-  const box = new BRepPrimAPI_MakeBox(p.width, p.height, p.depth);
-  try {
-    return box.Shape();
-  } finally {
-    box.delete();
-  }
-}
+export default function main(p = defaultParams) {}
 `,
     recommended: 'Advanced CAD & Full Kernel Access',
     tags: ['OpenCASCADE', 'BRep', 'TypeScript', 'WASM', 'Precision'],
