@@ -572,7 +572,7 @@ export function ChatStackTrace({ entryFile, className, side, ...props }: ChatSta
 
   const content = (
     <CollapsibleContent className={cn('border-border', side === 'bottom' && 'border-b', side === 'top' && 'border-b')}>
-      <div className='flex flex-col'>
+      <div className='flex max-h-[min(20rem,40svh)] scroll-shadows-y flex-col'>
         {errors.map((error, errorIndex) => {
           // Create a unique key from error properties
           const errorKey = `${error.message}-${error.location?.startLineNumber ?? 'unknown'}-${error.location?.startColumn ?? 'unknown'}`;
