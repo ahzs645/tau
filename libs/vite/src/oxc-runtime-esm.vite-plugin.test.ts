@@ -6,8 +6,7 @@ import { oxcRuntimeEsm } from '#oxc-runtime-esm.vite-plugin.js';
 const require = createRequire(import.meta.url);
 
 function getRuntimeDirectory(): string {
-  const viteRequire = createRequire(require.resolve('vite/package.json'));
-  return path.dirname(viteRequire.resolve('@oxc-project/runtime/package.json'));
+  return path.dirname(require.resolve('@oxc-project/runtime/package.json'));
 }
 
 type ResolveIdHook = {
@@ -72,7 +71,7 @@ describe('oxcRuntimeEsm', () => {
     expect(resolved).toBe(path.join(runtimeDirectory, 'src/helpers/esm', 'applyDecoratedDescriptor.js'));
   });
 
-  it("should resolve the runtime directory from vite's own @oxc-project/runtime", () => {
+  it("should resolve the runtime directory from @taucad/vite's @oxc-project/runtime dependency", () => {
     const plugin = oxcRuntimeEsm();
     callConfigResolved(plugin);
 

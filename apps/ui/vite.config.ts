@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { reactRouter } from '@react-router/dev/vite';
 import netlifyReactRouter from '@netlify/vite-plugin-react-router';
 import { nxViteTsPaths } from '@nx/vite/plugins/nx-tsconfig-paths.plugin';
-import devtoolsJson from 'vite-plugin-devtools-json';
+import devtoolsJson from '@silvenon/vite-plugin-devtools-json';
 import tailwindcss from '@tailwindcss/vite';
 import { visualizer } from 'rollup-plugin-visualizer';
 import mdx from 'fumadocs-mdx/vite';
@@ -15,7 +15,6 @@ import * as MdxConfig from './app/lib/fumadocs/source.config.js';
 import { runtime } from '@taucad/runtime/vite';
 import { tsModuleUrlPlugin } from '@taucad/vite/ts-module-url';
 import { base64Loader } from '@taucad/vite/base64-loader';
-import { largeDepRegexFix } from '@taucad/vite/large-dep-regex-fix';
 import { optimizeDepsFromCache } from '@taucad/vite/optimize-deps-from-cache';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -35,9 +34,6 @@ export default defineConfig(({ mode }) => {
       // Pre-bundle all deps known from the previous dev session's cache,
       // eliminating cascading "new dependencies optimized → reloading" on cold start.
       optimizeDepsFromCache(),
-
-      // Workaround: Vite 8 beta regex overflow on large pre-bundled deps (Monaco Editor)
-      largeDepRegexFix(),
 
       /*
        * @taucad/runtime contract: COOP/COEP for SharedArrayBuffer, exclude the

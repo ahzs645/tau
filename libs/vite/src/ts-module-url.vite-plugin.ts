@@ -99,9 +99,8 @@ const isRealCallSite = (code: string, match: RegExpExecArray): boolean => {
  * **Cheap-first invariant:** run `urlPattern` before any `stripLiteral` call. Zero matches means we never
  * tokenize (dependency files that only mention `import.meta.url` for Emscripten glue are free). For sources
  * larger than {@link stripLimit}, strip only per-match windows via {@link isRealCallSite}. Same pattern as
- * {@link largeDepRegexFix} and Vite upstream's transform-filter hardening
- * ([`vitejs/vite#21800`](https://github.com/vitejs/vite/pull/21800)). Root cause:
- * `docs/research/vite-plugin-large-string-literal-overflow.md`.
+ * Vite upstream's transform-filter hardening ([`vitejs/vite#21800`](https://github.com/vitejs/vite/pull/21800)).
+ * Root cause: `docs/research/vite-plugin-large-string-literal-overflow.md`.
  *
  * @internal
  */

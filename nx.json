@@ -160,5 +160,6 @@
     "git": {
       "commitMessage": "chore(release): v{version}"
     }
-  }
+  },
+  "analytics": true
 }

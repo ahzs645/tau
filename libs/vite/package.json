@@ -18,11 +18,6 @@
       "import": "./src/base64-loader.vite-plugin.ts",
       "default": "./src/base64-loader.vite-plugin.ts"
     },
-    "./large-dep-regex-fix": {
-      "types": "./src/large-dep-regex-fix.vite-plugin.ts",
-      "import": "./src/large-dep-regex-fix.vite-plugin.ts",
-      "default": "./src/large-dep-regex-fix.vite-plugin.ts"
-    },
     "./optimize-deps-from-cache": {
       "types": "./src/optimize-deps-from-cache.vite-plugin.ts",
       "import": "./src/optimize-deps-from-cache.vite-plugin.ts",
@@ -35,6 +30,7 @@
     }
   },
   "dependencies": {
+    "@oxc-project/runtime": "0.128.0",
     "strip-literal": "catalog:",
     "vite": "catalog:"
   }

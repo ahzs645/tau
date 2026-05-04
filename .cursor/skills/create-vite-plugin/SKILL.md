@@ -94,7 +94,6 @@ plugins: [
 | `cross-origin-isolation`   | `configureServer`, `configurePreviewServer`      | COOP/COEP headers for SharedArrayBuffer     |
 | `ts-module-url`            | `resolveId`, `load` (build); `transform` (serve) | Resolve `.ts` in `new URL()`                |
 | `base64-loader`            | `transform`                                      | Base64-encode `?base64` imports             |
-| `large-dep-regex-fix`      | `configResolved`                                 | Patch regex overflow on large deps          |
 | `optimize-deps-from-cache` | `config`                                         | Pre-inject deps from previous session cache |
 
 ## Vite 8 Best Practices

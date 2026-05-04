@@ -7,29 +7,28 @@ const helperPrefix = '@oxc-project/runtime/helpers/';
 /**
  * Vite 8's built-in `vite:oxc` plugin transforms TypeScript decorators into
  * imports from `@oxc-project/runtime/helpers/*`. Its internal resolveId hook
- * resolves these from Vite's own bundled `@oxc-project/runtime` copy, where
- * the `node` (CJS) condition is listed first in conditional exports. The
- * ESM-only SSR module runner then crashes with `module is not defined`.
+ * resolves these from a CJS-first conditional export. The ESM-only SSR module
+ * runner then crashes with `module is not defined`.
  *
  * This plugin intercepts those imports before `vite:oxc` and resolves them
  * directly to the ESM file on disk, bypassing the conditional export map.
  *
- * Resolution uses `createRequire` anchored at `vite/package.json` so it
- * finds the same `@oxc-project/runtime` copy that `vite:oxc` ships, even
- * under pnpm strict mode where the runtime is not hoisted.
+ * Resolution is anchored at this package's `node_modules` via
+ * `createRequire(import.meta.url)` — Vite 8 no longer ships
+ * `@oxc-project/runtime` next to `vite/package.json`, so we depend on
+ * `@oxc-project/runtime` explicitly on `@taucad/vite`.
  *
  * @public
  */
 export function oxcRuntimeEsm(): Plugin {
   const esmRequire = createRequire(import.meta.url);
-  const viteRequire = createRequire(esmRequire.resolve('vite/package.json'));
   let runtimeDirectory: string;
   return {
     name: 'vite:oxc-runtime-esm',
     enforce: 'pre',
     apply: 'serve',
     configResolved() {
-      runtimeDirectory = path.dirname(viteRequire.resolve('@oxc-project/runtime/package.json'));
+      runtimeDirectory = path.dirname(esmRequire.resolve('@oxc-project/runtime/package.json'));
     },
     resolveId: {
       filter: { id: /^@oxc-project\/runtime\/helpers\// },

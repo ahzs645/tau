@@ -32,17 +32,17 @@ catalog:
   '@langchain/tavily': ^1.2.0
   '@msgpack/msgpack': ^3.1.3
   '@nestjs/terminus': ^11.1.1
-  '@nx/devkit': 22.5.2
-  '@nx/eslint': 22.5.2
-  '@nx/eslint-plugin': 22.5.2
-  '@nx/js': 22.5.2
-  '@nx/nest': 22.5.2
-  '@nx/node': 22.5.2
-  '@nx/playwright': 22.5.2
-  '@nx/react': 22.5.2
-  '@nx/vite': 22.5.2
-  '@nx/web': 22.5.2
-  '@nx/webpack': 22.5.2
+  '@nx/devkit': 22.7.1
+  '@nx/eslint': 22.7.1
+  '@nx/eslint-plugin': 22.7.1
+  '@nx/js': 22.7.1
+  '@nx/nest': 22.7.1
+  '@nx/node': 22.7.1
+  '@nx/playwright': 22.7.1
+  '@nx/react': 22.7.1
+  '@nx/vite': 22.7.1
+  '@nx/web': 22.7.1
+  '@nx/webpack': 22.7.1
   '@opentelemetry/api': ^1.9.0
   '@opentelemetry/auto-instrumentations-node': ^0.71.0
   '@opentelemetry/exporter-logs-otlp-http': ^0.213.0
@@ -57,10 +57,10 @@ catalog:
   '@oxc-node/core': ^0.0.35
   '@playwright/test': ^1.58.2
   '@pyroscope/nodejs': ^0.4.10
-  '@react-router/dev': 7.12.0
-  '@react-router/express': 7.12.0
-  '@react-router/fs-routes': 7.12.0
-  '@react-router/node': 7.12.0
+  '@react-router/dev': 7.14.2
+  '@react-router/express': 7.14.2
+  '@react-router/fs-routes': 7.14.2
+  '@react-router/node': 7.14.2
   '@size-limit/file': ^12.0.1
   '@socket.io/redis-streams-adapter': ^0.3.1
   '@taucad/kcl-wasm-lib': 0.1.148
@@ -89,8 +89,8 @@ catalog:
   '@types/turndown': ^5.0.6
   '@typescript/native-preview': 7.0.0-dev.20260223.1
   '@typescript/vfs': ^1.6.4
-  '@vitest/coverage-v8': 4.1.0-beta.6
-  '@vitest/ui': 4.1.0-beta.6
+  '@vitest/coverage-v8': 4.1.5
+  '@vitest/ui': 4.1.5
   '@xyflow/react': ^12.10.1
   cdn-resolve: ^2.1.2
   citty: ^0.2.2
@@ -129,7 +129,7 @@ catalog:
   manifold-3d: 3.3.2
   mermaid: ^11.12.3
   netlify-cli: ^25.1.0
-  nx: 22.5.2
+  nx: 22.7.1
   openscad-wasm-prebuilt: ^1.2.0
   oxfmt: ^0.36.0
   oxlint: ^1.51.0
@@ -138,7 +138,7 @@ catalog:
   publint: ^0.3.17
   react: ^19.2.4
   react-dom: ^19.2.4
-  react-router: 7.12.0
+  react-router: 7.14.2
   remark-math: ^6.0.0
   rolldown: 1.0.0-rc.17
   size-limit: ^12.0.1
@@ -153,9 +153,9 @@ catalog:
   typescript-eslint: ^8.56.1
   uint8array-extras: ^1.5.0
   uzip: ^0.20201231.0
-  vite: 8.0.0-beta.16
+  vite: 8.0.10
   vite-plugin-static-copy: ^4.1.0
-  vitest: 4.1.0-beta.6
+  vitest: 4.1.5
   vitest-mock-extended: ^3.1.0
   ws: ^8.19.0
   xstate: ^5.28.0
