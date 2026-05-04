@@ -356,9 +356,10 @@
   },
   "pnpm": {
     "patchedDependencies": {
-      "@taucad/replicad": "patches/replicad.patch",
+      "@ai-sdk/langchain@2.0.147": "patches/@ai-sdk__langchain@2.0.147.patch",
+      "@kittycad/lib@2.0.48": "patches/@kittycad__lib@2.0.48.patch",
       "@langchain/openai@1.4.0": "patches/@langchain__openai@1.4.0.patch",
-      "@ai-sdk/langchain@2.0.147": "patches/@ai-sdk__langchain@2.0.147.patch"
+      "@taucad/replicad": "patches/replicad.patch"
     },
     "overrides": {
       "@langchain/google-common": "file:tarballs/langchain-fork/langchain-google-common-2.1.32.tgz",
