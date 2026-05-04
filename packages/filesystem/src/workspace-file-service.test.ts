@@ -10,6 +10,7 @@ import { ChangeEventBus } from '#change-event-bus.js';
 import { MountTable } from '#mount-table.js';
 import { SharedPool } from '@taucad/memory';
 import type { ChangeEvent, FileSystemProvider, WatchEvent } from '#types.js';
+import { getEventOrigin } from '#event-origin-registry.js';
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -587,9 +588,55 @@ describe('WorkspaceFileService', () => {
       expect(nodes[1]!.children).toBeUndefined();
     });
 
-    it('should return empty array for non-existent directory', async () => {
-      const nodes = await service.readDirectory('/nowhere');
-      expect(nodes).toEqual([]);
+    it('should propagate ENOENT from the provider when the directory does not exist', async () => {
+      try {
+        await service.readDirectory('/nowhere');
+        expect.fail('should have thrown');
+      } catch (error) {
+        expect((error as NodeJS.ErrnoException).code).toBe('ENOENT');
+        expect((error as Error).message.toLowerCase()).toContain('enoent');
+      }
+    });
+
+    it('should still skip individual children whose stat fails when using readdir without readdirWithStats', async () => {
+      await service.mkdir('/stat-skip', { recursive: true });
+      await service.writeFile('/stat-skip/good.txt', 'a');
+
+      const savedReaddirWithStats = rootProvider.readdirWithStats;
+      const originalReaddir = rootProvider.readdir.bind(rootProvider);
+      const originalStat = rootProvider.stat.bind(rootProvider);
+
+      Object.defineProperty(rootProvider, 'readdirWithStats', {
+        value: undefined,
+        configurable: true,
+        enumerable: true,
+      });
+      try {
+        vi.spyOn(rootProvider, 'readdir').mockImplementation(async (directoryPath: string) => {
+          if (directoryPath === '/stat-skip') {
+            return ['good.txt', 'ghost.txt'];
+          }
+
+          return originalReaddir(directoryPath);
+        });
+        vi.spyOn(rootProvider, 'stat').mockImplementation(async (filePath: string) => {
+          if (filePath === '/stat-skip/ghost.txt') {
+            throw new Error('stat failed for deleted child');
+          }
+
+          return originalStat(filePath);
+        });
+
+        const nodes = await service.readDirectory('/stat-skip');
+        const names = nodes.map((n) => n.name).sort();
+        expect(names).toEqual(['good.txt']);
+      } finally {
+        Object.defineProperty(rootProvider, 'readdirWithStats', {
+          value: savedReaddirWithStats,
+          configurable: true,
+          enumerable: true,
+        });
+      }
     });
 
     it('should cache results on subsequent calls', async () => {
@@ -788,6 +835,60 @@ describe('WorkspaceFileService', () => {
       const writeEvents = events.filter((event) => event.type === 'fileWritten');
       expect(writeEvents).toHaveLength(1);
       expect(writeEvents[0]!.path).toBe('/ev.txt');
+    });
+
+    it('should leave event untagged on direct mutations (no context)', async () => {
+      const origins: Array<string | undefined> = [];
+      eventBus.subscribe((event) => origins.push(getEventOrigin(event)));
+      await service.writeFile('/direct-origin.txt', 'x');
+      expect(origins).toEqual([undefined]);
+    });
+
+    it('should tag fileWritten via WorkspaceMutationContext on writeFile', async () => {
+      const received: Array<{ type: string; origin: string | undefined }> = [];
+      eventBus.subscribe((event) => {
+        received.push({ type: event.type, origin: getEventOrigin(event) });
+      });
+      await service.writeFile('/ctx.txt', 'y12345678901234567890123456789012', { originClientId: 'port_kernel' });
+      expect(received.some((r) => r.type === 'fileWritten' && r.origin === 'port_kernel')).toBe(true);
+    });
+
+    it('should leave observer-raw emits untagged when emit() is used without tagEventOrigin', async () => {
+      const origins: Array<string | undefined> = [];
+      eventBus.subscribe((changeEvent) => origins.push(getEventOrigin(changeEvent)));
+      eventBus.emit({ type: 'fileWritten', path: '/observer.txt', backend: 'memory' });
+      expect(origins).toEqual([undefined]);
+    });
+
+    it('should tag events for every mutating method when context.originClientId is set', async () => {
+      const context = { originClientId: 'all_methods' };
+      const originsByType: Array<{ type: ChangeEvent['type']; origin?: string }> = [];
+      eventBus.subscribe((event) => {
+        originsByType.push({ type: event.type, origin: getEventOrigin(event) });
+      });
+
+      await service.writeFile('/mut-w.txt', 'a', context);
+      await service.writeFiles({ '/mut-batch/x.txt': { content: 'b' } }, context);
+      await service.mkdir('/mut-mkdir', { recursive: true }, context);
+      await service.writeFile('/mut-r1.txt', 'c');
+      await service.rename('/mut-r1.txt', '/mut-r2.txt', context);
+      await service.writeFile('/mut-u.txt', 'd');
+      await service.unlink('/mut-u.txt', context);
+      await service.mkdir('/mut-rmdir', { recursive: true });
+      await service.rmdir('/mut-rmdir', context);
+      await service.writeFile('/mut-dup-s.txt', 'e');
+      await service.duplicateFile('/mut-dup-s.txt', '/mut-dup-d.txt', context);
+      await service.mkdir('/mut-cd-src', { recursive: true });
+      await service.writeFile('/mut-cd-src/nested.txt', 'f');
+      await service.copyDirectory('/mut-cd-src', '/mut-cd-dst', context);
+
+      const tagged = originsByType.filter((row) => row.origin === 'all_methods');
+      expect(tagged.length).toBeGreaterThanOrEqual(8);
+      const types = new Set(tagged.map((row) => row.type));
+      expect(types.has('fileWritten')).toBe(true);
+      expect(types.has('fileRenamed')).toBe(true);
+      expect(types.has('fileDeleted')).toBe(true);
+      expect(types.has('directoryChanged')).toBe(true);
     });
 
     it('should emit directoryChanged on writeFiles', async () => {

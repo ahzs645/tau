@@ -18,7 +18,7 @@ export { createFileSystemService, createFileSystemServiceOptions } from '#file-s
 export type { FileSystemService, FileSystemServiceOptions } from '#file-system-service.js';
 
 export { WorkspaceFileService } from '#workspace-file-service.js';
-export type { MkdirOptions } from '#workspace-file-service.js';
+export type { MkdirOptions, WorkspaceMutationContext } from '#workspace-file-service.js';
 
 export { ProviderRegistry } from '#provider-registry.js';
 export type { ProviderRegistryOptions } from '#provider-registry.js';
@@ -31,8 +31,9 @@ export { ChangeEventBus } from '#change-event-bus.js';
 export { DirectoryTreeCache } from '#directory-tree-cache.js';
 export { InMemoryFileTree } from '#in-memory-file-tree.js';
 export type { TreeNode } from '#in-memory-file-tree.js';
-export { EventCoalescer, coalesceEvents } from '#event-coalescer.js';
+export { EventCoalescer, coalesceEvents, coalesceChangeEvents } from '#event-coalescer.js';
 export type { CoalescerOptions } from '#event-coalescer.js';
+export { tagEventOrigin, getEventOrigin, clearEventOrigin } from '#event-origin-registry.js';
 export { ThrottledWorker } from '#throttled-worker.js';
 export type { ThrottledWorkerOptions } from '#throttled-worker.js';
 export { WatchRegistry } from '#watch-registry.js';

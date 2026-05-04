@@ -11,7 +11,7 @@ import { Slice } from '@tiptap/pm/model';
 import type { EditorView } from '@tiptap/pm/view';
 import type { Chat } from '@taucad/chat';
 import type { FileEntry } from '@taucad/types';
-import type { FileTreeService } from '#lib/file-tree-service.js';
+import type { FileTreeService } from '@taucad/fs-client/file-tree-service';
 import type { ChipType } from '#components/chat/context-chip.js';
 import { buildPastedContent, slashCommandRegex } from '#utils/at-reference.utils.js';
 import type { PastedContentSegment } from '#utils/at-reference.utils.js';

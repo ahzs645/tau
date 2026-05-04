@@ -1,6 +1,6 @@
 import { renderHook, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { FileContentResult } from '#lib/file-content-service.js';
+import type { FileContentResult } from '@taucad/fs-client/file-content-service';
 
 const mockContentService = {
   peekOutcome: vi.fn<(path: string) => FileContentResult>(),

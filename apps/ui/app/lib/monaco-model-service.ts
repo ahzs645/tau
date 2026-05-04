@@ -16,8 +16,8 @@
 
 import type * as Monaco from 'monaco-editor';
 import type { MonacoMarkerService } from '#lib/monaco-marker-service.js';
-import type { FileContentService, ContentChangeEvent } from '#lib/file-content-service.js';
-import type { FileTreeService } from '#lib/file-tree-service.js';
+import type { FileContentService, ContentChangeEvent } from '@taucad/fs-client/file-content-service';
+import type { FileTreeService } from '@taucad/fs-client/file-tree-service';
 import { isJsLikeFile, getMonacoLanguage } from '#lib/monaco.constants.js';
 import { decodeTextFile } from '#utils/filesystem.utils.js';
 

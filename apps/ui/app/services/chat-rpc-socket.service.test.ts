@@ -192,6 +192,7 @@ describe('ChatRpcSocketService', () => {
       service.connect();
       const handler = vi.fn().mockResolvedValue({
         type: 'rpc_response',
+        rpcName: 'read_file',
         requestId: 'req_1',
         toolCallId: 'tc_1',
         result: { content: 'ok' },
@@ -205,7 +206,7 @@ describe('ChatRpcSocketService', () => {
         requestId: 'req_1',
         toolCallId: 'tc_1',
         rpcName: 'read_file',
-        args: {},
+        args: { targetFile: '/fixture.txt' },
       };
 
       emitSocketEvent('rpc_request', request, ack);
@@ -227,7 +228,7 @@ describe('ChatRpcSocketService', () => {
         requestId: 'req_1',
         toolCallId: 'tc_1',
         rpcName: 'read_file',
-        args: {},
+        args: { targetFile: '/fixture.txt' },
       };
 
       emitSocketEvent('rpc_request', request, ack);
@@ -239,6 +240,7 @@ describe('ChatRpcSocketService', () => {
       expect(ack).toHaveBeenCalledWith(
         expect.objectContaining({
           type: 'rpc_response',
+          rpcName: 'read_file',
           error: expect.stringContaining('No handler registered'),
         }),
       );
@@ -256,7 +258,7 @@ describe('ChatRpcSocketService', () => {
         requestId: 'req_1',
         toolCallId: 'tc_1',
         rpcName: 'read_file',
-        args: {},
+        args: { targetFile: '/fixture.txt' },
       };
 
       emitSocketEvent('rpc_request', request, ack);
@@ -268,6 +270,7 @@ describe('ChatRpcSocketService', () => {
       expect(ack).toHaveBeenCalledWith(
         expect.objectContaining({
           type: 'rpc_response',
+          rpcName: 'read_file',
           error: 'handler crashed',
         }),
       );

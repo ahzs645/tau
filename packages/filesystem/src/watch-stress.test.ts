@@ -193,10 +193,11 @@ describe('EventCoalescer overflow stress', () => {
     }
     expect(onOverflow).toHaveBeenCalledTimes(1);
 
-    coalescer.push(written('/recovery.ts'));
+    const recovery = written('/recovery.ts');
+    coalescer.push(recovery);
     vi.advanceTimersByTime(100);
     expect(deliver).toHaveBeenCalledTimes(1);
-    expect(deliver).toHaveBeenCalledWith([written('/recovery.ts')]);
+    expect(deliver).toHaveBeenCalledWith([recovery]);
 
     coalescer.dispose();
   });
@@ -234,13 +235,15 @@ describe('Watch event latency measurement', () => {
     const deliver = vi.fn();
     const coalescer = new EventCoalescer(deliver, { coalescingWindow });
 
-    coalescer.push(written('/test.ts'));
+    const testEvent = written('/test.ts');
+    coalescer.push(testEvent);
 
     vi.advanceTimersByTime(coalescingWindow - 1);
     expect(deliver).not.toHaveBeenCalled();
 
     vi.advanceTimersByTime(1);
     expect(deliver).toHaveBeenCalledTimes(1);
+    expect(deliver).toHaveBeenCalledWith([testEvent]);
 
     coalescer.dispose();
   });
@@ -248,17 +251,20 @@ describe('Watch event latency measurement', () => {
   it('should batch multiple events within window into one delivery', () => {
     const coalescingWindow = 50;
     const deliveries: ChangeEvent[][] = [];
-    const coalescer = new EventCoalescer((events) => deliveries.push([...events]), { coalescingWindow });
+    const coalescer = new EventCoalescer((chunk) => deliveries.push([...chunk]), { coalescingWindow });
 
-    coalescer.push(written('/a.ts'));
+    const a = written('/a.ts');
+    const b = written('/b.ts');
+    const c = written('/c.ts');
+    coalescer.push(a);
     vi.advanceTimersByTime(10);
-    coalescer.push(written('/b.ts'));
+    coalescer.push(b);
     vi.advanceTimersByTime(10);
-    coalescer.push(written('/c.ts'));
+    coalescer.push(c);
 
     vi.advanceTimersByTime(coalescingWindow);
     expect(deliveries.length).toBe(1);
-    expect(deliveries[0]!.length).toBe(3);
+    expect(deliveries[0]).toEqual([a, b, c]);
 
     coalescer.dispose();
   });

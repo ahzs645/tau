@@ -2,6 +2,16 @@
  * Electron main-process filesystem authority seam (Phase 11, R8 seam 2,
  * R9).
  *
+ * Renderer-side parity with the web **file manager** stack is provided by
+ * `@taucad/fs-client/file-content-service`,
+ * `@taucad/fs-client/file-tree-service`, and
+ * `WorkerChangeChannel` from `@taucad/fs-client/worker-change-channel`
+ * when wired to a `listen('fileChanged', ...)` transport (same pattern as
+ * `apps/ui/app/machines/file-manager.machine.ts`).
+ *
+ * TODO: Renderer PoC still uses `openFile({ code })` only — adopt
+ * `FileContentService` / `FileTreeService` here when mirroring the full FM stack.
+ *
  * `createFsBridgeHost` plugs a {@link RuntimeFileSystemBase} onto a
  * wire-level {@link Port} (typically the `port1` half of a
  * `MessageChannelMain` whose `port2` was shipped to the renderer) and

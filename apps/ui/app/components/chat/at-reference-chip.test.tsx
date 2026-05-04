@@ -4,7 +4,7 @@ import type { FileEntry } from '@taucad/types';
 import type { Chat } from '@taucad/chat';
 import { AtReferenceChip } from '#components/chat/at-reference-chip.js';
 import { AtReferenceProvider } from '#components/chat/at-reference-context.js';
-import type { FileTreeService } from '#lib/file-tree-service.js';
+import type { FileTreeService } from '@taucad/fs-client/file-tree-service';
 
 vi.mock('#components/files/file-link.js', () => ({
   FileLink: ({ children, path }: { children: React.ReactNode; path: string }) => (

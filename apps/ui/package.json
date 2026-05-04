@@ -15,6 +15,7 @@
     "@taucad/chat": "workspace:*",
     "@taucad/utils": "workspace:*",
     "@taucad/filesystem": "workspace:*",
+    "@taucad/fs-client": "workspace:*",
     "@taucad/memory": "workspace:*",
     "@taucad/openscad": "workspace:*",
     "@taucad/react": "workspace:*",

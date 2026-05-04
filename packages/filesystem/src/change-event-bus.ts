@@ -14,6 +14,9 @@ export class ChangeEventBus {
   /**
    * Register a handler to receive all change events.
    *
+   * Originating bridge port ids are attached to events via `tagEventOrigin`
+   * in {@link WorkspaceFileService} before emit.
+   *
    * @param handler - Callback invoked for every emitted event.
    * @returns Unsubscribe function.
    */

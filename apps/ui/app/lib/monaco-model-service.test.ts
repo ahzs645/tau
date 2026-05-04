@@ -10,7 +10,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type * as Monaco from 'monaco-editor';
 import { MonacoModelService } from '#lib/monaco-model-service.js';
 import type { ModelServiceConfig } from '#lib/monaco-model-service.js';
-import type { ContentChangeEvent, FileContentResult } from '#lib/file-content-service.js';
+import type { ContentChangeEvent, FileContentResult } from '@taucad/fs-client/file-content-service';
 
 function textResult(text: string): FileContentResult {
   return { kind: 'text', content: new TextEncoder().encode(text) };

@@ -1,10 +1,62 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { FileTreeService } from '#lib/file-tree-service.js';
-import { FileContentService } from '#lib/file-content-service.js';
+import { FileTreeService } from '@taucad/fs-client/file-tree-service';
+import { FileContentService } from '@taucad/fs-client/file-content-service';
 import type { FileManagerProxy } from '#machines/file-manager.machine.types.js';
+import type { FileSystemClient } from '@taucad/fs-client/file-system-client';
 import type { ChangeEvent, FileEntry, FileStatEntry } from '@taucad/types';
 import type { FileTreeNode } from '@taucad/filesystem';
 import { parametersDirectory } from '#utils/parameter-config.utils.js';
+import { WorkerChangeChannel } from '@taucad/fs-client/worker-change-channel';
+import { WorkspacePathResolver } from '@taucad/fs-client/workspace-path-resolver';
+import { headlessVisibilityProvider } from '@taucad/fs-client/visibility-provider';
+import type { VisibilityProvider } from '@taucad/fs-client/visibility-provider';
+import { RefreshGenerationGuard } from '@taucad/fs-client/refresh-generation-guard';
+
+function createTreeHarness(
+  init?: Partial<Omit<ConstructorParameters<typeof FileTreeService>[0], 'paths' | 'channel' | 'visibility'>> & {
+    workspaceRoot?: string;
+    paths?: WorkspacePathResolver;
+    visibility?: VisibilityProvider;
+  },
+): { service: FileTreeService; proxy: FileSystemClient; emitWorker: (event: ChangeEvent) => void } {
+  const listen = vi.fn().mockReturnValue(vi.fn());
+  const workspaceRoot = init?.workspaceRoot ?? '/project';
+  const paths = init?.paths ?? new WorkspacePathResolver(workspaceRoot);
+  const channel = new WorkerChangeChannel({ transport: { listen }, paths });
+  const visibility = init?.visibility ?? headlessVisibilityProvider;
+  const {
+    workspaceRoot: _workspaceRoot,
+    paths: _pathsIn,
+    visibility: _visibilityIn,
+    proxy: inputProxy,
+    ...rest
+  } = init ?? {};
+  const proxyInstance = inputProxy ?? createMockProxy();
+  const service = new FileTreeService({
+    ...rest,
+    proxy: proxyInstance,
+    paths,
+    channel,
+    visibility,
+  });
+  const emitWorker = (event: ChangeEvent): void => {
+    (listen.mock.calls[0]![1] as (data: unknown) => void)(event);
+  };
+  return { service, proxy: proxyInstance, emitWorker };
+}
+
+function createContentServiceForTree(proxyInstance: FileSystemClient): FileContentService {
+  const listen = vi.fn().mockReturnValue(vi.fn());
+  const paths = new WorkspacePathResolver('/project');
+  const channel = new WorkerChangeChannel({ transport: { listen }, paths });
+  const refreshGuard = new RefreshGenerationGuard();
+  return new FileContentService({
+    proxy: proxyInstance,
+    paths,
+    channel,
+    refreshGuard,
+  });
+}
 
 function createMockProxy(overrides?: Partial<FileManagerProxy>): FileManagerProxy {
   return {
@@ -33,17 +85,19 @@ function createEntry(path: string, type: 'file' | 'dir' = 'file', size = 100): F
 }
 
 describe('FileTreeService', () => {
-  let proxy: FileManagerProxy;
+  let proxy: FileSystemClient;
   let service: FileTreeService;
+  let emitWorker: (event: ChangeEvent) => void;
 
   beforeEach(() => {
     vi.useFakeTimers();
-    proxy = createMockProxy();
-    service = new FileTreeService({
-      proxy,
-      rootDirectory: '/project',
+    const harness = createTreeHarness({
+      proxy: createMockProxy(),
       initialEntries: [createEntry('main.ts'), createEntry('lib/utils.ts'), createEntry('lib/helpers.ts')],
     });
+    proxy = harness.proxy;
+    service = harness.service;
+    emitWorker = harness.emitWorker;
   });
 
   afterEach(() => {
@@ -92,9 +146,8 @@ describe('FileTreeService', () => {
     const localProxy = createMockProxy({
       readDirectory: vi.fn().mockResolvedValue(readDirectoryNodes),
     });
-    const localService = new FileTreeService({
+    const { service: localService } = createTreeHarness({
       proxy: localProxy,
-      rootDirectory: '/project',
       initialEntries: [createEntry('main.ts'), createEntry('lib/utils.ts'), createEntry('lib/helpers.ts')],
       refreshDebounce: 10,
     });
@@ -115,7 +168,7 @@ describe('FileTreeService', () => {
 
   it('should skip tree refresh for source=editor content changes', () => {
     const contentProxy = createMockProxy();
-    const contentService = new FileContentService({ proxy: contentProxy, rootDirectory: '/project' });
+    const contentService = createContentServiceForTree(contentProxy);
 
     service.connectToContentService(contentService);
 
@@ -129,7 +182,7 @@ describe('FileTreeService', () => {
 
   it('should apply optimistic tree update on content written event', async () => {
     const contentProxy = createMockProxy();
-    const contentService = new FileContentService({ proxy: contentProxy, rootDirectory: '/project' });
+    const contentService = createContentServiceForTree(contentProxy);
     service.connectToContentService(contentService);
 
     vi.mocked(contentProxy.writeFile).mockResolvedValue(undefined);
@@ -145,7 +198,7 @@ describe('FileTreeService', () => {
 
   it('should apply optimistic tree update on content deleted event', async () => {
     const contentProxy = createMockProxy();
-    const contentService = new FileContentService({ proxy: contentProxy, rootDirectory: '/project' });
+    const contentService = createContentServiceForTree(contentProxy);
     service.connectToContentService(contentService);
 
     expect(await service.exists('main.ts')).toBe(true);
@@ -160,7 +213,7 @@ describe('FileTreeService', () => {
 
   it('should apply optimistic tree update on content renamed event', async () => {
     const contentProxy = createMockProxy();
-    const contentService = new FileContentService({ proxy: contentProxy, rootDirectory: '/project' });
+    const contentService = createContentServiceForTree(contentProxy);
     service.connectToContentService(contentService);
 
     vi.mocked(contentProxy.rename).mockResolvedValue(undefined);
@@ -177,7 +230,7 @@ describe('FileTreeService', () => {
     service.subscribeTree(subscriber);
 
     const contentProxy = createMockProxy();
-    const contentService = new FileContentService({ proxy: contentProxy, rootDirectory: '/project' });
+    const contentService = createContentServiceForTree(contentProxy);
     service.connectToContentService(contentService);
 
     vi.mocked(contentProxy.writeFile).mockResolvedValue(undefined);
@@ -192,9 +245,8 @@ describe('FileTreeService', () => {
 
   describe('hasChildrenLoaded', () => {
     it('should return false for root when no initialEntries are provided', () => {
-      const emptyService = new FileTreeService({
+      const { service: emptyService } = createTreeHarness({
         proxy: createMockProxy(),
-        rootDirectory: '/project',
       });
 
       expect(emptyService.hasChildrenLoaded('')).toBe(false);
@@ -211,9 +263,8 @@ describe('FileTreeService', () => {
 
   describe('directory resolution tracking', () => {
     it('should return false from hasChildrenLoaded for directory not yet loaded via loadDirectory', () => {
-      const localService = new FileTreeService({
+      const { service: localService } = createTreeHarness({
         proxy: createMockProxy(),
-        rootDirectory: '/project',
         initialEntries: [createEntry('.tau', 'dir'), createEntry('main.ts')],
       });
 
@@ -230,9 +281,8 @@ describe('FileTreeService', () => {
           { name: 'cache', children: [] },
         ]),
       });
-      const localService = new FileTreeService({
+      const { service: localService } = createTreeHarness({
         proxy: localProxy,
-        rootDirectory: '/project',
         initialEntries: [createEntry('.tau', 'dir')],
       });
 
@@ -251,9 +301,8 @@ describe('FileTreeService', () => {
       const localProxy = createMockProxy({
         readDirectory: vi.fn().mockResolvedValue([{ name: 'parameters', children: [{ name: 'main.ts.json' }] }]),
       });
-      const localService = new FileTreeService({
+      const { service: localService } = createTreeHarness({
         proxy: localProxy,
-        rootDirectory: '/project',
         initialEntries: [createEntry('.tau', 'dir')],
       });
 
@@ -278,12 +327,11 @@ describe('FileTreeService', () => {
           { name: 'artifacts', children: [] },
         ]),
       });
-      const localService = new FileTreeService({
+      const { service: localService } = createTreeHarness({
         proxy: localProxy,
-        rootDirectory: '/project',
         initialEntries: [createEntry('.tau', 'dir')],
       });
-      const contentService = new FileContentService({ proxy: localProxy, rootDirectory: '/project' });
+      const contentService = createContentServiceForTree(localProxy);
       localService.connectToContentService(contentService);
 
       await contentService.resolve(`${parametersDirectory}/main.ts.json`);
@@ -310,12 +358,11 @@ describe('FileTreeService', () => {
           { name: 'cache', children: [] },
         ]),
       });
-      const localService = new FileTreeService({
+      const { service: localService } = createTreeHarness({
         proxy: localProxy,
-        rootDirectory: '/project',
         initialEntries: [createEntry('.tau', 'dir')],
       });
-      const contentService = new FileContentService({ proxy: localProxy, rootDirectory: '/project' });
+      const contentService = createContentServiceForTree(localProxy);
       localService.connectToContentService(contentService);
 
       vi.mocked(localProxy.writeFile).mockResolvedValue(undefined);
@@ -341,9 +388,8 @@ describe('FileTreeService', () => {
           { name: 'cache', children: [] },
         ]),
       });
-      const localService = new FileTreeService({
+      const { service: localService } = createTreeHarness({
         proxy: localProxy,
-        rootDirectory: '/project',
         initialEntries: [createEntry('.tau', 'dir')],
         refreshDebounce: 10,
       });
@@ -433,9 +479,8 @@ describe('FileTreeService', () => {
     });
 
     it('should remove deleted entries from the local tree snapshot', async () => {
-      const localService = new FileTreeService({
+      const { service: localService } = createTreeHarness({
         proxy,
-        rootDirectory: '/project',
         initialEntries: [
           createEntry('src', 'dir'),
           createEntry('src/a.ts'),
@@ -492,9 +537,8 @@ describe('FileTreeService', () => {
     });
 
     it('should prune tree even when getDirectoryStat returns relative paths', async () => {
-      const localService = new FileTreeService({
+      const { service: localService } = createTreeHarness({
         proxy,
-        rootDirectory: '/project',
         initialEntries: [
           createEntry('.tau', 'dir'),
           createEntry('.tau/cache', 'dir'),
@@ -597,7 +641,7 @@ describe('FileTreeService', () => {
   describe('content read events', () => {
     it('should not add file to tree when content service emits a read event', async () => {
       const contentProxy = createMockProxy();
-      const contentService = new FileContentService({ proxy: contentProxy, rootDirectory: '/project' });
+      const contentService = createContentServiceForTree(contentProxy);
       service.connectToContentService(contentService);
 
       expect(service.getTreeSnapshot().has('newfile.ts')).toBe(false);
@@ -629,9 +673,8 @@ describe('FileTreeService', () => {
     });
 
     it('should return only file entries and exclude directories', () => {
-      const localService = new FileTreeService({
+      const { service: localService } = createTreeHarness({
         proxy: createMockProxy(),
-        rootDirectory: '/project',
         initialEntries: [createEntry('main.ts'), createEntry('lib', 'dir'), createEntry('lib/utils.ts')],
       });
 
@@ -652,7 +695,7 @@ describe('FileTreeService', () => {
 
     it('should invalidate cache when optimistic add occurs', async () => {
       const contentProxy = createMockProxy();
-      const contentService = new FileContentService({ proxy: contentProxy, rootDirectory: '/project' });
+      const contentService = createContentServiceForTree(contentProxy);
       service.connectToContentService(contentService);
 
       const before = service.getCachedFileItems();
@@ -671,7 +714,7 @@ describe('FileTreeService', () => {
 
     it('should invalidate cache when optimistic delete occurs', async () => {
       const contentProxy = createMockProxy();
-      const contentService = new FileContentService({ proxy: contentProxy, rootDirectory: '/project' });
+      const contentService = createContentServiceForTree(contentProxy);
       service.connectToContentService(contentService);
 
       const before = service.getCachedFileItems();
@@ -695,9 +738,8 @@ describe('FileTreeService', () => {
           { id: 'params.json', name: 'params.json' },
         ]),
       });
-      const localService = new FileTreeService({
+      const { service: localService } = createTreeHarness({
         proxy: localProxy,
-        rootDirectory: '/project',
         initialEntries: [createEntry('main.ts'), createEntry('.tau', 'dir')],
       });
 
@@ -715,9 +757,8 @@ describe('FileTreeService', () => {
     });
 
     it('should return empty array when tree has no file entries', () => {
-      const emptyService = new FileTreeService({
+      const { service: emptyService } = createTreeHarness({
         proxy: createMockProxy(),
-        rootDirectory: '/project',
         initialEntries: [createEntry('lib', 'dir'), createEntry('src', 'dir')],
       });
 
@@ -740,7 +781,7 @@ describe('FileTreeService', () => {
 
     it('should expose completeTreeVersion that increments on change', async () => {
       const contentProxy = createMockProxy();
-      const contentService = new FileContentService({ proxy: contentProxy, rootDirectory: '/project' });
+      const contentService = createContentServiceForTree(contentProxy);
       service.connectToContentService(contentService);
 
       const v1 = service.completeTreeVersion;
@@ -761,9 +802,9 @@ describe('FileTreeService', () => {
         { path: 'src/main.ts', name: 'main.ts', type: 'file', size: 100, mtimeMs: 1000 },
       ];
       const searchProxy = createMockProxy({
-        searchFiles: vi.fn().mockReturnValue(mockResults) as unknown as FileManagerProxy['searchFiles'],
+        searchFiles: vi.fn().mockReturnValue(mockResults) as unknown as FileSystemClient['searchFiles'],
       });
-      const searchService = new FileTreeService({ proxy: searchProxy, rootDirectory: '/project' });
+      const searchService = createTreeHarness({ proxy: searchProxy }).service;
 
       const results = await searchService.searchFiles('main');
       expect(searchProxy.searchFiles).toHaveBeenCalledWith('/project', 'main', undefined);
@@ -774,9 +815,9 @@ describe('FileTreeService', () => {
 
     it('should forward query and options', async () => {
       const searchProxy = createMockProxy({
-        searchFiles: vi.fn().mockReturnValue([]) as unknown as FileManagerProxy['searchFiles'],
+        searchFiles: vi.fn().mockReturnValue([]) as unknown as FileSystemClient['searchFiles'],
       });
-      const searchService = new FileTreeService({ proxy: searchProxy, rootDirectory: '/project' });
+      const searchService = createTreeHarness({ proxy: searchProxy }).service;
 
       await searchService.searchFiles('utils', { maxResults: 50, includeDirectories: true });
       expect(searchProxy.searchFiles).toHaveBeenCalledWith('/project', 'utils', {
@@ -793,9 +834,9 @@ describe('FileTreeService', () => {
         { path: 'b.ts', name: 'b.ts', type: 'file', size: 20, mtimeMs: 200 },
       ];
       const searchProxy = createMockProxy({
-        searchFiles: vi.fn().mockReturnValue(expected) as unknown as FileManagerProxy['searchFiles'],
+        searchFiles: vi.fn().mockReturnValue(expected) as unknown as FileSystemClient['searchFiles'],
       });
-      const searchService = new FileTreeService({ proxy: searchProxy, rootDirectory: '/project' });
+      const searchService = createTreeHarness({ proxy: searchProxy }).service;
 
       const results = await searchService.searchFiles('.ts');
       expect(results).toHaveLength(2);
@@ -807,9 +848,9 @@ describe('FileTreeService', () => {
     it('should warm the worker search index via getDirectoryStat on first call', async () => {
       const warmProxy = createMockProxy({
         getDirectoryStat: vi.fn().mockResolvedValue([]),
-        searchFiles: vi.fn().mockReturnValue([]) as unknown as FileManagerProxy['searchFiles'],
+        searchFiles: vi.fn().mockReturnValue([]) as unknown as FileSystemClient['searchFiles'],
       });
-      const warmService = new FileTreeService({ proxy: warmProxy, rootDirectory: '/project' });
+      const warmService = createTreeHarness({ proxy: warmProxy }).service;
 
       await warmService.searchFiles('main');
       expect(warmProxy.getDirectoryStat).toHaveBeenCalledWith('/project');
@@ -823,9 +864,9 @@ describe('FileTreeService', () => {
     it('should re-warm the search index after reset()', async () => {
       const resetProxy = createMockProxy({
         getDirectoryStat: vi.fn().mockResolvedValue([]),
-        searchFiles: vi.fn().mockReturnValue([]) as unknown as FileManagerProxy['searchFiles'],
+        searchFiles: vi.fn().mockReturnValue([]) as unknown as FileSystemClient['searchFiles'],
       });
-      const resetService = new FileTreeService({ proxy: resetProxy, rootDirectory: '/project' });
+      const resetService = createTreeHarness({ proxy: resetProxy }).service;
 
       await resetService.searchFiles('main');
       expect(resetProxy.getDirectoryStat).toHaveBeenCalledOnce();
@@ -852,7 +893,7 @@ describe('FileTreeService', () => {
         backend: 'indexeddb',
       };
 
-      service.handleWorkerFileChanged(event);
+      emitWorker(event);
 
       expect(service.getTreeSnapshot().has('newfile.ts')).toBe(true);
       expect(service.getTreeSnapshot().get('newfile.ts')?.type).toBe('file');
@@ -860,9 +901,8 @@ describe('FileTreeService', () => {
     });
 
     it('should skip fileWritten when parent directory is not loaded', async () => {
-      const localService = new FileTreeService({
+      const { service: localService, emitWorker: emitLocal } = createTreeHarness({
         proxy,
-        rootDirectory: '/project',
         initialEntries: [createEntry('main.ts'), createEntry('.tau', 'dir')],
       });
 
@@ -873,7 +913,7 @@ describe('FileTreeService', () => {
       };
 
       const snapshotBefore = localService.getTreeSnapshot();
-      localService.handleWorkerFileChanged(event);
+      emitLocal(event);
       await vi.advanceTimersByTimeAsync(200);
 
       expect(localService.getTreeSnapshot()).toBe(snapshotBefore);
@@ -891,7 +931,7 @@ describe('FileTreeService', () => {
         path: '/project/added.ts',
         backend: 'indexeddb',
       };
-      service.handleWorkerFileChanged(event);
+      emitWorker(event);
 
       expect(subscriber).toHaveBeenCalledOnce();
     });
@@ -907,7 +947,7 @@ describe('FileTreeService', () => {
         backend: 'indexeddb',
       };
 
-      service.handleWorkerFileChanged(event);
+      emitWorker(event);
 
       expect(service.getTreeSnapshot().has('main.ts')).toBe(false);
       expect(proxy.readDirectory).not.toHaveBeenCalled();
@@ -920,7 +960,7 @@ describe('FileTreeService', () => {
         backend: 'indexeddb',
       };
 
-      service.handleWorkerFileChanged(event);
+      emitWorker(event);
       await vi.advanceTimersByTimeAsync(200);
 
       expect(proxy.readDirectory).not.toHaveBeenCalled();
@@ -938,7 +978,7 @@ describe('FileTreeService', () => {
         backend: 'indexeddb',
       };
 
-      service.handleWorkerFileChanged(event);
+      emitWorker(event);
 
       expect(service.getTreeSnapshot().has('main.ts')).toBe(false);
       expect(service.getTreeSnapshot().has('app.ts')).toBe(true);
@@ -956,7 +996,7 @@ describe('FileTreeService', () => {
         backend: 'indexeddb',
       };
 
-      service.handleWorkerFileChanged(event);
+      emitWorker(event);
 
       expect(service.getTreeSnapshot().has('main.ts')).toBe(false);
       expect(service.getTreeSnapshot().has('lib/main.ts')).toBe(true);
@@ -972,16 +1012,15 @@ describe('FileTreeService', () => {
         backend: 'indexeddb',
       };
 
-      service.handleWorkerFileChanged(event);
+      emitWorker(event);
       await vi.advanceTimersByTimeAsync(200);
 
       expect(proxy.readDirectory).toHaveBeenCalledWith('/project');
     });
 
     it('should skip refresh on directoryChanged when directory is not loaded', async () => {
-      const localService = new FileTreeService({
+      const { service: localService, emitWorker: emitLocal } = createTreeHarness({
         proxy,
-        rootDirectory: '/project',
         initialEntries: [createEntry('main.ts'), createEntry('.tau', 'dir')],
       });
 
@@ -991,7 +1030,7 @@ describe('FileTreeService', () => {
         backend: 'indexeddb',
       };
 
-      localService.handleWorkerFileChanged(event);
+      emitLocal(event);
       await vi.advanceTimersByTimeAsync(200);
 
       expect(proxy.readDirectory).not.toHaveBeenCalled();
@@ -1007,7 +1046,7 @@ describe('FileTreeService', () => {
         backend: 'opfs',
       };
 
-      service.handleWorkerFileChanged(event);
+      emitWorker(event);
       await vi.advanceTimersByTimeAsync(200);
 
       expect(proxy.readDirectory).toHaveBeenCalledWith('/project');
@@ -1022,7 +1061,7 @@ describe('FileTreeService', () => {
         backend: 'indexeddb',
       };
 
-      service.handleWorkerFileChanged(event);
+      emitWorker(event);
       await vi.advanceTimersByTimeAsync(200);
 
       expect(proxy.readDirectory).not.toHaveBeenCalled();

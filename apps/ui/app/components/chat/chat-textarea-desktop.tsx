@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useRef } from 'react';
 import { ChevronDown, Paperclip, Wrench, AtSign } from 'lucide-react';
 import type { Chat, ToolSelection } from '@taucad/chat';
 import type { FileEntry } from '@taucad/types';
-import type { FileTreeService } from '#lib/file-tree-service.js';
+import type { FileTreeService } from '@taucad/fs-client/file-tree-service';
 import { ChatModelSelector } from '#components/chat/chat-model-selector.js';
 import { ChatKernelSelector } from '#components/chat/chat-kernel-selector.js';
 import { ChatToolSelector } from '#components/chat/chat-tool-selector.js';

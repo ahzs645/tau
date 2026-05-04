@@ -3,12 +3,13 @@ title: 'Filesystem Policy'
 description: 'Standards for filesystem access, data transfer, caching, concurrency, and watcher architecture in the Tau application. Covers ZenFS, bridge RPC, and kernel/UI watch planes.'
 status: active
 created: '2026-03-05'
-updated: '2026-03-27'
+updated: '2026-05-03'
 related:
   - docs/research/filesystem-architecture.md
   - docs/research/fs-capabilities.md
   - docs/research/large-repo-import-performance.md
   - docs/research/vscode-fs-performance.md
+  - docs/research/origin-client-id-propagation-audit.md
 ---
 
 # Filesystem Policy
@@ -29,8 +30,18 @@ A single-writer topology with zero-copy binary transfer and bounded caches preve
 6. **Kernel watcher fast path first** — file change -> kernel invalidation must not route through `use-project.tsx` fanout
 7. **Server-side watch filtering** — path/include/exclude/event filtering happens in the worker, not in clients
 8. **Loss-aware event streams** — watcher overflow/dropped-event conditions must trigger explicit resync behavior
+9. **Bridge skip-originator is internal** — when a filesystem bridge port initiates a mutation, the resulting `ChangeEvent` may carry an originating port id for intra-process routing only (`tagEventOrigin` / `getEventOrigin` on `@taucad/filesystem`). The runtime bridge (`exposeFileSystem`) skips delivering `fileChanged` back to that port. This metadata is **not** part of the wire shape of `ChangeEvent`, is **not** passed as a second argument to `ChangeEventBus.emit`, and **must not** surface in consumer-facing UI APIs.
 
-## Access Topology
+## Bridge self-write suppression (skip-originator)
+
+Self-write suppression (so an editor port does not receive its own `fileChanged` echo) is enforced in `packages/runtime` at `filesystem-bridge.exposeFileSystem`: `deliverToHandles` reads the origin via `getEventOrigin(event)` and skips the recipient whose port id matches.
+
+- **Author boundary:** `WorkspaceFileService` mutating methods accept optional `context?: { originClientId?: string }` (from the RPC bridge's `methodContextProvider`). Before `ChangeEventBus.emit(event)`, the worker calls `tagEventOrigin(event, id)` when context is present.
+- **Merge rule:** `EventCoalescer` / `coalesceChangeEvents` reads origins via `getEventOrigin` so mixed-origin batches clear the tag (every port receives the merged event), matching the blueprint Finding 14 rule.
+- **Forwarders:** `ChangeEventBus`, `WatchRegistry`, and `ThrottledWorker` chunk paths do not take a parallel `originClientId` parameter; the event object is the sole carrier.
+- **Registry:** `packages/filesystem/src/event-origin-registry.ts` (`WeakMap<ChangeEvent, string>`) plus `clearEventOrigin` when a coalesced survivor must lose its tag.
+
+For rationale and alternatives considered, see [`docs/research/origin-client-id-propagation-audit.md`](../research/origin-client-id-propagation-audit.md).
 
 ```
 Main Thread                       File Manager Worker              Kernel Worker

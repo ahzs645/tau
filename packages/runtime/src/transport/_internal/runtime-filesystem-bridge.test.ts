@@ -472,14 +472,65 @@ describe('runtime-filesystem-bridge', () => {
     });
   });
 
+  describe('createBridgeServer methodContextProvider', () => {
+    it('should append non-undefined provider payload as the trailing call argument', async () => {
+      const writeFile = vi.fn().mockResolvedValue(undefined);
+      const channel = new MessageChannel();
+      createBridgeServer({ writeFile }, fsBridgePort(channel.port1, 'fs-bridge-server'), {
+        methodContextProvider: (name) => (name === 'writeFile' ? { originClientId: 'p1' } : undefined),
+      });
+
+      const { createBridgeCall } = await import('#transport/_internal/runtime-filesystem-bridge.js');
+      const { call, dispose } = createBridgeCall(fsBridgePort(channel.port2, 'fs-bridge-client'));
+      await call('writeFile', ['/f.txt', new TextEncoder().encode('x')]);
+      expect(writeFile).toHaveBeenCalledWith('/f.txt', expect.any(Uint8Array), { originClientId: 'p1' });
+      dispose();
+      channel.port1.close();
+    });
+
+    it('should not append when provider returns undefined', async () => {
+      const readFile = vi.fn().mockResolvedValue('ok');
+      const channel = new MessageChannel();
+      createBridgeServer({ readFile }, fsBridgePort(channel.port1, 'fs-bridge-server'), {
+        methodContextProvider: () => undefined,
+      });
+
+      const { createBridgeCall } = await import('#transport/_internal/runtime-filesystem-bridge.js');
+      const { call, dispose } = createBridgeCall(fsBridgePort(channel.port2, 'fs-bridge-client'));
+      await call('readFile', ['/a.txt', 'utf8']);
+      expect(readFile).toHaveBeenCalledWith('/a.txt', 'utf8');
+      dispose();
+      channel.port1.close();
+    });
+
+    it('should not emit legacy fileChanged push messages on mutating RPC alone', async () => {
+      const writeFile = vi.fn().mockResolvedValue(undefined);
+      const channel = new MessageChannel();
+      createBridgeServer({ writeFile }, fsBridgePort(channel.port1, 'fs-bridge-server'));
+
+      const { createBridgeCall } = await import('#transport/_internal/runtime-filesystem-bridge.js');
+      const { call, listen, dispose } = createBridgeCall(fsBridgePort(channel.port2, 'fs-bridge-client'));
+      const received: unknown[] = [];
+      const off = listen('fileChanged', (data) => {
+        received.push(data);
+      });
+      const bytes = new TextEncoder().encode('z');
+      await call('writeFile', ['/w.txt', bytes]);
+      expect(received).toHaveLength(0);
+      off();
+      dispose();
+      channel.port1.close();
+    });
+  });
+
   describe('ChangeEventBus bridge broadcasting', () => {
     it('should broadcast change events to all connected ports via listen()', async () => {
       const { exposeFileSystem } = await import('#filesystem/filesystem-bridge.js');
       const { createBridgeCall } = await import('#transport/_internal/runtime-filesystem-bridge.js');
 
       const changeEventBus = {
-        subscribe: vi.fn((handler: (event: unknown) => void) => {
-          (changeEventBus as { _handler?: (event: unknown) => void })._handler = handler;
+        subscribe: vi.fn((handler: (event: unknown, originClientId?: string) => void) => {
+          (changeEventBus as { _handler?: (event: unknown, originClientId?: string) => void })._handler = handler;
           return () => {
             (changeEventBus as { _handler?: undefined })._handler = undefined;
           };
@@ -522,7 +573,10 @@ describe('runtime-filesystem-bridge', () => {
         });
 
         const testEvent = { type: 'fileWritten', path: '/test.ts', backend: 'indexeddb' };
-        (changeEventBus as { _handler?: (event: unknown) => void })._handler?.(testEvent);
+        (changeEventBus as { _handler?: (event: unknown, originClientId?: string) => void })._handler?.(
+          testEvent,
+          undefined,
+        );
 
         await new Promise<void>((resolve) => {
           setTimeout(resolve, 50);
@@ -690,14 +744,12 @@ describe('runtime-filesystem-bridge', () => {
 
   describe('broadcast invalidation', () => {
     /*
-     * TR11 / OQ12 — when the host filesystem mutates a path the server emits
-     * a `'fileChanged'` event on the bridge so every connected reader can
-     * drop its cached copy. Without this the SharedPool / FileContentCache
-     * peer keeps serving stale bytes until the arena cycles around or the
-     * client manually invalidates, which silently breaks dependency tracking
-     * across cluster boundaries (T2 in-process Node, T5+ subprocess/remote).
+     * Reader-side pool invalidation reacts to `fileChanged` frames on the bridge.
+     * The FM worker fans those out from ChangeEventBus via exposeFileSystem; a bare
+     * createBridgeServer + in-memory RuntimeFileSystem does not synthesize events
+     * on mutating RPC (R13). Use `emit` from the server handle to assert client behaviour.
      */
-    it('should emit a fileChanged event after writeFile so readers can invalidate', async () => {
+    it('should not synthesize fileChanged from mutating RPC on the bare bridge', async () => {
       // eslint-disable-next-line @typescript-eslint/naming-convention -- filesystem paths use non-camelCase names
       const fs = makeFs({ '/cached.txt': 'initial' });
       const channel = new MessageChannel();
@@ -714,67 +766,12 @@ describe('runtime-filesystem-bridge', () => {
         }
       });
 
-      await call('writeFile', ['/cached.txt', 'updated']);
+      await call('writeFile', ['/cached.txt', new TextEncoder().encode('updated')]);
       await new Promise<void>((resolve) => {
         setTimeout(resolve, 10);
       });
 
-      expect(received).toContain('/cached.txt');
-
-      dispose();
-    });
-
-    it('should emit a fileChanged event after unlink', async () => {
-      // eslint-disable-next-line @typescript-eslint/naming-convention -- filesystem paths use non-camelCase names
-      const fs = makeFs({ '/cached.txt': 'initial' });
-      const channel = new MessageChannel();
-      createBridgeServer(fs, fsBridgePort(channel.port1, 'fs-bridge-server'));
-
-      const bridge = await import('#transport/_internal/runtime-filesystem-bridge.js');
-      const { call, listen, dispose } = bridge.createBridgeCall(fsBridgePort(channel.port2, 'fs-bridge-client'));
-
-      const received: string[] = [];
-      listen('fileChanged', (data) => {
-        const event = data as { path?: string };
-        if (event.path !== undefined) {
-          received.push(event.path);
-        }
-      });
-
-      await call('unlink', ['/cached.txt']);
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 10);
-      });
-
-      expect(received).toContain('/cached.txt');
-
-      dispose();
-    });
-
-    it('should emit fileChanged for both old and new path on rename', async () => {
-      // eslint-disable-next-line @typescript-eslint/naming-convention -- filesystem paths use non-camelCase names
-      const fs = makeFs({ '/old.txt': 'initial' });
-      const channel = new MessageChannel();
-      createBridgeServer(fs, fsBridgePort(channel.port1, 'fs-bridge-server'));
-
-      const bridge = await import('#transport/_internal/runtime-filesystem-bridge.js');
-      const { call, listen, dispose } = bridge.createBridgeCall(fsBridgePort(channel.port2, 'fs-bridge-client'));
-
-      const received: string[] = [];
-      listen('fileChanged', (data) => {
-        const event = data as { path?: string };
-        if (event.path !== undefined) {
-          received.push(event.path);
-        }
-      });
-
-      await call('rename', ['/old.txt', '/new.txt']);
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 10);
-      });
-
-      expect(received).toContain('/old.txt');
-      expect(received).toContain('/new.txt');
+      expect(received).toEqual([]);
 
       dispose();
     });
@@ -786,7 +783,7 @@ describe('runtime-filesystem-bridge', () => {
       // eslint-disable-next-line @typescript-eslint/naming-convention -- filesystem paths use non-camelCase names
       const fs = makeFs({ '/cached.txt': 'on disk' });
       const channel = new MessageChannel();
-      createBridgeServer(fs, fsBridgePort(channel.port1, 'fs-bridge-server'));
+      const { emit } = createBridgeServer(fs, fsBridgePort(channel.port1, 'fs-bridge-server'));
 
       const bridge = await import('#transport/_internal/runtime-filesystem-bridge.js');
       const { call, dispose } = bridge.createBridgeCall(fsBridgePort(channel.port2, 'fs-bridge-client'), {
@@ -796,7 +793,7 @@ describe('runtime-filesystem-bridge', () => {
       const before = await call('readFile', ['/cached.txt', 'utf8']);
       expect(before).toBe('initial');
 
-      await call('writeFile', ['/cached.txt', 'on disk']);
+      emit('fileChanged', { path: '/cached.txt' });
       await new Promise<void>((resolve) => {
         setTimeout(resolve, 10);
       });

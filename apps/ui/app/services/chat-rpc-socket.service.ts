@@ -444,6 +444,7 @@ export class ChatRpcSocketService {
       console.warn(`[ChatRpcSocket] Received RPC request for unknown chat: ${chatId}`);
       ack({
         type: 'rpc_response',
+        rpcName: request.rpcName,
         requestId: request.requestId,
         toolCallId: request.toolCallId,
         result: undefined,
@@ -460,6 +461,7 @@ export class ChatRpcSocketService {
     } catch (execError) {
       ack({
         type: 'rpc_response',
+        rpcName: request.rpcName,
         requestId: request.requestId,
         toolCallId: request.toolCallId,
         result: undefined,

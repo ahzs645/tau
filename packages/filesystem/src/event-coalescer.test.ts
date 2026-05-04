@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { EventCoalescer, coalesceEvents } from '#event-coalescer.js';
+import { EventCoalescer, coalesceEvents, coalesceChangeEvents } from '#event-coalescer.js';
+import { getEventOrigin, tagEventOrigin } from '#event-origin-registry.js';
 import type { ChangeEvent } from '#types.js';
 
 const testBackend = 'memory';
@@ -56,8 +57,6 @@ describe('coalesceEvents (pure)', () => {
   it('should preserve rename event when fileRenamed is followed by fileDeleted on oldPath', () => {
     const events = [renamed('/a', '/b'), deleted('/a')];
     const result = coalesceEvents(events);
-    // NewPath '/b' must appear in the coalesced result — either as a rename or
-    // as a write — so that downstream consumers learn about the new location.
     const allPaths = result.flatMap((event) => {
       const paths: string[] = [];
       if ('path' in event) {
@@ -74,8 +73,6 @@ describe('coalesceEvents (pure)', () => {
   it('should not cancel rename when fileWritten + fileRenamed + fileDeleted occur on same path', () => {
     const events = [written('/a'), renamed('/a', '/b'), deleted('/a')];
     const result = coalesceEvents(events);
-    // The rename to /b should survive — a consumer watching /a should learn
-    // that the content moved to /b, not just that /a was deleted.
     const allPaths = result.flatMap((event) => {
       const paths: string[] = [];
       if ('path' in event) {
@@ -109,6 +106,70 @@ describe('coalesceEvents (pure)', () => {
   });
 });
 
+describe('coalesceChangeEvents (origin merge)', () => {
+  it('should preserve origin when a single path sequence shares one origin', () => {
+    const firstWritten = written('/a.txt');
+    const secondWritten = written('/a.txt');
+    tagEventOrigin(firstWritten, 'p1');
+    tagEventOrigin(secondWritten, 'p1');
+    const result = coalesceChangeEvents([firstWritten, secondWritten]);
+    expect(result).toHaveLength(1);
+    expect(getEventOrigin(result[0]!)).toBe('p1');
+  });
+
+  it('should clear origin when the same path mixes origins', () => {
+    const firstWritten = written('/a.txt');
+    const secondWritten = written('/a.txt');
+    tagEventOrigin(firstWritten, 'p1');
+    tagEventOrigin(secondWritten, 'p2');
+    const result = coalesceChangeEvents([firstWritten, secondWritten]);
+    expect(result).toHaveLength(1);
+    expect(getEventOrigin(result[0]!)).toBeUndefined();
+  });
+
+  it('should clear origin when defined origin mixes with external observer (undefined)', () => {
+    const taggedWritten = written('/a.txt');
+    const externalWritten = written('/a.txt');
+    tagEventOrigin(taggedWritten, 'p1');
+    const result = coalesceChangeEvents([taggedWritten, externalWritten]);
+    expect(result).toHaveLength(1);
+    expect(getEventOrigin(result[0]!)).toBeUndefined();
+  });
+
+  it('should preserve origin through deleted → written collapse when both share an origin', () => {
+    const d = deleted('/a.txt');
+    const w = written('/a.txt');
+    tagEventOrigin(d, 'k');
+    tagEventOrigin(w, 'k');
+    const result = coalesceChangeEvents([d, w]);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toBe(w);
+    expect(getEventOrigin(result[0]!)).toBe('k');
+  });
+
+  it('should clear origin through deleted → written collapse when origins differ', () => {
+    const d = deleted('/a.txt');
+    const w = written('/a.txt');
+    tagEventOrigin(d, 'k');
+    tagEventOrigin(w, 'u');
+    const result = coalesceChangeEvents([d, w]);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toBe(w);
+    expect(getEventOrigin(result[0]!)).toBeUndefined();
+  });
+
+  it('should not merge origins across different paths', () => {
+    const a = written('/a.txt');
+    const b = written('/b.txt');
+    tagEventOrigin(a, 'p1');
+    tagEventOrigin(b, 'p2');
+    const result = coalesceChangeEvents([a, b]);
+    expect(result).toHaveLength(2);
+    expect(getEventOrigin(result[0]!)).toBe('p1');
+    expect(getEventOrigin(result[1]!)).toBe('p2');
+  });
+});
+
 describe('EventCoalescer (timed)', () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -127,7 +188,9 @@ describe('EventCoalescer (timed)', () => {
 
     vi.advanceTimersByTime(50);
     expect(deliver).toHaveBeenCalledTimes(1);
-    expect(deliver).toHaveBeenCalledWith([written('/a.txt')]);
+    const batch = deliver.mock.calls[0]![0] as ChangeEvent[];
+    expect(batch).toEqual([written('/a.txt')]);
+    expect(getEventOrigin(batch[0]!)).toBeUndefined();
 
     coalescer.dispose();
   });
@@ -141,8 +204,23 @@ describe('EventCoalescer (timed)', () => {
 
     vi.advanceTimersByTime(50);
     expect(deliver).toHaveBeenCalledTimes(1);
-    expect(deliver).toHaveBeenCalledWith([written('/a.txt')]);
+    const batch = deliver.mock.calls[0]![0] as ChangeEvent[];
+    expect(batch).toEqual([written('/a.txt')]);
+    expect(getEventOrigin(batch[0]!)).toBeUndefined();
 
+    coalescer.dispose();
+  });
+
+  it('should deliver tagged origin from push without second push arg', () => {
+    const deliver = vi.fn();
+    const coalescer = new EventCoalescer(deliver, { coalescingWindow: 50 });
+    const writtenEvent = written('/o.txt');
+    tagEventOrigin(writtenEvent, 'port_a');
+    coalescer.push(writtenEvent);
+    vi.advanceTimersByTime(50);
+    const batch = deliver.mock.calls[0]![0] as ChangeEvent[];
+    expect(batch).toEqual([writtenEvent]);
+    expect(getEventOrigin(batch[0]!)).toBe('port_a');
     coalescer.dispose();
   });
 

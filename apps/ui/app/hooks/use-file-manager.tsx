@@ -5,13 +5,14 @@ import { waitFor } from 'xstate';
 import type { SnapshotFrom } from 'xstate';
 import type { FileTreeEntry, FileSystemBackend, FileStatEntry, FileStat } from '@taucad/types';
 import { fileManagerMachine } from '#machines/file-manager.machine.js';
-import type { FileWriteSource, FileManagerRef, FileManagerProxy } from '#machines/file-manager.machine.types.js';
+import type { FileWriteSource } from '@taucad/fs-client/file-write-source';
+import type { FileManagerRef, FileManagerProxy } from '#machines/file-manager.machine.types.js';
 import type { FileTreeNode, MountOptions } from '@taucad/filesystem';
 import { getStoredDirectoryHandle } from '#filesystem/handle-store.js';
 import { useCookie } from '#hooks/use-cookie.js';
 import { cookieName } from '#constants/cookie.constants.js';
-import type { FileContentService } from '#lib/file-content-service.js';
-import type { FileTreeService } from '#lib/file-tree-service.js';
+import type { FileContentService } from '@taucad/fs-client/file-content-service';
+import type { FileTreeService } from '@taucad/fs-client/file-tree-service';
 
 type FileManagerSnapshot = SnapshotFrom<typeof fileManagerMachine>;
 
@@ -33,6 +34,31 @@ function assertNotErrorState(snapshot: FileManagerSnapshot, fallbackMessage: str
   }
 }
 
+export async function waitForFileManagerServices(
+  fileManagerRef: FileManagerRef,
+): Promise<{ contentService: FileContentService; treeService: FileTreeService }> {
+  const snapshot = fileManagerRef.getSnapshot();
+  const { contentService: content, treeService: tree } = snapshot.context;
+  if (content && tree) {
+    return { contentService: content, treeService: tree };
+  }
+
+  const settled = await waitFor(
+    fileManagerRef,
+    createErrorAwareWaitPredicate(
+      (state) => state.context.contentService !== undefined && state.context.treeService !== undefined,
+    ),
+  );
+  assertNotErrorState(settled, 'File manager failed to initialize before services were requested');
+  const readyContent = settled.context.contentService;
+  const readyTree = settled.context.treeService;
+  if (!readyContent || !readyTree) {
+    throw new Error('File manager services not available');
+  }
+
+  return { contentService: readyContent, treeService: readyTree };
+}
+
 type WriteFileOptions = {
   source: FileWriteSource;
 };
@@ -46,6 +72,8 @@ type FileManagerContextType = {
   backendType: FileSystemBackend;
   contentService: FileContentService | undefined;
   treeService: FileTreeService | undefined;
+  /** Resolves once both content and tree facades are bound (or rejects if the machine enters `error`). */
+  whenServicesReady: () => Promise<{ contentService: FileContentService; treeService: FileTreeService }>;
   writeFile: (path: string, data: Uint8Array<ArrayBuffer>, options: WriteFileOptions) => Promise<void>;
   writeFiles: (files: Record<string, { content: Uint8Array<ArrayBuffer> }>) => Promise<void>;
   readFile: (path: string) => Promise<Uint8Array<ArrayBuffer>>;
@@ -149,34 +177,32 @@ export function FileManagerProvider({
     return proxy;
   }, [fileManagerRef]);
 
+  const whenServicesReady = useCallback(async () => {
+    return waitForFileManagerServices(fileManagerRef);
+  }, [fileManagerRef]);
+
   const writeFile = useCallback(
     async (path: string, data: Uint8Array<ArrayBuffer>, options: WriteFileOptions): Promise<void> => {
-      if (!contentService) {
-        throw new Error('Content service not initialized');
-      }
+      const { contentService } = await whenServicesReady();
       await contentService.write(path, data, options.source);
     },
-    [contentService],
+    [whenServicesReady],
   );
 
   const writeFiles = useCallback(
     async (files: Record<string, { content: Uint8Array<ArrayBuffer> }>): Promise<void> => {
-      if (!contentService) {
-        throw new Error('Content service not initialized');
-      }
+      const { contentService } = await whenServicesReady();
       await contentService.writeFiles(files, 'machine');
     },
-    [contentService],
+    [whenServicesReady],
   );
 
   const readFile = useCallback(
     async (path: string): Promise<Uint8Array<ArrayBuffer>> => {
-      if (!contentService) {
-        throw new Error('Content service not initialized');
-      }
+      const { contentService } = await whenServicesReady();
       return contentService.resolveBytes(path);
     },
-    [contentService],
+    [whenServicesReady],
   );
 
   const renameFile = useCallback(
@@ -184,92 +210,74 @@ export function FileManagerProvider({
       if (oldPath === newPath) {
         return;
       }
-      if (!contentService) {
-        throw new Error('Content service not initialized');
-      }
+      const { contentService } = await whenServicesReady();
       await contentService.rename(oldPath, newPath);
     },
-    [contentService],
+    [whenServicesReady],
   );
 
   const duplicateFile = useCallback(
     async (sourcePath: string, destinationPath: string): Promise<void> => {
-      if (!contentService) {
-        throw new Error('Content service not initialized');
-      }
+      const { contentService } = await whenServicesReady();
       await contentService.duplicate(sourcePath, destinationPath);
     },
-    [contentService],
+    [whenServicesReady],
   );
 
   const deleteFile = useCallback(
     async (path: string, options: DeleteFileOptions): Promise<void> => {
-      if (!contentService) {
-        throw new Error('Content service not initialized');
-      }
+      const { contentService } = await whenServicesReady();
       await contentService.delete(path, options.source);
     },
-    [contentService],
+    [whenServicesReady],
   );
 
   const exists = useCallback(
     async (path: string): Promise<boolean> => {
-      if (!treeService) {
-        throw new Error('Tree service not initialized');
-      }
+      const { treeService } = await whenServicesReady();
       return treeService.exists(path);
     },
-    [treeService],
+    [whenServicesReady],
   );
 
   const readdir = useCallback(
     async (path: string): Promise<string[]> => {
-      if (!treeService) {
-        throw new Error('Tree service not initialized');
-      }
+      const { treeService } = await whenServicesReady();
       return treeService.readdir(path);
     },
-    [treeService],
+    [whenServicesReady],
   );
 
   const stat = useCallback(
     async (path: string): Promise<FileStat> => {
-      if (!treeService) {
-        throw new Error('Tree service not initialized');
-      }
+      const { treeService } = await whenServicesReady();
       return treeService.stat(path);
     },
-    [treeService],
+    [whenServicesReady],
   );
 
   const getDirectoryStat = useCallback(
     async (path: string): Promise<FileStatEntry[]> => {
-      if (!treeService) {
-        throw new Error('Tree service not initialized');
-      }
+      const { treeService } = await whenServicesReady();
       return treeService.getDirectoryStat(path);
     },
-    [treeService],
+    [whenServicesReady],
   );
 
   const getZippedDirectory = useCallback(
     async (path: string): Promise<Blob> => {
-      if (!contentService) {
-        throw new Error('Content service not initialized');
-      }
+      const { contentService } = await whenServicesReady();
       return contentService.getZippedDirectory(path);
     },
-    [contentService],
+    [whenServicesReady],
   );
 
   const copyDirectory = useCallback(
     async (sourcePath: string, destinationPath: string): Promise<void> => {
-      if (!contentService) {
-        throw new Error('Content service not initialized');
-      }
+      const { contentService } = await whenServicesReady();
       await contentService.copyDirectory(sourcePath, destinationPath);
     },
-    [contentService],
+    [whenServicesReady],
   );
 
   const mount = useCallback(
@@ -282,6 +290,7 @@ export function FileManagerProvider({
 
   const unmount = useCallback(
     (prefix: string): void => {
+      // async-iife: bootstrap
       void (async () => {
         const proxy = await getReadiedProxy();
         proxy.unmount(prefix);
@@ -294,9 +303,7 @@ export function FileManagerProvider({
 
   const readShallowDirectory = useCallback(
     async (path: string, backend: FileSystemBackend): Promise<FileTreeNode[]> => {
-      if (!treeService) {
-        throw new Error('Tree service not initialized');
-      }
+      const { treeService } = await whenServicesReady();
       const handle = backend === 'webaccess' ? await getStoredDirectoryHandle() : undefined;
       if (handle) {
         const proxy = await getReadiedProxy();
@@ -304,7 +311,7 @@ export function FileManagerProvider({
       }
       return treeService.readShallowDirectory(path, backend);
     },
-    [treeService, getReadiedProxy],
+    [whenServicesReady, getReadiedProxy],
   );
 
   useEffect(() => {
@@ -328,6 +335,7 @@ export function FileManagerProvider({
       backendType,
       contentService,
       treeService,
+      whenServicesReady,
       writeFile,
       writeFiles,
       readFile,
@@ -350,6 +358,7 @@ export function FileManagerProvider({
       backendType,
       contentService,
       treeService,
+      whenServicesReady,
       writeFile,
       writeFiles,
       readFile,

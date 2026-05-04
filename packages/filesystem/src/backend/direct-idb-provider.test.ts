@@ -152,8 +152,8 @@ describe('DirectIdbProvider', () => {
     });
 
     it('should return correct stats for a directory', async () => {
-      await provider.mkdir('/dir');
-      const stats = await provider.stat('/dir');
+      await provider.mkdir('/statdir');
+      const stats = await provider.stat('/statdir');
       expect(stats.type).toBe('dir');
     });
 

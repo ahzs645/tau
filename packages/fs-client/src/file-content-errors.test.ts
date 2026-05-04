@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { BinaryFileError, FileTooLargeError, FileNotFoundError } from '#lib/file-content-errors.js';
+import { BinaryFileError, FileTooLargeError, FileNotFoundError } from '#file-content-errors.js';
 
 describe('BinaryFileError', () => {
   it('should preserve message and set name to BinaryFileError', () => {

@@ -89,8 +89,6 @@ export type BridgeError = {
   metadata?: Record<string, unknown>;
 };
 
-const mutatingMethods: ReadonlySet<string> = new Set(['writeFile', 'unlink', 'rmdir', 'rename']);
-
 const broadcastEvent = 'broadcast';
 const watchEvent = 'watch';
 
@@ -227,6 +225,11 @@ export function createBridgeServer<T extends StringKeyedObject>(
     onUnwatch?: (watchId: string) => void;
     /** Writer-side shared file pool. Binary readFile results are stored here after successful reads. */
     filePool?: FilePool;
+    /**
+     * When returning non-`undefined`, the value is appended as the final argument
+     * to the handler invocation (e.g. `{ originClientId: portId }` for mutating FS calls).
+     */
+    methodContextProvider?: (methodName: string) => unknown;
   },
 ): BridgeServerHandle {
   const broadcastQueues = new Set<PushQueue<BroadcastFrame>>();
@@ -242,18 +245,13 @@ export function createBridgeServer<T extends StringKeyedObject>(
     if (!handlerFunction) {
       throw new Error(`Unknown method: ${name}`);
     }
-    const result: unknown = await handlerFunction.call(handlers, ...args);
+    const contextPayload = options?.methodContextProvider?.(name);
+    const callArgs = contextPayload === undefined ? args : [...args, contextPayload];
+    const result: unknown = await handlerFunction.call(handlers, ...callArgs);
 
     if (options?.filePool && name === 'readFile' && result instanceof Uint8Array) {
       const filePath = args[0] as string;
       options.filePool.store(filePath, result as Uint8Array<ArrayBuffer>);
-    }
-
-    if (mutatingMethods.has(name)) {
-      const paths: string[] = name === 'rename' ? [args[0] as string, args[1] as string] : [args[0] as string];
-      for (const path of paths) {
-        emit('fileChanged', { path });
-      }
     }
 
     return wrapAsTransferables(result);

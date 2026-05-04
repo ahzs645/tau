@@ -2,6 +2,8 @@
  * Number of leading bytes inspected by `seemsBinary`. Mirrors VS Code's
  * `ZERO_BYTE_DETECTION_BUFFER_MAX_LEN` (512) which has been validated for years
  * across every binary format the editor encounters.
+ *
+ * @public
  */
 export const headSniffByteLength = 512;
 
@@ -30,6 +32,10 @@ const startsWith = (buffer: Uint8Array<ArrayBuffer>, prefix: readonly number[]):
  * NUL byte indicates binary.
  *
  * No filename or extension is consulted at any point.
+ *
+ * @param head - First bytes of the file (may be shorter than the sniff window).
+ * @returns `true` when the buffer should be treated as binary for editor purposes.
+ * @public
  */
 export function seemsBinary(head: Uint8Array<ArrayBuffer>): boolean {
   if (head.length === 0) {

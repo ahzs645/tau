@@ -2,6 +2,7 @@
  * Filesystem bridge: worker-side ({@link exposeFileSystem}) and client-side ({@link createFileSystemBridge}).
  */
 
+import { getEventOrigin } from '@taucad/filesystem';
 import { safeDispose } from '@taucad/utils/dispose';
 import { wrapMessagePort } from '@taucad/rpc';
 import type { ChangeEvent } from '@taucad/types';
@@ -12,6 +13,18 @@ import { createBridgeServer, catchMessages } from '#transport/_internal/runtime-
 import { filesystemBridgeConnectMessageType, workerReadyMessageType } from '#framework/runtime-framework.constants.js';
 /** Milliseconds. */
 const defaultUiCoalescingWindow = 500;
+
+/** Filesystem bridge methods that receive `{ originClientId: portId }` from the server. */
+const mutatingFilesystemMethods: ReadonlySet<string> = new Set([
+  'writeFile',
+  'writeFiles',
+  'mkdir',
+  'rename',
+  'unlink',
+  'rmdir',
+  'duplicateFile',
+  'copyDirectory',
+]);
 
 /**
  * Minimal interface for an event coalescer that batches ChangeEvents
@@ -136,20 +149,23 @@ export function exposeFileSystem<T extends StringKeyedObject>(
   const messageType = options?.messageType ?? filesystemBridgeConnectMessageType;
   const activePorts = new Set<MessagePort>();
   const serverHandles = new Map<MessagePort, BridgeServerHandle>();
+  const portIds = new Map<MessagePort, string>();
   const portWatches = new Map<MessagePort, Map<string, () => void>>();
 
   const deliverToHandles = (events: ChangeEvent[]): void => {
     for (const event of events) {
-      for (const handle of serverHandles.values()) {
+      const originClientId = getEventOrigin(event);
+      for (const [recipientPort, handle] of serverHandles) {
+        const recipientPortId = portIds.get(recipientPort);
+        if (originClientId !== undefined && recipientPortId !== undefined && originClientId === recipientPortId) {
+          continue;
+        }
         handle.emit('fileChanged', event);
       }
     }
   };
 
-  let throttledWorker: ThrottledEventWorker | undefined;
-  if (options?.createThrottledWorker) {
-    throttledWorker = options.createThrottledWorker(deliverToHandles);
-  }
+  const throttledWorker = options?.createThrottledWorker?.(deliverToHandles);
 
   const deliverFromCoalescer = throttledWorker
     ? (events: ChangeEvent[]): void => {
@@ -177,6 +193,7 @@ export function exposeFileSystem<T extends StringKeyedObject>(
       const portId = `port_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
       activePorts.add(port);
+      portIds.set(port, portId);
       portWatches.set(port, new Map());
 
       const wrappedPort = wrapMessagePort<unknown>(port, { label: 'expose-fs-bridge' });
@@ -185,6 +202,8 @@ export function exposeFileSystem<T extends StringKeyedObject>(
       }
 
       const serverHandle = createBridgeServer(handlers, wrappedPort, {
+        methodContextProvider: (methodName) =>
+          mutatingFilesystemMethods.has(methodName) ? { originClientId: portId } : undefined,
         onDisconnect() {
           const watches = portWatches.get(port);
           if (watches) {
@@ -195,6 +214,7 @@ export function exposeFileSystem<T extends StringKeyedObject>(
           }
           options?.watchHandler?.cleanupWatches(portId);
           activePorts.delete(port);
+          portIds.delete(port);
           serverHandles.delete(port);
           safeDispose(() => {
             port.close();

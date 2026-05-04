@@ -1,5 +1,5 @@
 import { assign, assertEvent, setup, enqueueActions } from 'xstate';
-import type { ChangeEvent, FileEntry, FileSystemBackend } from '@taucad/types';
+import type { FileEntry, FileSystemBackend } from '@taucad/types';
 import { createBridgeProxy, createFileSystemBridge, waitForWorkerReady } from '@taucad/runtime/transport-internals';
 import { safeDispose } from '@taucad/utils/dispose';
 import FileManagerWorker from '#machines/file-manager.worker.js?worker';
@@ -10,9 +10,13 @@ import {
 } from '#filesystem/handle-store.js';
 import { fromSafeAsync } from '#lib/xstate.lib.js';
 import { normalizePath } from '@taucad/utils/path';
-import { FileContentService } from '#lib/file-content-service.js';
+import { FileContentService } from '@taucad/fs-client/file-content-service';
 import { SharedPool } from '@taucad/memory';
-import { FileTreeService } from '#lib/file-tree-service.js';
+import { FileTreeService } from '@taucad/fs-client/file-tree-service';
+import { WorkerChangeChannel } from '@taucad/fs-client/worker-change-channel';
+import { WorkspacePathResolver } from '@taucad/fs-client/workspace-path-resolver';
+import { RefreshGenerationGuard } from '@taucad/fs-client/refresh-generation-guard';
+import { createDomVisibilityProvider } from '@taucad/fs-client/visibility-provider';
 import type { FileManagerProxy, FileManagerProtocol } from '#machines/file-manager.machine.types.js';
 import {
   formatWorkerError,
@@ -34,6 +38,7 @@ type FileManagerContext = {
   filePoolBuffer: SharedArrayBuffer | undefined;
   contentService: FileContentService | undefined;
   treeService: FileTreeService | undefined;
+  workerChangeChannel: WorkerChangeChannel | undefined;
   error: Error | undefined;
   rootDirectory: string;
   shouldInitializeOnStart: boolean;
@@ -60,6 +65,7 @@ type WorkerInitializedEvent = {
   initialEntries: FileEntry[];
   contentService: FileContentService;
   treeService: FileTreeService;
+  workerChangeChannel: WorkerChangeChannel;
 };
 
 const connectWorkerActor = fromSafeAsync<WorkerConnectedEvent, { context: FileManagerContext }>(
@@ -72,6 +78,7 @@ const connectWorkerActor = fromSafeAsync<WorkerConnectedEvent, { context: FileMa
     safeDispose(context.bridgeDispose);
     context.contentService?.dispose();
     context.treeService?.dispose();
+    context.workerChangeChannel?.dispose();
 
     if (context.worker && !context.sharedWorker) {
       safeDispose(() => context.worker?.terminate());
@@ -243,9 +250,19 @@ const initializeServicesActor = fromSafeAsync<WorkerInitializedEvent, { context:
 
     const filePool = context.filePoolBuffer ? new SharedPool(context.filePoolBuffer) : undefined;
 
+    const paths = new WorkspacePathResolver(context.rootDirectory);
+    const refreshGuard = new RefreshGenerationGuard();
+    const workerChangeChannel = new WorkerChangeChannel({
+      transport: { listen: proxy.listen! },
+      paths,
+    });
+    const visibilityProvider = createDomVisibilityProvider();
+
     const contentService = new FileContentService({
       proxy,
-      rootDirectory: context.rootDirectory,
+      paths,
+      channel: workerChangeChannel,
+      refreshGuard,
       cacheOptions: {
         maxEntries: fileCacheMaxEntries,
         maxTotalBytes: fileCacheMaxTotalBytes,
@@ -256,17 +273,13 @@ const initializeServicesActor = fromSafeAsync<WorkerInitializedEvent, { context:
 
     const treeService = new FileTreeService({
       proxy,
-      rootDirectory: context.rootDirectory,
+      paths,
+      channel: workerChangeChannel,
+      visibility: visibilityProvider,
       initialEntries,
     });
 
     treeService.connectToContentService(contentService);
-
-    proxy.listen?.('fileChanged', (event) => {
-      const changeEvent = event as ChangeEvent;
-      treeService.handleWorkerFileChanged(changeEvent);
-      contentService.handleWorkerFileChanged(changeEvent);
-    });
 
     console.debug('[FileManager] initializeServicesActor: success');
     return {
@@ -276,6 +289,7 @@ const initializeServicesActor = fromSafeAsync<WorkerInitializedEvent, { context:
       initialEntries,
       contentService,
       treeService,
+      workerChangeChannel,
     };
   },
 );
@@ -339,6 +353,7 @@ export const fileManagerMachine = setup({
 
       context.contentService?.dispose();
       context.treeService?.dispose();
+      context.workerChangeChannel?.dispose();
       safeDispose(() => context.proxy?.dispose());
       safeDispose(context.bridgeDispose);
 
@@ -352,6 +367,7 @@ export const fileManagerMachine = setup({
         worker: context.sharedWorker ? context.worker : undefined,
         contentService: undefined,
         treeService: undefined,
+        workerChangeChannel: undefined,
       };
     }),
 
@@ -403,6 +419,10 @@ export const fileManagerMachine = setup({
         assertEvent(event, 'workerInitialized');
         return event.treeService;
       },
+      workerChangeChannel({ event }) {
+        assertEvent(event, 'workerInitialized');
+        return event.workerChangeChannel;
+      },
     }),
 
     updateBackendType: assign({
@@ -443,6 +463,7 @@ export const fileManagerMachine = setup({
     filePoolBuffer: input.sharedFilePoolBuffer,
     contentService: undefined,
     treeService: undefined,
+    workerChangeChannel: undefined,
     error: undefined,
     rootDirectory: input.rootDirectory,
     shouldInitializeOnStart: input.shouldInitializeOnStart ?? true,

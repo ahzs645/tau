@@ -5,7 +5,7 @@
   "private": true,
   "main": "dist/main/index.js",
   "dependencies": {
-    "@taucad/filesystem": "workspace:*",
+    "@taucad/fs-client": "workspace:*",
     "@taucad/memory": "workspace:*",
     "@taucad/openscad": "workspace:*",
     "@taucad/runtime": "workspace:*",

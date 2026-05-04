@@ -1,13 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mock } from 'vitest-mock-extended';
-import { FileContentService } from '#lib/file-content-service.js';
-import type { ContentChangeEvent, FileContentResult, OutcomeChangeEvent } from '#lib/file-content-service.js';
-import { BinaryFileError, FileNotFoundError, FileTooLargeError } from '#lib/file-content-errors.js';
+import { FileContentService } from '#file-content-service.js';
+import type { ContentChangeEvent, FileContentResult, OutcomeChangeEvent } from '#file-content-service.js';
+import { BinaryFileError, FileNotFoundError, FileTooLargeError } from '#file-content-errors.js';
+import type { FileSystemClient } from '#file-system-client.js';
 import { SharedPool } from '@taucad/memory';
-import type { FileManagerProxy } from '#machines/file-manager.machine.types.js';
+import type { ChangeEvent } from '@taucad/types';
+import { WorkerChangeChannel } from '#worker-change-channel.js';
+import { WorkspacePathResolver } from '#workspace-path-resolver.js';
+import { RefreshGenerationGuard } from '#refresh-generation-guard.js';
 
-function createMockProxy(overrides?: Partial<FileManagerProxy>): FileManagerProxy {
-  const proxy = mock<FileManagerProxy>({
+function createMockProxy(overrides?: Partial<FileSystemClient>): FileSystemClient {
+  const proxy = mock<FileSystemClient>({
     readFile: vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3])),
     writeFile: vi.fn().mockResolvedValue(undefined),
     writeFiles: vi.fn().mockResolvedValue(undefined),
@@ -16,12 +20,50 @@ function createMockProxy(overrides?: Partial<FileManagerProxy>): FileManagerProx
     copyDirectory: vi.fn().mockResolvedValue(undefined),
     getZippedDirectory: vi.fn().mockResolvedValue(new Blob()),
     duplicateFile: vi.fn().mockResolvedValue(undefined),
-    dispose: vi.fn(),
   });
   if (overrides) {
     Object.assign(proxy, overrides);
   }
   return proxy;
+}
+
+type FileContentHarness = {
+  service: FileContentService;
+  proxy: FileSystemClient;
+  emitFileChanged: (event: ChangeEvent) => void;
+  disposeChannel: () => void;
+};
+
+function createHarness(
+  init?: Partial<Omit<ConstructorParameters<typeof FileContentService>[0], 'channel' | 'refreshGuard'>> & {
+    workspaceRoot?: string;
+  },
+): FileContentHarness {
+  const listen = vi.fn().mockReturnValue(vi.fn());
+  const { workspaceRoot = '/project', paths: inputPaths, proxy: inputProxy, ...serviceOptions } = init ?? {};
+  const paths = inputPaths ?? new WorkspacePathResolver(workspaceRoot);
+  const channel = new WorkerChangeChannel({ transport: { listen }, paths });
+  const refreshGuard = new RefreshGenerationGuard();
+  const proxy = inputProxy ?? createMockProxy();
+  const service = new FileContentService({
+    openSizeBytes: 50 * 1024 * 1024,
+    ...serviceOptions,
+    proxy,
+    paths,
+    channel,
+    refreshGuard,
+  });
+  const emitFileChanged = (event: ChangeEvent): void => {
+    (listen.mock.calls[0]![1] as (data: unknown) => void)(event);
+  };
+  return {
+    service,
+    proxy,
+    emitFileChanged,
+    disposeChannel: () => {
+      channel.dispose();
+    },
+  };
 }
 
 function expectTextContent(result: FileContentResult, expected: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer> {
@@ -39,18 +81,35 @@ function makeAsciiBuffer(byteLength: number): Uint8Array<ArrayBuffer> {
   return buffer;
 }
 
+/** Record `peekOutcome(path).kind` on each subscribe callback (matches useSyncExternalStore snapshot cadence). */
+function recordOutcomeKinds(
+  service: FileContentService,
+  path: string,
+): {
+  readonly kinds: Array<FileContentResult['kind']>;
+  readonly unsubscribe: () => void;
+} {
+  const kinds: Array<FileContentResult['kind']> = [];
+  const unsubscribe = service.subscribe(path, () => {
+    kinds.push(service.peekOutcome(path).kind);
+  });
+  return { kinds, unsubscribe };
+}
+
+function fileWritten(pathRelative: string): ChangeEvent {
+  return { type: 'fileWritten', path: `/project/${pathRelative}`, backend: 'indexeddb' };
+}
+
 describe('FileContentService', () => {
-  let proxy: FileManagerProxy;
+  let proxy: FileSystemClient;
   let service: FileContentService;
+  let emitFileChanged: (event: ChangeEvent) => void;
 
   beforeEach(() => {
-    proxy = createMockProxy();
-    service = new FileContentService({
-      proxy,
-      rootDirectory: '/project',
-      // Use a high open limit by default so tests opt-in to too-large scenarios.
-      openSizeBytes: 50 * 1024 * 1024,
-    });
+    const harness = createHarness();
+    proxy = harness.proxy;
+    service = harness.service;
+    emitFileChanged = harness.emitFileChanged;
   });
 
   it('should resolve text content from worker on cache miss', async () => {
@@ -258,13 +317,12 @@ describe('FileContentService', () => {
     });
 
     it('should produce too-large outcome when ASCII content exceeds open limit', async () => {
-      const tinyService = new FileContentService({
+      const { service: tinyService, proxy: tinyProxy } = createHarness({
         proxy,
-        rootDirectory: '/project',
         openSizeBytes: 1024,
       });
       const ascii = makeAsciiBuffer(5000);
-      vi.mocked(proxy.readFile).mockResolvedValue(ascii);
+      vi.mocked(tinyProxy.readFile).mockResolvedValue(ascii);
 
       const result = await tinyService.resolve('mystery.dat');
 
@@ -286,13 +344,12 @@ describe('FileContentService', () => {
     });
 
     it('should bypass open-limit when sizeLimit override is set', async () => {
-      const tinyService = new FileContentService({
+      const { service: tinyService, proxy: tinyProxy } = createHarness({
         proxy,
-        rootDirectory: '/project',
         openSizeBytes: 1024,
       });
       const ascii = makeAsciiBuffer(4096);
-      vi.mocked(proxy.readFile).mockResolvedValue(ascii);
+      vi.mocked(tinyProxy.readFile).mockResolvedValue(ascii);
 
       const result = await tinyService.resolve('mystery.dat', { sizeLimit: Number.MAX_SAFE_INTEGER });
 
@@ -325,14 +382,13 @@ describe('FileContentService', () => {
 
   describe('open-limit decoupled from cache budget', () => {
     it('should reject ASCII bytes with too-large when openSizeBytes is below cache.maxSingleFileBytes', async () => {
-      const decoupled = new FileContentService({
+      const { service: decoupled, proxy: decoupledProxy } = createHarness({
         proxy,
-        rootDirectory: '/project',
         openSizeBytes: 2 * 1024 * 1024,
         cacheOptions: { maxSingleFileBytes: 50 * 1024 * 1024 },
       });
       const ascii = makeAsciiBuffer(5 * 1024 * 1024);
-      vi.mocked(proxy.readFile).mockResolvedValue(ascii);
+      vi.mocked(decoupledProxy.readFile).mockResolvedValue(ascii);
 
       const result = await decoupled.resolve('mystery.dat');
 
@@ -346,14 +402,13 @@ describe('FileContentService', () => {
 
   describe('cache rejection does not become too-large', () => {
     it('should still produce text outcome when cache.set rejects but bytes fit the open-limit', async () => {
-      const tinyCache = new FileContentService({
+      const { service: tinyCache, proxy: tinyCacheProxy } = createHarness({
         proxy,
-        rootDirectory: '/project',
         openSizeBytes: 10 * 1024 * 1024,
         cacheOptions: { maxSingleFileBytes: 1024, maxEntries: 10, maxTotalBytes: 100 * 1024 },
       });
       const ascii = makeAsciiBuffer(5 * 1024);
-      vi.mocked(proxy.readFile).mockResolvedValue(ascii);
+      vi.mocked(tinyCacheProxy.readFile).mockResolvedValue(ascii);
 
       const callback = vi.fn();
       tinyCache.subscribe('mystery.dat', callback);
@@ -372,14 +427,20 @@ describe('FileContentService', () => {
     function createPoolService(options?: { openSizeBytes?: number }): {
       service: FileContentService;
       pool: SharedPool;
-      proxy: FileManagerProxy;
+      proxy: FileSystemClient;
     } {
       const buffer = new SharedArrayBuffer(16 * 1024 * 1024);
       const pool = new SharedPool(buffer, { maxEntries: 128 });
       const mockProxy = createMockProxy();
+      const listen = vi.fn().mockReturnValue(vi.fn());
+      const paths = new WorkspacePathResolver('/project');
+      const channel = new WorkerChangeChannel({ transport: { listen }, paths });
+      const refreshGuard = new RefreshGenerationGuard();
       const svc = new FileContentService({
         proxy: mockProxy,
-        rootDirectory: '/project',
+        paths,
+        channel,
+        refreshGuard,
         filePool: pool,
         openSizeBytes: options?.openSizeBytes ?? 50 * 1024 * 1024,
       });
@@ -527,13 +588,12 @@ describe('FileContentService', () => {
     });
 
     it('should reject with FileTooLargeError for too-large outcome', async () => {
-      const tinyService = new FileContentService({
+      const { service: tinyService, proxy: tinyProxy } = createHarness({
         proxy,
-        rootDirectory: '/project',
         openSizeBytes: 2,
       });
       const ascii = makeAsciiBuffer(64);
-      vi.mocked(proxy.readFile).mockResolvedValue(ascii);
+      vi.mocked(tinyProxy.readFile).mockResolvedValue(ascii);
 
       try {
         await tinyService.resolveBytes('mystery.dat');
@@ -660,8 +720,260 @@ describe('FileContentService', () => {
     });
   });
 
+  describe('open-file outcome contract', () => {
+    it('should not transition an open file outcome back to loading on fileWritten echo', async () => {
+      vi.mocked(proxy.readFile).mockResolvedValue(new Uint8Array([1, 2, 3]));
+      await service.resolve('main.ts');
+      const { kinds, unsubscribe } = recordOutcomeKinds(service, 'main.ts');
+      try {
+        vi.mocked(proxy.readFile).mockResolvedValue(new Uint8Array([9, 9]));
+        emitFileChanged(fileWritten('main.ts'));
+        await vi.waitFor(() => {
+          if (service.peekOutcome('main.ts').kind !== 'text') {
+            throw new Error('expected text');
+          }
+          expectTextContent(service.peekOutcome('main.ts'), new Uint8Array([9, 9]));
+        });
+        const afterFirstText = kinds.indexOf('text');
+        expect(afterFirstText).toBeGreaterThanOrEqual(0);
+        expect(kinds.slice(afterFirstText).includes('loading')).toBe(false);
+      } finally {
+        unsubscribe();
+      }
+    });
+
+    it('should swap text to text with new bytes on external fileWritten without a loading snapshot', async () => {
+      const before = new Uint8Array([1]);
+      const after = new Uint8Array([2, 3, 4]);
+      vi.mocked(proxy.readFile).mockResolvedValueOnce(before);
+      await service.resolve('main.ts');
+      const { kinds, unsubscribe } = recordOutcomeKinds(service, 'main.ts');
+      try {
+        kinds.length = 0;
+        vi.mocked(proxy.readFile).mockResolvedValue(after);
+        emitFileChanged(fileWritten('main.ts'));
+        await vi.waitFor(() => {
+          expectTextContent(service.peekOutcome('main.ts'), after);
+        });
+        expect(kinds.includes('loading')).toBe(false);
+      } finally {
+        unsubscribe();
+      }
+    });
+
+    it('should reclassify text to binary on refresh when new bytes trip the binary sniffer', async () => {
+      vi.mocked(proxy.readFile).mockResolvedValueOnce(new Uint8Array([0x41, 0x42]));
+      await service.resolve('main.ts');
+      const binaryPayload = new Uint8Array([0x00]);
+      vi.mocked(proxy.readFile).mockResolvedValue(binaryPayload);
+      const { kinds, unsubscribe } = recordOutcomeKinds(service, 'main.ts');
+      try {
+        kinds.length = 0;
+        emitFileChanged(fileWritten('main.ts'));
+        await vi.waitFor(() => {
+          expect(service.peekOutcome('main.ts').kind).toBe('binary');
+        });
+        expect(kinds.includes('loading')).toBe(false);
+      } finally {
+        unsubscribe();
+      }
+    });
+
+    it('should reclassify text to too-large on refresh when new bytes exceed openSizeBytes', async () => {
+      const {
+        service: smallLimitService,
+        proxy: smallProxy,
+        emitFileChanged: emitSmall,
+      } = createHarness({
+        openSizeBytes: 4,
+      });
+      vi.mocked(smallProxy.readFile).mockResolvedValueOnce(new Uint8Array([1, 2, 3]));
+      await smallLimitService.resolve('main.ts');
+      vi.mocked(smallProxy.readFile).mockResolvedValue(makeAsciiBuffer(10));
+      const { kinds, unsubscribe } = recordOutcomeKinds(smallLimitService, 'main.ts');
+      try {
+        kinds.length = 0;
+        emitSmall(fileWritten('main.ts'));
+        await vi.waitFor(() => {
+          expect(smallLimitService.peekOutcome('main.ts').kind).toBe('too-large');
+        });
+        expect(kinds.includes('loading')).toBe(false);
+      } finally {
+        unsubscribe();
+      }
+    });
+
+    it('should not transition open paths to loading on fileRenamed for old or new path', async () => {
+      vi.mocked(proxy.readFile).mockResolvedValueOnce(new Uint8Array([1]));
+      await service.resolve('old.ts');
+      vi.mocked(proxy.readFile).mockResolvedValueOnce(new Uint8Array([2]));
+      await service.resolve('new.ts');
+      const oldRec = recordOutcomeKinds(service, 'old.ts');
+      const newRec = recordOutcomeKinds(service, 'new.ts');
+      try {
+        oldRec.kinds.length = 0;
+        newRec.kinds.length = 0;
+        vi.mocked(proxy.readFile).mockResolvedValue(new Uint8Array([3]));
+        emitFileChanged({
+          type: 'fileRenamed',
+          oldPath: '/project/old.ts',
+          newPath: '/project/new.ts',
+          backend: 'indexeddb',
+        });
+        await vi.waitFor(() => {
+          expect(service.peekOutcome('old.ts').kind).toBe('orphaned');
+        });
+        await vi.waitFor(() => {
+          expect(service.peekOutcome('new.ts').kind).toBe('text');
+        });
+        expect(oldRec.kinds.includes('loading')).toBe(false);
+        expect(newRec.kinds.includes('loading')).toBe(false);
+      } finally {
+        oldRec.unsubscribe();
+        newRec.unsubscribe();
+      }
+    });
+
+    it('should not transition any path under the prefix to loading on directoryChanged', async () => {
+      const populate = async (path: string): Promise<void> => {
+        vi.mocked(proxy.readFile).mockResolvedValueOnce(new Uint8Array([1]));
+        await service.resolve(path);
+      };
+      await populate('lib/a.ts');
+      await populate('lib/sub/b.ts');
+      await populate('main.ts');
+      const recA = recordOutcomeKinds(service, 'lib/a.ts');
+      const recB = recordOutcomeKinds(service, 'lib/sub/b.ts');
+      try {
+        recA.kinds.length = 0;
+        recB.kinds.length = 0;
+        vi.mocked(proxy.readFile).mockImplementation(async (abs: string) => {
+          if (abs.endsWith('lib/a.ts')) {
+            return new Uint8Array([2]);
+          }
+          if (abs.endsWith('lib/sub/b.ts')) {
+            return new Uint8Array([3]);
+          }
+          return new Uint8Array([1]);
+        });
+        emitFileChanged({ type: 'directoryChanged', path: '/project/lib', backend: 'indexeddb' });
+        await vi.waitFor(() => {
+          expect(service.peekOutcome('lib/a.ts').kind).toBe('text');
+        });
+        await vi.waitFor(() => {
+          expect(service.peekOutcome('lib/sub/b.ts').kind).toBe('text');
+        });
+        expect(recA.kinds.includes('loading')).toBe(false);
+        expect(recB.kinds.includes('loading')).toBe(false);
+        expect(service.peekOutcome('main.ts').kind).toBe('text');
+      } finally {
+        recA.unsubscribe();
+        recB.unsubscribe();
+      }
+    });
+
+    it('should not transition any open path to loading on backendChanged', async () => {
+      vi.mocked(proxy.readFile).mockResolvedValue(new Uint8Array([1]));
+      await service.resolve('a.ts');
+      await service.resolve('b.ts');
+      const recA = recordOutcomeKinds(service, 'a.ts');
+      const recB = recordOutcomeKinds(service, 'b.ts');
+      try {
+        recA.kinds.length = 0;
+        recB.kinds.length = 0;
+        vi.mocked(proxy.readFile).mockResolvedValue(new Uint8Array([5]));
+        emitFileChanged({ type: 'backendChanged', backend: 'opfs' });
+        await vi.waitFor(() => {
+          expect(service.peekOutcome('a.ts').kind).toBe('text');
+        });
+        await vi.waitFor(() => {
+          expect(service.peekOutcome('b.ts').kind).toBe('text');
+        });
+        expect(recA.kinds.includes('loading')).toBe(false);
+        expect(recB.kinds.includes('loading')).toBe(false);
+      } finally {
+        recA.unsubscribe();
+        recB.unsubscribe();
+      }
+    });
+
+    it('should not show loading after editor write when a fileWritten echo still arrives', async () => {
+      const data = new Uint8Array([7, 8]);
+      vi.mocked(proxy.readFile).mockResolvedValue(data);
+      await service.resolve('main.ts');
+      const { kinds, unsubscribe } = recordOutcomeKinds(service, 'main.ts');
+      try {
+        kinds.length = 0;
+        await service.write('main.ts', new Uint8Array([9, 10]), 'editor');
+        vi.mocked(proxy.readFile).mockResolvedValue(new Uint8Array([9, 10]));
+        emitFileChanged(fileWritten('main.ts'));
+        await vi.waitFor(() => {
+          expect(service.peekOutcome('main.ts').kind).toBe('text');
+        });
+        expect(kinds.includes('loading')).toBe(false);
+      } finally {
+        unsubscribe();
+      }
+    });
+  });
+
+  describe('refresh generation guard', () => {
+    it('should discard a stale refresh result when a newer refresh started before the slow read settled', async () => {
+      vi.useFakeTimers();
+      try {
+        vi.mocked(proxy.readFile).mockResolvedValue(new Uint8Array([1]));
+        await service.resolve('main.ts');
+
+        let refreshReadCount = 0;
+        vi.mocked(proxy.readFile).mockImplementation(async (): Promise<Uint8Array<ArrayBuffer>> => {
+          refreshReadCount += 1;
+          if (refreshReadCount === 1) {
+            return new Promise<Uint8Array<ArrayBuffer>>((resolve) => {
+              setTimeout(() => {
+                resolve(new Uint8Array([7]));
+              }, 1000);
+            });
+          }
+          return new Uint8Array([9]);
+        });
+
+        emitFileChanged(fileWritten('main.ts'));
+        emitFileChanged(fileWritten('main.ts'));
+
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.waitFor(() => {
+          expectTextContent(service.peekOutcome('main.ts'), new Uint8Array([9]));
+        });
+
+        await vi.advanceTimersByTimeAsync(1000);
+        await vi.advanceTimersByTimeAsync(0);
+
+        expectTextContent(service.peekOutcome('main.ts'), new Uint8Array([9]));
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('should publish the latest refresh result when refresh generations are strictly monotonic', async () => {
+      vi.mocked(proxy.readFile).mockResolvedValue(new Uint8Array([1]));
+      await service.resolve('main.ts');
+
+      vi.mocked(proxy.readFile).mockResolvedValueOnce(new Uint8Array([2]));
+      vi.mocked(proxy.readFile).mockResolvedValueOnce(new Uint8Array([51]));
+      emitFileChanged(fileWritten('main.ts'));
+      await vi.waitFor(() => {
+        expectTextContent(service.peekOutcome('main.ts'), new Uint8Array([2]));
+      });
+
+      emitFileChanged(fileWritten('main.ts'));
+      await vi.waitFor(() => {
+        expectTextContent(service.peekOutcome('main.ts'), new Uint8Array([51]));
+      });
+    });
+  });
+
   describe('handleWorkerFileChanged', () => {
-    it('should evict cache and notify subscribers when a watched file is written out-of-band', async () => {
+    it('should refresh in place and notify subscribers when a watched file is written externally', async () => {
       const initialBytes = new Uint8Array([1, 2, 3]);
       vi.mocked(proxy.readFile).mockResolvedValue(initialBytes);
       await service.resolve('main.ts');
@@ -670,24 +982,30 @@ describe('FileContentService', () => {
       const callback = vi.fn();
       service.subscribe('main.ts', callback);
 
-      service.handleWorkerFileChanged({ type: 'fileWritten', path: '/project/main.ts', backend: 'indexeddb' });
+      vi.mocked(proxy.readFile).mockResolvedValue(new Uint8Array([4, 5]));
+      emitFileChanged({ type: 'fileWritten', path: '/project/main.ts', backend: 'indexeddb' });
 
-      expect(service.has('main.ts')).toBe(false);
-      expect(service.peekOutcome('main.ts')).toEqual({ kind: 'loading' });
-      expect(callback).toHaveBeenCalledOnce();
+      await vi.waitFor(() => {
+        expect(callback.mock.calls.length).toBeGreaterThanOrEqual(1);
+      });
+      expect(service.peekOutcome('main.ts').kind).toBe('text');
+      expect(service.peekOutcome('main.ts')).toEqual(
+        expect.objectContaining({ kind: 'text', content: new Uint8Array([4, 5]) }),
+      );
     });
 
-    it('should re-read fresh bytes from the proxy after fileWritten eviction', async () => {
+    it('should re-read fresh bytes from the proxy after fileWritten without requiring explicit resolve', async () => {
       const before = new Uint8Array([1]);
       const after = new Uint8Array([2, 3, 4]);
       vi.mocked(proxy.readFile).mockResolvedValueOnce(before);
       await service.resolve('main.ts');
 
       vi.mocked(proxy.readFile).mockResolvedValueOnce(after);
-      service.handleWorkerFileChanged({ type: 'fileWritten', path: '/project/main.ts', backend: 'indexeddb' });
+      emitFileChanged({ type: 'fileWritten', path: '/project/main.ts', backend: 'indexeddb' });
 
-      const next = await service.resolve('main.ts');
-      expectTextContent(next, after);
+      await vi.waitFor(() => {
+        expectTextContent(service.peekOutcome('main.ts'), after);
+      });
       expect(proxy.readFile).toHaveBeenCalledTimes(2);
     });
 
@@ -695,33 +1013,37 @@ describe('FileContentService', () => {
       vi.mocked(proxy.readFile).mockResolvedValue(new Uint8Array([1]));
       await service.resolve('main.ts');
 
-      service.handleWorkerFileChanged({ type: 'fileDeleted', path: '/project/main.ts', backend: 'indexeddb' });
+      emitFileChanged({ type: 'fileDeleted', path: '/project/main.ts', backend: 'indexeddb' });
 
       expect(service.has('main.ts')).toBe(false);
       expect(service.isOrphaned('main.ts')).toBe(true);
       expect(service.peekOutcome('main.ts')).toEqual({ kind: 'orphaned' });
     });
 
-    it('should evict both old and new keys on fileRenamed', async () => {
+    it('should orphan old path and refresh new path on fileRenamed', async () => {
       vi.mocked(proxy.readFile).mockResolvedValueOnce(new Uint8Array([1]));
       await service.resolve('old.ts');
       vi.mocked(proxy.readFile).mockResolvedValueOnce(new Uint8Array([2]));
       await service.resolve('new.ts');
 
-      service.handleWorkerFileChanged({
+      vi.mocked(proxy.readFile).mockResolvedValue(new Uint8Array([3]));
+      emitFileChanged({
         type: 'fileRenamed',
         oldPath: '/project/old.ts',
         newPath: '/project/new.ts',
         backend: 'indexeddb',
       });
 
-      expect(service.has('old.ts')).toBe(false);
-      expect(service.has('new.ts')).toBe(false);
-      expect(service.isOrphaned('old.ts')).toBe(true);
-      expect(service.isOrphaned('new.ts')).toBe(false);
+      await vi.waitFor(() => {
+        expect(service.peekOutcome('old.ts').kind).toBe('orphaned');
+      });
+      await vi.waitFor(() => {
+        expect(service.peekOutcome('new.ts').kind).toBe('text');
+      });
+      expectTextContent(service.peekOutcome('new.ts'), new Uint8Array([3]));
     });
 
-    it('should evict every cached entry under a directoryChanged prefix', async () => {
+    it('should refresh every cached entry under a directoryChanged prefix without dropping main.ts', async () => {
       const populate = async (path: string): Promise<void> => {
         vi.mocked(proxy.readFile).mockResolvedValueOnce(new Uint8Array([1]));
         await service.resolve(path);
@@ -730,14 +1052,21 @@ describe('FileContentService', () => {
       await populate('lib/sub/b.ts');
       await populate('main.ts');
 
-      service.handleWorkerFileChanged({ type: 'directoryChanged', path: '/project/lib', backend: 'indexeddb' });
+      vi.mocked(proxy.readFile).mockImplementation(async (abs: string) => {
+        if (abs.includes('/lib/')) {
+          return new Uint8Array([2]);
+        }
+        return new Uint8Array([1]);
+      });
+      emitFileChanged({ type: 'directoryChanged', path: '/project/lib', backend: 'indexeddb' });
 
-      expect(service.has('lib/a.ts')).toBe(false);
-      expect(service.has('lib/sub/b.ts')).toBe(false);
-      expect(service.has('main.ts')).toBe(true);
+      await vi.waitFor(() => {
+        expect(service.peekOutcome('lib/a.ts').kind).toBe('text');
+      });
+      expect(service.peekOutcome('main.ts').kind).toBe('text');
     });
 
-    it('should clear the entire cache on backendChanged', async () => {
+    it('should refresh open paths on backendChanged', async () => {
       vi.mocked(proxy.readFile).mockResolvedValue(new Uint8Array([1]));
       await service.resolve('a.ts');
       await service.resolve('b.ts');
@@ -745,18 +1074,30 @@ describe('FileContentService', () => {
       const callback = vi.fn();
       service.subscribe('a.ts', callback);
 
-      service.handleWorkerFileChanged({ type: 'backendChanged', backend: 'opfs' });
+      vi.mocked(proxy.readFile).mockResolvedValue(new Uint8Array([9]));
+      emitFileChanged({ type: 'backendChanged', backend: 'opfs' });
 
-      expect(service.has('a.ts')).toBe(false);
-      expect(service.has('b.ts')).toBe(false);
-      expect(callback).toHaveBeenCalledOnce();
+      await vi.waitFor(() => {
+        expectTextContent(service.peekOutcome('a.ts'), new Uint8Array([9]));
+      });
+      expect(callback.mock.calls.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('should evict cache for a closed path on fileWritten without readFile roundtrip', async () => {
+      vi.mocked(proxy.readFile).mockResolvedValue(new Uint8Array([1]));
+      await service.resolve('open.ts');
+      vi.mocked(proxy.readFile).mockClear();
+
+      emitFileChanged(fileWritten('never-opened.ts'));
+
+      expect(vi.mocked(proxy.readFile)).not.toHaveBeenCalled();
     });
 
     it('should ignore events that fall outside the project root', async () => {
       vi.mocked(proxy.readFile).mockResolvedValue(new Uint8Array([1]));
       await service.resolve('main.ts');
 
-      service.handleWorkerFileChanged({ type: 'fileWritten', path: '/other/main.ts', backend: 'indexeddb' });
+      emitFileChanged({ type: 'fileWritten', path: '/other/main.ts', backend: 'indexeddb' });
 
       expect(service.has('main.ts')).toBe(true);
     });
@@ -764,12 +1105,10 @@ describe('FileContentService', () => {
 
   describe('cache capacity', () => {
     it('should accept 500 entries before eviction with default cache options', async () => {
-      const svc = new FileContentService({
-        proxy: createMockProxy({
-          readFile: vi.fn().mockImplementation(async () => new Uint8Array([1])),
-        }),
-        rootDirectory: '/project',
+      const customProxy = createMockProxy({
+        readFile: vi.fn().mockImplementation(async () => new Uint8Array([1])),
       });
+      const { service: svc } = createHarness({ proxy: customProxy });
 
       for (let i = 0; i < 500; i++) {
         // oxlint-disable-next-line no-await-in-loop -- Sequential cache population required

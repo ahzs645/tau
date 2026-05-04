@@ -1,5 +1,6 @@
 import type { FileStat, FileStatEntry, FileSystemBackend } from '@taucad/types';
 import type {
+  ChangeEvent,
   FileSystemProvider,
   FileTreeNode,
   TreeEntry,
@@ -19,6 +20,7 @@ import type { SharedPool } from '@taucad/memory';
 import type { MountTable, MountOptions, MountResolution } from '#mount-table.js';
 import { createFileSystemService } from '#file-system-service.js';
 import type { FileSystemService } from '#file-system-service.js';
+import { tagEventOrigin } from '#event-origin-registry.js';
 import { parentDirectory, joinPath, normalizePath } from '@taucad/utils/path';
 
 /** Milliseconds. */
@@ -31,6 +33,16 @@ const kernelCoalescingWindow = 75;
 export type MkdirOptions = {
   mode?: number;
   recursive?: boolean;
+};
+
+/**
+ * Optional metadata for workspace mutations initiated from a specific client
+ * (e.g. a filesystem bridge port). Observer and direct UI paths omit this.
+ *
+ * @public
+ */
+export type WorkspaceMutationContext = {
+  originClientId?: string;
 };
 
 /**
@@ -273,9 +285,14 @@ export class WorkspaceFileService {
    *
    * @param path - Absolute file path.
    * @param data - File content as raw bytes or a UTF-8 string.
+   * @param context - Optional mutation source metadata for change-bus subscribers.
    * @returns Resolves when the write completes.
    */
-  public async writeFile(path: string, data: Uint8Array<ArrayBuffer> | string): Promise<void> {
+  public async writeFile(
+    path: string,
+    data: Uint8Array<ArrayBuffer> | string,
+    context?: WorkspaceMutationContext,
+  ): Promise<void> {
     return this._crossTabCoordinator.withWriteLock(path, async () =>
       this._resourceQueue.queueFor(path, async () => {
         const { provider, path: resolvedPath, backend: resolvedBackend } = this._resolveProvider(path);
@@ -286,11 +303,14 @@ export class WorkspaceFileService {
         const size = typeof data === 'string' ? new TextEncoder().encode(data).byteLength : data.byteLength;
         this._inMemoryTreeAddFile(path, size);
         this._treeCache.invalidate(parentDirectory(path));
-        this._eventBus.emit({
-          type: 'fileWritten',
-          path,
-          backend: resolvedBackend,
-        });
+        this._emitChangeEvent(
+          {
+            type: 'fileWritten',
+            path,
+            backend: resolvedBackend,
+          },
+          context,
+        );
       }),
     );
   }
@@ -299,9 +319,13 @@ export class WorkspaceFileService {
    * Write multiple files atomically within a single serialized operation.
    *
    * @param files - Map of absolute path to content.
+   * @param context - Optional mutation source metadata for change-bus subscribers.
    * @returns Resolves when all writes complete.
    */
-  public async writeFiles(files: Record<string, { content: Uint8Array<ArrayBuffer> | string }>): Promise<void> {
+  public async writeFiles(
+    files: Record<string, { content: Uint8Array<ArrayBuffer> | string }>,
+    context?: WorkspaceMutationContext,
+  ): Promise<void> {
     const entries = Object.entries(files);
     if (entries.length === 0) {
       return;
@@ -327,11 +351,14 @@ export class WorkspaceFileService {
     for (const directory of parentDirectories) {
       this._treeCache.invalidate(directory);
     }
-    this._eventBus.emit({
-      type: 'directoryChanged',
-      path: '/',
-      backend: resolvedBackend,
-    });
+    this._emitChangeEvent(
+      {
+        type: 'directoryChanged',
+        path: '/',
+        backend: resolvedBackend,
+      },
+      context,
+    );
   }
 
   /**
@@ -339,9 +366,10 @@ export class WorkspaceFileService {
    *
    * @param path - Absolute directory path.
    * @param options - Pass `{ recursive: true }` to create parent directories.
+   * @param context - Optional mutation source metadata for change-bus subscribers.
    * @returns Resolves when the directory is created.
    */
-  public async mkdir(path: string, options?: MkdirOptions): Promise<void> {
+  public async mkdir(path: string, options?: MkdirOptions, context?: WorkspaceMutationContext): Promise<void> {
     return this._resourceQueue.queueFor(path, async () => {
       const { provider, path: resolvedPath, backend: resolvedBackend } = this._resolveProvider(path);
       await provider.mkdir(resolvedPath, options?.recursive ? { recursive: true } : undefined);
@@ -354,11 +382,14 @@ export class WorkspaceFileService {
         this._treeCache.invalidate(parentDirectory(path));
       }
 
-      this._eventBus.emit({
-        type: 'directoryChanged',
-        path: parentDirectory(path),
-        backend: resolvedBackend,
-      });
+      this._emitChangeEvent(
+        {
+          type: 'directoryChanged',
+          path: parentDirectory(path),
+          backend: resolvedBackend,
+        },
+        context,
+      );
     });
   }
 
@@ -367,9 +398,10 @@ export class WorkspaceFileService {
    *
    * @param from - Current absolute path.
    * @param to - New absolute path.
+   * @param context - Optional mutation source metadata for change-bus subscribers.
    * @returns Resolves when the rename completes.
    */
-  public async rename(from: string, to: string): Promise<void> {
+  public async rename(from: string, to: string, context?: WorkspaceMutationContext): Promise<void> {
     return this._resourceQueue.queueFor(from, async () => {
       const source = this._resolveProvider(from);
       const target = this._resolveProvider(to);
@@ -389,12 +421,15 @@ export class WorkspaceFileService {
       this._treeCache.invalidate(parentDirectory(from));
       this._treeCache.invalidate(parentDirectory(to));
       this._treeCache.invalidateSubtree(from);
-      this._eventBus.emit({
-        type: 'fileRenamed',
-        oldPath: from,
-        newPath: to,
-        backend: source.backend,
-      });
+      this._emitChangeEvent(
+        {
+          type: 'fileRenamed',
+          oldPath: from,
+          newPath: to,
+          backend: source.backend,
+        },
+        context,
+      );
     });
   }
 
@@ -402,9 +437,10 @@ export class WorkspaceFileService {
    * Delete a file.
    *
    * @param path - Absolute file path.
+   * @param context - Optional mutation source metadata for change-bus subscribers.
    * @returns Resolves when the file is deleted.
    */
-  public async unlink(path: string): Promise<void> {
+  public async unlink(path: string, context?: WorkspaceMutationContext): Promise<void> {
     return this._resourceQueue.queueFor(path, async () => {
       const { provider, path: resolvedPath, backend: resolvedBackend } = this._resolveProvider(path);
       await provider.unlink(resolvedPath);
@@ -412,11 +448,14 @@ export class WorkspaceFileService {
       this._filePool?.invalidate(path);
       this._inMemoryTreeRemoveFile(path);
       this._treeCache.invalidate(parentDirectory(path));
-      this._eventBus.emit({
-        type: 'fileDeleted',
-        path,
-        backend: resolvedBackend,
-      });
+      this._emitChangeEvent(
+        {
+          type: 'fileDeleted',
+          path,
+          backend: resolvedBackend,
+        },
+        context,
+      );
     });
   }
 
@@ -424,9 +463,10 @@ export class WorkspaceFileService {
    * Remove a directory.
    *
    * @param path - Absolute directory path.
+   * @param context - Optional mutation source metadata for change-bus subscribers.
    * @returns Resolves when the directory is removed.
    */
-  public async rmdir(path: string): Promise<void> {
+  public async rmdir(path: string, context?: WorkspaceMutationContext): Promise<void> {
     return this._resourceQueue.queueFor(path, async () => {
       const { provider, path: resolvedPath, backend: resolvedBackend } = this._resolveProvider(path);
       await provider.rmdir(resolvedPath);
@@ -434,11 +474,14 @@ export class WorkspaceFileService {
       this._inMemoryTreeRemoveDirectory(path);
       this._treeCache.invalidateSubtree(path);
       this._treeCache.invalidate(parentDirectory(path));
-      this._eventBus.emit({
-        type: 'directoryChanged',
-        path: parentDirectory(path),
-        backend: resolvedBackend,
-      });
+      this._emitChangeEvent(
+        {
+          type: 'directoryChanged',
+          path: parentDirectory(path),
+          backend: resolvedBackend,
+        },
+        context,
+      );
     });
   }
 
@@ -463,9 +506,14 @@ export class WorkspaceFileService {
    *
    * @param sourcePath - Absolute path of the file to copy.
    * @param destinationPath - Absolute path for the new copy.
+   * @param context - Optional mutation source metadata for change-bus subscribers.
    * @returns Resolves when the copy completes.
    */
-  public async duplicateFile(sourcePath: string, destinationPath: string): Promise<void> {
+  public async duplicateFile(
+    sourcePath: string,
+    destinationPath: string,
+    context?: WorkspaceMutationContext,
+  ): Promise<void> {
     return this._resourceQueue.queueFor(destinationPath, async () => {
       const source = this._resolveProvider(sourcePath);
       const destination = this._resolveProvider(destinationPath);
@@ -476,11 +524,14 @@ export class WorkspaceFileService {
       const size = data.byteLength;
       this._inMemoryTreeAddFile(destinationPath, size);
       this._treeCache.invalidate(parentDirectory(destinationPath));
-      this._eventBus.emit({
-        type: 'fileWritten',
-        path: destinationPath,
-        backend: destination.backend,
-      });
+      this._emitChangeEvent(
+        {
+          type: 'fileWritten',
+          path: destinationPath,
+          backend: destination.backend,
+        },
+        context,
+      );
     });
   }
 
@@ -489,9 +540,14 @@ export class WorkspaceFileService {
    *
    * @param sourcePath - Absolute path of the source directory.
    * @param destinationPath - Absolute path for the destination directory.
+   * @param context - Optional mutation source metadata for change-bus subscribers.
    * @returns Resolves when the copy completes.
    */
-  public async copyDirectory(sourcePath: string, destinationPath: string): Promise<void> {
+  public async copyDirectory(
+    sourcePath: string,
+    destinationPath: string,
+    context?: WorkspaceMutationContext,
+  ): Promise<void> {
     return this._resourceQueue.queueFor(destinationPath, async () => {
       const source = this._resolveProvider(sourcePath);
       const files = await this._getDirectoryContentsInternal(source.provider, source.path);
@@ -510,11 +566,14 @@ export class WorkspaceFileService {
       this._treeCache.invalidate(parentDirectory(destinationPath));
       this._treeCache.invalidateSubtree(destinationPath);
       const destinationResolution = this._resolveProvider(destinationPath);
-      this._eventBus.emit({
-        type: 'directoryChanged',
-        path: parentDirectory(destinationPath),
-        backend: destinationResolution.backend,
-      });
+      this._emitChangeEvent(
+        {
+          type: 'directoryChanged',
+          path: parentDirectory(destinationPath),
+          backend: destinationResolution.backend,
+        },
+        context,
+      );
     });
   }
 
@@ -573,37 +632,33 @@ export class WorkspaceFileService {
     const { provider, path: resolvedPath } = this._resolveProvider(path);
     const entryMap = new Map<string, TreeEntry>();
 
-    try {
-      if (provider.readdirWithStats) {
-        const statsEntries = await provider.readdirWithStats(resolvedPath);
-        for (const entry of statsEntries) {
-          entryMap.set(entry.name, {
-            name: entry.name,
-            type: entry.type,
-            size: entry.size,
-            mtimeMs: entry.mtimeMs,
+    if (provider.readdirWithStats) {
+      const statsEntries = await provider.readdirWithStats(resolvedPath);
+      for (const entry of statsEntries) {
+        entryMap.set(entry.name, {
+          name: entry.name,
+          type: entry.type,
+          size: entry.size,
+          mtimeMs: entry.mtimeMs,
+        });
+      }
+    } else {
+      const entries = await provider.readdir(resolvedPath);
+      for (const entry of entries) {
+        const fullPath = joinPath(resolvedPath, entry);
+        try {
+          // oxlint-disable-next-line no-await-in-loop -- Sequential stat required for tree building
+          const stat = await provider.stat(fullPath);
+          entryMap.set(entry, {
+            name: entry,
+            type: stat.type,
+            size: stat.size,
+            mtimeMs: stat.mtimeMs,
           });
-        }
-      } else {
-        const entries = await provider.readdir(resolvedPath);
-        for (const entry of entries) {
-          const fullPath = joinPath(resolvedPath, entry);
-          try {
-            // oxlint-disable-next-line no-await-in-loop -- Sequential stat required for tree building
-            const stat = await provider.stat(fullPath);
-            entryMap.set(entry, {
-              name: entry,
-              type: stat.type,
-              size: stat.size,
-              mtimeMs: stat.mtimeMs,
-            });
-          } catch {
-            // Skip entries that can't be stat'd (deleted between readdir and stat)
-          }
+        } catch {
+          // Skip entries that can't be stat'd (deleted between readdir and stat)
         }
       }
-    } catch {
-      return [];
     }
 
     const childMounts = this._mountTable.getMountsUnder(path);
@@ -846,6 +901,13 @@ export class WorkspaceFileService {
   }
 
   // --- Private helpers ---
+
+  private _emitChangeEvent(event: ChangeEvent, context?: WorkspaceMutationContext): void {
+    if (context?.originClientId !== undefined) {
+      tagEventOrigin(event, context.originClientId);
+    }
+    this._eventBus.emit(event);
+  }
 
   /**
    * Convert an absolute path to a path relative to {@link _directoryStatRoot} (scan root).

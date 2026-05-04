@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { seemsBinary, headSniffByteLength } from '#lib/seems-binary.js';
+import { seemsBinary, headSniffByteLength } from '#seems-binary.js';
 
 describe('seemsBinary', () => {
   it('should return false for an empty buffer', () => {

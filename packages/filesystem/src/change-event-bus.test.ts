@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ChangeEventBus } from '#change-event-bus.js';
 import type { ChangeEvent } from '#types.js';
+import { getEventOrigin, tagEventOrigin } from '#event-origin-registry.js';
 
 const mockBackend = 'memory';
 
@@ -75,9 +76,27 @@ describe('ChangeEventBus', () => {
     bus.emit(fileWrittenEvent('/test.txt'));
 
     expect(failingHandler).toHaveBeenCalledTimes(1);
+    expect(failingHandler).toHaveBeenCalledWith({ type: 'fileWritten', path: '/test.txt', backend: mockBackend });
     expect(succeedingHandler).toHaveBeenCalledTimes(1);
+    expect(succeedingHandler).toHaveBeenCalledWith({ type: 'fileWritten', path: '/test.txt', backend: mockBackend });
     expect(consoleErrorSpy).toHaveBeenCalledWith('[ChangeEventBus] Subscriber error:', expect.any(Error));
 
     consoleErrorSpy.mockRestore();
+  });
+
+  it('should deliver events that were tagged before emit so getEventOrigin works on the payload', () => {
+    const bus = new ChangeEventBus();
+    const handler = vi.fn();
+
+    const event = fileWrittenEvent('/origin.txt');
+    tagEventOrigin(event, 'port_a');
+
+    bus.subscribe(handler);
+    bus.emit(event);
+
+    expect(handler).toHaveBeenCalledOnce();
+    expect(handler).toHaveBeenCalledWith(event);
+    const emittedEvent = handler.mock.calls[0]![0] as ChangeEvent;
+    expect(getEventOrigin(emittedEvent)).toBe('port_a');
   });
 });

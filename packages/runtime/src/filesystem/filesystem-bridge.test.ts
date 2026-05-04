@@ -1,9 +1,21 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createFileSystemBridge, exposeFileSystem } from '#filesystem/filesystem-bridge.js';
+import { wrapMessagePort } from '@taucad/rpc';
+import type { Port } from '@taucad/rpc';
+import { ChangeEventBus, tagEventOrigin } from '@taucad/filesystem';
 import type { ChangeEvent } from '@taucad/types';
+import { createFileSystemBridge, exposeFileSystem } from '#filesystem/filesystem-bridge.js';
+import { createBridgeCall } from '#transport/_internal/runtime-filesystem-bridge.js';
 
 const testBackend = 'memory';
 const written = (path: string): ChangeEvent => ({ type: 'fileWritten', path, backend: testBackend });
+
+function fsBridgePort(port: MessagePort, label: string): Port<unknown> {
+  const wrapped = wrapMessagePort<unknown>(port, { label });
+  if (wrapped.start !== undefined) {
+    wrapped.start();
+  }
+  return wrapped;
+}
 
 describe('createFileSystemBridge', () => {
   it('should send disconnect message before closing port on dispose', () => {
@@ -81,11 +93,13 @@ describe('exposeFileSystem throttled delivery', () => {
     );
 
     expect(coalescerDeliver).toBeDefined();
-    const events = [written('/a.txt'), written('/b.txt')];
-    coalescerDeliver!(events);
+    const a = written('/a.txt');
+    const b = written('/b.txt');
+    const batch = [a, b];
+    coalescerDeliver!(batch);
 
     expect(pushFunction).toHaveBeenCalledTimes(1);
-    expect(pushFunction).toHaveBeenCalledWith(events);
+    expect(pushFunction).toHaveBeenCalledWith(batch);
 
     handle.cleanup();
   });
@@ -126,7 +140,8 @@ describe('exposeFileSystem throttled delivery', () => {
     );
 
     expect(coalescerDeliver).toBeDefined();
-    coalescerDeliver!([written('/a.txt')]);
+    const writtenEvent = written('/a.txt');
+    coalescerDeliver!([writtenEvent]);
 
     handle.cleanup();
   });
@@ -167,12 +182,147 @@ describe('exposeFileSystem throttled delivery', () => {
     const serverHandle = [...handle.serverHandles.values()][0]!;
     const emitSpy = vi.spyOn(serverHandle, 'emit');
 
-    coalescerDeliver!([written('/a.txt'), written('/b.txt')]);
+    const first = written('/a.txt');
+    const second = written('/b.txt');
+    coalescerDeliver!([first, second]);
 
-    expect(emitSpy).toHaveBeenCalledWith('fileChanged', written('/a.txt'));
-    expect(emitSpy).toHaveBeenCalledWith('fileChanged', written('/b.txt'));
+    expect(emitSpy).toHaveBeenCalledWith('fileChanged', first);
+    expect(emitSpy).toHaveBeenCalledWith('fileChanged', second);
 
     handle.cleanup();
     channel.port2.close();
+  });
+});
+
+describe('exposeFileSystem skip-originator dispatch', () => {
+  let messageHandlers: Array<(event: MessageEvent) => void>;
+
+  beforeEach(() => {
+    messageHandlers = [];
+    vi.stubGlobal('self', {
+      addEventListener: (_type: string, handler: (event: MessageEvent) => void) => {
+        messageHandlers.push(handler);
+      },
+      removeEventListener: vi.fn(),
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('should deliver fileChanged to peer ports but skip the originating port on self-write', async () => {
+    const bus = new ChangeEventBus();
+
+    const handle = exposeFileSystem(
+      {
+        async writeFile(
+          path: string,
+          data: Uint8Array<ArrayBuffer>,
+          context?: { originClientId?: string },
+        ): Promise<void> {
+          void data;
+          const event: ChangeEvent = { type: 'fileWritten', path, backend: 'memory' };
+          if (context?.originClientId !== undefined) {
+            tagEventOrigin(event, context.originClientId);
+          }
+          bus.emit(event);
+        },
+      },
+      {
+        changeEventBus: bus,
+      },
+    );
+
+    const fireConnect = (port: MessagePort) => {
+      const mh = messageHandlers[0];
+      expect(mh).toBeDefined();
+      mh!(new MessageEvent('message', { data: { type: 'connect', port } }));
+    };
+
+    const chA = new MessageChannel();
+    const chB = new MessageChannel();
+    fireConnect(chA.port1);
+    fireConnect(chB.port1);
+
+    expect(handle.serverHandles.size).toBe(2);
+
+    const clientA = createBridgeCall(fsBridgePort(chA.port2, 'fs-bridge-client-a'));
+    const clientB = createBridgeCall(fsBridgePort(chB.port2, 'fs-bridge-client-b'));
+
+    const receivedA: unknown[] = [];
+    const receivedB: unknown[] = [];
+    const offA = clientA.listen('fileChanged', (d) => {
+      receivedA.push(d);
+    });
+    const offB = clientB.listen('fileChanged', (d) => {
+      receivedB.push(d);
+    });
+
+    const bytes = new TextEncoder().encode('hi');
+    await clientA.call('writeFile', ['/x.txt', bytes]);
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 30);
+    });
+
+    expect(receivedA).toHaveLength(0);
+    expect(receivedB).toHaveLength(1);
+    expect(receivedB[0]).toEqual({ type: 'fileWritten', path: '/x.txt', backend: 'memory' });
+
+    offA();
+    offB();
+    clientA.dispose();
+    clientB.dispose();
+    handle.cleanup();
+    chA.port2.close();
+    chB.port2.close();
+  });
+
+  it('should deliver observer-sourced bus events to every connected port', async () => {
+    const bus = new ChangeEventBus();
+
+    const handle = exposeFileSystem(
+      { readFile: vi.fn() },
+      {
+        changeEventBus: bus,
+      },
+    );
+
+    const fireConnect = (port: MessagePort) => {
+      messageHandlers[0]!(new MessageEvent('message', { data: { type: 'connect', port } }));
+    };
+
+    const chA = new MessageChannel();
+    const chB = new MessageChannel();
+    fireConnect(chA.port1);
+    fireConnect(chB.port1);
+
+    const clientA = createBridgeCall(fsBridgePort(chA.port2, 'fs-bridge-client-a'));
+    const clientB = createBridgeCall(fsBridgePort(chB.port2, 'fs-bridge-client-b'));
+
+    const receivedA: unknown[] = [];
+    const receivedB: unknown[] = [];
+    clientA.listen('fileChanged', (d) => {
+      receivedA.push(d);
+    });
+    clientB.listen('fileChanged', (d) => {
+      receivedB.push(d);
+    });
+
+    bus.emit({ type: 'fileWritten', path: '/ext.txt', backend: 'memory' });
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 30);
+    });
+
+    expect(receivedA).toHaveLength(1);
+    expect(receivedB).toHaveLength(1);
+    expect(receivedA[0]).toEqual({ type: 'fileWritten', path: '/ext.txt', backend: 'memory' });
+    expect(receivedB[0]).toEqual({ type: 'fileWritten', path: '/ext.txt', backend: 'memory' });
+
+    clientA.dispose();
+    clientB.dispose();
+    handle.cleanup();
+    chA.port2.close();
+    chB.port2.close();
   });
 });

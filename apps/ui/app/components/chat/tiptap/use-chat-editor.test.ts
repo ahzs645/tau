@@ -5,7 +5,7 @@ import type { UseChatEditorOptions } from '#components/chat/tiptap/use-chat-edit
 import type { PastedContentSegment } from '#utils/at-reference.utils.js';
 import { buildPastedContent } from '#utils/at-reference.utils.js';
 import type { FileEntry } from '@taucad/types';
-import type { FileTreeService } from '#lib/file-tree-service.js';
+import type { FileTreeService } from '@taucad/fs-client/file-tree-service';
 
 function createMockTreeService(fileTree: Map<string, FileEntry>): FileTreeService {
   return {

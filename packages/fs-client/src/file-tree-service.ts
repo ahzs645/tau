@@ -1,9 +1,12 @@
-import type { ChangeEvent, FileEntry, FileStatEntry, FileSystemBackend, FileStat } from '@taucad/types';
-import type { FileManagerProxy } from '#machines/file-manager.machine.types.js';
+import type { FileEntry, FileStatEntry, FileSystemBackend, FileStat } from '@taucad/types';
 import type { FileTreeNode } from '@taucad/filesystem';
-import type { FileContentService, ContentChangeEvent } from '#lib/file-content-service.js';
 import { FileSystemObserverBridge } from '@taucad/filesystem';
-import { normalizePath, joinPath } from '@taucad/utils/path';
+import type { FileContentService, ContentChangeEvent } from '#file-content-service.js';
+import type { FileSystemClient } from '#file-system-client.js';
+import type { WorkerChangeChannel, WorkerRelativeRenameEvent } from '#worker-change-channel.js';
+import type { WorkspacePathResolver } from '#workspace-path-resolver.js';
+import type { VisibilityProvider } from '#visibility-provider.js';
+import { joinPath } from '@taucad/utils/path';
 
 /** Milliseconds. */
 const defaultRefreshDebounce = 100;
@@ -12,6 +15,11 @@ const watchIntervalFocused = 2000;
 /** Milliseconds. */
 const watchIntervalBlurred = 10_000;
 
+/**
+ * Lightweight file listing entry for search / complete-tree snapshots.
+ *
+ * @public
+ */
 export type FileItem = {
   path: string;
   size: number;
@@ -20,6 +28,8 @@ export type FileItem = {
 /**
  * Stat-enriched directory entry returned by
  * {@link FileTreeService.readDirectoryEntriesWithStats}.
+ *
+ * @public
  */
 export type DirectoryEntryWithStat = {
   name: string;
@@ -31,8 +41,10 @@ export type DirectoryEntryWithStat = {
 };
 
 type FileTreeServiceInit = {
-  proxy: FileManagerProxy;
-  rootDirectory: string;
+  proxy: FileSystemClient;
+  paths: WorkspacePathResolver;
+  channel: WorkerChangeChannel;
+  visibility: VisibilityProvider;
   initialEntries?: FileEntry[];
   /** Debounce window between subsequent tree-refresh fires. Milliseconds. */
   refreshDebounce?: number;
@@ -42,17 +54,42 @@ type FileTreeServiceInit = {
  * Single tree/metadata authority on the main thread.
  * All tree reads, directory listings, existence checks, and stat operations
  * go through this service. Owns the fileTree Map.
+ *
+ * @public
+ * @example <caption>Construct a file tree service for tests</caption>
+ * ```typescript
+ * import { FileTreeService } from '@taucad/fs-client/file-tree-service';
+ * import { WorkerChangeChannel } from '@taucad/fs-client/worker-change-channel';
+ * import { WorkspacePathResolver } from '@taucad/fs-client/workspace-path-resolver';
+ * import { headlessVisibilityProvider } from '@taucad/fs-client/visibility-provider';
+ * import type { FileSystemClient } from '@taucad/fs-client/file-system-client';
+ * import type { WorkerChangeChannelTransport } from '@taucad/fs-client/worker-change-channel';
+ * export function createExampleFileTreeService(
+ *   proxy: FileSystemClient,
+ *   listen: WorkerChangeChannelTransport['listen'],
+ * ): FileTreeService {
+ *   const paths = new WorkspacePathResolver('/project');
+ *   const channel = new WorkerChangeChannel({ transport: { listen }, paths });
+ *   return new FileTreeService({
+ *     proxy,
+ *     paths,
+ *     channel,
+ *     visibility: headlessVisibilityProvider,
+ *   });
+ * }
+ * ```
  */
 export class FileTreeService {
   private _tree: Map<string, FileEntry>;
-  private readonly proxy: FileManagerProxy;
-  private rootDirectory: string;
+  private readonly proxy: FileSystemClient;
+  private readonly paths: WorkspacePathResolver;
+  private readonly visibility: VisibilityProvider;
   private readonly treeSubscribers = new Set<() => void>();
   private refreshTimer: ReturnType<typeof setTimeout> | undefined;
   private pendingRefreshPath = '';
-  private pollingTimer: ReturnType<typeof setInterval> | undefined;
+  private pollingTimer: ReturnType<typeof setTimeout> | undefined;
+  private visibilityUnsub: (() => void) | undefined;
   private contentUnsubscribe: (() => void) | undefined;
-  private visibilityHandler: (() => void) | undefined;
   /** Milliseconds. */
   private readonly refreshDebounce: number;
   private _observerBridge: FileSystemObserverBridge | undefined;
@@ -61,10 +98,12 @@ export class FileTreeService {
   private _completeTreeVersion = 0;
   private _searchIndexWarmed = false;
   private readonly _resolvedDirectories = new Set<string>();
+  private readonly unsubscribeChannel: Array<() => void>;
 
   public constructor(init: FileTreeServiceInit) {
     this.proxy = init.proxy;
-    this.rootDirectory = init.rootDirectory;
+    this.paths = init.paths;
+    this.visibility = init.visibility;
     this.refreshDebounce = init.refreshDebounce ?? defaultRefreshDebounce;
     this._tree = new Map();
     if (init.initialEntries) {
@@ -73,6 +112,34 @@ export class FileTreeService {
       }
       this._resolvedDirectories.add('');
     }
+    this.unsubscribeChannel = [
+      init.channel.onFileWritten({
+        interestedIn: (relativePath) => this._resolvedDirectories.has(this.paths.parentOf(relativePath)),
+        handler: (event) => {
+          this.handleFileWrittenRelative(event.path);
+        },
+      }),
+      init.channel.onFileDeleted({
+        handler: (event) => {
+          this.handleFileDeletedRelative(event.path);
+        },
+      }),
+      init.channel.onFileRenamed({
+        interestedIn: (relativePath) => this._resolvedDirectories.has(this.paths.parentOf(relativePath)),
+        handler: (event) => {
+          this.handleFileRenamedRelative(event);
+        },
+      }),
+      init.channel.onDirectoryChanged({
+        interestedIn: (relativeDirectory) => this._resolvedDirectories.has(relativeDirectory),
+        handler: (event) => {
+          this.handleDirectoryChangedRelative(event.path);
+        },
+      }),
+      init.channel.onBackendChanged(() => {
+        this.scheduleRefresh('');
+      }),
+    ];
   }
 
   // === Tree Access (sync, from cache) ===
@@ -80,6 +147,7 @@ export class FileTreeService {
   /**
    * Returns the current tree Map. Stable reference when unchanged.
    * Required by `useSyncExternalStore`.
+   * @returns Mutable backing map of {@link FileEntry} records keyed by path.
    */
   public getTreeSnapshot(): Map<string, FileEntry> {
     return this._tree;
@@ -88,6 +156,7 @@ export class FileTreeService {
   /**
    * Monotonically increasing counter that increments on every tree change.
    * Consumers can use this to cheaply detect staleness.
+   * @returns Current tree revision counter.
    */
   public get completeTreeVersion(): number {
     return this._completeTreeVersion;
@@ -97,6 +166,7 @@ export class FileTreeService {
    * Return a cached list of all file entries currently in the lazy tree.
    * Derives synchronously from `_tree` — no worker RPC. The list grows
    * progressively as directories are expanded via `loadDirectory`.
+   * @returns Lightweight {@link FileItem} records for all known files.
    */
   public getCachedFileItems(): FileItem[] {
     this._cachedCompleteTree ??= [...this._tree.values()]
@@ -107,14 +177,17 @@ export class FileTreeService {
 
   /**
    * Get a single entry by path. Tree-first O(1), then proxy.stat fallback.
+   * @param path - User or workspace-relative path string.
+   * @returns Cached or freshly-stated {@link FileEntry}, or `undefined` when absent.
    */
   public async getEntry(path: string): Promise<FileEntry | undefined> {
-    const cached = this._tree.get(path);
+    const relativeKey = this.relativeKeyFromUserPath(path);
+    const cached = this._tree.get(path) ?? this._tree.get(relativeKey);
     if (cached) {
       return cached;
     }
     try {
-      const absolutePath = joinPath(this.rootDirectory, path);
+      const absolutePath = this.paths.toAbsoluteWorkspacePath(path);
       const stat = await this.proxy.stat(absolutePath);
       return {
         path,
@@ -131,13 +204,16 @@ export class FileTreeService {
 
   /**
    * Check if a path exists. Tree-first O(1), then proxy.stat fallback.
+   * @param path - User or workspace-relative path string.
+   * @returns `true` when the path resolves to an on-disk object.
    */
   public async exists(path: string): Promise<boolean> {
-    if (this._tree.has(path)) {
+    const relativeKey = this.relativeKeyFromUserPath(path);
+    if (this._tree.has(path) || this._tree.has(relativeKey)) {
       return true;
     }
     try {
-      const absolutePath = joinPath(this.rootDirectory, path);
+      const absolutePath = this.paths.toAbsoluteWorkspacePath(path);
       await this.proxy.stat(absolutePath);
       return true;
     } catch {
@@ -150,9 +226,12 @@ export class FileTreeService {
   /**
    * List directory contents from the cached tree. Falls back to proxy
    * if tree appears stale or empty.
+   * @param path - Directory path relative to workspace conventions.
+   * @returns Child names within the directory when known to the lazy tree or worker.
    */
   public async readdir(path: string): Promise<string[]> {
-    const prefix = path === '' ? '' : path.endsWith('/') ? path : `${path}/`;
+    const relativeKey = this.relativeDirectoryKeyFromUserPath(path);
+    const prefix = relativeKey === '' ? '' : relativeKey.endsWith('/') ? relativeKey : `${relativeKey}/`;
     const results: string[] = [];
 
     for (const [entryPath, entry] of this._tree) {
@@ -172,32 +251,38 @@ export class FileTreeService {
       return results;
     }
 
-    const absolutePath = joinPath(this.rootDirectory, path);
+    const absolutePath = this.paths.toAbsoluteWorkspacePath(path);
     return this.proxy.readdir(absolutePath);
   }
 
   /**
    * Get file stat via proxy.
+   * @param path - Resolvable path string (workspace-relative forms allowed).
+   * @returns Worker-backed {@link FileStat}.
    */
   public async stat(path: string): Promise<FileStat> {
-    const absolutePath = joinPath(this.rootDirectory, path);
+    const absolutePath = this.paths.toAbsoluteWorkspacePath(path);
     return this.proxy.stat(absolutePath);
   }
 
   /**
    * Get all file stats in a directory recursively via proxy.
+   * @param path - Directory path to enumerate.
+   * @returns Recursive listing from the worker index.
    */
   public async getDirectoryStat(path: string): Promise<FileStatEntry[]> {
-    const absolutePath = path === '' ? normalizePath(this.rootDirectory) : joinPath(this.rootDirectory, path);
+    const absolutePath = this.paths.toAbsoluteWorkspacePath(path);
     return this.proxy.getDirectoryStat(absolutePath);
   }
 
   /**
    * Return full FileTreeNode[] for a directory via proxy.readDirectory.
    * Centralizes directory listing with consistent path resolution.
+   * @param path - Directory whose children should be loaded.
+   * @returns Parsed tree nodes from the worker listing.
    */
   public async readDirectoryEntries(path: string): Promise<FileTreeNode[]> {
-    const absolutePath = path === '' ? normalizePath(this.rootDirectory) : joinPath(this.rootDirectory, path);
+    const absolutePath = this.paths.toAbsoluteWorkspacePath(path);
     return this.proxy.readDirectory(absolutePath);
   }
 
@@ -210,9 +295,11 @@ export class FileTreeService {
    * `glob_search` surface authoritative byte counts to the agent instead of
    * a synthetic `0`. Stat failures (entry deleted between readDirectory and
    * stat) fall back to `size: 0`/`mtimeMs: 0` so the listing still resolves.
+   * @param path - Directory whose children require authoritative stat metadata.
+   * @returns Stat-enriched entries for immediate children.
    */
   public async readDirectoryEntriesWithStats(path: string): Promise<DirectoryEntryWithStat[]> {
-    const absolutePath = path === '' ? normalizePath(this.rootDirectory) : joinPath(this.rootDirectory, path);
+    const absolutePath = this.paths.toAbsoluteWorkspacePath(path);
     const nodes = await this.proxy.readDirectory(absolutePath);
     return Promise.all(
       nodes.map(async (node) => {
@@ -236,12 +323,15 @@ export class FileTreeService {
   /**
    * Search files on the worker's InMemoryFileTree. Returns only matching results.
    * The main thread never holds the full file index for interactive filtering.
+   * @param query - Free-text search string understood by the worker search index.
+   * @param options - Optional cap / directory inclusion flags forwarded to the proxy.
+   * @returns Matching {@link FileStatEntry} records from the worker.
    */
   public async searchFiles(
     query: string,
     options?: { maxResults?: number; includeDirectories?: boolean },
   ): Promise<FileStatEntry[]> {
-    const absolutePath = normalizePath(this.rootDirectory);
+    const absolutePath = this.paths.toAbsoluteWorkspacePath('');
     if (!this._searchIndexWarmed) {
       await this.proxy.getDirectoryStat(absolutePath);
       this._searchIndexWarmed = true;
@@ -251,6 +341,9 @@ export class FileTreeService {
 
   /**
    * Read shallow directory for files route.
+   * @param path - Directory to read shallowly on the requested backend.
+   * @param backend - Filesystem backend identifier for disambiguation.
+   * @returns Immediate children as {@link FileTreeNode} stubs.
    */
   public async readShallowDirectory(path: string, backend: FileSystemBackend): Promise<FileTreeNode[]> {
     return this.proxy.readShallowDirectory(path, backend);
@@ -258,18 +351,21 @@ export class FileTreeService {
 
   /**
    * Remove a directory via proxy.
+   * @param path - Workspace-relative directory to remove (must be empty per worker semantics).
    */
   public async rmdir(path: string): Promise<void> {
-    const absolutePath = joinPath(this.rootDirectory, path);
+    const absolutePath = this.paths.toAbsoluteWorkspacePath(path);
     await this.proxy.rmdir(absolutePath);
   }
 
   /**
    * Recursively delete a directory and all its contents via the worker.
    * The worker has complete filesystem knowledge; the lazy UI tree does not.
+   * @param path - Directory to delete recursively.
    */
   public async deleteDirectory(path: string): Promise<void> {
-    const absolutePath = joinPath(this.rootDirectory, path);
+    const absolutePath = this.paths.toAbsoluteWorkspacePath(path);
+    const relativeKey = this.relativeDirectoryKeyFromUserPath(path);
     const entries = await this.proxy.getDirectoryStat(absolutePath);
 
     const subdirs = new Set<string>();
@@ -294,8 +390,9 @@ export class FileTreeService {
     }
     await this.proxy.rmdir(absolutePath);
 
-    const prefix = path.endsWith('/') ? path : `${path}/`;
+    const prefix = relativeKey === '' ? '' : relativeKey.endsWith('/') ? relativeKey : `${relativeKey}/`;
     const newTree = new Map(this._tree);
+    newTree.delete(relativeKey);
     newTree.delete(path);
     for (const key of newTree.keys()) {
       if (key.startsWith(prefix)) {
@@ -310,6 +407,7 @@ export class FileTreeService {
 
   /**
    * Debounce tree refresh. Multiple calls coalesce to common ancestor.
+   * @param path - Path hint whose refresh should be merged with pending work.
    */
   public scheduleRefresh(path: string): void {
     if (this.pendingRefreshPath === '' || path === '') {
@@ -341,7 +439,10 @@ export class FileTreeService {
 
   // === Change Detection (Observer preferred, polling fallback) ===
 
-  /** Whether the observer is actively monitoring changes. */
+  /**
+   * Whether the observer is actively monitoring changes.
+   * @returns `true` when a native {@link FileSystemObserverBridge} session is active.
+   */
   public get isObserving(): boolean {
     return this._observerBridge?.isObserving ?? false;
   }
@@ -350,6 +451,8 @@ export class FileTreeService {
    * Start observing via FileSystemObserver (Chrome 133+).
    * Returns `true` if the observer was started, `false` if unavailable.
    * When observer is active, polling is stopped to eliminate double work.
+   * @param handle - Native directory handle supplied by the host picker.
+   * @returns `true` when observation started successfully.
    */
   public async startObserving(handle: FileSystemDirectoryHandle): Promise<boolean> {
     this.stopPolling();
@@ -367,7 +470,10 @@ export class FileTreeService {
     return true;
   }
 
-  /** Stop observing. Allows polling to be started again. */
+  /**
+   * Stop observing. Allows polling to be started again.
+   * @returns `void` after tearing down the observer bridge, if any.
+   */
   public stopObserving(): void {
     if (this._observerBridge) {
       this._observerBridge.disconnect();
@@ -378,6 +484,7 @@ export class FileTreeService {
   /**
    * Unified entry point for external change detection.
    * Tries FileSystemObserver first; falls back to polling.
+   * @param handle - Optional host handle enabling native observation.
    */
   public async startChangeDetection(handle?: FileSystemDirectoryHandle): Promise<void> {
     if (handle) {
@@ -389,12 +496,18 @@ export class FileTreeService {
     this.startPolling();
   }
 
-  /** Stop all change detection (observer + polling). */
+  /**
+   * Stop all change detection (observer + polling).
+   * @returns `void` once timers/observer subscriptions are cleared.
+   */
   public stopChangeDetection(): void {
     this.stopObserving();
     this.stopPolling();
   }
 
+  /**
+   * Begin polling the worker on a visibility-aware interval when observers are unavailable.
+   */
   public startPolling(): void {
     if (this.isObserving) {
       return;
@@ -403,12 +516,7 @@ export class FileTreeService {
     this.stopPolling();
 
     const poll = (): void => {
-      let pollInterval: number;
-      if (typeof document === 'undefined') {
-        pollInterval = watchIntervalBlurred;
-      } else {
-        pollInterval = document.visibilityState === 'visible' ? watchIntervalFocused : watchIntervalBlurred;
-      }
+      const pollInterval = this.visibility.isVisible() ? watchIntervalFocused : watchIntervalBlurred;
       this.pollingTimer = setTimeout(() => {
         this.scheduleRefresh('');
         poll();
@@ -417,26 +525,23 @@ export class FileTreeService {
 
     poll();
 
-    this.visibilityHandler = () => {
+    this.visibilityUnsub = this.visibility.onVisibilityChange(() => {
       this.stopPolling();
       poll();
-    };
-
-    if (typeof document !== 'undefined') {
-      document.addEventListener('visibilitychange', this.visibilityHandler);
-    }
+    });
   }
 
+  /**
+   * Tear down polling timers and visibility subscriptions.
+   */
   public stopPolling(): void {
     if (this.pollingTimer !== undefined) {
       clearTimeout(this.pollingTimer);
       this.pollingTimer = undefined;
     }
-    if (this.visibilityHandler) {
-      if (typeof document !== 'undefined') {
-        document.removeEventListener('visibilitychange', this.visibilityHandler);
-      }
-      this.visibilityHandler = undefined;
+    if (this.visibilityUnsub !== undefined) {
+      this.visibilityUnsub();
+      this.visibilityUnsub = undefined;
     }
   }
 
@@ -447,6 +552,7 @@ export class FileTreeService {
    * Skips tree refresh for `source === 'editor'` (editor typing doesn't
    * change tree structure). Otherwise applies optimistic update + schedules
    * debounced refresh.
+   * @param contentService - Live content authority emitting mutation events.
    */
   public connectToContentService(contentService: FileContentService): void {
     this.contentUnsubscribe?.();
@@ -455,38 +561,13 @@ export class FileTreeService {
     });
   }
 
-  // === Worker Push Events ===
-
-  public handleWorkerFileChanged(event: ChangeEvent): void {
-    if (event.type === 'backendChanged') {
-      this.scheduleRefresh('');
-      return;
-    }
-
-    const rootPrefix = this.rootDirectory.endsWith('/') ? this.rootDirectory : `${this.rootDirectory}/`;
-
-    switch (event.type) {
-      case 'fileWritten': {
-        this.handleFileWrittenEvent(event.path, rootPrefix);
-        break;
-      }
-      case 'fileDeleted': {
-        this.handleFileDeletedEvent(event.path, rootPrefix);
-        break;
-      }
-      case 'fileRenamed': {
-        this.handleFileRenamedEvent(event.oldPath, event.newPath, rootPrefix);
-        break;
-      }
-      case 'directoryChanged': {
-        this.handleDirectoryChangedEvent(event.path, rootPrefix);
-        break;
-      }
-    }
-  }
-
   // === Tree Subscriptions (useSyncExternalStore) ===
 
+  /**
+   * Subscribe to tree mutations for `useSyncExternalStore` consumers.
+   * @param callback - Invoked after the internal Map snapshot changes.
+   * @returns Unsubscribe function removing `callback`.
+   */
   public subscribeTree(callback: () => void): () => void {
     this.treeSubscribers.add(callback);
     return () => {
@@ -496,8 +577,13 @@ export class FileTreeService {
 
   // === Lifecycle ===
 
+  /**
+   * Reset tree caches when the workspace root or bootstrap entries change.
+   * @param rootDirectory - New worker root path.
+   * @param initialEntries - Optional seed entries for eagerly known files.
+   */
   public reset(rootDirectory: string, initialEntries?: FileEntry[]): void {
-    this.rootDirectory = rootDirectory;
+    this.paths.reset(rootDirectory);
     this._refreshAbortController?.abort();
     this._refreshAbortController = undefined;
     if (this.refreshTimer !== undefined) {
@@ -522,12 +608,14 @@ export class FileTreeService {
    * Load a directory's immediate children from the worker. Patches the tree
    * Map at this level only (no recursive walk). Idempotent — safe to call
    * for already-loaded directories.
+   * @param path - Directory path to hydrate into {@link FileTreeService.getTreeSnapshot}.
    */
   public async loadDirectory(path: string): Promise<void> {
     try {
-      const absolutePath = path === '' ? normalizePath(this.rootDirectory) : joinPath(this.rootDirectory, path);
+      const absolutePath = this.paths.toAbsoluteWorkspacePath(path);
+      const relativeDirectory = this.relativeDirectoryKeyFromUserPath(path);
       const entries = await this.proxy.readDirectory(absolutePath);
-      this.patchDirectoryEntries(path, entries);
+      this.patchDirectoryEntries(relativeDirectory, entries);
     } catch (error) {
       console.error('[FileTreeService] loadDirectory failed:', error);
     }
@@ -535,12 +623,20 @@ export class FileTreeService {
 
   /**
    * Check whether a directory's children have been loaded into the tree.
+   * @param path - Directory key to query in the resolved-directory ledger.
+   * @returns `true` when lazy loading previously completed for `path`.
    */
   public hasChildrenLoaded(path: string): boolean {
     return this._resolvedDirectories.has(path);
   }
 
+  /**
+   * Dispose worker subscriptions, timers, and in-flight refresh controllers.
+   */
   public dispose(): void {
+    for (const unsubscribe of this.unsubscribeChannel) {
+      unsubscribe();
+    }
     this.stopChangeDetection();
     this._refreshAbortController?.abort();
     this._refreshAbortController = undefined;
@@ -554,51 +650,53 @@ export class FileTreeService {
     this._resolvedDirectories.clear();
   }
 
-  // === Private: Worker Event Handlers ===
+  private relativeKeyFromUserPath(path: string): string {
+    const absolutePath = this.paths.toAbsoluteWorkspacePath(path);
+    return this.paths.toRelativePath(absolutePath) ?? '';
+  }
 
-  private handleFileWrittenEvent(absolutePath: string, rootPrefix: string): void {
-    if (!absolutePath.startsWith(rootPrefix)) {
-      return;
-    }
-    const relativePath = absolutePath.slice(rootPrefix.length);
-    const parentPath = this.getParentPath(relativePath);
+  /**
+   * Workspace-relative directory key for {@link patchDirectoryEntries} and tree-prefix scans.
+   * @param path - User-supplied path (any alias accepted by {@link WorkspacePathResolver.toAbsoluteWorkspacePath}).
+   * @returns Workspace-relative directory key used for lazy-tree bookkeeping.
+   */
+  private relativeDirectoryKeyFromUserPath(path: string): string {
+    return this.relativeKeyFromUserPath(path);
+  }
+
+  // === Private: Worker Event Handlers (workspace-relative paths) ===
+
+  private handleFileWrittenRelative(relativePath: string): void {
+    const parentPath = this.paths.parentOf(relativePath);
     if (this._resolvedDirectories.has(parentPath)) {
       this.optimisticAdd(relativePath, 0);
     }
   }
 
-  private handleFileDeletedEvent(absolutePath: string, rootPrefix: string): void {
-    if (!absolutePath.startsWith(rootPrefix)) {
-      return;
-    }
-    this.optimisticDelete(absolutePath.slice(rootPrefix.length));
+  private handleFileDeletedRelative(relativePath: string): void {
+    this.optimisticDelete(relativePath);
   }
 
-  private handleFileRenamedEvent(oldPath: string, newPath: string, rootPrefix: string): void {
-    const oldInScope = oldPath.startsWith(rootPrefix);
-    const newInScope = newPath.startsWith(rootPrefix);
-    if (!oldInScope && !newInScope) {
+  private handleFileRenamedRelative(event: WorkerRelativeRenameEvent): void {
+    const oldRelative = event.oldPath;
+    const newRelative = event.newPath;
+    if (oldRelative !== undefined && newRelative !== undefined) {
+      this.optimisticRename(oldRelative, newRelative);
       return;
     }
-    const oldRelative = oldInScope ? oldPath.slice(rootPrefix.length) : undefined;
-    const newRelative = newInScope ? newPath.slice(rootPrefix.length) : undefined;
-    if (oldRelative && newRelative) {
-      this.optimisticRename(oldRelative, newRelative);
-    } else if (oldRelative) {
+    if (oldRelative !== undefined) {
       this.optimisticDelete(oldRelative);
-    } else if (newRelative) {
-      const parentPath = this.getParentPath(newRelative);
+      return;
+    }
+    if (newRelative !== undefined) {
+      const parentPath = this.paths.parentOf(newRelative);
       if (this._resolvedDirectories.has(parentPath)) {
         this.optimisticAdd(newRelative, 0);
       }
     }
   }
 
-  private handleDirectoryChangedEvent(absolutePath: string, rootPrefix: string): void {
-    if (!absolutePath.startsWith(rootPrefix) && absolutePath !== this.rootDirectory) {
-      return;
-    }
-    const relativePath = absolutePath === this.rootDirectory ? '' : absolutePath.slice(rootPrefix.length);
+  private handleDirectoryChangedRelative(relativePath: string): void {
     if (this._resolvedDirectories.has(relativePath)) {
       this.scheduleRefresh(relativePath);
     }
@@ -681,13 +779,8 @@ export class FileTreeService {
     this.notifyTreeSubscribers();
   }
 
-  private getParentPath(path: string): string {
-    const lastSlash = path.lastIndexOf('/');
-    return lastSlash > 0 ? path.slice(0, lastSlash) : '';
-  }
-
   private scheduleRefreshForParent(path: string): void {
-    this.scheduleRefresh(this.getParentPath(path));
+    this.scheduleRefresh(this.paths.parentOf(path));
   }
 
   private async executeRefresh(path: string): Promise<void> {
@@ -696,12 +789,13 @@ export class FileTreeService {
     this._refreshAbortController = controller;
 
     try {
-      const absolutePath = path === '' ? normalizePath(this.rootDirectory) : joinPath(this.rootDirectory, path);
+      const absolutePath = this.paths.toAbsoluteWorkspacePath(path);
+      const relativeDirectory = this.relativeDirectoryKeyFromUserPath(path);
       const entries = await this.proxy.readDirectory(absolutePath);
       if (controller.signal.aborted) {
         return;
       }
-      this.patchDirectoryEntries(path, entries);
+      this.patchDirectoryEntries(relativeDirectory, entries);
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') {
         return;
@@ -713,6 +807,8 @@ export class FileTreeService {
   /**
    * Patch the tree Map with fresh entries from a single-level `readDirectory`.
    * Removes stale direct children at this level, adds fresh entries.
+   * @param path - Workspace-relative directory key (`''` for root-level listing).
+   * @param entries - Immediate child nodes returned by the worker.
    */
   private patchDirectoryEntries(path: string, entries: FileTreeNode[]): void {
     const newTree = new Map(this._tree);

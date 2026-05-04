@@ -1,6 +1,6 @@
 import { createContext, use, useMemo } from 'react';
 import type { Chat } from '@taucad/chat';
-import type { FileTreeService } from '#lib/file-tree-service.js';
+import type { FileTreeService } from '@taucad/fs-client/file-tree-service';
 
 type AtReferenceContextValue = {
   treeService: FileTreeService | undefined;

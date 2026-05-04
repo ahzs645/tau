@@ -9,9 +9,14 @@
  * - Parent directory delete suppresses child delete spam
  * - Rename emits both old and new path invalidation
  *
+ * Originating bridge port ids are stored on events via {@link tagEventOrigin} /
+ * {@link getEventOrigin} from `#event-origin-registry.js` (not a separate wire
+ * type).
+ *
  * @see docs/policy/filesystem-policy.md
  */
 
+import { clearEventOrigin, getEventOrigin, tagEventOrigin } from '#event-origin-registry.js';
 import type { ChangeEvent } from '#types.js';
 
 type PendingEvent = {
@@ -35,6 +40,70 @@ export type CoalescerOptions = {
 /** Milliseconds. */
 const defaultCoalescingWindow = 50;
 const defaultMaxQueueDepth = 10_000;
+
+function mergeOrigins(history: ChangeEvent[]): string | undefined {
+  let sawDefined = false;
+  let sawUndefined = false;
+  let singleDefined: string | undefined;
+  for (const event of history) {
+    const origin = getEventOrigin(event);
+    if (origin === undefined) {
+      sawUndefined = true;
+    } else {
+      sawDefined = true;
+      if (singleDefined === undefined) {
+        singleDefined = origin;
+      } else if (singleDefined !== origin) {
+        return undefined;
+      }
+    }
+  }
+  if (sawUndefined && sawDefined) {
+    return undefined;
+  }
+  if (sawDefined) {
+    return singleDefined;
+  }
+  return undefined;
+}
+
+function collapsePathHistory(history: ChangeEvent[]): ChangeEvent | undefined {
+  if (history.length === 0) {
+    return undefined;
+  }
+  if (history.length === 1) {
+    return history[0];
+  }
+
+  const first = history[0]!;
+  const last = history.at(-1)!;
+
+  const firstType = first.type;
+  const lastType = last.type;
+
+  const origin = mergeOrigins(history);
+
+  if (firstType === 'fileWritten' && lastType === 'fileDeleted') {
+    return undefined;
+  }
+
+  if (firstType === 'fileDeleted' && lastType === 'fileWritten') {
+    applyCollapsedOrigin(last, origin);
+    return last;
+  }
+
+  applyCollapsedOrigin(last, origin);
+  return last;
+}
+
+function applyCollapsedOrigin(survivor: ChangeEvent, origin: string | undefined): void {
+  if (origin === undefined) {
+    clearEventOrigin(survivor);
+    return;
+  }
+
+  tagEventOrigin(survivor, origin);
+}
 
 /**
  * Buffers {@link ChangeEvent}s within a time window and applies coalescing
@@ -66,7 +135,7 @@ export class EventCoalescer {
   /**
    * Queue an event for coalescing.
    *
-   * @param event - Change event to queue.
+   * @param event - Change event to queue. Origin may be set via {@link tagEventOrigin} before push.
    */
   public push(event: ChangeEvent): void {
     if (this._pending.length >= this._maxQueueDepth) {
@@ -117,7 +186,7 @@ export class EventCoalescer {
     const events = this._pending.map((p) => p.event);
     this._pending = [];
 
-    const coalesced = coalesceEvents(events);
+    const coalesced = coalesceChangeEvents(events);
     if (coalesced.length > 0) {
       this._deliverCallback(coalesced);
     }
@@ -127,18 +196,16 @@ export class EventCoalescer {
 /**
  * Apply coalescing rules to a batch of events.
  *
- * Rules applied in order:
- * 1. Collect per-path event sequences
- * 2. Cancel `fileWritten → fileDeleted` pairs (same path)
- * 3. Collapse `fileDeleted → fileWritten` pairs to a single `fileWritten` (treated as update)
- * 4. Suppress child deletes when parent is deleted
- * 5. Deduplicate identical events
+ * Same originator across a merged path sequence preserves the tag via
+ * {@link tagEventOrigin}; mixed originators (including untagged mixed with
+ * tagged) clear it via {@link clearEventOrigin} on the survivor so every
+ * bridge port receives the batch when appropriate.
  *
  * @param events - Raw change events to coalesce.
  * @returns Coalesced event array.
  * @public
  */
-export function coalesceEvents(events: ChangeEvent[]): ChangeEvent[] {
+export function coalesceChangeEvents(events: ChangeEvent[]): ChangeEvent[] {
   if (events.length <= 1) {
     return events;
   }
@@ -208,29 +275,16 @@ export function coalesceEvents(events: ChangeEvent[]): ChangeEvent[] {
   });
 }
 
-function collapsePathHistory(history: ChangeEvent[]): ChangeEvent | undefined {
-  if (history.length === 0) {
-    return undefined;
-  }
-  if (history.length === 1) {
-    return history[0];
-  }
-
-  const first = history[0]!;
-  const last = history.at(-1)!;
-
-  const firstType = first.type;
-  const lastType = last.type;
-
-  if (firstType === 'fileWritten' && lastType === 'fileDeleted') {
-    return undefined;
-  }
-
-  if (firstType === 'fileDeleted' && lastType === 'fileWritten') {
-    return last;
-  }
-
-  return last;
+/**
+ * Alias for {@link coalesceChangeEvents}; kept as the historical public entry
+ * name for untagged batches used by tests and tooling.
+ *
+ * @param events - Raw change events to coalesce.
+ * @returns Coalesced event array.
+ * @public
+ */
+export function coalesceEvents(events: ChangeEvent[]): ChangeEvent[] {
+  return coalesceChangeEvents(events);
 }
 
 function getEventPath(event: ChangeEvent): string | undefined {

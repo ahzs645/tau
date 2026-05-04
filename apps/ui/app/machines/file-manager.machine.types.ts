@@ -10,17 +10,9 @@
  */
 
 import type { ActorRefFrom } from 'xstate';
-import type { FileStat, FileStatEntry, FileSystemBackend } from '@taucad/types';
+import type { FileStatEntry } from '@taucad/types';
+import type { FileSystemClient } from '@taucad/fs-client/file-system-client';
 import type { FileManagerMachine } from '#machines/file-manager.machine.js';
-import type { FileTreeNode, WatchRequest, WatchEvent, MkdirOptions, MountOptions } from '@taucad/filesystem';
-
-/**
- * The source of the file write operation.
- * - 'editor': Write originated from user typing in the Monaco editor (special case for recursion prevention)
- * - 'user': Write originated from user action (create file, upload, etc.)
- * - 'machine': Write originated from machine/programmatic source (e.g., chat AI)
- */
-export type FileWriteSource = 'editor' | 'user' | 'machine';
 
 /**
  * Type-safe reference to the file manager XState actor.
@@ -42,54 +34,14 @@ export type FileManagerApi = {
 
 /**
  * Full FileManager protocol served over MessagePort.
- * Superset of RuntimeFileSystem -- includes higher-level operations
- * and worker control methods (reconfigure, setDirectoryHandle).
+ * Alias of `FileSystemClient` for historical imports.
  */
-export type FileManagerProtocol = {
-  readFile(filepath: string, options: 'utf8' | { encoding: 'utf8' }): Promise<string>;
-  readFile(filepath: string, options?: Record<string, never>): Promise<Uint8Array<ArrayBuffer>>;
-  readFiles(paths: string[]): Promise<Record<string, Uint8Array<ArrayBuffer>>>;
-  writeFile(filepath: string, data: Uint8Array<ArrayBuffer> | string): Promise<void>;
-  writeFiles(files: Record<string, { content: Uint8Array<ArrayBuffer> }>): Promise<void>;
-  mkdir(path: string, options?: MkdirOptions): Promise<void>;
-  readdir(path: string): Promise<string[]>;
-  stat(path: string): Promise<FileStat>;
-  lstat(path: string): Promise<FileStat>;
-  rename(oldPath: string, newPath: string): Promise<void>;
-  unlink(path: string): Promise<void>;
-  rmdir(path: string): Promise<void>;
-  exists(path: string): Promise<boolean>;
-  batchExists(paths: string[]): Promise<Record<string, boolean>>;
-  ensureDirectoryExists(path: string): Promise<void>;
-  getDirectoryStat(path: string): Promise<FileStatEntry[]>;
-  getDirectoryContents(path: string): Promise<Record<string, Uint8Array<ArrayBuffer>>>;
-  duplicateFile(sourcePath: string, destinationPath: string): Promise<void>;
-  copyDirectory(sourcePath: string, destinationPath: string): Promise<void>;
-  getZippedDirectory(path: string): Promise<Blob>;
-  mount(prefix: string, backend: FileSystemBackend, options?: MountOptions): Promise<void>;
-  unmount(prefix: string): void;
-  setDirectoryHandle(handle: FileSystemDirectoryHandle): void;
-  readShallowDirectory(
-    path: string,
-    backend: FileSystemBackend,
-    handle?: FileSystemDirectoryHandle,
-  ): Promise<FileTreeNode[]>;
-
-  readDirectory(path: string): Promise<FileTreeNode[]>;
-
-  searchFiles(
-    basePath: string,
-    query: string,
-    options?: { maxResults?: number; includeDirectories?: boolean },
-  ): FileStatEntry[];
-
-  watch(request: WatchRequest, handler: (event: WatchEvent) => void): () => void;
-};
+export type FileManagerProtocol = FileSystemClient;
 
 /**
- * FileManagerProtocol proxy with dispose method for cleanup.
+ * Worker proxy: protocol plus optional `listen` for `fileChanged` and `dispose`.
  */
-export type FileManagerProxy = FileManagerProtocol & {
+export type FileManagerProxy = FileSystemClient & {
   listen?: (event: string, handler: (data: unknown) => void) => () => void;
   dispose(): void;
 };

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useSyncExternalStore } from 'react';
 import { useFileManager } from '#hooks/use-file-manager.js';
-import type { FileContentResult } from '#lib/file-content-service.js';
+import type { FileContentResult } from '@taucad/fs-client/file-content-service';
 
 const noop = (): void => {
   /* Intentional no-op when subscribe is unavailable (useSyncExternalStore fallback). */
