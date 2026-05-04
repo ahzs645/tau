@@ -246,6 +246,32 @@ describe('createNewlineTrimTransform', () => {
 
       expect(deltas).toEqual(['Step 1', '\n\nStep 2']);
     });
+
+    /**
+     * OpenAI Responses summary boundary injection prepends `\n\n` between `summary_index`
+     * parts. When the prior part ends with `\n`, the seam can briefly be `\n\n\n` until
+     * this transform collapses runs of three or more newlines to `\n\n`.
+     */
+    it('should collapse triple newlines after GPT-5 summary boundary plus trailing newline', async () => {
+      const chunks: UIMessageChunk[] = [
+        { type: 'reasoning-start', id: 'r1' },
+        { type: 'reasoning-delta', id: 'r1', delta: 'gather more clarity.\n' },
+        { type: 'reasoning-delta', id: 'r1', delta: '\n\n**Exploring cactus design options**' },
+        { type: 'reasoning-end', id: 'r1' },
+      ];
+
+      const results = await processChunks(chunks);
+      const reasoningJoined = results
+        .filter(
+          (chunk): chunk is UIMessageChunk & { type: 'reasoning-delta'; delta: string } =>
+            chunk.type === 'reasoning-delta' &&
+            typeof (chunk as UIMessageChunk & { delta?: unknown }).delta === 'string',
+        )
+        .map((chunk) => chunk.delta)
+        .join('');
+
+      expect(reasoningJoined).toBe('gather more clarity.\n\n**Exploring cactus design options**');
+    });
   });
 
   // ===========================================================================
