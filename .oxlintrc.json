@@ -998,8 +998,11 @@
               "Head",
               "All",
               "Body",
+              "Param",
+              "Query",
               "Res",
               "Req",
+              "HttpCode",
               "Inject",
               "Global",
               "UseGuards",
@@ -1012,6 +1015,7 @@
               "WebSocketGateway",
               "User",
               "UseAuth",
+              "OptionalAuth",
               "Span"
             ]
           }
