@@ -41,6 +41,16 @@ export function getMdxComponents(): MDXComponents {
         className?: string;
       };
 
+      const isBlockCodeChild = typeof children !== 'string' && (className === undefined || className === '');
+
+      if (isBlockCodeChild) {
+        return (
+          <code {...properties} className={className}>
+            {children}
+          </code>
+        );
+      }
+
       return (
         <InlineCode {...properties} className={className}>
           {children}

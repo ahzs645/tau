@@ -1,6 +1,13 @@
+import type { ReactNode } from 'react';
 import type { DocsLayoutProps } from 'fumadocs-ui/layouts/docs';
+import type { SidebarProps } from 'fumadocs-ui/layouts/docs/slots/sidebar';
+import { SidebarProvider, SidebarTrigger, useSidebar } from 'fumadocs-ui/layouts/docs/slots/sidebar';
 import { cn } from '#utils/ui.utils.js';
 import { DocsSidebarWithTrigger } from '#routes/docs.$/docs-sidebar.js';
+
+function DocsSidebarRoot(_unused: SidebarProps): ReactNode {
+  return <DocsSidebarWithTrigger />;
+}
 
 export function baseOptions(): Omit<DocsLayoutProps, 'tree'> {
   return {
@@ -12,7 +19,14 @@ export function baseOptions(): Omit<DocsLayoutProps, 'tree'> {
     },
     sidebar: {
       enabled: true,
-      component: <DocsSidebarWithTrigger />,
+    },
+    slots: {
+      sidebar: {
+        provider: SidebarProvider,
+        root: DocsSidebarRoot,
+        trigger: SidebarTrigger,
+        useSidebar,
+      },
     },
     containerProps: {
       className: cn(

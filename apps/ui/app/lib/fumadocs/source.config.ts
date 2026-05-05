@@ -4,6 +4,7 @@ import { remarkAutoTypeTable, createGenerator } from 'fumadocs-typescript';
 import { remarkMdxMermaid } from 'fumadocs-core/mdx-plugins';
 import kclLang from '#lib/kcl-language/kcl-shiki-precompiled.js';
 import openscadLang from '#lib/openscad-language/openscad-shiki-precompiled.js';
+import { remarkResolveRelativeLinks } from '#lib/fumadocs/remark-resolve-relative-links.js';
 
 const generator = createGenerator({
   tsconfigPath: '../../tsconfig.docs.json',
@@ -20,7 +21,7 @@ export const docs = defineDocs({
 
 export default defineConfig({
   mdxOptions: {
-    remarkPlugins: [[remarkAutoTypeTable, { generator }], remarkMdxMermaid],
+    remarkPlugins: [[remarkAutoTypeTable, { generator }], remarkMdxMermaid, remarkResolveRelativeLinks],
     remarkCodeTabOptions: {
       parseMdx: true,
     },

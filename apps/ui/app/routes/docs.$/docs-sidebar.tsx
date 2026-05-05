@@ -30,11 +30,11 @@ import {
   SidebarGroupLabel,
 } from '#components/ui/sidebar.js';
 import { Loader } from '#components/ui/loader.js';
-import { DocsIcon } from '#components/icons/docs-icon.js';
 import { useIsMobile } from '#hooks/use-mobile.js';
 import { Button } from '#components/ui/button.js';
 import { useKeybinding } from '#hooks/use-keyboard.js';
 import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
+import { DocsIcon } from '#components/icons/docs-icon.js';
 
 const docsSidebarWidthIcon = 'calc(var(--spacing) * 17)';
 const docsSidebarWidth = 'calc(var(--spacing) * 72)';
@@ -304,7 +304,7 @@ function DocsSidebarItem({
   readonly children: ReactNode;
 }): React.JSX.Element {
   const renderIcon = (icon: ReactNode | string | undefined): ReactNode => {
-    if (!icon) {
+    if (icon === undefined || icon === null) {
       return null;
     }
 

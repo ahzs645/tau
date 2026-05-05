@@ -25,20 +25,33 @@ describe('getMdxComponents', () => {
       expect(element).not.toHaveClass('flex', 'flex-col');
     });
 
-    it('wraps Shiki-highlighted children in InlineCode chrome', () => {
+    it('renders fenced code block children as bare <code> without InlineCode chrome', () => {
       const Code = getMdxCode();
-      render(
-        <Code className='shiki shiki-themes github-light github-dark'>
+      const { container } = render(
+        <Code>
           <span className='line' data-testid='shiki-line'>
             <span>hi</span>
           </span>
         </Code>,
       );
+      expect(document.querySelector('[data-slot="inline-code"]')).toBeNull();
+      const code = container.querySelector('code');
+      expect(code).not.toBeNull();
+      expect(code).not.toHaveClass('rounded-xs', 'border', 'bg-neutral/10');
+      expect(screen.getByTestId('shiki-line')).toBeInTheDocument();
+    });
+
+    it('wraps inline shiki ({:lang}) children in InlineCode chrome', () => {
+      const Code = getMdxCode();
+      render(
+        <Code className='shiki'>
+          <span data-testid='shiki-token'>useState</span>
+        </Code>,
+      );
       const element = document.querySelector('[data-slot="inline-code"]');
       expect(element).not.toBeNull();
       expect(element).toHaveClass('shiki');
-      expect(screen.getByTestId('shiki-line')).toBeInTheDocument();
-      expect(element).not.toHaveClass('flex', 'flex-col');
+      expect(screen.getByTestId('shiki-token')).toBeInTheDocument();
     });
   });
 });
