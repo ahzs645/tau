@@ -197,9 +197,9 @@ function useCurrentSection(sections: DocumentSection[]): DocumentSection | undef
 }
 
 function DocsSidebarFrameworkSelector({ className }: { readonly className?: string }): React.JSX.Element {
-  const { root } = useTreeContext();
+  const { full } = useTreeContext();
   const navigate = useNavigate();
-  const sections = useMemo(() => getDocumentSections(root), [root]);
+  const sections = useMemo(() => getDocumentSections(full), [full]);
   const currentSection = useCurrentSection(sections);
 
   const groupedItems = [

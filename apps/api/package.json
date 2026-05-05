@@ -4,6 +4,10 @@
   "type": "module",
   "private": true,
   "dependencies": {
+    "@aws-sdk/client-s3": "catalog:",
+    "@aws-sdk/lib-storage": "catalog:",
+    "@aws-sdk/s3-request-presigner": "catalog:",
+    "@fastify/multipart": "catalog:",
     "@pyroscope/nodejs": "catalog:",
     "@taucad/api-extractor": "workspace:*",
     "@taucad/chat": "workspace:*",

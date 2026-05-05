@@ -5,7 +5,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
 import { createGenerator } from 'fumadocs-typescript';
-import { internalTagTransform } from '#lib/fumadocs/internal-tag-transform.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const docsApiDirectory = path.resolve(__dirname, '../../../content/docs/(runtime)/api');
@@ -54,10 +53,10 @@ const collectLeaksAndErrors = async (
     invocations.map(async ({ mdxFile, propsPath, name }) => {
       const source = `${mdxFile} → ${name}`;
       try {
-        const documents = await generator.generateTypeTable(
-          { path: propsPath, name },
-          { transform: internalTagTransform },
-        );
+        const documents = await generator.generateTypeTable({
+          path: propsPath,
+          name,
+        });
         const leaks = documents
           .flatMap((document) => document.entries)
           .filter((entry) => entry.name.includes('@'))
@@ -89,7 +88,7 @@ const collectLeaksAndErrors = async (
  *
  * Every brand member added to a publicly exported type must be marked
  * `@internal` so fumadocs-typescript filters it out before serialization
- * (see `internal-tag-transform.ts` for the v4.x filter workaround).
+ * (`fumadocs-typescript` v5+ resolves `@internal` without a transform shim).
  */
 describe('auto-type-table brand safety', () => {
   // Ts-morph project boot + ~30 type-table introspections without cache.

@@ -7,6 +7,7 @@
     "app/**/*.jsx",
     "server.ts",
     "vite-environment.d.ts",
+    "types/**/*.d.ts",
     ".react-router/types/**/*",
     ".source/**/*", // Fumadocs collections
     "package.json"
