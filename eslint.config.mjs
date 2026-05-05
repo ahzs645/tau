@@ -228,7 +228,11 @@ const config = [
       parserOptions: {
         ...tseslint.configs.base.languageOptions?.parserOptions,
         projectService: {
-          allowDefaultProject: ['eslint.config.mjs', 'examples/electron-tau/electron.vite.config.ts'],
+          allowDefaultProject: [
+            'eslint.config.mjs',
+            'examples/electron-tau/electron.vite.config.ts',
+            'apps/api/vitest.config.ts',
+          ],
         },
         tsconfigRootDir: import.meta.dirname,
       },
