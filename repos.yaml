@@ -111,6 +111,11 @@ groups:
       - javascript
       - gemm
       - emscripten
+  infra:
+    description: Cloud infrastructure-as-code (Terraform/Fly.io/Netlify/Supabase)
+    repos:
+      - cloud-infra
+      - terraform-provider-netlify
 repos:
   langchainjs:
     upstream: langchain-ai/langchainjs
@@ -446,6 +451,12 @@ repos:
     description: Three Viewport Gizmo - interactive three.js view helper
     fork: taucad/three-viewport-gizmo
     commit: 3c22fb7b4da17aa5aaa33b169f144d1d3e2254dc
+  terraform-provider-netlify:
+    upstream: netlify/terraform-provider-netlify
+    description: Netlify Terraform provider source (schema/release reference for Tau cloud-infra stacks).
+  cloud-infra:
+    upstream: taucad/cloud-infra
+    description: Tau cloud infrastructure as code.
   VSCode_SysML_Extension:
     upstream: daltskin/VSCode_SysML_Extension
     description: SysML v2 extension for VS Code

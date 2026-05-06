@@ -1,36 +1,37 @@
-# Netlify configuration for Tau UI (production site: `taucad-prod`, https://tau.new)
+# Netlify configuration for Tau UI (production site: `taucad-prod-us`, https://tau.new)
 #
-# Authoritative for **build-time** configuration only. Per Netlify's
-# environment-variable model, values declared in `[context.*.environment]` are
-# injected during the build container's lifetime and ARE NOT visible to
-# Netlify Functions (SSR) at request time. Because this app SSRs via React
-# Router on Netlify Functions, every endpoint URL we read from `process.env`
-# inside server code (apps/ui/app/environment.config.ts) MUST also exist as a
-# dashboard env var with `runtime` (and `functions`) scope, or SSR will see
-# `undefined` and BetterAuth/etc. will throw.
+# Drives the build container only. Site-level configuration (custom_domain,
+# domain_aliases, build_settings, dashboard env vars) is owned by Terraform
+# in `repos/cloud-infra` (HCP workspace `tau-cloud-prod-us`) — never edit
+# anything in the Netlify dashboard for this site, every property there is
+# managed.
 #
-# Convention:
-#   - **Endpoint URLs** (TAU_API_URL / TAU_WEBSOCKET_URL / TAU_FRONTEND_URL)
-#     and **NODE_ENV** are duplicated here AND in the dashboard. The TOML
-#     entries cover the build container; the dashboard entries cover SSR.
-#     Keep them in sync; review both together when changing endpoints.
-#   - **Secrets** (POSTHOG_API_KEY, SENTRY_AUTH_TOKEN, …) live ONLY in the
-#     dashboard.
-#   - **NODE_ENV** in the dashboard MUST be scoped to `functions,runtime`
-#     ONLY — never to `builds`. Setting `NODE_ENV=production` at build time
-#     makes pnpm skip devDependencies, breaking the Vite build.
+# `[context.production.environment]` entries below are mirrored verbatim by
+# Terraform's `plain_environment_variables` map in
+# `repos/cloud-infra/stacks/cloud/prod-us/terraform.auto.tfvars` with
+# `functions+runtime` scope (the toml covers the build container; the
+# dashboard mirror covers Functions/SSR runtime). When changing an endpoint
+# URL, update BOTH this toml and the tfvars map together — HCP plan diff
+# catches drift.
 #
-# This config is invoked by `.github/workflows/prod-deploy-ui.yml` via
-# `netlify deploy --prod --config apps/ui/netlify.prod.toml`. The
-# `taucad-prod` site has no Git integration wired (provisioning script in
-# `scripts/netlify-provision-prod.sh` creates it bare), so auto-builds are
-# inherently impossible — the only deploy path is the manual
-# `workflow_dispatch`.
+# Secrets (POSTHOG_API_KEY, SENTRY_AUTH_TOKEN, …) live in HCP workspace
+# variables (Sensitive flag) and are written to Netlify via Terraform's
+# `secret_environment_variables` — never in this toml, never directly in the
+# Netlify dashboard.
 #
-# Staging uses `apps/ui/netlify.toml` (default Netlify config), wired to the
-# `taucad` site via the Netlify GitHub integration. Both files share the
-# same `[build]` command and `[[headers]]` block so security posture stays
-# in sync; only endpoints diverge.
+# NODE_ENV is mirrored as `functions+runtime` ONLY — never `builds`. Setting
+# `NODE_ENV=production` at build time makes pnpm skip devDependencies and
+# breaks the Vite build. The Terraform map enforces this scope.
+#
+# Deployment: this config is invoked by `.github/workflows/prod-deploy-ui.yml`
+# via `netlify deploy --prod --config apps/ui/netlify.prod.toml`. The
+# `taucad-prod-us` site has no Git integration (Terraform creates it as a CI-only
+# shell via `deploy_mode = "ci"`); manual `workflow_dispatch` is the only
+# deploy path.
+#
+# Staging counterpart at `apps/ui/netlify.toml` (taucad site, git-driven).
+# Both share `[build].command` and `[[headers]]` for security parity; only
+# endpoints diverge.
 #
 # NX_PREFER_NODE_STRIP_TYPES: NODE_ENV=production causes pnpm to skip
 # devDependencies (including @swc/core). Nx needs a TS transpiler to load
@@ -84,4 +85,4 @@ Document-Policy = "js-profiling"
 #     Socket.IO endpoint. Listed explicitly so when CSP flips to enforcing
 #     (report-only first) we don't rely on the catch-all `wss:` and any unintended hop is
 #     immediately reported.
-Content-Security-Policy-Report-Only = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.zoo.dev https://api.kittycad.io https://api.tau.new wss://api.tau.new wss:; worker-src 'self' blob:; child-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; upgrade-insecure-requests;"
+Content-Security-Policy-Report-Only = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.taucad.dev https://cdn.tau.new https:; font-src 'self' data:; connect-src 'self' https://cdn.taucad.dev https://cdn.tau.new https://api.zoo.dev https://api.kittycad.io https://api.tau.new wss://api.tau.new wss:; worker-src 'self' blob:; child-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; upgrade-insecure-requests;"

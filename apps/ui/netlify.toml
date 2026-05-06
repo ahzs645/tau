@@ -1,26 +1,20 @@
 # Netlify configuration for Tau UI (staging site: `taucad`, https://taucad.dev)
 #
-# Authoritative for **build-time** configuration only. Per Netlify's
-# environment-variable model, values declared in `[context.*.environment]` are
-# injected during the build container's lifetime and ARE NOT visible to
-# Netlify Functions (SSR) at request time. Because this app SSRs via React
-# Router on Netlify Functions, every endpoint URL we read from `process.env`
-# inside server code (apps/ui/app/environment.config.ts) MUST also exist as a
-# dashboard env var with `runtime` (and `functions`) scope, or SSR will see
-# `undefined` and BetterAuth/etc. will throw.
+# Drives the build container only. Site-level configuration (custom_domain,
+# domain_aliases, build_settings, dashboard env vars) is owned by Terraform
+# in `repos/cloud-infra` (HCP workspace `tau-cloud-staging`). The dashboard
+# env-var mirror for Functions/SSR runtime is currently a manual one-off pass
+# (pre-Terraform — backfill into `plain_environment_variables` is tracked
+# separately); the production-US site (`taucad-prod-us`) is the cleaner
+# reference for the unified Terraform-mirror pattern.
 #
-# Convention:
-#   - **Endpoint URLs** (TAU_API_URL / TAU_WEBSOCKET_URL / TAU_FRONTEND_URL)
-#     and **NODE_ENV** are duplicated here AND in the dashboard. The TOML
-#     entries cover the build container; the dashboard entries cover SSR.
-#     Keep them in sync; review both together when changing endpoints.
-#   - **Secrets** (POSTHOG_API_KEY, SENTRY_AUTH_TOKEN, …) live ONLY in the
-#     dashboard.
-#   - **NODE_ENV** in the dashboard MUST be scoped to `functions,runtime`
-#     ONLY — never to `builds`. Setting `NODE_ENV=production` at build time
-#     makes pnpm skip devDependencies, breaking the Vite build.
+# `[context.*.environment]` entries below cover the build container. The
+# corresponding Functions/SSR runtime values must also exist as dashboard env
+# vars with `functions+runtime` scope. NODE_ENV is `functions+runtime` ONLY —
+# never `builds`, since `NODE_ENV=production` at build time makes pnpm skip
+# devDependencies and breaks the Vite build.
 #
-# The production Netlify site (`taucad-prod`, https://tau.new) uses the sibling
+# The production Netlify site (`taucad-prod-us`, https://tau.new) uses the sibling
 # `apps/ui/netlify.prod.toml`, invoked from the manual
 # `.github/workflows/prod-deploy-ui.yml` workflow with
 # `netlify deploy --prod --config apps/ui/netlify.prod.toml`. Both files share
@@ -119,4 +113,4 @@ Document-Policy = "js-profiling"
 #     Socket.IO endpoint. Listed explicitly so when CSP flips to enforcing
 #     (report-only first) we don't rely on the catch-all `wss:` and any unintended hop is
 #     immediately reported.
-Content-Security-Policy-Report-Only = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self' https://api.zoo.dev https://api.kittycad.io https://api.taucad.dev wss://api.taucad.dev wss:; worker-src 'self' blob:; child-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; upgrade-insecure-requests;"
+Content-Security-Policy-Report-Only = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.taucad.dev https://cdn.tau.new https:; font-src 'self' data:; connect-src 'self' https://cdn.taucad.dev https://cdn.tau.new https://api.zoo.dev https://api.kittycad.io https://api.taucad.dev wss://api.taucad.dev wss:; worker-src 'self' blob:; child-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; upgrade-insecure-requests;"
