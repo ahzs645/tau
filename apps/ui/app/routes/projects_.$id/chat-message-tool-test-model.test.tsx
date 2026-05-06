@@ -123,6 +123,30 @@ afterEach(() => {
   cleanup();
 });
 
+describe('ChatMessageToolTestModel — multi-line failure reasons', () => {
+  it('should preserve newline-separated lines in the reason copy', () => {
+    const part = buildPart({
+      passed: 0,
+      total: 1,
+      passes: [],
+      failures: [
+        {
+          id: 'f1',
+          requirement: 'cohesion',
+          reason: ['Cluster summary line', 'Second diagnostic line'].join('\n'),
+          suggestion: 'Move parts together',
+          targetFile: 'main.ts',
+        },
+      ],
+    });
+
+    render(<ChatMessageToolTestModel part={part} />);
+
+    const reasonEl = screen.getByText(/Cluster summary line/);
+    expect(reasonEl.textContent).toContain('Second diagnostic line');
+  });
+});
+
 describe('ChatMessageToolTestModel — multi-file rendering', () => {
   it('should render a per-file section for every file in the failures map', () => {
     const part = buildPart({

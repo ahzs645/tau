@@ -48,7 +48,7 @@ function TestFailureItem({
           {index + 1}. {failure.requirement}
         </div>
         <div className='mt-1 space-y-1.5'>
-          <div className='wrap-break-word text-muted-foreground'>{failure.reason}</div>
+          <div className='wrap-break-word whitespace-pre-wrap text-muted-foreground'>{failure.reason}</div>
           <div className='text-warning-foreground flex min-w-0 items-start gap-1.5 rounded-md bg-warning/10 p-2'>
             <Lightbulb className='mt-0.5 size-3 shrink-0 text-warning' />
             <span className='min-w-0 flex-1 text-[11px] leading-relaxed wrap-break-word'>{failure.suggestion}</span>

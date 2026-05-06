@@ -186,7 +186,11 @@ export async function gradeGeometry(
   const stats = await analyzeGlb(glb);
   const checks: GraderCheck[] = requirements.map((requirement) => {
     const result = evaluateRequirement(requirement, stats);
-    return { name: requirement.id, passed: result.passed, detail: result.passed ? undefined : result.reason };
+    return {
+      name: requirement.id,
+      passed: result.passed,
+      detail: result.passed ? undefined : 'reason' in result ? result.reason : undefined,
+    };
   });
 
   return { checks, stats };

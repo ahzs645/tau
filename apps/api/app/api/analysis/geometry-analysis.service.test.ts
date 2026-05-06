@@ -398,6 +398,13 @@ describe('GeometryAnalysisService', () => {
       expect(result.failures[0]!.suggestion).toContain('raise tolerance');
       expect(result.failures[0]!.suggestion).toContain('raise expected.count to 2');
       expect(result.failures[0]!.suggestion).toContain('fuse them in the kernel and assert watertight');
+      const structuredFailure = result.failures[0]!.failure;
+      expect(structuredFailure?.check).toBe('connectedComponents');
+      if (structuredFailure?.check !== 'connectedComponents') {
+        throw new Error('expected connectedComponents structured failure');
+      }
+      expect(structuredFailure.got).toBe(2);
+      expect(structuredFailure.clusters.length).toBeGreaterThanOrEqual(2);
     });
 
     it('should report 1 component for overlapping fused shapes', async () => {

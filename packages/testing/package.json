@@ -56,6 +56,8 @@
     "@gltf-transform/functions": "^4.1.1"
   },
   "devDependencies": {
+    "@taucad/openscad": "workspace:*",
+    "@taucad/runtime": "workspace:*",
     "zod": "catalog:"
   },
   "peerDependencies": {

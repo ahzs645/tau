@@ -157,6 +157,15 @@ describe('countConnectedComponents', () => {
     expect(countConnectedComponents(document, 0.1)).toBe(0);
   });
 
+  it('does not add #part suffix when each glTF primitive is already one connected sub-mesh', async () => {
+    const stats = await analyzeGlb(boxGlb);
+    const analysis = stats.analyseConnectedComponents(0.1);
+    const names = analysis.clusters.flatMap((c) => c.primitives.map((p) => p.name));
+    for (const name of names) {
+      expect(name).not.toContain('#part');
+    }
+  });
+
   it('should pass connectedComponents:1 for the helicopter ShapeConfig regression repro', async () => {
     // End-to-end regression: feeds the touching multi-ShapeConfig fixture through
     // analyzeGlb + evaluateRequirement and asserts the user-reported bug
@@ -175,6 +184,5 @@ describe('countConnectedComponents', () => {
     const result = evaluateRequirement(requirement, stats);
 
     expect(result.passed).toBe(true);
-    expect(result.reason).toBe('');
   });
 });

@@ -100,4 +100,14 @@ describe('analyzeGlb', () => {
       expect(dim).toBeGreaterThan(0);
     }
   });
+
+  it('should expose per-primitive bbox contributors and memoised analysers', async () => {
+    const stats = await analyzeGlb(boxGlb);
+
+    expect(stats.boundingBox?.primitives.length).toBeGreaterThan(0);
+    const cc = stats.analyseConnectedComponents(0.1);
+    expect(cc.count).toBe(stats.connectedComponents(0.1));
+    const wt = stats.analyseWatertight();
+    expect(wt.watertight).toBe(stats.watertight);
+  });
 });

@@ -8,7 +8,7 @@ import { esbuild } from '@taucad/runtime/bundler';
 import type { MeasurementTestRequirement } from '#schemas.js';
 import { analyzeGlb } from '#geometry/analyze-glb.js';
 import { evaluateRequirement } from '#geometry/evaluate-requirement.js';
-import type { GeometryStats } from '#geometry/types.js';
+import type { ConnectedComponentsResult, CheckResult, GeometryStats, WatertightResult } from '#geometry/types.js';
 
 async function renderGlb(filename: string, code: string): Promise<Uint8Array<ArrayBuffer>> {
   const filePath = filename.startsWith('/') ? filename : `/${filename}`;
@@ -60,7 +60,7 @@ describe('evaluateRequirement', () => {
         expected: { size: { x: 0.01, y: 0.03, z: 0.02 } },
       };
 
-      const result = evaluateRequirement(requirement, boxStats);
+      const result: CheckResult = evaluateRequirement(requirement, boxStats);
       expect(result.passed).toBe(true);
     });
 
@@ -73,9 +73,18 @@ describe('evaluateRequirement', () => {
         expected: { size: { x: 99, y: 99, z: 99 } },
       };
 
-      const result = evaluateRequirement(requirement, boxStats);
-      expect(result.passed).toBe(false);
+      const result: CheckResult = evaluateRequirement(requirement, boxStats);
+      if (result.passed) {
+        throw new Error('expected failure');
+      }
+      if (result.check !== 'boundingBox') {
+        throw new Error(`expected boundingBox, got ${result.check}`);
+      }
       expect(result.reason).toContain('Bounding box mismatch');
+      expect(result.failure.axisFailures.length).toBeGreaterThan(0);
+      const xFail = result.failure.axisFailures.find((a) => a.field === 'size' && a.axis === 'x');
+      expect(xFail?.minExtremum?.name).toBeDefined();
+      expect(xFail?.maxExtremum?.name).toBeDefined();
     });
 
     it('should accept a single axis (partial check)', () => {
@@ -87,7 +96,7 @@ describe('evaluateRequirement', () => {
         expected: { size: { x: 0.01 } },
       };
 
-      const result = evaluateRequirement(requirement, boxStats);
+      const result: CheckResult = evaluateRequirement(requirement, boxStats);
       expect(result.passed).toBe(true);
     });
 
@@ -101,7 +110,7 @@ describe('evaluateRequirement', () => {
         tolerance: 0.01,
       };
 
-      const result = evaluateRequirement(requirement, boxStats);
+      const result: CheckResult = evaluateRequirement(requirement, boxStats);
       expect(result.passed).toBe(true);
     });
 
@@ -114,8 +123,11 @@ describe('evaluateRequirement', () => {
         expected: {},
       };
 
-      const result = evaluateRequirement(requirement, boxStats);
-      expect(result.passed).toBe(false);
+      const result: CheckResult = evaluateRequirement(requirement, boxStats);
+      if (result.passed) {
+        throw new Error('expected failure');
+      }
+      expect(result.check).toBe('invalid');
       expect(result.reason).toContain('requires at least size or center');
     });
 
@@ -132,8 +144,11 @@ describe('evaluateRequirement', () => {
         expected: { size: { x: 1 } },
       };
 
-      const result = evaluateRequirement(requirement, noBboxStats);
-      expect(result.passed).toBe(false);
+      const result: CheckResult = evaluateRequirement(requirement, noBboxStats);
+      if (result.passed) {
+        throw new Error('expected failure');
+      }
+      expect(result.check).toBe('invalid');
       expect(result.reason).toContain('No bounding box available');
     });
   });
@@ -155,13 +170,13 @@ describe('evaluateRequirement', () => {
       expect(evaluateRequirement(requirement, boxStats).passed).toBe(true);
     });
 
-    it('should call the connectedComponents getter with the default tolerance (0.1mm) when omitted', () => {
+    it('should call analyseConnectedComponents with the default tolerance (0.1mm) when omitted', () => {
       const calls: number[] = [];
       const stubStats: GeometryStats = {
         ...boxStats,
-        connectedComponents: (toleranceMm) => {
+        analyseConnectedComponents: (toleranceMm) => {
           calls.push(toleranceMm);
-          return 1;
+          return boxStats.analyseConnectedComponents(toleranceMm);
         },
       };
       const requirement: MeasurementTestRequirement = {
@@ -176,13 +191,13 @@ describe('evaluateRequirement', () => {
       expect(calls).toEqual([0.1]);
     });
 
-    it('should forward a custom tolerance through to the connectedComponents getter', () => {
+    it('should forward a custom tolerance through to analyseConnectedComponents', () => {
       const calls: number[] = [];
       const stubStats: GeometryStats = {
         ...boxStats,
-        connectedComponents: (toleranceMm) => {
+        analyseConnectedComponents: (toleranceMm) => {
           calls.push(toleranceMm);
-          return 1;
+          return boxStats.analyseConnectedComponents(toleranceMm);
         },
       };
       const requirement: MeasurementTestRequirement = {
@@ -195,13 +210,50 @@ describe('evaluateRequirement', () => {
       };
 
       evaluateRequirement(requirement, stubStats);
-      expect(calls).toEqual([50]);
+      expect(calls).toContain(50);
     });
 
     it('should produce the rich failure suggestion when actual exceeds expected', () => {
+      const analysis: ConnectedComponentsResult = {
+        count: 3,
+        clusters: [
+          {
+            label: 'A',
+            primitives: [{ name: 'big', vertices: 100, aabb: { min: [0, 0, 0], max: [1, 1, 1] } }],
+            aabb: { min: [0, 0, 0], max: [1, 1, 1] },
+            centroid: [0.5, 0.5, 0.5],
+            totalVertices: 100,
+          },
+          {
+            label: 'B',
+            primitives: [{ name: 'mid', vertices: 50, aabb: { min: [2, 0, 0], max: [3, 1, 1] } }],
+            aabb: { min: [2, 0, 0], max: [3, 1, 1] },
+            centroid: [2.5, 0.5, 0.5],
+            totalVertices: 50,
+          },
+          {
+            label: 'C',
+            primitives: [{ name: 'tiny', vertices: 5, aabb: { min: [5, 0, 0], max: [5.5, 0.5, 0.5] } }],
+            aabb: { min: [5, 0, 0], max: [5.5, 0.5, 0.5] },
+            centroid: [5.25, 0.25, 0.25],
+            totalVertices: 5,
+          },
+        ],
+        gaps: [
+          {
+            fromLabel: 'A',
+            toLabel: 'B',
+            axis: 'x',
+            gapMm: 1000,
+            fromPrimitive: 'big',
+            toPrimitive: 'mid',
+          },
+        ],
+      };
       const stubStats: GeometryStats = {
         ...boxStats,
-        connectedComponents: () => 3,
+        connectedComponents: () => analysis.count,
+        analyseConnectedComponents: () => analysis,
       };
       const requirement: MeasurementTestRequirement = {
         id: 'cc_fail',
@@ -211,19 +263,42 @@ describe('evaluateRequirement', () => {
         expected: { count: 1 },
       };
 
-      const result = evaluateRequirement(requirement, stubStats);
-      expect(result.passed).toBe(false);
+      const result: CheckResult = evaluateRequirement(requirement, stubStats);
+      if (result.passed) {
+        throw new Error('expected failure');
+      }
+      if (result.check !== 'connectedComponents') {
+        throw new Error(`expected connectedComponents, got ${result.check}`);
+      }
       expect(result.reason).toContain('expected 1, got 3 (tolerance: 0.1mm)');
-      expect(result.suggestion).toContain('disjoint chunks at 0.1mm tolerance');
+      expect(result.reason).toContain('Cluster A');
+      expect(result.reason).toContain('Spatial gaps:');
+      expect(result.failure.got).toBe(3);
+      expect(result.failure.gaps[0]!.axis).toBe('x');
       expect(result.suggestion).toContain('raise tolerance');
       expect(result.suggestion).toContain('raise expected.count to 3');
       expect(result.suggestion).toContain('fuse them in the kernel and assert watertight');
+      expect(result.suggestion).toContain('Smallest cluster');
     });
 
     it('should produce the lower-than-expected failure suggestion when actual is below expected', () => {
+      const analysis: ConnectedComponentsResult = {
+        count: 1,
+        clusters: [
+          {
+            label: 'A',
+            primitives: [{ name: 'only', vertices: 10, aabb: { min: [0, 0, 0], max: [1, 1, 1] } }],
+            aabb: { min: [0, 0, 0], max: [1, 1, 1] },
+            centroid: [0.5, 0.5, 0.5],
+            totalVertices: 10,
+          },
+        ],
+        gaps: [],
+      };
       const stubStats: GeometryStats = {
         ...boxStats,
-        connectedComponents: () => 1,
+        connectedComponents: () => analysis.count,
+        analyseConnectedComponents: () => analysis,
       };
       const requirement: MeasurementTestRequirement = {
         id: 'cc_low',
@@ -233,8 +308,13 @@ describe('evaluateRequirement', () => {
         expected: { count: 4 },
       };
 
-      const result = evaluateRequirement(requirement, stubStats);
-      expect(result.passed).toBe(false);
+      const result: CheckResult = evaluateRequirement(requirement, stubStats);
+      if (result.passed) {
+        throw new Error('expected failure');
+      }
+      if (result.check !== 'connectedComponents') {
+        throw new Error(`expected connectedComponents, got ${result.check}`);
+      }
       expect(result.suggestion).toContain('lower expected.count to 1');
       expect(result.suggestion).toContain('split the model so it returns 4 top-level shapes');
     });
@@ -248,8 +328,11 @@ describe('evaluateRequirement', () => {
         expected: {},
       };
 
-      const result = evaluateRequirement(requirement, boxStats);
-      expect(result.passed).toBe(false);
+      const result: CheckResult = evaluateRequirement(requirement, boxStats);
+      if (result.passed) {
+        throw new Error('expected failure');
+      }
+      expect(result.check).toBe('invalid');
       expect(result.reason).toContain('Missing expected.count');
     });
   });
@@ -271,7 +354,19 @@ describe('evaluateRequirement', () => {
     });
 
     it('should fail for non-watertight mesh and surface the per-part lib/<part>.ts hint', () => {
-      const openStats: GeometryStats = { ...boxStats, watertight: false };
+      const wt: WatertightResult = {
+        watertight: false,
+        irregularEdges: 12,
+        openBoundaryEdges: 10,
+        totalEdges: 100,
+        irregularEdgeFraction: 0.12,
+        perPrimitive: [{ name: 'Shell', boundaryEdges: 10, loopCentroid: [0, 0.1, 0] }],
+      };
+      const openStats: GeometryStats = {
+        ...boxStats,
+        watertight: false,
+        analyseWatertight: () => wt,
+      };
       const requirement: MeasurementTestRequirement = {
         id: 'wt1',
         description: 'is watertight',
@@ -279,12 +374,19 @@ describe('evaluateRequirement', () => {
         check: 'watertight',
       };
 
-      const result = evaluateRequirement(requirement, openStats);
-      expect(result.passed).toBe(false);
+      const result: CheckResult = evaluateRequirement(requirement, openStats);
+      if (result.passed) {
+        throw new Error('expected failure');
+      }
+      if (result.check !== 'watertight') {
+        throw new Error(`expected watertight, got ${result.check}`);
+      }
       expect(result.reason).toContain('not watertight');
+      expect(result.failure.perPrimitive[0]!.name).toBe('Shell');
       expect(result.suggestion).toContain('lib/<part>.ts');
       expect(result.suggestion).toContain('multi-part assemblies are watertight per part');
       expect(result.suggestion).toContain('failed boolean ops');
+      expect(result.suggestion).toContain('Shell');
     });
   });
 
@@ -301,8 +403,11 @@ describe('evaluateRequirement', () => {
         check: 'nonExistent' as 'boundingBox',
       } as const;
 
-      const result = evaluateRequirement(requirement, boxStats);
-      expect(result.passed).toBe(false);
+      const result: CheckResult = evaluateRequirement(requirement as unknown as MeasurementTestRequirement, boxStats);
+      if (result.passed) {
+        throw new Error('expected failure');
+      }
+      expect(result.check).toBe('invalid');
       expect(result.reason).toContain('Unknown check type');
       expect(result.suggestion).toBe('Use one of: boundingBox, connectedComponents, watertight');
     });

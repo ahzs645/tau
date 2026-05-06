@@ -28,8 +28,9 @@ export type BoundingBoxExpected = z.infer<typeof boundingBoxExpectedSchema>;
  * The agent-facing check vocabulary is intentionally narrow. Each of the
  * three checks answers a question none of the others can:
  *  - `boundingBox`   — overall extents and centre (mm)
- *  - `connectedComponents` — number of spatially-disjoint chunks (clustered
- *    via per-primitive AABB overlap with a tunable `tolerance`)
+ *  - `connectedComponents` — number of spatially-disjoint chunks (each glTF
+ *    primitive is split into connected sub-meshes via welded vertices, then
+ *    clustered via sub-mesh AABB overlap with a tunable `tolerance`)
  *  - `watertight`    — the part is a closed manifold (3D-printable)
  *
  * Raw mesh statistics (`meshCount`, `vertexCount`) remain available to
@@ -81,6 +82,89 @@ export const testFileSchema = z.record(z.string(), testFileEntrySchema);
 export type TestFile = z.infer<typeof testFileSchema>;
 
 // =============================================================================
+// Structured test failure payloads (geometry measurement checks)
+// =============================================================================
+
+const aabbSchema = z.object({
+  min: z.tuple([z.number(), z.number(), z.number()]),
+  max: z.tuple([z.number(), z.number(), z.number()]),
+});
+
+const primitiveRecordSchema = z.object({
+  name: z.string(),
+  color: z.string().optional(),
+  vertices: z.number(),
+  aabb: aabbSchema,
+});
+
+const clusterReportSchema = z.object({
+  label: z.string(),
+  primitives: z.array(primitiveRecordSchema),
+  aabb: aabbSchema,
+  centroid: z.tuple([z.number(), z.number(), z.number()]),
+  totalVertices: z.number(),
+});
+
+const clusterGapSchema = z.object({
+  fromLabel: z.string(),
+  toLabel: z.string(),
+  axis: z.enum(['x', 'y', 'z']),
+  gapMm: z.number(),
+  fromPrimitive: z.string(),
+  toPrimitive: z.string(),
+});
+
+const boundingBoxAxisExtremumSchema = z.object({
+  name: z.string(),
+  aabb: aabbSchema,
+  value: z.number(),
+});
+
+const boundingBoxAxisFailureSchema = z.object({
+  axis: z.enum(['x', 'y', 'z']),
+  field: z.enum(['size', 'center']),
+  expected: z.number(),
+  actual: z.number(),
+  tolerance: z.number(),
+  minExtremum: boundingBoxAxisExtremumSchema.optional(),
+  maxExtremum: boundingBoxAxisExtremumSchema.optional(),
+});
+
+const watertightPrimitiveBreakdownSchema = z.object({
+  name: z.string(),
+  boundaryEdges: z.number(),
+  loopCentroid: z.tuple([z.number(), z.number(), z.number()]),
+});
+
+/**
+ * Optional structured geometry payload serialised alongside reason/suggestion.
+ * @public
+ */
+export const testFailurePayloadSchema = z.discriminatedUnion('check', [
+  z.object({
+    check: z.literal('boundingBox'),
+    axisFailures: z.array(boundingBoxAxisFailureSchema),
+  }),
+  z.object({
+    check: z.literal('connectedComponents'),
+    expected: z.number(),
+    got: z.number(),
+    toleranceMm: z.number(),
+    clusters: z.array(clusterReportSchema),
+    gaps: z.array(clusterGapSchema),
+  }),
+  z.object({
+    check: z.literal('watertight'),
+    irregularEdges: z.number(),
+    openBoundaryEdges: z.number(),
+    irregularEdgeFraction: z.number(),
+    perPrimitive: z.array(watertightPrimitiveBreakdownSchema),
+  }),
+]);
+/** @public */
+export type TestFailurePayload = z.infer<typeof testFailurePayloadSchema>;
+
+// =============================================================================
 // Test Result Schemas (output from test runner)
 // =============================================================================
 
@@ -95,6 +179,9 @@ export const testFailureSchema = z.object({
   reason: z.string().describe('Why the test failed'),
   suggestion: z.string().describe('Actionable suggestion to fix the issue'),
   targetFile: z.string().describe('Source file whose geometry produced this failure'),
+  failure: testFailurePayloadSchema
+    .optional()
+    .describe('Structured geometry diagnostics for UI / programmatic consumers'),
 });
 /** @public */
 export type TestFailure = z.infer<typeof testFailureSchema>;

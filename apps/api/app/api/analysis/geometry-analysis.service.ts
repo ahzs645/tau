@@ -44,7 +44,7 @@ export class GeometryAnalysisService {
       const result = evaluateRequirement(requirement, stats);
       if (result.passed) {
         passes.push({ id: requirement.id, requirement: requirement.description, targetFile });
-      } else {
+      } else if (result.check === 'invalid') {
         failures.push({
           id: requirement.id,
           requirement: requirement.description,
@@ -52,6 +52,46 @@ export class GeometryAnalysisService {
           suggestion: result.suggestion,
           targetFile,
         });
+      } else {
+        switch (result.check) {
+          case 'boundingBox': {
+            failures.push({
+              id: requirement.id,
+              requirement: requirement.description,
+              reason: result.reason,
+              suggestion: result.suggestion,
+              targetFile,
+              failure: { check: 'boundingBox', ...result.failure },
+            });
+            break;
+          }
+          case 'connectedComponents': {
+            failures.push({
+              id: requirement.id,
+              requirement: requirement.description,
+              reason: result.reason,
+              suggestion: result.suggestion,
+              targetFile,
+              failure: { check: 'connectedComponents', ...result.failure },
+            });
+            break;
+          }
+          case 'watertight': {
+            failures.push({
+              id: requirement.id,
+              requirement: requirement.description,
+              reason: result.reason,
+              suggestion: result.suggestion,
+              targetFile,
+              failure: { check: 'watertight', ...result.failure },
+            });
+            break;
+          }
+          default: {
+            const exhaustive: never = result;
+            throw new Error(`Unexpected measurement failure branch: ${String(exhaustive)}`);
+          }
+        }
       }
     }
 

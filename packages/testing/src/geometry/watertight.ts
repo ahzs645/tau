@@ -1,14 +1,7 @@
 import type { Document } from '@gltf-transform/core';
-
-/**
- * Coincidence epsilon for merging duplicate vertices (in glTF meter-scale units).
- *
- * CAD tessellators emit per-face meshes that share boundary vertices by position
- * but allocate them independently per face, so coincident vertices differ only
- * by floating-point noise (~1e-7). The epsilon must be tight enough to avoid
- * merging genuinely distinct neighboring vertices on fine tessellations.
- */
-const spatialEpsilon = 1e-5;
+import type { WatertightPrimitiveBreakdown, WatertightResult } from '#geometry/types.js';
+import { buildMeshNodeNameMap } from '#geometry/connected-components.js';
+import { weldPositions } from '#geometry/_internal/spatial-welding.js';
 
 /**
  * Maximum fraction of edges allowed to be boundary (shared by 1 triangle) or
@@ -21,109 +14,25 @@ const spatialEpsilon = 1e-5;
  */
 const irregularEdgeTolerance = 0.01;
 
-/**
- * Determines whether a mesh is watertight (closed/manifold).
- *
- * A mesh is watertight when every triangle edge is shared by exactly two
- * triangles. Boundary edges (shared by only one triangle) indicate gaps,
- * and non-manifold edges (shared by three or more) indicate self-intersections.
- *
- * Returns true when the fraction of irregular edges is within tolerance, so
- * CAD-tessellated meshes with minor pole or seam artifacts are still recognized
- * as watertight for downstream fabrication checks.
- *
- * @param document - A glTF-Transform Document
- * @returns `true` if the mesh is watertight, `false` otherwise
- * @public
- */
-export const isWatertight = (document: Document): boolean => {
-  const root = document.getRoot();
-  const meshes = root.listMeshes();
+type EdgeTopology = {
+  irregularEdges: number;
+  totalEdges: number;
+  boundaryEdges: number;
+  boundaryCentroid: [number, number, number];
+};
 
-  const allPositions: Array<[number, number, number]> = [];
-  const allTriangles: Array<[number, number, number]> = [];
-  let vertexOffset = 0;
+const emptyCentroid = (): [number, number, number] => [0, 0, 0];
 
-  for (const mesh of meshes) {
-    for (const primitive of mesh.listPrimitives()) {
-      if (primitive.getMode() !== 4) {
-        continue; // TRIANGLES only
-      }
-
-      const posAccessor = primitive.getAttribute('POSITION');
-      const indexAccessor = primitive.getIndices();
-      if (!posAccessor || !indexAccessor) {
-        continue;
-      }
-
-      const vCount = posAccessor.getCount();
-      const indexCount = indexAccessor.getCount();
-
-      for (let i = 0; i < vCount; i++) {
-        allPositions.push(posAccessor.getElement(i, [0, 0, 0]));
-      }
-
-      for (let i = 0; i < indexCount; i += 3) {
-        allTriangles.push([
-          indexAccessor.getScalar(i) + vertexOffset,
-          indexAccessor.getScalar(i + 1) + vertexOffset,
-          indexAccessor.getScalar(i + 2) + vertexOffset,
-        ]);
-      }
-
-      vertexOffset += vCount;
-    }
-  }
-
+const classifyEdges = (
+  allPositions: Array<[number, number, number]>,
+  allTriangles: Array<[number, number, number]>,
+): EdgeTopology => {
   if (allTriangles.length === 0) {
-    return false;
+    return { irregularEdges: 0, totalEdges: 0, boundaryEdges: 0, boundaryCentroid: emptyCentroid() };
   }
 
-  // Spatial hashing: merge coincident vertices. Cell size is 2*epsilon so any
-  // two vertices within epsilon distance fall in either the same cell or one of
-  // the 26 neighboring cells. We probe all 27 cells to avoid false splits when
-  // coincident vertices land on opposite sides of a grid boundary.
-  const gridSize = spatialEpsilon * 2;
-  const epsilonSquared = spatialEpsilon * spatialEpsilon;
-  const positionToCanonical = new Map<string, number>();
-  const vertexMap = new Int32Array(allPositions.length);
+  const vertexMap = weldPositions(allPositions);
 
-  for (const [i, position] of allPositions.entries()) {
-    const [x, y, z] = position;
-    const cx = Math.round(x / gridSize);
-    const cy = Math.round(y / gridSize);
-    const cz = Math.round(z / gridSize);
-
-    let canonical = -1;
-    for (let dx = -1; dx <= 1 && canonical === -1; dx++) {
-      for (let dy = -1; dy <= 1 && canonical === -1; dy++) {
-        for (let dz = -1; dz <= 1 && canonical === -1; dz++) {
-          const neighborKey = `${cx + dx},${cy + dy},${cz + dz}`;
-          const candidate = positionToCanonical.get(neighborKey);
-          if (candidate === undefined) {
-            continue;
-          }
-          const [ox, oy, oz] = allPositions[candidate]!;
-          const ddx = x - ox;
-          const ddy = y - oy;
-          const ddz = z - oz;
-          if (ddx * ddx + ddy * ddy + ddz * ddz <= epsilonSquared) {
-            canonical = candidate;
-          }
-        }
-      }
-    }
-
-    if (canonical === -1) {
-      const key = `${cx},${cy},${cz}`;
-      positionToCanonical.set(key, i);
-      vertexMap[i] = i;
-    } else {
-      vertexMap[i] = canonical;
-    }
-  }
-
-  // Build edge reference count map using canonical vertex indices
   const edgeCounts = new Map<string, number>();
 
   for (const tri of allTriangles) {
@@ -144,11 +53,203 @@ export const isWatertight = (document: Document): boolean => {
   }
 
   let irregularEdges = 0;
-  for (const count of edgeCounts.values()) {
+  let boundaryEdges = 0;
+  let bx = 0;
+  let by = 0;
+  let bz = 0;
+
+  for (const [key, count] of edgeCounts) {
     if (count !== 2) {
       irregularEdges++;
     }
+    if (count === 1) {
+      boundaryEdges++;
+      const parts = key.split(',');
+      const a = Number.parseInt(parts[0] ?? '0', 10);
+      const b = Number.parseInt(parts[1] ?? '0', 10);
+      const [ax, ay, az] = allPositions[a]!;
+      const [bx2, by2, bz2] = allPositions[b]!;
+      bx += (ax + bx2) / 2;
+      by += (ay + by2) / 2;
+      bz += (az + bz2) / 2;
+    }
   }
 
-  return irregularEdges / edgeCounts.size <= irregularEdgeTolerance;
+  const centroid: [number, number, number] =
+    boundaryEdges > 0 ? [bx / boundaryEdges, by / boundaryEdges, bz / boundaryEdges] : emptyCentroid();
+
+  return {
+    irregularEdges,
+    totalEdges: edgeCounts.size,
+    boundaryEdges,
+    boundaryCentroid: centroid,
+  };
+};
+
+type WatertightPrimSlice = { name: string; start: number; triCount: number };
+
+const collectWatertightGeometry = (
+  document: Document,
+): {
+  allPositions: Array<[number, number, number]>;
+  allTriangles: Array<[number, number, number]>;
+  slices: WatertightPrimSlice[];
+} => {
+  const meshes = document.getRoot().listMeshes();
+  const meshNodeNames = buildMeshNodeNameMap(document);
+
+  const allPositions: Array<[number, number, number]> = [];
+  const allTriangles: Array<[number, number, number]> = [];
+  let vertexOffset = 0;
+  const slices: WatertightPrimSlice[] = [];
+
+  for (const mesh of meshes) {
+    const trimmedMeshName = mesh.getName().trim();
+    const nodeMappedName = meshNodeNames.get(mesh);
+    const resolvedMeshName =
+      trimmedMeshName === ''
+        ? nodeMappedName !== undefined && nodeMappedName !== ''
+          ? nodeMappedName
+          : undefined
+        : trimmedMeshName;
+    const fallbackName = resolvedMeshName ?? `Mesh_${slices.length}`;
+    let primOrdinal = 0;
+    for (const primitive of mesh.listPrimitives()) {
+      if (primitive.getMode() !== 4) {
+        continue;
+      }
+
+      const posAccessor = primitive.getAttribute('POSITION');
+      const indexAccessor = primitive.getIndices();
+      if (!posAccessor || !indexAccessor) {
+        continue;
+      }
+
+      const vCount = posAccessor.getCount();
+      const indexCount = indexAccessor.getCount();
+      const name =
+        resolvedMeshName && resolvedMeshName.length > 0 ? resolvedMeshName : `${fallbackName}#${primOrdinal}`;
+      primOrdinal += 1;
+
+      const start = allTriangles.length;
+      for (let i = 0; i < vCount; i++) {
+        allPositions.push(posAccessor.getElement(i, [0, 0, 0]));
+      }
+
+      for (let i = 0; i < indexCount; i += 3) {
+        allTriangles.push([
+          indexAccessor.getScalar(i) + vertexOffset,
+          indexAccessor.getScalar(i + 1) + vertexOffset,
+          indexAccessor.getScalar(i + 2) + vertexOffset,
+        ]);
+      }
+
+      slices.push({ name, start, triCount: indexCount / 3 });
+      vertexOffset += vCount;
+    }
+  }
+
+  return { allPositions, allTriangles, slices };
+};
+
+const buildPerPrimitiveBreakdowns = (
+  slices: readonly WatertightPrimSlice[],
+  allPositions: Array<[number, number, number]>,
+  allTriangles: Array<[number, number, number]>,
+): WatertightPrimitiveBreakdown[] => {
+  const perPrimitive: WatertightPrimitiveBreakdown[] = [];
+  for (const slice of slices) {
+    const endTri = slice.start + slice.triCount;
+    const localPositions: Array<[number, number, number]> = [];
+    const localTriangles: Array<[number, number, number]> = [];
+    let minV = Infinity;
+    let maxV = -1;
+    for (let t = slice.start; t < endTri; t++) {
+      const tri = allTriangles[t]!;
+      for (const vi of tri) {
+        if (vi < minV) {
+          minV = vi;
+        }
+        if (vi > maxV) {
+          maxV = vi;
+        }
+      }
+    }
+    if (minV === Infinity) {
+      continue;
+    }
+    for (let i = minV; i <= maxV; i++) {
+      localPositions.push(allPositions[i]!);
+    }
+    const offset = minV;
+    for (let t = slice.start; t < endTri; t++) {
+      const [a, b, c] = allTriangles[t]!;
+      localTriangles.push([a - offset, b - offset, c - offset]);
+    }
+    const local = classifyEdges(localPositions, localTriangles);
+    perPrimitive.push({
+      name: slice.name,
+      boundaryEdges: local.boundaryEdges,
+      loopCentroid: local.boundaryCentroid,
+    });
+  }
+
+  perPrimitive.sort((a, b) => b.boundaryEdges - a.boundaryEdges);
+  return perPrimitive;
+};
+
+/**
+ * Global watertight analysis plus per-primitive local boundary breakdown.
+ *
+ * @param document - A glTF-Transform document to analyse.
+ * @returns Watertight verdict, global edge counts, and per-primitive boundary diagnostics.
+ * @public
+ */
+export const analyseWatertight = (document: Document): WatertightResult => {
+  const { allPositions, allTriangles, slices } = collectWatertightGeometry(document);
+
+  if (allTriangles.length === 0) {
+    return {
+      watertight: false,
+      irregularEdges: 0,
+      openBoundaryEdges: 0,
+      totalEdges: 0,
+      irregularEdgeFraction: 1,
+      perPrimitive: [],
+    };
+  }
+
+  const global = classifyEdges(allPositions, allTriangles);
+  const irregularEdgeFraction = global.totalEdges > 0 ? global.irregularEdges / global.totalEdges : 0;
+  const watertight = irregularEdgeFraction <= irregularEdgeTolerance;
+
+  const perPrimitive = buildPerPrimitiveBreakdowns(slices, allPositions, allTriangles);
+
+  return {
+    watertight,
+    irregularEdges: global.irregularEdges,
+    openBoundaryEdges: global.boundaryEdges,
+    totalEdges: global.totalEdges,
+    irregularEdgeFraction,
+    perPrimitive,
+  };
+};
+
+/**
+ * Determines whether a mesh is watertight (closed/manifold).
+ *
+ * A mesh is watertight when every triangle edge is shared by exactly two
+ * triangles. Boundary edges (shared by only one triangle) indicate gaps,
+ * and non-manifold edges (shared by three or more) indicate self-intersections.
+ *
+ * Returns true when the fraction of irregular edges is within tolerance, so
+ * CAD-tessellated meshes with minor pole or seam artifacts are still recognized
+ * as watertight for downstream fabrication checks.
+ *
+ * @param document - A glTF-Transform Document
+ * @returns `true` if the mesh is watertight, `false` otherwise
+ * @public
+ */
+export const isWatertight = (document: Document): boolean => {
+  return analyseWatertight(document).watertight;
 };

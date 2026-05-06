@@ -141,6 +141,44 @@ describe('testFailureSchema / testPassSchema', () => {
     expect(present.targetFile).toBe('main.ts');
   });
 
+  it('should round-trip an optional structured failure payload', () => {
+    const data = testFailureSchema.parse({
+      id: 'req_cc',
+      requirement: 'Single solid',
+      reason: 'Connected components: expected 1, got 2 (tolerance: 0.1mm)',
+      suggestion: 'Fuse parts',
+      targetFile: 'main.ts',
+      failure: {
+        check: 'connectedComponents',
+        expected: 1,
+        got: 2,
+        toleranceMm: 0.1,
+        clusters: [
+          {
+            label: 'A',
+            primitives: [{ name: 'Body', vertices: 8, aabb: { min: [0, 0, 0], max: [1, 1, 1] } }],
+            aabb: { min: [0, 0, 0], max: [1, 1, 1] },
+            centroid: [0.5, 0.5, 0.5],
+            totalVertices: 8,
+          },
+        ],
+        gaps: [
+          {
+            fromLabel: 'A',
+            toLabel: 'B',
+            axis: 'x',
+            gapMm: 10,
+            fromPrimitive: 'Body',
+            toPrimitive: 'Handle',
+          },
+        ],
+      },
+    });
+
+    expect(data.failure?.check).toBe('connectedComponents');
+    expect(testFailureSchema.parse(data)).toEqual(data);
+  });
+
   it('should require targetFile on every pass', () => {
     const missing = testPassSchema.safeParse({
       id: 'req_x',
