@@ -19,7 +19,11 @@ type MdxJsxElementShape = {
 
 const collapseWhitespace = (value: string): string => value.replaceAll(/\s+/g, ' ').trim();
 
-const escapeTablePipes = (value: string): string => value.replaceAll('|', String.raw`\|`);
+/**
+ * TSDoc / MDX can emit `\{\}` so `{` doesn't open a JSX expression in MDX source.
+ * LLM-facing markdown is plain text — strip these escapes for readable `{` / `}`.
+ */
+const relaxMdxCurlyEscapes = (value: string): string => value.replaceAll(/\\([{}])/g, '$1');
 
 const isMdxJsxAttributeShape = (value: unknown): value is MdxJsxAttributeShape => {
   if (typeof value !== 'object' || value === null) {
@@ -155,26 +159,51 @@ const readGeneratedDocument = (node: MdxJsxElementShape): GeneratedDoc | undefin
   }
 };
 
-const formatEntryDescription = (entry: DocEntry): string => {
+const formatPropertyMeta = (entry: DocEntry): string => {
+  const parts: string[] = [`\`${collapseWhitespace(entry.type)}\``];
+  parts.push(entry.required ? 'required' : 'optional');
+
   const defaultTag = entry.tags.find((tag) => tag.name === 'default');
-  const otherTags = entry.tags.filter((tag) => tag.name !== 'default');
-
-  let text = '';
   if (defaultTag) {
-    text += `(default: ${defaultTag.text}) `;
+    parts.push(`default \`${relaxMdxCurlyEscapes(defaultTag.text)}\``);
   }
 
-  text += entry.description.replaceAll(/\r?\n/g, '<br>');
-
-  if (otherTags.length > 0) {
-    const serialized = otherTags.map((tag) => `${tag.name}=${tag.text}`).join(', ');
-    text += `; tags: ${serialized}`;
-  }
-
-  return escapeTablePipes(text);
+  return `(${parts.join(', ')})`;
 };
 
-const renderTypeTable = (generatedDocument: GeneratedDoc): string => {
+const formatPropertyDescription = (entry: DocEntry): string => {
+  const paragraphs = entry.description
+    .split(/\r?\n\r?\n+/u)
+    .map((paragraph) => paragraph.replaceAll(/\r?\n/g, ' ').trim())
+    .filter((paragraph) => paragraph.length > 0);
+
+  if (paragraphs.length === 0) {
+    return '';
+  }
+
+  const [first, ...rest] = paragraphs;
+  const head = ` — ${first}`;
+  const tail = rest.map((paragraph) => `\n\n  ${paragraph}`).join('');
+  return head + tail;
+};
+
+const formatPropertyBullet = (entry: DocEntry): string => {
+  const name = entry.deprecated ? `~~\`${entry.name}\`~~` : `\`${entry.name}\``;
+  const meta = formatPropertyMeta(entry);
+  const description = formatPropertyDescription(entry);
+
+  const otherTags = entry.tags.filter((tag) => tag.name !== 'default');
+  const tagLine =
+    otherTags.length > 0
+      ? `\n\n  Tags: ${otherTags
+          .map((tag) => (tag.text.length > 0 ? `@${tag.name} ${collapseWhitespace(tag.text)}` : `@${tag.name}`))
+          .join(', ')}`
+      : '';
+
+  return `- **${name}** ${meta}${description}${tagLine}`;
+};
+
+const renderTypeAsPropertyList = (generatedDocument: GeneratedDoc): string => {
   const headerLine: string[] = [`**\`${generatedDocument.name}\`**`];
   if (generatedDocument.description && generatedDocument.description.length > 0) {
     const oneLine = collapseWhitespace(generatedDocument.description);
@@ -183,43 +212,59 @@ const renderTypeTable = (generatedDocument: GeneratedDoc): string => {
     }
   }
 
-  const lines: string[] = [headerLine.join('')];
+  const sections: string[] = [headerLine.join('')];
 
   if (generatedDocument.entries.length === 0) {
-    lines.push('_No properties._');
-    return lines.join('\n\n');
+    sections.push('_No properties._');
+    return sections.join('\n\n');
   }
 
-  lines.push('| Prop | Type | Required | Description |');
-  lines.push('| --- | --- | --- | --- |');
-
-  for (const entry of generatedDocument.entries) {
-    const propertyCell = entry.deprecated ? `~~\`${entry.name}\`~~` : `\`${entry.name}\``;
-    const typeCell = escapeTablePipes(collapseWhitespace(entry.type));
-    const requiredCell = entry.required ? 'Yes' : 'No';
-    const descriptionCell = formatEntryDescription(entry);
-    lines.push(`| ${propertyCell} | ${typeCell} | ${requiredCell} | ${descriptionCell} |`);
-  }
-
-  return lines.join('\n');
+  sections.push(generatedDocument.entries.map(formatPropertyBullet).join('\n\n'));
+  return sections.join('\n\n');
 };
 
-/**
- * Custom MDAST stringifier hook for Fumadocs `includeProcessedMarkdown` / `_markdown`.
- * Replaces literal `<TypeTable type="{...JSON...}">` JSX in LLM-facing markdown with a GFM table
- * built from the embedded `GeneratedDoc` JSON. Returns `undefined` for all other nodes so the
- * default stringifier runs unchanged (browser MDX compilation is unaffected).
- */
-export const llmStringifyTypeTable = (...stringifyArguments: readonly unknown[]): string | undefined => {
-  const [maybeNode] = stringifyArguments;
-  if (!isMdxJsxElementShape(maybeNode) || maybeNode.name !== 'TypeTable') {
-    return undefined;
-  }
-
-  const generatedDocument = readGeneratedDocument(maybeNode);
+const stringifyTypeTable = (node: MdxJsxElementShape): string | undefined => {
+  const generatedDocument = readGeneratedDocument(node);
   if (generatedDocument === undefined) {
     return undefined;
   }
 
-  return renderTypeTable(generatedDocument);
+  return renderTypeAsPropertyList(generatedDocument);
+};
+
+const stringifyMermaid = (node: MdxJsxElementShape): string | undefined => {
+  const chart = node.attributes.find((attribute) => attribute.name === 'chart');
+  const value = chart ? readAttributeString(chart) : undefined;
+  if (value === undefined || value.length === 0) {
+    return undefined;
+  }
+
+  return `\`\`\`mermaid\n${value.trim()}\n\`\`\``;
+};
+
+/**
+ * Custom MDAST stringifier hook for Fumadocs `includeProcessedMarkdown` / `_markdown`.
+ * Renders `<TypeTable>` as a CommonMark prop-bullet list (no GFM tables / `<br>`) and
+ * `<Mermaid>` as a fenced mermaid code block. Returns `undefined` for all other nodes so
+ * the default stringifier runs unchanged (browser MDX compilation is unaffected).
+ */
+export const llmStringifyMdx = (...stringifyArguments: readonly unknown[]): string | undefined => {
+  const [maybeNode] = stringifyArguments;
+  if (!isMdxJsxElementShape(maybeNode)) {
+    return undefined;
+  }
+
+  switch (maybeNode.name) {
+    case 'TypeTable': {
+      return stringifyTypeTable(maybeNode);
+    }
+
+    case 'Mermaid': {
+      return stringifyMermaid(maybeNode);
+    }
+
+    default: {
+      return undefined;
+    }
+  }
 };

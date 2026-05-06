@@ -4,7 +4,7 @@ import { remarkAutoTypeTable, createGenerator } from 'fumadocs-typescript';
 import { remarkMdxMermaid } from 'fumadocs-core/mdx-plugins';
 import kclLang from '#lib/kcl-language/kcl-shiki-precompiled.js';
 import openscadLang from '#lib/openscad-language/openscad-shiki-precompiled.js';
-import { llmStringifyTypeTable } from '#lib/fumadocs/llm-stringify-type-table.js';
+import { llmStringifyMdx } from '#lib/fumadocs/llm-stringify-mdx.js';
 import { remarkResolveRelativeLinks } from '#lib/fumadocs/remark-resolve-relative-links.js';
 
 const generator = createGenerator({
@@ -16,7 +16,7 @@ export const docs = defineDocs({
   docs: {
     postprocess: {
       includeProcessedMarkdown: {
-        stringify: (...stringifyArguments) => llmStringifyTypeTable(...stringifyArguments),
+        stringify: (...stringifyArguments) => llmStringifyMdx(...stringifyArguments),
       },
     },
   },

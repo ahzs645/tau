@@ -1,8 +1,9 @@
 import type { InferPageType } from 'fumadocs-core/source';
+import { decodeHtmlEntities } from '#lib/fumadocs/decode-html-entities.js';
 import { source } from '#lib/fumadocs/source.js';
 
 export async function getLlmText(page: InferPageType<typeof source>): Promise<string> {
-  const processed = await page.data.getText('processed');
+  const processed = decodeHtmlEntities(await page.data.getText('processed'));
 
   return `# ${page.data.title}
 URL: ${page.url}

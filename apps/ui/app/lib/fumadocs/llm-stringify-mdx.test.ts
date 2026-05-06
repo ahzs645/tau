@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { GeneratedDoc } from 'fumadocs-typescript';
-import { llmStringifyTypeTable } from '#lib/fumadocs/llm-stringify-type-table.js';
+import { llmStringifyMdx } from '#lib/fumadocs/llm-stringify-mdx.js';
 
 type MdxJsxFlowFixture = {
   type: 'mdxJsxFlowElement';
@@ -38,15 +38,15 @@ const typeTableFixture = (generatedDocument: GeneratedDoc): MdxJsxFlowFixture =>
   children: [],
 });
 
-describe('llmStringifyTypeTable', () => {
-  it('returns undefined for non-TypeTable mdx elements', () => {
+describe('llmStringifyMdx', () => {
+  it('returns undefined for non-TypeTable, non-Mermaid mdx elements', () => {
     const node: MdxJsxFlowFixture = {
       type: 'mdxJsxFlowElement',
       name: 'Callout',
       attributes: [],
       children: [],
     };
-    expect(llmStringifyTypeTable(node)).toBeUndefined();
+    expect(llmStringifyMdx(node)).toBeUndefined();
   });
 
   it('returns undefined for TypeTable without a type attribute JSON string', () => {
@@ -56,7 +56,7 @@ describe('llmStringifyTypeTable', () => {
       attributes: [{ type: 'mdxJsxAttribute', name: 'id', value: 'x' }],
       children: [],
     };
-    expect(llmStringifyTypeTable(node)).toBeUndefined();
+    expect(llmStringifyMdx(node)).toBeUndefined();
   });
 
   it('returns undefined when type JSON is not a valid GeneratedDoc', () => {
@@ -76,7 +76,7 @@ describe('llmStringifyTypeTable', () => {
       ],
       children: [],
     };
-    expect(llmStringifyTypeTable(node)).toBeUndefined();
+    expect(llmStringifyMdx(node)).toBeUndefined();
   });
 
   it('returns undefined when type JSON parse throws', () => {
@@ -96,10 +96,10 @@ describe('llmStringifyTypeTable', () => {
       ],
       children: [],
     };
-    expect(llmStringifyTypeTable(node)).toBeUndefined();
+    expect(llmStringifyMdx(node)).toBeUndefined();
   });
 
-  it('renders a single-entry GFM table with required and description', () => {
+  it('renders type header and a required prop bullet with description', () => {
     const generatedDocument: GeneratedDoc = {
       id: 't.ts-Foo',
       name: 'Foo',
@@ -116,13 +116,15 @@ describe('llmStringifyTypeTable', () => {
         },
       ],
     };
-    const out = llmStringifyTypeTable(typeTableFixture(generatedDocument));
+    const out = llmStringifyMdx(typeTableFixture(generatedDocument));
     expect(out).toContain('**`Foo`** — A test type.');
-    expect(out).toContain('| Prop | Type | Required | Description |');
-    expect(out).toContain('| `bar` | string | Yes | Bar field. |');
+    expect(out).toContain('- **`bar`** (`string`, required) — Bar field.');
+    expect(out).not.toContain('| Prop |');
+    expect(out).not.toMatch(/<br>/u);
+    expect(out).not.toContain(String.raw`\|`);
   });
 
-  it('escapes pipes in the Type column', () => {
+  it('renders optional props without required label', () => {
     const generatedDocument: GeneratedDoc = {
       id: 't.ts-Union',
       name: 'UnionType',
@@ -138,11 +140,12 @@ describe('llmStringifyTypeTable', () => {
         },
       ],
     };
-    const out = llmStringifyTypeTable(typeTableFixture(generatedDocument));
-    expect(out).toContain('| `x` | string[] \\| undefined | No | d |');
+    const out = llmStringifyMdx(typeTableFixture(generatedDocument));
+    expect(out).toContain('- **`x`** (`string[] | undefined`, optional) — d');
+    expect(out).not.toContain(String.raw`\|`);
   });
 
-  it('collapses multiline descriptions into br-separated cells', () => {
+  it('renders multiline descriptions as loose-list continuation without br tags', () => {
     const generatedDocument: GeneratedDoc = {
       id: 't.ts-Multi',
       name: 'Multi',
@@ -158,8 +161,29 @@ describe('llmStringifyTypeTable', () => {
         },
       ],
     };
-    const out = llmStringifyTypeTable(typeTableFixture(generatedDocument));
-    expect(out).toContain('Line one.<br>Line two.');
+    const out = llmStringifyMdx(typeTableFixture(generatedDocument));
+    expect(out).toContain('— Line one. Line two.');
+    expect(out).not.toMatch(/<br>/u);
+  });
+
+  it('splits description paragraphs with blank lines and two-space indent', () => {
+    const generatedDocument: GeneratedDoc = {
+      id: 't.ts-Para',
+      name: 'Para',
+      entries: [
+        {
+          name: 'p',
+          description: 'First block.\n\nSecond block.',
+          type: 'string',
+          simplifiedType: 'string',
+          tags: [],
+          required: true,
+          deprecated: false,
+        },
+      ],
+    };
+    const out = llmStringifyMdx(typeTableFixture(generatedDocument));
+    expect(out).toContain('— First block.\n\n  Second block.');
   });
 
   it('marks deprecated props with strikethrough', () => {
@@ -178,11 +202,11 @@ describe('llmStringifyTypeTable', () => {
         },
       ],
     };
-    const out = llmStringifyTypeTable(typeTableFixture(generatedDocument));
-    expect(out).toContain('| ~~`old`~~ |');
+    const out = llmStringifyMdx(typeTableFixture(generatedDocument));
+    expect(out).toContain('- **~~`old`~~**');
   });
 
-  it('prefixes default tag as (default: …) ahead of description', () => {
+  it('includes default tag in meta with relaxed curly escapes', () => {
     const generatedDocument: GeneratedDoc = {
       id: 't.ts-Def',
       name: 'Def',
@@ -192,17 +216,19 @@ describe('llmStringifyTypeTable', () => {
           description: 'count',
           type: 'number',
           simplifiedType: 'number',
-          tags: [{ name: 'default', text: '"foo"' }],
+          tags: [{ name: 'default', text: '\\{\\}' }],
           required: false,
           deprecated: false,
         },
       ],
     };
-    const out = llmStringifyTypeTable(typeTableFixture(generatedDocument));
-    expect(out).toContain('(default: "foo") count');
+    const out = llmStringifyMdx(typeTableFixture(generatedDocument));
+    expect(out).toContain('default `{}`');
+    expect(out).not.toContain(String.raw`\{`);
+    expect(out).not.toContain(String.raw`\}`);
   });
 
-  it('appends non-default tags to the description', () => {
+  it('surfaces non-default tags on a Tags continuation line', () => {
     const generatedDocument: GeneratedDoc = {
       id: 't.ts-Tags',
       name: 'Tags',
@@ -218,8 +244,8 @@ describe('llmStringifyTypeTable', () => {
         },
       ],
     };
-    const out = llmStringifyTypeTable(typeTableFixture(generatedDocument));
-    expect(out).toContain('; tags: example=`x`');
+    const out = llmStringifyMdx(typeTableFixture(generatedDocument));
+    expect(out).toContain('Tags: @example `x`');
   });
 
   it('emits _No properties._ when entries is empty', () => {
@@ -228,7 +254,7 @@ describe('llmStringifyTypeTable', () => {
       name: 'Empty',
       entries: [],
     };
-    const out = llmStringifyTypeTable(typeTableFixture(generatedDocument));
+    const out = llmStringifyMdx(typeTableFixture(generatedDocument));
     expect(out).toContain('**`Empty`**');
     expect(out).toContain('_No properties._');
     expect(out).not.toContain('| Prop |');
@@ -259,12 +285,43 @@ describe('llmStringifyTypeTable', () => {
       ],
       children: [],
     };
-    const out = llmStringifyTypeTable(node);
-    expect(out).toContain('| `x` | boolean | Yes | y |');
+    const out = llmStringifyMdx(node);
+    expect(out).toContain('- **`x`** (`boolean`, required) — y');
   });
 
   it('returns undefined for non-mdx root nodes', () => {
     const paragraphLikeNode: unknown = { type: 'paragraph', children: [] };
-    expect(llmStringifyTypeTable(paragraphLikeNode)).toBeUndefined();
+    expect(llmStringifyMdx(paragraphLikeNode)).toBeUndefined();
+  });
+
+  it('stringifies Mermaid chart to a fenced mermaid block', () => {
+    const node: MdxJsxFlowFixture = {
+      type: 'mdxJsxFlowElement',
+      name: 'Mermaid',
+      attributes: [{ type: 'mdxJsxAttribute', name: 'chart', value: '  flowchart TD\n  A-->B  ' }],
+      children: [],
+    };
+    const out = llmStringifyMdx(node);
+    expect(out).toBe('```mermaid\nflowchart TD\n  A-->B\n```');
+  });
+
+  it('returns undefined for Mermaid without chart attribute', () => {
+    const node: MdxJsxFlowFixture = {
+      type: 'mdxJsxFlowElement',
+      name: 'Mermaid',
+      attributes: [],
+      children: [],
+    };
+    expect(llmStringifyMdx(node)).toBeUndefined();
+  });
+
+  it('returns undefined for Mermaid with empty chart', () => {
+    const node: MdxJsxFlowFixture = {
+      type: 'mdxJsxFlowElement',
+      name: 'Mermaid',
+      attributes: [{ type: 'mdxJsxAttribute', name: 'chart', value: '' }],
+      children: [],
+    };
+    expect(llmStringifyMdx(node)).toBeUndefined();
   });
 });
