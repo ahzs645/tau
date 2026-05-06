@@ -63,7 +63,7 @@ construction (`{ transport: webWorkerTransport({ ... }) }`). Opaque
 filesystems are produced by the public factories
 (`fromMemoryFs`, `fromNodeFs`, `fromBrowserFs`, `fromFsLikeOpaque`,
 `fromWorkerOpaque`); raw `MessagePort`s are not part of the public surface.
-See [Embedding in a Host](<../../apps/ui/content/docs/(runtime)/guides/embedding-in-a-host.mdx>).
+See [Embedding in a Host](../../apps/ui/content/docs/runtime/guides/embedding-in-a-host.mdx).
 
 ## Autonomous render loop (editors and live UIs)
 
@@ -178,8 +178,8 @@ isolated pages also receive zero-copy geometry transfers via a
 
 ## Further reading
 
-- Quick start — `apps/ui/content/docs/(runtime)/getting-started/quick-start.mdx`
-- Live rendering (autonomous loop, `RenderOutcome`, supersession) — `apps/ui/content/docs/(runtime)/guides/live-rendering.mdx`
-- Embedding in a host (port bridges, `filePoolBuffer` SAB, deferred FS) — `apps/ui/content/docs/(runtime)/guides/embedding-in-a-host.mdx`
+- Quick start — `apps/ui/content/docs/runtime/getting-started/quick-start.mdx`
+- Live rendering (autonomous loop, `RenderOutcome`, supersession) — `apps/ui/content/docs/runtime/guides/live-rendering.mdx`
+- Embedding in a host (port bridges, `filePoolBuffer` SAB, deferred FS) — `apps/ui/content/docs/runtime/guides/embedding-in-a-host.mdx`
 - Architecture invariants — `docs/architecture/runtime-topology.md`
-- Per-kernel guides — `apps/ui/content/docs/(runtime)/`
+- Per-kernel guides — `apps/ui/content/docs/runtime/`
