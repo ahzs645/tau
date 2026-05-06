@@ -33,6 +33,11 @@ export function ModelSettings(): React.JSX.Element {
         placeholder='Search models...'
       />
 
+      <p className='text-sm text-muted-foreground'>
+        Choose which models appear in the chat model picker. Disabled models stay configured and can be re-enabled
+        anytime.
+      </p>
+
       <div className='flex flex-col divide-y rounded-md border'>
         {visibleModels.map((model) => (
           <div key={model.id} className='flex items-center justify-between gap-3 px-3 py-2.5'>
