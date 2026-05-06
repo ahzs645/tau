@@ -22,64 +22,10 @@ import {
   readDevRootCommonName,
 } from '#lib/certificates/dev-ca-banner.js';
 import { httpsCaPemPath, httpsCertPemPath, httpsKeyPemPath } from '#lib/certificates/https-certs-path.js';
+import type { HostArgument } from '#lib/server-args.js';
+import { parseHostArgument, parseHttpsArgument } from '#lib/server-args.js';
 
 const port = Number.parseInt(process.env['PORT'] ?? '3000', 10);
-
-/** Value from `--host` / `--host=<addr>` (`undefined` means loopback-only, like Vite without `--host`). */
-export type HostArgument = undefined | string;
-
-/**
- * Mirrors Vite / `react-router dev` `--host` handling: `--host` alone binds every interface (`0.0.0.0`).
- */
-export const parseHostArgument = (argv: readonly string[]): HostArgument => {
-  for (let index = 0; index < argv.length; index++) {
-    const cliArgument = argv[index]!;
-    if (cliArgument === '--host') {
-      const nextArgument = argv[index + 1];
-      return nextArgument !== undefined && !nextArgument.startsWith('-') ? nextArgument : '0.0.0.0';
-    }
-
-    if (cliArgument.startsWith('--host=')) {
-      const value = cliArgument.slice('--host='.length);
-      return value === '' ? '0.0.0.0' : value;
-    }
-  }
-
-  return undefined;
-};
-
-/**
- * `--https`, `--no-https`, and `--https=<truthy|falsey>` parity with usual CLI conventions.
- *
- * Bare `--https` behaves like `--https=true`. Later occurrences win (last-flag semantics).
- */
-export const parseHttpsArgument = (argv: readonly string[]): boolean => {
-  let lastResolved: undefined | boolean;
-
-  for (const cliArgument of argv) {
-    if (cliArgument === '--https') {
-      lastResolved = true;
-      continue;
-    }
-
-    if (cliArgument === '--no-https' || cliArgument === '--https=false') {
-      lastResolved = false;
-      continue;
-    }
-
-    if (cliArgument === '--https=true') {
-      lastResolved = true;
-      continue;
-    }
-
-    if (cliArgument.startsWith('--https=')) {
-      const value = cliArgument.slice('--https='.length);
-      lastResolved = !(value === '' || value === '0' || value === 'false');
-    }
-  }
-
-  return lastResolved ?? false;
-};
 
 const formatServeUrl = (scheme: 'http' | 'https', hostname: string, listenPort: number): string =>
   hostname.includes(':') ? `${scheme}://[${hostname}]:${listenPort}` : `${scheme}://${hostname}:${listenPort}`;

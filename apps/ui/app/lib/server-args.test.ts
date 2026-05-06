@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
 
-import { parseHostArgument, parseHttpsArgument } from './server.js';
+import { parseHostArgument, parseHttpsArgument } from '#lib/server-args.js';
 
 describe('parseHostArgument', () => {
   it('returns undefined when --host is absent', () => {
