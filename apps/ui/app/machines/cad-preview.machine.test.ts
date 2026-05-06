@@ -38,7 +38,7 @@ describe('cadPreviewMachine + cadMachine integration', () => {
     const cadRef = createActor(providedCadMachine, {
       input: {
         shouldInitializeKernelOnStart: false,
-        kernelOptionsFactory: () => mock<RuntimeClientOptions>(),
+        kernelOptionsFactory: async () => () => mock<RuntimeClientOptions>(),
       },
     });
 
@@ -102,7 +102,7 @@ describe('cadPreviewMachine + cadMachine integration', () => {
     const cadRef = createActor(providedCadMachine, {
       input: {
         shouldInitializeKernelOnStart: false,
-        kernelOptionsFactory: () => mock<RuntimeClientOptions>(),
+        kernelOptionsFactory: async () => () => mock<RuntimeClientOptions>(),
       },
     });
 
@@ -182,7 +182,7 @@ describe('cadPreviewMachine + cadMachine integration', () => {
     const cadRef = createActor(providedCadMachine, {
       input: {
         shouldInitializeKernelOnStart: false,
-        kernelOptionsFactory: () => mock<RuntimeClientOptions>(),
+        kernelOptionsFactory: async () => () => mock<RuntimeClientOptions>(),
       },
     });
 
@@ -265,7 +265,7 @@ describe('cadPreviewMachine + cadMachine integration', () => {
     const cadRef = createActor(providedCadMachine, {
       input: {
         shouldInitializeKernelOnStart: false,
-        kernelOptionsFactory: () => mock<RuntimeClientOptions>(),
+        kernelOptionsFactory: async () => () => mock<RuntimeClientOptions>(),
       },
     });
 
@@ -360,7 +360,7 @@ describe('cadPreviewMachine + cadMachine integration', () => {
     const cadRef = createActor(providedCadMachine, {
       input: {
         shouldInitializeKernelOnStart: false,
-        kernelOptionsFactory: () => mock<RuntimeClientOptions>(),
+        kernelOptionsFactory: async () => () => mock<RuntimeClientOptions>(),
       },
     });
 
@@ -486,7 +486,7 @@ describe('cadPreviewMachine + cadMachine integration', () => {
     const cadRef = createActor(providedCadMachine, {
       input: {
         shouldInitializeKernelOnStart: false,
-        kernelOptionsFactory: () => mock<RuntimeClientOptions>(),
+        kernelOptionsFactory: async () => () => mock<RuntimeClientOptions>(),
       },
     });
 

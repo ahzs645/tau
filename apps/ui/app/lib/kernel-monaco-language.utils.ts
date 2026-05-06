@@ -9,13 +9,11 @@
  * expose per-kernel source-file extensions.
  */
 
+import { kernelSourceExtensionsById } from '#constants/kernel-monaco-extensions.constants.js';
 import type { MonacoLanguage } from '#lib/monaco.constants.js';
-import { defaultKernels } from '#constants/kernel-worker.constants.js';
 import { extensionToMonacoLanguage } from '#lib/monaco.constants.js';
 
-const kernelExtensionsById = new Map<string, readonly string[]>(
-  defaultKernels.map((kernel) => [kernel.id, kernel.extensions]),
-);
+const kernelExtensionsById = new Map<string, readonly string[]>(Object.entries(kernelSourceExtensionsById));
 
 /**
  * Resolve the Monaco language ids associated with a kernel id. Returns an

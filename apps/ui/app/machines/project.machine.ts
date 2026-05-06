@@ -3,7 +3,7 @@ import type { ActorRefFrom, AnyStateMachine } from 'xstate';
 import { produce } from 'immer';
 import type { FileParameterEntry, Project } from '@taucad/types';
 import { isBrowser } from '#constants/browser.constants.js';
-import type { KernelOptionsFactory } from '#types/runtime-client.alias.js';
+import type { LazyKernelOptionsFactory } from '#types/runtime-client.alias.js';
 import type { GraphicsViewSettings } from '#constants/editor.constants.js';
 import { defaultGraphicsSettings } from '#constants/editor.constants.js';
 import { fromSafeAsync } from '#lib/xstate.lib.js';
@@ -29,7 +29,7 @@ export type ProjectContext = {
   error: Error | undefined;
   isLoading: boolean;
   shouldLoadModelOnStart: boolean;
-  kernelOptionsFactory: KernelOptionsFactory;
+  kernelOptionsFactory: LazyKernelOptionsFactory;
   fileManagerRef: ActorRefFrom<typeof fileManagerMachine>;
   /** Per-viewer-panel graphics machines, keyed by Dockview panel ID */
   viewGraphics: Map<string, ActorRefFrom<typeof graphicsMachine>>;
@@ -51,7 +51,7 @@ type ProjectInput = {
   projectId: string;
   shouldLoadModelOnStart?: boolean;
   fileManagerRef: ActorRefFrom<typeof fileManagerMachine>;
-  kernelOptionsFactory: KernelOptionsFactory;
+  kernelOptionsFactory: LazyKernelOptionsFactory;
 };
 
 // Define the actors that the machine can invoke

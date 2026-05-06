@@ -7,7 +7,7 @@ import { projectMachine } from '#machines/project.machine.js';
 import type { ProjectContext } from '#machines/project.machine.js';
 import { fromSafeAsync } from '#lib/xstate.lib.js';
 import { createDefaultEntry, getActiveGroupValues } from '#utils/parameter-config.utils.js';
-import type { KernelOptionsFactory } from '#types/runtime-client.alias.js';
+import type { LazyKernelOptionsFactory } from '#types/runtime-client.alias.js';
 
 vi.mock('#constants/browser.constants.js', () => ({
   isBrowser: true,
@@ -86,7 +86,7 @@ function createTestActor(options?: {
   });
 
   const fileManagerRef = mock<ProjectContext['fileManagerRef']>({ send: vi.fn() });
-  const kernelOptionsFactory: KernelOptionsFactory = () => mock<RuntimeClientOptions>();
+  const kernelOptionsFactory: LazyKernelOptionsFactory = async () => () => mock<RuntimeClientOptions>();
 
   return createActor(machine, {
     input: {
@@ -146,7 +146,7 @@ describe('projectMachine', () => {
         },
       });
       const fileManagerRef = mock<ProjectContext['fileManagerRef']>({ send: vi.fn() });
-      const kernelOptionsFactory: KernelOptionsFactory = () => mock<RuntimeClientOptions>();
+      const kernelOptionsFactory: LazyKernelOptionsFactory = async () => () => mock<RuntimeClientOptions>();
       const actor = createActor(machine, {
         input: { projectId: 'b', fileManagerRef, kernelOptionsFactory },
       });

@@ -11,9 +11,9 @@ import { cadPreviewMachine } from '#machines/cad-preview.machine.js';
 import { graphicsMachine } from '#machines/graphics.machine.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import { joinPath } from '@taucad/utils/path';
-import { createDefaultKernelOptions } from '#constants/kernel-worker.constants.js';
 import { defaultGraphicsSettings } from '#constants/editor.constants.js';
-import type { KernelOptionsFactory } from '#types/runtime-client.alias.js';
+import type { LazyKernelOptionsFactory } from '#types/runtime-client.alias.js';
+import { defaultKernelOptions } from '#constants/kernel-options.presets.js';
 
 /**
  * Status of the CAD preview.
@@ -47,7 +47,7 @@ export type CadPreviewProviderProps = {
   readonly parameters?: Record<string, unknown>;
   /** Whether the rendering should be triggered (default: true) */
   readonly isEnabled?: boolean;
-  readonly kernelOptionsFactory?: KernelOptionsFactory;
+  readonly kernelOptionsFactory?: LazyKernelOptionsFactory;
   readonly children: ReactNode;
 };
 
@@ -81,14 +81,14 @@ function deriveStatus(cadState: string): CadPreviewStatus {
  * Uses cadPreviewMachine to orchestrate file preparation and kernel initialization,
  * following the same invoke+fromPromise pattern as projectMachine.
  *
- * @example Simple thumbnail
+ * @example <caption>Simple thumbnail</caption>
  * ```tsx
  * <CadPreviewProvider projectId="my-build" mainFile="main.ts" files={files}>
  *   <CadPreviewViewer className="size-full" />
  * </CadPreviewProvider>
  * ```
  *
- * @example Dynamic project (files already in the filesystem)
+ * @example <caption>Dynamic project (files already in the filesystem)</caption>
  * ```tsx
  * <CadPreviewProvider projectId={existingBuildId} mainFile="main.ts">
  *   <CadPreviewViewer enablePan enableZoom />
@@ -101,7 +101,7 @@ export function CadPreviewProvider({
   files,
   parameters,
   isEnabled = true,
-  kernelOptionsFactory,
+  kernelOptionsFactory = defaultKernelOptions,
   children,
 }: CadPreviewProviderProps): React.JSX.Element {
   const { fileManagerRef } = useFileManager();
@@ -110,7 +110,7 @@ export function CadPreviewProvider({
     input: {
       shouldInitializeKernelOnStart: false,
       fileManagerRef,
-      kernelOptionsFactory: kernelOptionsFactory ?? createDefaultKernelOptions,
+      kernelOptionsFactory,
     },
   });
 
@@ -257,7 +257,7 @@ export function CadPreviewProvider({
 /**
  * Access the CAD preview context from the nearest CadPreviewProvider.
  *
- * @example
+ * @example <caption>Read preview state</caption>
  * ```tsx
  * const { geometries, status, setParameters } = useCadPreview();
  * ```

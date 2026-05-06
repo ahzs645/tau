@@ -71,10 +71,13 @@ export default defineConfig(({ mode }) => {
       // Browser DevTools JSON plugin.
       devtoolsJson(),
 
-      // This plugin visualizes the bundle size of the build.
-      visualizer({
-        exclude: [{ file: '**/*?raw' }], // ignore raw files that are used for editor typings
-      }),
+      ...(process.env['STATS'] === '1'
+        ? [
+            visualizer({
+              exclude: [{ file: '**/*?raw' }], // ignore raw files that are used for editor typings
+            }),
+          ]
+        : []),
 
       // This plugin generates an SVG sprite to reduce the number of requests to the server.
       // An SVG sprite is a single SVG file that contains all the SVG icons,
@@ -101,12 +104,18 @@ export default defineConfig(({ mode }) => {
       format: 'es',
     },
 
-    // Force-bundle these into the SSR output so Netlify's secondary esbuild
-    // pass doesn't re-resolve them. Without this, headless-tree's broken
-    // package.json `main` field (points to .d.ts) and posthog-js's CJS/ESM
-    // interop cause runtime crashes in the Netlify SSR function.
+    /*
+     * Externalise only workspace packages that emit sibling SSR chunks via
+     * static `new URL('./<file>.js', import.meta.url)` patterns (kernel plugins,
+     * worker bootstraps, middleware factories). Bundling those re-emits many
+     * `build/server/assets/*` chunks SSR never executes. Other `@taucad/*`
+     * packages bundle into the SSR output.
+     *
+     * Audit: rg -n "new URL\(['\"]\.\..*\.(?:js|ts)['\"], import\.meta\.url\)" packages/ kernels/
+     */
     ssr: {
       noExternal: ['@headless-tree/core', '@headless-tree/react', 'posthog-js'],
+      external: ['@taucad/runtime', '@taucad/openscad'],
     },
 
     server: {
@@ -117,7 +126,11 @@ export default defineConfig(({ mode }) => {
       allowedHosts: true,
     },
     build: {
-      sourcemap: true,
+      /*
+       * Source maps: client uses `react-router build --sourcemapClient hidden`
+       * (apps/ui/project.json). Omit server maps by not passing `--sourcemapServer`
+       * so the SSR `sourcemap` option stays unset (Rolldown rejects boolean `false`).
+       */
       /*
        * SVGs are forced out of the base64 inline path so the icon sprite
        * pipeline can fingerprint them. WASM exclusion is the same invariant

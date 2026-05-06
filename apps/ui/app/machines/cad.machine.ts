@@ -1,7 +1,6 @@
 import { assign, assertEvent, setup, enqueueActions, waitFor } from 'xstate';
 import type { ActorRefFrom, AnyActorRef } from 'xstate';
 import type { CodeIssue, FileExtension, Geometry, GeometryFile, LogLevel, LogOrigin } from '@taucad/types';
-import { createRuntimeClient } from '@taucad/runtime';
 import type {
   CapabilitiesManifest,
   ExportResult,
@@ -12,14 +11,13 @@ import type {
   TelemetryEntry,
   WorkerState,
 } from '@taucad/runtime';
-import { fromChannelFs } from '@taucad/runtime/filesystem';
 import { safeDispose } from '@taucad/utils/dispose';
 import type { JSONSchema7 } from '@taucad/json-schema';
 import type { LengthSymbol } from '@taucad/units';
 import { fromSafeAsync } from '#lib/xstate.lib.js';
 import type { logMachine } from '#machines/logs.machine.js';
 import type { fileManagerMachine } from '#machines/file-manager.machine.js';
-import type { AppRuntimeClient, KernelOptionsFactory } from '#types/runtime-client.alias.js';
+import type { AppRuntimeClient, LazyKernelOptionsFactory } from '#types/runtime-client.alias.js';
 
 export type CadContext = {
   file: GeometryFile | undefined;
@@ -34,7 +32,7 @@ export type CadContext = {
   shouldInitializeKernelOnStart: boolean;
   logActorRef?: ActorRefFrom<typeof logMachine>;
   fileManagerRef?: ActorRefFrom<typeof fileManagerMachine>;
-  kernelOptionsFactory: KernelOptionsFactory;
+  kernelOptionsFactory: LazyKernelOptionsFactory;
   jsonSchema?: JSONSchema7;
   renderPhase: RenderPhase | undefined;
   telemetryEntries: TelemetryEntry[];
@@ -94,17 +92,17 @@ type CadInput = {
   shouldInitializeKernelOnStart: boolean;
   logRef?: ActorRefFrom<typeof logMachine>;
   fileManagerRef?: ActorRefFrom<typeof fileManagerMachine>;
-  kernelOptionsFactory: KernelOptionsFactory;
+  kernelOptionsFactory: LazyKernelOptionsFactory;
 };
 
 type ConnectKernelInput = {
-  kernelOptionsFactory: KernelOptionsFactory;
+  kernelOptionsFactory: LazyKernelOptionsFactory;
   fileManagerRef?: ActorRefFrom<typeof fileManagerMachine>;
   machineRef: AnyActorRef;
 };
 
 const connectKernelActor = fromSafeAsync<KernelConnectedEvent, ConnectKernelInput>(async ({ input, signal }) => {
-  const { kernelOptionsFactory, fileManagerRef, machineRef } = input;
+  const { kernelOptionsFactory: lazyKernelOptionsFactory, fileManagerRef, machineRef } = input;
 
   if (!fileManagerRef) {
     throw new Error('File manager not initialized');
@@ -118,7 +116,13 @@ const connectKernelActor = fromSafeAsync<KernelConnectedEvent, ConnectKernelInpu
 
   signal.throwIfAborted();
 
-  const kernelOptions = kernelOptionsFactory({
+  const [{ createRuntimeClient }, { fromChannelFs }] = await Promise.all([
+    import('@taucad/runtime'),
+    import('@taucad/runtime/filesystem'),
+  ]);
+
+  const resolveKernelOptions = await lazyKernelOptionsFactory();
+  const kernelOptions = resolveKernelOptions({
     fileSystem: fromChannelFs(snapshot.context.worker),
     filePoolBuffer: snapshot.context.filePoolBuffer,
   });

@@ -35,3 +35,11 @@ export type KernelOptionsFactory = (deps: {
   readonly fileSystem: RuntimeFileSystem;
   readonly filePoolBuffer?: SharedArrayBuffer;
 }) => RuntimeClientOptions;
+
+/**
+ * Async loader for {@link KernelOptionsFactory}.
+ *
+ * Invoked from `connectKernelActor` after the file-manager worker is ready so
+ * `@taucad/runtime` and `kernel-worker.constants` stay off the SSR eager graph.
+ */
+export type LazyKernelOptionsFactory = () => Promise<KernelOptionsFactory>;

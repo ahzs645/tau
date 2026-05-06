@@ -1,6 +1,5 @@
 import { assign, assertEvent, setup, enqueueActions } from 'xstate';
 import type { FileEntry, FileSystemBackend } from '@taucad/types';
-import { createBridgeProxy, createFileSystemBridge, waitForWorkerReady } from '@taucad/runtime/transport-internals';
 import { safeDispose } from '@taucad/utils/dispose';
 import FileManagerWorker from '#machines/file-manager.worker.js?worker';
 import {
@@ -79,6 +78,9 @@ const connectWorkerActor = fromSafeAsync<WorkerConnectedEvent, { context: FileMa
     context.contentService?.dispose();
     context.treeService?.dispose();
     context.workerChangeChannel?.dispose();
+
+    const { createBridgeProxy, createFileSystemBridge, waitForWorkerReady } =
+      await import('@taucad/runtime/transport-internals');
 
     if (context.worker && !context.sharedWorker) {
       safeDispose(() => context.worker?.terminate());

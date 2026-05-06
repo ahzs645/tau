@@ -8,7 +8,7 @@ import type { Geometry, GeometryFile } from '@taucad/types';
 import { fromSafeAsync } from '#lib/xstate.lib.js';
 import { cadMachine } from '#machines/cad.machine.js';
 import type { CadContext } from '#machines/cad.machine.js';
-import type { AppRuntimeClient, KernelOptionsFactory } from '#types/runtime-client.alias.js';
+import type { AppRuntimeClient, LazyKernelOptionsFactory } from '#types/runtime-client.alias.js';
 
 const noop = () => {
   /* No-op */
@@ -48,7 +48,7 @@ function createTestActor(options?: {
     },
   });
 
-  const kernelOptionsFactory: KernelOptionsFactory = () => mock<RuntimeClientOptions>();
+  const kernelOptionsFactory: LazyKernelOptionsFactory = async () => () => mock<RuntimeClientOptions>();
 
   const actor = createActor(machine, {
     input: {

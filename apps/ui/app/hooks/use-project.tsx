@@ -16,8 +16,8 @@ import type { graphicsMachine } from '#machines/graphics.machine.js';
 import type { logMachine } from '#machines/logs.machine.js';
 import { inspect } from '#machines/inspector.js';
 import { useProjectManager } from '#hooks/use-project-manager.js';
-import { createDefaultKernelOptions } from '#constants/kernel-worker.constants.js';
-import type { KernelOptionsFactory } from '#types/runtime-client.alias.js';
+import type { LazyKernelOptionsFactory } from '#types/runtime-client.alias.js';
+import { defaultKernelOptions } from '#constants/kernel-options.presets.js';
 import { joinPath } from '@taucad/utils/path';
 import {
   parseParameterEntry,
@@ -64,7 +64,7 @@ export function ProjectProvider({
   projectId,
   provide,
   input,
-  kernelOptionsFactory,
+  kernelOptionsFactory = defaultKernelOptions,
 }: {
   readonly children: ReactNode;
   readonly projectId: string;
@@ -73,7 +73,7 @@ export function ProjectProvider({
     Parameters<typeof useActorRef<typeof projectMachine>>[1]['input'],
     'projectId' | 'fileManagerRef' | 'kernelOptionsFactory'
   >;
-  readonly kernelOptionsFactory?: KernelOptionsFactory;
+  readonly kernelOptionsFactory?: LazyKernelOptionsFactory;
 }): React.JSX.Element {
   const queryClient = useQueryClient();
   // Create the project machine actor - it will auto-load based on projectId
@@ -154,7 +154,7 @@ export function ProjectProvider({
       input: {
         projectId,
         fileManagerRef: fileManager.fileManagerRef,
-        kernelOptionsFactory: kernelOptionsFactory ?? createDefaultKernelOptions,
+        kernelOptionsFactory,
         ...input,
       },
       inspect,

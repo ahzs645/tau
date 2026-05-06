@@ -96,10 +96,6 @@ export const cadPreviewMachine = setup({
         filename: context.mainFile,
       };
 
-      console.log('[CadPreview] initializeCadModel → sending initializeModel', {
-        file,
-        parameters: context.parameters,
-      });
       enqueue.sendTo(context.cadRef, {
         type: 'initializeModel',
         file,

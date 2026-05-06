@@ -14,9 +14,9 @@ import type { KernelOptionsFactory } from '#types/runtime-client.alias.js';
  * Default kernel array for the editor.
  *
  * Order defines selection priority — the first kernel that can handle
- * a file wins. Exported separately so consumers that only need plugin
- * metadata (e.g. Monaco language registration) can import the kernel
- * list without paying the cost of building a full transport client.
+ * a file wins. Consumers that only need id/extension metadata for Monaco
+ * prefetch import `kernel-monaco-extensions.constants.ts` instead — it
+ * mirrors these plugins without pulling `@taucad/runtime` into the SSR graph.
  */
 export const defaultKernels = [
   openscad(),
