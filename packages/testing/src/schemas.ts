@@ -19,7 +19,10 @@ export const boundingBoxExpectedSchema = z.object({
   size: axesSchema.optional().describe('Expected bounding box dimensions in mm (specify any subset of axes)'),
   center: axesSchema.optional().describe('Expected bounding box center position (specify any subset of axes)'),
 });
-/** @public */
+/**
+ * Inferred input/output shape for {@link boundingBoxExpectedSchema}.
+ * @public
+ */
 export type BoundingBoxExpected = z.infer<typeof boundingBoxExpectedSchema>;
 
 /**
@@ -49,7 +52,10 @@ export const measurementTestRequirementSchema = baseTestRequirementSchema.extend
       'Tolerance for the check. For boundingBox: per-axis dimensional slack in mm (default 0.1). For connectedComponents: maximum AABB gap in mm that still counts as connected — raise this when intentional small gaps between touching parts must collapse into one cluster (default 0.1). Ignored for watertight.',
     ),
 });
-/** @public */
+/**
+ * Inferred shape for a measurement requirement row in `test.json`.
+ * @public
+ */
 export type MeasurementTestRequirement = z.infer<typeof measurementTestRequirementSchema>;
 
 /**
@@ -57,7 +63,10 @@ export type MeasurementTestRequirement = z.infer<typeof measurementTestRequireme
  * @public
  */
 export const testRequirementSchema = measurementTestRequirementSchema;
-/** @public */
+/**
+ * Inferred union of supported requirement definitions (measurement-only today).
+ * @public
+ */
 export type TestRequirement = z.infer<typeof testRequirementSchema>;
 
 /**
@@ -68,7 +77,10 @@ export type TestRequirement = z.infer<typeof testRequirementSchema>;
 export const testFileEntrySchema = z.object({
   requirements: z.array(testRequirementSchema),
 });
-/** @public */
+/**
+ * Inferred per-source-file bundle of requirements inside `test.json`.
+ * @public
+ */
 export type TestFileEntry = z.infer<typeof testFileEntrySchema>;
 
 /**
@@ -78,7 +90,10 @@ export type TestFileEntry = z.infer<typeof testFileEntrySchema>;
  * @public
  */
 export const testFileSchema = z.record(z.string(), testFileEntrySchema);
-/** @public */
+/**
+ * Inferred full `test.json` map from geometry-unit paths to requirement bundles.
+ * @public
+ */
 export type TestFile = z.infer<typeof testFileSchema>;
 
 // =============================================================================
@@ -161,7 +176,10 @@ export const testFailurePayloadSchema = z.discriminatedUnion('check', [
     perPrimitive: z.array(watertightPrimitiveBreakdownSchema),
   }),
 ]);
-/** @public */
+/**
+ * Discriminated structured diagnostics attached to a failed geometry requirement.
+ * @public
+ */
 export type TestFailurePayload = z.infer<typeof testFailurePayloadSchema>;
 
 // =============================================================================
@@ -183,7 +201,10 @@ export const testFailureSchema = z.object({
     .optional()
     .describe('Structured geometry diagnostics for UI / programmatic consumers'),
 });
-/** @public */
+/**
+ * Inferred failed-test row emitted by the geometry harness / agent tooling.
+ * @public
+ */
 export type TestFailure = z.infer<typeof testFailureSchema>;
 
 /**
@@ -195,7 +216,10 @@ export const testPassSchema = z.object({
   requirement: z.string().describe('Description of the requirement that passed'),
   targetFile: z.string().describe('Source file whose geometry satisfied this requirement'),
 });
-/** @public */
+/**
+ * Inferred passing-test row for summarising satisfied requirements.
+ * @public
+ */
 export type TestPass = z.infer<typeof testPassSchema>;
 
 /**
@@ -215,5 +239,8 @@ export const testModelOutputSchema = z.object({
     .optional()
     .describe('Map of source file path → captured GLB artifact path'),
 });
-/** @public */
+/**
+ * Inferred aggregate output from `test_model` / geometry evaluation runs.
+ * @public
+ */
 export type TestModelOutput = z.infer<typeof testModelOutputSchema>;

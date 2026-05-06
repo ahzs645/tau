@@ -44,6 +44,7 @@ const baseConfig: Options = {
     'src/react-router/index.ts',
     'src/vite/index.ts',
     'src/rolldown/index.ts',
+    'src/utils/package-info.ts',
   ],
   sourcemap: false,
   clean: true,

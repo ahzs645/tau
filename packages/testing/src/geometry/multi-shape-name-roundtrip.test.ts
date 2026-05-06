@@ -128,7 +128,7 @@ describe('multi-shape ShapeConfig names → GLB → spatial test feedback', () =
     const stats = await analyzeGlb(glb);
     expect(stats.watertight).toBe(true);
 
-    const boundingBoxReq: MeasurementTestRequirement = {
+    const boundingBoxRequest: MeasurementTestRequirement = {
       id: 'footprint_x',
       type: 'measurement',
       description: 'extent along X (0.06 m = 60 mm)',
@@ -136,7 +136,7 @@ describe('multi-shape ShapeConfig names → GLB → spatial test feedback', () =
       expected: { size: { x: 0.06 } },
       tolerance: 0.01,
     };
-    expect(evaluateRequirement(boundingBoxReq, stats).passed).toBe(true);
+    expect(evaluateRequirement(boundingBoxRequest, stats).passed).toBe(true);
 
     const passTwoPieces: MeasurementTestRequirement = {
       id: 'two_lumps',

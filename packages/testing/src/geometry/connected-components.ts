@@ -30,21 +30,26 @@ const collectPositionTuples = (pos: Accessor): Array<[number, number, number]> =
   return positions;
 };
 
-/** Triangle corner indices (into the POSITION accessor) for each triangle. */
+/**
+ * Triangle corner indices (into the POSITION accessor) for each triangle.
+ *
+ * @param primitive - glTF primitive carrying POSITION (and optional indices).
+ * @returns One `[i,j,k]` triple per triangle, or `undefined` when topology is invalid.
+ */
 const readTriangleVertexIndices = (primitive: Primitive): Array<[number, number, number]> | undefined => {
   const pos = primitive.getAttribute('POSITION');
   if (!pos) {
     return undefined;
   }
-  const idx = primitive.getIndices();
-  if (idx) {
-    const indexCount = idx.getCount();
+  const indices = primitive.getIndices();
+  if (indices) {
+    const indexCount = indices.getCount();
     if (indexCount < 3 || indexCount % 3 !== 0) {
       return undefined;
     }
     const out: Array<[number, number, number]> = [];
     for (let i = 0; i < indexCount; i += 3) {
-      out.push([idx.getScalar(i), idx.getScalar(i + 1), idx.getScalar(i + 2)]);
+      out.push([indices.getScalar(i), indices.getScalar(i + 1), indices.getScalar(i + 2)]);
     }
     return out;
   }
@@ -79,28 +84,31 @@ const computeAabbForTriangleSet = (
       }
       const [x, y, z] = p;
       if (!hasCorner) {
-        min[0] = max[0] = x;
-        min[1] = max[1] = y;
-        min[2] = max[2] = z;
+        min[0] = x;
+        max[0] = x;
+        min[1] = y;
+        max[1] = y;
+        min[2] = z;
+        max[2] = z;
         hasCorner = true;
         continue;
       }
-      if (x < min[0]!) {
+      if (x < min[0]) {
         min[0] = x;
       }
-      if (y < min[1]!) {
+      if (y < min[1]) {
         min[1] = y;
       }
-      if (z < min[2]!) {
+      if (z < min[2]) {
         min[2] = z;
       }
-      if (x > max[0]!) {
+      if (x > max[0]) {
         max[0] = x;
       }
-      if (y > max[1]!) {
+      if (y > max[1]) {
         max[1] = y;
       }
-      if (z > max[2]!) {
+      if (z > max[2]) {
         max[2] = z;
       }
     }
@@ -145,21 +153,26 @@ const componentSortKey = (
  * Splits one glTF TRIANGLES primitive into spatially disjoint sub-meshes using
  * welded vertex coincidence + triangle adjacency (handles per-triangle
  * unwelded indices from color-binned OpenSCAD export).
+ *
+ * @param primitive - Source TRIANGLES primitive.
+ * @param primName - Display name prefix for emitted pieces.
+ * @param color - Optional CSS hex material tint inherited from the primitive.
+ * @returns One record per welded connected component inside the primitive.
  */
 const expandPrimitiveToSubMeshPieces = (
   primitive: Primitive,
   primName: string,
   color: string | undefined,
 ): SubMeshPiece[] => {
-  const posAcc = primitive.getAttribute('POSITION');
-  if (!posAcc) {
+  const positionAccessor = primitive.getAttribute('POSITION');
+  if (!positionAccessor) {
     return [];
   }
   const triangles = readTriangleVertexIndices(primitive);
   if (!triangles || triangles.length === 0) {
     return [];
   }
-  const positions = collectPositionTuples(posAcc);
+  const positions = collectPositionTuples(positionAccessor);
   const weldMap = weldPositions(positions);
   const triangleCount = triangles.length;
   const parent = new Uint32Array(triangleCount);
@@ -205,7 +218,7 @@ const expandPrimitiveToSubMeshPieces = (
     list.push(t);
     buckets.set(root, list);
   }
-  let components = [...buckets.values()];
+  const components = [...buckets.values()];
   components.sort((a, b) => {
     const keyA = componentSortKey(positions, triangles, a);
     const keyB = componentSortKey(positions, triangles, b);
@@ -268,7 +281,12 @@ const baseColorToHex = (rgba: readonly number[] | undefined): string | undefined
   return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
 };
 
-/** L-infinity AABB separation in meters; 0 if overlapping or touching. */
+/** L-infinity AABB separation in meters; 0 if overlapping or touching.
+ *
+ * @param a - First axis-aligned bounds (meters).
+ * @param b - Second axis-aligned bounds (meters).
+ * @returns Gap magnitude on the worst-separated axis plus axis id.
+ */
 const linfSeparation = (a: InternalAabb, b: InternalAabb): { gapM: number; axis: 'x' | 'y' | 'z' } => {
   const axes = ['x', 'y', 'z'] as const;
   let maxGap = 0;
@@ -329,6 +347,8 @@ const clusterLabelsFromIndex = (i: number): string => String.fromCodePoint('A'.c
  * {@link Mesh} names empty. ShapeConfig / XCAF names therefore resolve from the
  * first parent node that references each mesh.
  *
+ * @param document - Parsed glTF document.
+ * @returns Map from mesh instances to a human-readable node label.
  * @public
  */
 export const buildMeshNodeNameMap = (document: Document): Map<Mesh, string> => {
@@ -363,6 +383,8 @@ const meshDisplayBaseName = (
 /**
  * Lists every TRIANGLES primitive with AABB and display metadata (no clustering).
  *
+ * @param document - Parsed glTF document whose meshes should be enumerated.
+ * @returns Primitive catalogue entries suitable for clustering overlays.
  * @public
  */
 export const collectPrimitiveRecords = (document: Document): PrimitiveRecord[] => {
@@ -434,6 +456,8 @@ const minimumSeparationAcrossPrimitiveLists = (
 /**
  * Full cluster decomposition at `toleranceMm`.
  *
+ * @param document - Parsed glTF document.
+ * @param toleranceMm - Maximum separation (mm) that still merges adjacent clusters.
  * @returns Disjoint spatial clusters, labels, per-cluster primitives, and sorted pairwise gaps.
  * @public
  */

@@ -49,13 +49,13 @@ translate([100, 0, 0]) color("yellow") cube([10, 10, 10]);
 
 describe('OpenSCAD → GLB: connectedComponents (color-binned unwelded mesh)', { timeout: 120_000 }, () => {
   let singleGlb: Uint8Array<ArrayBuffer>;
-  let twoSameSepGlb: Uint8Array<ArrayBuffer>;
+  let twoSameSeparatorGlb: Uint8Array<ArrayBuffer>;
   let twoSameTouchGlb: Uint8Array<ArrayBuffer>;
-  let twoDiffSepGlb: Uint8Array<ArrayBuffer>;
+  let twoDiffSeparatorGlb: Uint8Array<ArrayBuffer>;
   let threeSameGlb: Uint8Array<ArrayBuffer>;
 
   beforeAll(async () => {
-    [singleGlb, twoSameSepGlb, twoSameTouchGlb, twoDiffSepGlb, threeSameGlb] = await Promise.all([
+    [singleGlb, twoSameSeparatorGlb, twoSameTouchGlb, twoDiffSeparatorGlb, threeSameGlb] = await Promise.all([
       renderOpenScadGlb('one.scad', singleCube),
       renderOpenScadGlb('two-same-sep.scad', twoSameColorSeparated),
       renderOpenScadGlb('two-same-touch.scad', twoSameColorTouching),
@@ -72,7 +72,7 @@ describe('OpenSCAD → GLB: connectedComponents (color-binned unwelded mesh)', {
 
   it('reports 2 components for two same-color disjoint cubes (one glTF primitive)', async () => {
     const io = new NodeIO();
-    const document = await io.readBinary(twoSameSepGlb);
+    const document = await io.readBinary(twoSameSeparatorGlb);
     expect(countConnectedComponents(document, 0.1)).toBe(2);
   });
 
@@ -84,7 +84,7 @@ describe('OpenSCAD → GLB: connectedComponents (color-binned unwelded mesh)', {
 
   it('reports 2 components for two different-color disjoint cubes', async () => {
     const io = new NodeIO();
-    const document = await io.readBinary(twoDiffSepGlb);
+    const document = await io.readBinary(twoDiffSeparatorGlb);
     expect(countConnectedComponents(document, 0.1)).toBe(2);
   });
 

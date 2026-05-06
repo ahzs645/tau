@@ -43,8 +43,8 @@ const tagGlbMeshAndNodesFromShapeEntries = async (
   }
   for (const node of document.getRoot().listNodes()) {
     const mesh = node.getMesh();
-    const meshName = mesh?.getName()?.trim();
-    if (meshName && !node.getName()?.trim()) {
+    const meshName = mesh.getName().trim();
+    if (meshName && node.getName().trim() === '') {
       node.setName(meshName);
     }
   }
