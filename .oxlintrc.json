@@ -1023,6 +1023,13 @@
       }
     },
     {
+      "files": ["apps/ui/react-router.config.ts"],
+      "rules": {
+        "import/extensions": "off",
+        "no-restricted-imports": "off"
+      }
+    },
+    {
       // Declaration files declare types/interfaces for consumers — variables are "used" by importers, not locally.
       "files": ["**/*.d.ts"],
       "rules": {

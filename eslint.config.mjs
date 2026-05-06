@@ -232,6 +232,7 @@ const config = [
             'eslint.config.mjs',
             'examples/electron-tau/electron.vite.config.ts',
             'apps/api/vitest.config.ts',
+            'apps/ui/scripts/check-ssr-bundle-budget.mts',
           ],
         },
         tsconfigRootDir: import.meta.dirname,

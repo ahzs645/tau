@@ -8,10 +8,23 @@
     "build": {
       "dependsOn": ["copy-assets", "^copy-assets"],
       "outputs": ["{projectRoot}/build"],
+      "command": "react-router build --sourcemapClient hidden",
       "options": {
+        "cwd": "{projectRoot}",
         "env": {
           "NODE_OPTIONS": "--max-old-space-size=8192"
         }
+      }
+    },
+    "size": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["build"],
+      "cache": true,
+      "inputs": ["{projectRoot}/build/server/**", "{projectRoot}/scripts/check-ssr-bundle-budget.mts"],
+      "outputs": [],
+      "options": {
+        "cwd": "{projectRoot}",
+        "command": "node --import @oxc-node/core/register scripts/check-ssr-bundle-budget.mts"
       }
     },
     "bootstrap-https-certs": {
