@@ -284,6 +284,25 @@ import { esbuild } from '@taucad/runtime/bundlers'; // inconsistent with ./middl
 
 For the full library survey, analysis, and trade-offs behind this convention, see [Subpath Export Naming Research](../research/subpath-export-naming.md).
 
+### Package metadata subpath
+
+Use `./metadata` as the canonical subpath for exposing package metadata (name, version) to external consumers. The internal source file may be named differently (e.g., `package-info.ts`), but the public subpath is always `./metadata`.
+
+CORRECT:
+
+```typescript
+import { packageName, packageVersion } from '@taucad/runtime/metadata';
+```
+
+INCORRECT:
+
+```typescript
+import { packageVersion } from '@taucad/runtime/package-info'; // exposes internal file name
+import { packageVersion } from '@taucad/runtime/version'; // ambiguous, conflicts with semver tools
+```
+
+**Why**: `./metadata` is explicit, unambiguous, and consistent with Node.js ecosystem patterns for package self-description. Exposing the internal source filename (`package-info`) as the subpath leaks implementation details into the public API surface.
+
 ## 7. Subscribe-Anytime Events
 
 Use `.on(event, handler)` returning an unsubscribe function. Events should be subscribable at any point in the lifecycle.
