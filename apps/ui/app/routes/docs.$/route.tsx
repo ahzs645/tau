@@ -1,4 +1,4 @@
-import { Link } from 'react-router';
+import { data, Link } from 'react-router';
 import type { MetaDescriptor } from 'react-router';
 import { DocsLayout } from 'fumadocs-ui/layouts/docs';
 import { DocsBody, DocsDescription, DocsPage, DocsTitle } from 'fumadocs-ui/page';
@@ -15,6 +15,7 @@ import { baseOptions } from '#lib/fumadocs/layout.shared.js';
 import { getLlmText } from '#lib/fumadocs/get-llms-text.js';
 import { DocsSidebarProvider } from '#routes/docs.$/docs-sidebar.js';
 import { getMdxComponents } from '#routes/docs.$/docs-mdx.js';
+import { cacheTag, cdnBackedSsrRouteHeaders } from '#lib/react-router.lib.js';
 import { cn } from '#utils/ui.utils.js';
 
 // oxlint-disable-next-line @typescript-eslint/explicit-module-boundary-types -- loaders are inferred types by design.
@@ -56,18 +57,27 @@ export async function loader({ params }: Route.LoaderArgs) {
 
   const rawMarkdownContent = await getLlmText(page);
 
-  return {
-    path: page.path,
-    url: page.url,
-    tree: source.getPageTree(),
-    page: {
-      data: {
-        title: page.data.title,
-        description: page.data.description,
+  return data(
+    {
+      path: page.path,
+      url: page.url,
+      tree: source.getPageTree(),
+      page: {
+        data: {
+          title: page.data.title,
+          description: page.data.description,
+        },
       },
+      rawMarkdownContent,
     },
-    rawMarkdownContent,
-  };
+    {
+      headers: cdnBackedSsrRouteHeaders(cacheTag.docs),
+    },
+  );
+}
+
+export function headers({ loaderHeaders }: Route.HeadersArgs): Headers {
+  return loaderHeaders;
 }
 
 export function meta({ loaderData }: Route.MetaArgs): MetaDescriptor[] {

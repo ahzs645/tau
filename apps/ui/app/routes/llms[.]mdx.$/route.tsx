@@ -1,6 +1,7 @@
 import type { Route } from './+types/route.js';
-import { source } from '#lib/fumadocs/source.js';
 import { getLlmText } from '#lib/fumadocs/get-llms-text.js';
+import { source } from '#lib/fumadocs/source.js';
+import { cacheTag, cdnBackedSsrRouteHeaders } from '#lib/react-router.lib.js';
 
 // oxlint-disable-next-line @typescript-eslint/explicit-module-boundary-types -- loaders are inferred types by design.
 export async function loader({ params }: Route.LoaderArgs) {
@@ -16,6 +17,7 @@ export async function loader({ params }: Route.LoaderArgs) {
   return new Response(rawMarkdownContent, {
     headers: {
       'Content-Type': 'text/plain; charset=utf-8',
+      ...cdnBackedSsrRouteHeaders(cacheTag.llmsMdx),
     },
   });
 }

@@ -10,35 +10,66 @@ URL: ${page.url}
 ${processed}`;
 }
 
+type Section = {
+  title: string;
+  pages: Array<InferPageType<typeof source>>;
+};
+
+const formatSectionTitle = (slug: string): string => {
+  return slug
+    .split('-')
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+};
+
 /**
  * Generates a comprehensive reference document in the Stripe llms.txt style
  * This provides an overview of all documentation pages with links and descriptions
  */
-export async function getLlmRefText({ siteTitle, siteUrl }: { siteTitle: string; siteUrl: string }): Promise<string> {
-  const pages = source.getPages();
+export async function getLlmRefText({
+  siteTitle,
+  siteUrl,
+  pathPrefix,
+}: {
+  siteTitle: string;
+  siteUrl: string;
+  /** When set, only pages under this prefix are included; sections follow the next path segment (e.g. getting-started, guides). */
+  pathPrefix?: string;
+}): Promise<string> {
+  const normalizedPrefix = pathPrefix && pathPrefix.length > 0 ? pathPrefix.replace(/\/$/, '') : undefined;
 
-  // Group pages by their path segments to create sections
-  type Section = {
-    title: string;
-    pages: Array<InferPageType<typeof source>>;
-  };
+  let pages = source.getPages();
+  if (normalizedPrefix) {
+    pages = pages.filter((page) => page.url === normalizedPrefix || page.url.startsWith(`${normalizedPrefix}/`));
+  }
 
   const sections = new Map<string, Section>();
 
   for (const page of pages) {
-    const pathParts = page.url.split('/').filter((part) => part.length > 0);
+    let sectionKey: string;
+    let sectionTitle: string;
 
-    let sectionKey = 'docs';
-    let sectionTitle = 'Documentation';
+    if (normalizedPrefix) {
+      const remainder = page.url === normalizedPrefix ? '' : page.url.slice(normalizedPrefix.length).replace(/^\//, '');
+      const firstSegment = remainder.split('/').find((part) => part.length > 0);
 
-    // If the page is nested (e.g., /docs/kernels/replicad)
-    if (pathParts.length > 1 && pathParts[1]) {
-      sectionKey = pathParts[1]; // E.g., 'kernels'
-      // Capitalize and format the section title
-      sectionTitle = sectionKey
-        .split('-')
-        .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-        .join(' ');
+      if (firstSegment) {
+        sectionKey = firstSegment;
+        sectionTitle = formatSectionTitle(firstSegment);
+      } else {
+        sectionKey = 'overview';
+        sectionTitle = 'Overview';
+      }
+    } else {
+      const pathParts = page.url.split('/').filter((part) => part.length > 0);
+
+      sectionKey = 'docs';
+      sectionTitle = 'Documentation';
+
+      if (pathParts.length > 1 && pathParts[1]) {
+        sectionKey = pathParts[1];
+        sectionTitle = formatSectionTitle(sectionKey);
+      }
     }
 
     if (!sections.has(sectionKey)) {
@@ -54,7 +85,6 @@ export async function getLlmRefText({ siteTitle, siteUrl }: { siteTitle: string;
     }
   }
 
-  // Build the output
   const output: string[] = [];
 
   output.push(`# ${siteTitle}`);

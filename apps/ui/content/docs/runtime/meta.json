@@ -10,6 +10,7 @@
     "getting-started/installation",
     "getting-started/quick-start",
     "getting-started/your-first-kernel",
+    "getting-started/llms-txt",
 
     "---Guides---",
     "guides/choosing-a-kernel",
