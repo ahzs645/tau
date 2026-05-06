@@ -3,7 +3,6 @@
  *
  * Uses Zod for validation
  */
-import process from 'node:process';
 import { z } from 'zod';
 
 // Define the schema for environment variables
@@ -76,4 +75,4 @@ export type Environment = z.infer<typeof environmentSchema>;
 // eslint-disable-next-line @typescript-eslint/naming-convention -- easier to distinguish this constant with UPPER_CASE.
 export const ENV =
   // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- globalThis.window can be undefined in SSR
-  globalThis.window ? globalThis.window.ENV : process.env;
+  globalThis.window ? globalThis.window.ENV : globalThis.process.env;
