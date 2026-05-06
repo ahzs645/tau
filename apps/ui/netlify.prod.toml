@@ -90,3 +90,22 @@ Document-Policy = "js-profiling"
 #     (report-only first) we don't rely on the catch-all `wss:` and any unintended hop is
 #     immediately reported.
 Content-Security-Policy-Report-Only = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' 'wasm-unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://cdn.taucad.dev https://cdn.tau.new https:; font-src 'self' data:; connect-src 'self' https://cdn.taucad.dev https://cdn.tau.new https://api.zoo.dev https://api.kittycad.io https://api.tau.new wss://api.tau.new wss:; worker-src 'self' blob:; child-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; upgrade-insecure-requests;"
+
+# Content-hashed Vite bundles + WASM (immutable filenames)
+[[headers]]
+for = "/assets/*"
+[headers.values]
+Cache-Control = "public, max-age=31536000, immutable"
+Netlify-CDN-Cache-Control = "public, durable, max-age=31536000"
+
+[[headers]]
+for = "/fonts/*"
+[headers.values]
+Cache-Control = "public, max-age=2592000"
+Netlify-CDN-Cache-Control = "public, durable, max-age=2592000"
+
+[[headers]]
+for = "/*.svg"
+[headers.values]
+Cache-Control = "public, max-age=86400"
+Netlify-CDN-Cache-Control = "public, durable, max-age=86400"
