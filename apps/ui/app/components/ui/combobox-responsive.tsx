@@ -174,7 +174,7 @@ export function ComboBoxResponsive<T>({
       <PopoverContent
         {...properties}
         {...popoverProperties}
-        className={cn('w-[200px] p-0', className, popoverProperties?.className)}
+        className={cn('w-[200px] overflow-hidden p-0', className, popoverProperties?.className)}
       >
         <>
           <ItemList
