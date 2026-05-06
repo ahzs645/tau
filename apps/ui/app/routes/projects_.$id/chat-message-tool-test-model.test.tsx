@@ -142,8 +142,8 @@ describe('ChatMessageToolTestModel — multi-line failure reasons', () => {
 
     render(<ChatMessageToolTestModel part={part} />);
 
-    const reasonEl = screen.getByText(/Cluster summary line/);
-    expect(reasonEl.textContent).toContain('Second diagnostic line');
+    const reasonElement = screen.getByText(/Cluster summary line/);
+    expect(reasonElement.textContent).toContain('Second diagnostic line');
   });
 });
 
