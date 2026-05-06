@@ -86,6 +86,7 @@ groups:
       - effect
       - drizzle-orm
       - elysia
+      - VSCode_SysML_Extension
   tscircuit:
     description: tscircuit EDA ecosystem
     repos:
@@ -359,6 +360,8 @@ repos:
     description: "React Flow |\_Svelte Flow - Powerful open source libraries for building node-based UIs with React (https://reactflow.dev) or Svelte (https://svelteflow.dev). Ready out-of-the-box and infinitely customizable."
   shiki:
     upstream: shikijs/shiki
+    fork: taucad/shiki
+    branch: main
     description: A beautiful yet powerful syntax highlighter
   brepjs:
     upstream: andymai/brepjs
@@ -443,3 +446,6 @@ repos:
     description: Three Viewport Gizmo - interactive three.js view helper
     fork: taucad/three-viewport-gizmo
     commit: 3c22fb7b4da17aa5aaa33b169f144d1d3e2254dc
+  VSCode_SysML_Extension:
+    upstream: daltskin/VSCode_SysML_Extension
+    description: SysML v2 extension for VS Code

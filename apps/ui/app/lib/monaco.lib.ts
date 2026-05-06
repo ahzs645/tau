@@ -20,6 +20,7 @@ import { openscadContribution } from '#lib/openscad-language/openscad-register-l
 import { stepfileContribution } from '#lib/stepfile-language/stepfile-register-language.js';
 import { stlContribution } from '#lib/stl-language/stl-register-language.js';
 import { usdContribution } from '#lib/usd-language/usd-register-language.js';
+import { sysmlContribution } from '#lib/sysml-language/sysml-register-language.js';
 import { jsTsContribution } from '#lib/javascript-contribution.js';
 
 /**
@@ -43,6 +44,7 @@ registry.addContribution(openscadContribution);
 registry.addContribution(stepfileContribution);
 registry.addContribution(stlContribution);
 registry.addContribution(usdContribution);
+registry.addContribution(sysmlContribution);
 registry.addContribution(jsTsContribution);
 
 // Guard to ensure configureMonaco runs only once. shikiToMonaco monkey-patches

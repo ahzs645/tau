@@ -13,6 +13,7 @@ import { openscadContribution } from '#lib/openscad-language/openscad-register-l
 import { stepfileContribution } from '#lib/stepfile-language/stepfile-register-language.js';
 import { stlContribution } from '#lib/stl-language/stl-register-language.js';
 import { usdContribution } from '#lib/usd-language/usd-register-language.js';
+import { sysmlContribution } from '#lib/sysml-language/sysml-register-language.js';
 
 const contributions: ReadonlyArray<{
   readonly name: string;
@@ -48,6 +49,11 @@ const contributions: ReadonlyArray<{
     name: 'usdContribution',
     contribution: usdContribution,
     expectedIds: [codeLanguages.usd],
+  },
+  {
+    name: 'sysmlContribution',
+    contribution: sysmlContribution,
+    expectedIds: [codeLanguages.sysml],
   },
 ];
 

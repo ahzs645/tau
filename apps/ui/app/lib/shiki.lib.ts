@@ -40,6 +40,8 @@ export const getHighlighter = async (): Promise<HighlighterCore> => {
         import('#lib/stl-language/stl-shiki-precompiled.js'),
         // @ts-expect-error -- TODO: migrate the precompiled grammar to the Shiki project.
         import('#lib/usd-language/usd-shiki-precompiled.js'),
+        // @ts-expect-error -- TODO: migrate the precompiled grammar to the Shiki project.
+        import('#lib/sysml-language/sysml-shiki-precompiled.js'),
       ],
       engine: createJavaScriptRawEngine(),
     });

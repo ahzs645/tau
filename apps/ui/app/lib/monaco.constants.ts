@@ -18,6 +18,7 @@ export const monacoLanguages = {
   stepfile: 'stepfile',
   stl: 'stl',
   usd: 'usd',
+  sysml: 'sysml',
 } as const;
 
 export type MonacoLanguage = (typeof monacoLanguages)[keyof typeof monacoLanguages];
@@ -39,6 +40,8 @@ export const extensionToMonacoLanguage: Record<string, MonacoLanguage> = {
   p21: 'stepfile',
   stl: 'stl',
   usd: 'usd',
+  sysml: 'sysml',
+  kerml: 'sysml',
   usda: 'usd',
   usdc: 'usd',
   usdz: 'usd',

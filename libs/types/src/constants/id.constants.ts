@@ -17,9 +17,25 @@ export const idPrefix = {
    */
   chat: 'chat',
   /**
-   * A project ID.
+   * A CAD project identifier (IndexedDB + `/projects/:id` routing).
    */
   project: 'proj',
+  /**
+   * A publication record identifier (`publication.id`).
+   */
+  publication: 'pub',
+  /**
+   * Non-secret token for unlisted publication URLs (`publication.unlisted_token`).
+   */
+  publicationToken: 'put',
+  /**
+   * Opaque visitor id embedded in the signed `tau_view_id` publication-view cookie.
+   */
+  publicationViewer: 'pvv',
+  /**
+   * Opaque blob record identifiers stored locally when keyed independently from SHA (`blob_ref` is keyed by SHA — placeholder prefix).
+   */
+  blobRef: 'blob',
   /**
    * An LLM chat tool call ID.
    */
