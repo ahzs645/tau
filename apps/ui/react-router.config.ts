@@ -1,11 +1,5 @@
 import type { Config } from '@react-router/dev/config';
-import { glob } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { createGetUrl, getSlugs } from 'fumadocs-core/source';
-
-const getDocumentUrl = createGetUrl('/docs');
-const docsContentRoot = join(dirname(fileURLToPath(import.meta.url)), 'content/docs');
+import { listStaticPrerenderPaths } from './app/lib/static-paths';
 
 /**
  * Concurrency for parallel prerender requests. React Router defaults to 1
@@ -41,24 +35,7 @@ export default {
   ssr: true,
   prerender: {
     async paths() {
-      const documentPages: string[] = [];
-      for await (const entry of glob('**/*.mdx', { cwd: docsContentRoot })) {
-        documentPages.push(getDocumentUrl(getSlugs(entry)));
-      }
-
-      return [
-        '/manifest.webmanifest',
-        '/robots.txt',
-        '/llms.txt',
-        '/llms-full.txt',
-        ...documentPages,
-        '/legal',
-        '/legal/terms',
-        '/legal/privacy',
-        '/legal/cookies',
-        '/legal/subprocessors',
-        '/legal/acceptable-use',
-      ];
+      return listStaticPrerenderPaths();
     },
     // eslint-disable-next-line @typescript-eslint/naming-convention -- React Router config field is `unstable_concurrency` (snake_case in upstream API).
     unstable_concurrency: prerenderConcurrency,
