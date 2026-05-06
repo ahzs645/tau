@@ -37,6 +37,17 @@ export async function loader({ params }: Route.LoaderArgs) {
   }
 
   const slugs = path.split('/').filter((v) => v.length > 0);
+
+  if (slugs.length === 0) {
+    // oxlint-disable-next-line @typescript-eslint/only-throw-error -- this is the react-router pattern.
+    throw new Response(undefined, {
+      status: 302,
+      headers: {
+        Location: '/docs/runtime',
+      },
+    });
+  }
+
   const page = source.getPage(slugs);
   if (!page) {
     // oxlint-disable-next-line @typescript-eslint/only-throw-error -- this is the react-router pattern.

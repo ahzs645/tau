@@ -2,8 +2,8 @@ import type * as PageTree from 'fumadocs-core/page-tree';
 import { useMemo, useCallback, createContext, useContext, useEffect } from 'react';
 import type { ReactNode } from 'react';
 import { cva } from 'class-variance-authority';
-import { XIcon, MenuIcon } from 'lucide-react';
-import { useLocation, NavLink, useNavigate } from 'react-router';
+import { ChevronsUpDown, SearchIcon, XIcon, MenuIcon } from 'lucide-react';
+import { useLocation, NavLink, useNavigate, Link } from 'react-router';
 import { useTreeContext } from 'fumadocs-ui/contexts/tree';
 import { useSearchContext } from 'fumadocs-ui/contexts/search';
 import { cn } from '#utils/ui.utils.js';
@@ -35,6 +35,7 @@ import { Button } from '#components/ui/button.js';
 import { useKeybinding } from '#hooks/use-keyboard.js';
 import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
 import { DocsIcon } from '#components/icons/docs-icon.js';
+import { TauWordmark } from '#components/icons/tau-wordmark.js';
 
 const docsSidebarWidthIcon = 'calc(var(--spacing) * 17)';
 const docsSidebarWidth = 'calc(var(--spacing) * 72)';
@@ -134,10 +135,11 @@ export function DocsSidebar({ className }: DocsSidebarProps): React.JSX.Element 
       <FloatingPanelContent className={cn('overflow-hidden rounded-md border', isDocsSidebarOpen && 'z-100')}>
         <FloatingPanelContentHeader>
           <FloatingPanelContentTitle>
-            <DocsSidebarFrameworkSelector />
+            <Link to='/docs/runtime' aria-label='Tau documentation' className='inline-flex min-w-0 items-center'>
+              <TauWordmark className='h-5 max-w-[140px] shrink-0 py-0.5 text-primary' />
+            </Link>
           </FloatingPanelContentTitle>
-          <FloatingPanelContentHeaderActions>
-            <DocsSidebarSearch />
+          <FloatingPanelContentHeaderActions className='md:opacity-100'>
             <FloatingPanelClose
               icon={XIcon}
               tooltipContent={(isOpen) => `${isOpen ? 'Close' : 'Open'} Documentation Sidebar`}
@@ -146,8 +148,12 @@ export function DocsSidebar({ className }: DocsSidebarProps): React.JSX.Element 
           </FloatingPanelContentHeaderActions>
         </FloatingPanelContentHeader>
 
-        <FloatingPanelContentBody>
-          <SidebarContent className='p-1'>
+        <FloatingPanelContentBody className='flex flex-col overflow-hidden p-0'>
+          <div className='flex shrink-0 flex-col gap-1.5 border-b p-2'>
+            <DocsSidebarSearch />
+            <DocsSidebarFrameworkSelector />
+          </div>
+          <SidebarContent className='min-h-0 flex-1 overflow-y-auto p-1'>
             <SidebarGroup>
               <SidebarMenu>
                 <DocsSidebarItems />
@@ -163,8 +169,20 @@ export function DocsSidebar({ className }: DocsSidebarProps): React.JSX.Element 
 type DocumentSection = {
   readonly id: string;
   readonly label: string;
-  readonly icon: ReactNode;
+  readonly icon: ReactNode | string | undefined;
   readonly url: string;
+};
+
+const renderSectionIcon = (icon: ReactNode | string | undefined): ReactNode => {
+  if (icon === undefined || icon === null) {
+    return null;
+  }
+
+  if (typeof icon === 'string') {
+    return <DocsIcon iconString={icon} className='size-4 shrink-0' />;
+  }
+
+  return icon;
 };
 
 function getDocumentSections(root: PageTree.Root): DocumentSection[] {
@@ -214,18 +232,22 @@ function DocsSidebarFrameworkSelector({ className }: { readonly className?: stri
       searchPlaceHolder='Search sections...'
       isSearchEnabled={false}
       groupedItems={groupedItems}
+      labelClassName='px-2'
       renderLabel={(section) => (
-        <div className='flex items-center gap-2'>
-          {section.icon ? <span className='[&_svg]:size-4'>{section.icon}</span> : undefined}
-          <span>{section.label}</span>
+        <div className='flex min-w-0 items-center gap-2'>
+          {renderSectionIcon(section.icon)}
+          <span className='truncate'>{section.label}</span>
         </div>
       )}
-      popoverProperties={{ align: 'start' }}
       getValue={(section) => section.id}
       defaultValue={currentSection}
       title='Select Section'
       description='Choose which documentation section to view'
-      className='md:w-[180px]'
+      popoverProperties={{
+        align: 'start',
+        sideOffset: 4,
+        className: 'w-[var(--radix-popover-trigger-width)] p-0',
+      }}
       onSelect={(value) => {
         const section = sections.find((s) => s.id === value);
         if (section) {
@@ -233,15 +255,12 @@ function DocsSidebarFrameworkSelector({ className }: { readonly className?: stri
         }
       }}
     >
-      <Button
-        variant='ghost'
-        className={cn(
-          'h-7 gap-2 rounded-sm border border-transparent pr-3 pl-2! hover:border-border hover:text-foreground max-md:border-border',
-          className,
-        )}
-      >
-        {currentSection?.icon ? <span className='[&_svg]:size-4'>{currentSection.icon}</span> : undefined}
-        {currentSection?.label ?? 'Docs'}
+      <Button variant='outline' className={cn('h-9 w-full justify-between gap-2 px-3 text-sm font-medium', className)}>
+        <span className='flex min-w-0 items-center gap-2'>
+          {renderSectionIcon(currentSection?.icon)}
+          <span className='truncate'>{currentSection?.label ?? 'Docs'}</span>
+        </span>
+        <ChevronsUpDown className='size-3.5 shrink-0 text-muted-foreground' />
       </Button>
     </ComboBoxResponsive>
   );
@@ -266,12 +285,15 @@ function DocsSidebarSearch(): React.JSX.Element | undefined {
   return (
     <Button
       variant='outline'
-      className='mr-0.5 h-6 w-fit px-2 text-xs font-normal'
+      className='h-9 w-full justify-between gap-2 px-3 text-sm font-normal text-muted-foreground'
       onClick={() => {
         setOpenSearch(true);
       }}
     >
-      Search Docs
+      <span className='inline-flex min-w-0 items-center gap-2'>
+        <SearchIcon className='size-4 shrink-0' aria-hidden />
+        <span>Search</span>
+      </span>
       <KeyShortcut>{formattedSearchKeyCombination}</KeyShortcut>
     </Button>
   );
