@@ -30,6 +30,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./types": "./src/types/index.ts",
+    "./metadata": "./src/utils/package-info.ts",
     "./kernel": "./src/plugins/kernel-plugin-entry.ts",
     "./kernels": "./src/plugins/kernels-entry.ts",
     "./middleware": "./src/plugins/middleware-entry.ts",
@@ -129,6 +130,16 @@
         "import": {
           "types": "./dist/esm/types/index.d.ts",
           "default": "./dist/esm/types/index.js"
+        }
+      },
+      "./metadata": {
+        "require": {
+          "types": "./dist/cjs/utils/package-info.d.cts",
+          "default": "./dist/cjs/utils/package-info.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/utils/package-info.d.ts",
+          "default": "./dist/esm/utils/package-info.js"
         }
       },
       "./kernel": {
