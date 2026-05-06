@@ -40,8 +40,12 @@
 # instead of SWC/ts-node, which requires no additional packages.
 
 [build]
+# `command` and `publish` are resolved relative to the site's `base directory`
+# (set to `apps/ui` by Terraform — `repos/cloud-infra/stacks/cloud/prod-us/main.tf`).
+# `pnpm nx build ui` invoked from `apps/ui` still walks up to the workspace root,
+# and `build/client` resolves to `apps/ui/build/client` at the repo level.
 command = "NX_PREFER_NODE_STRIP_TYPES=true pnpm nx build ui"
-publish = "apps/ui/build/client"
+publish = "build/client"
 
 # Production context — the only deploy context for this site (PR previews
 # and branch deploys live on the staging `taucad` site, not here).
