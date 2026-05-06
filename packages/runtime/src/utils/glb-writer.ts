@@ -131,7 +131,7 @@ type GltfJson = {
   scene: number;
   scenes: Array<{ nodes: number[] }>;
   nodes: Array<{ mesh: number; name?: string }>;
-  meshes: Array<{ primitives: GltfJsonPrimitive[] }>;
+  meshes: Array<{ primitives: GltfJsonPrimitive[]; name?: string }>;
   accessors: GltfJsonAccessor[];
   bufferViews: GltfJsonBufferView[];
   buffers: Array<{ byteLength: number; uri?: string }>;
@@ -316,7 +316,10 @@ function buildGltf(input: GlbInput): { json: GltfJson; binBuffer: Uint8Array<Arr
 
     if (primitiveJsons.length > 0) {
       const meshIndex = meshes.length;
-      meshes.push({ primitives: primitiveJsons });
+      meshes.push({
+        primitives: primitiveJsons,
+        ...(node.name ? { name: node.name } : {}),
+      });
 
       const nodeIndex = nodes.length;
       const nodeJson: GltfJson['nodes'][number] = { mesh: meshIndex };

@@ -6,6 +6,7 @@
  * directly, eliminating manual vertex extraction and the gltf-transform dependency.
  */
 
+import { NodeIO } from '@gltf-transform/core';
 import { cadMaterialDefaults } from '@taucad/types/constants';
 import type { OpenCascadeInstance } from '#kernels/opencascade/wasm/opencascade_full.js';
 import type { ShapeEntry } from '#kernels/opencascade/opencascade.types.js';
@@ -15,6 +16,39 @@ type MeshOptions = {
   linearTolerance: number;
   angularTolerance: number;
   coordinateSystem?: 'y-up' | 'z-up';
+};
+
+/**
+ * RWGltf_CafWriter may merge or reorder meshes relative to `ShapeEntry` order.
+ * Assign `ShapeConfig.name` onto the first `min(meshes, entries)` glTF meshes,
+ * then propagate mesh names to parent nodes when nodes are anonymous — mirrors
+ * the invariants `analyzeGlb` relies on for per-part feedback.
+ */
+const tagGlbMeshAndNodesFromShapeEntries = async (
+  glb: Uint8Array<ArrayBuffer>,
+  entries: ShapeEntry[],
+): Promise<Uint8Array<ArrayBuffer>> => {
+  if (entries.length === 0) {
+    return glb;
+  }
+  const io = new NodeIO();
+  const document = await io.readBinary(glb);
+  const meshes = document.getRoot().listMeshes();
+  const limit = Math.min(meshes.length, entries.length);
+  for (let i = 0; i < limit; i++) {
+    const label = entries[i]?.name;
+    if (label) {
+      meshes[i]!.setName(label);
+    }
+  }
+  for (const node of document.getRoot().listNodes()) {
+    const mesh = node.getMesh();
+    const meshName = mesh?.getName()?.trim();
+    if (meshName && !node.getName()?.trim()) {
+      node.setName(meshName);
+    }
+  }
+  return io.writeBinary(document);
 };
 
 /**
@@ -43,11 +77,11 @@ export function parseHexColor(hex: string): [number, number, number] {
  * @param options - Meshing parameters (linear deflection, angular deflection)
  * @returns GLB binary as a Uint8Array
  */
-export function meshShapesToGltf(
+export async function meshShapesToGltf(
   oc: OpenCascadeInstance,
   shapes: ShapeEntry[],
   options: MeshOptions,
-): Uint8Array<ArrayBuffer> {
+): Promise<Uint8Array<ArrayBuffer>> {
   const documentName = new oc.TCollection_ExtendedString();
   const document = new oc.TDocStd_Document(documentName);
   const mainLabel = document.Main();
@@ -56,7 +90,7 @@ export function meshShapesToGltf(
 
   const labels: Array<{ delete(): void }> = [];
 
-  for (const entry of shapes) {
+  for (const [shapeIndex, entry] of shapes.entries()) {
     if (entry.shape.IsNull()) {
       continue;
     }
@@ -73,6 +107,10 @@ export function meshShapesToGltf(
     const label = shapeTool.NewShape();
     labels.push(label);
     shapeTool.SetShape(label, entry.shape);
+
+    const shapeLabelName = new oc.TCollection_ExtendedString(entry.name ?? `Shape_${shapeIndex}`);
+    oc.TDataStd_Name.Set(label, shapeLabelName);
+    shapeLabelName.delete();
 
     if (entry.color) {
       const [r, g, b] = parseHexColor(entry.color);
@@ -166,5 +204,5 @@ export function meshShapesToGltf(
   documentName.delete();
   document.delete();
 
-  return result;
+  return tagGlbMeshAndNodesFromShapeEntries(result, shapes);
 }

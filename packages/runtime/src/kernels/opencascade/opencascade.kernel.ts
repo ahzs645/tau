@@ -426,7 +426,7 @@ export default defineKernel({
 
       const { tessellation } = options;
       const { linearTolerance, angularTolerance } = tessellation;
-      const gltfData = meshShapesToGltf(context.oc, shapeEntries, {
+      const gltfData = await meshShapesToGltf(context.oc, shapeEntries, {
         linearTolerance,
         angularTolerance: angularTolerance * (Math.PI / 180),
       });
@@ -458,7 +458,7 @@ export default defineKernel({
         const { linearTolerance, angularTolerance } = options.tessellation;
         const { coordinateSystem } = options;
 
-        const gltfData = meshShapesToGltf(context.oc, nativeHandle, {
+        const gltfData = await meshShapesToGltf(context.oc, nativeHandle, {
           linearTolerance,
           angularTolerance: angularTolerance * (Math.PI / 180),
           coordinateSystem,
