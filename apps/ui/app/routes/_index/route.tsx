@@ -35,6 +35,7 @@ import { Loader } from '#components/ui/loader.js';
 import type { Handle } from '#types/matches.types.js';
 import { useProjectManager } from '#hooks/use-project-manager.js';
 import { useKernel } from '#hooks/use-kernel.js';
+import { cacheTag, cdnBackedSsrRouteHeaders } from '#lib/react-router.lib.js';
 const homepageChatResourceId = 'homepage_main_chat_resource';
 const homepageChatId = 'chat_homepage_main';
 
@@ -75,6 +76,10 @@ function useHomepageChatSession(): { chatId: string | undefined; isReady: boolea
     chatId: isReady ? homepageChatId : undefined,
     isReady,
   };
+}
+
+export function headers(): Record<string, string> {
+  return cdnBackedSsrRouteHeaders(cacheTag.homepage, 'short');
 }
 
 export const handle: Handle = {

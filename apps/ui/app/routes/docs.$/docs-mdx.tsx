@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import type { MDXComponents } from 'mdx/types.js';
+import { lazy } from 'react';
 import defaultMdxComponents from 'fumadocs-ui/mdx';
 import { TypeTable } from 'fumadocs-ui/components/type-table';
 import { InlineCode, Pre } from '#components/code/code-block.js';
@@ -7,8 +8,13 @@ import { DocsCodeBlock } from '#routes/docs.$/docs-codeblock.js';
 import { MarkdownHyperlink } from '#components/markdown/markdown-hyperlink.js';
 import { Mermaid } from '#components/docs/mermaid.js';
 import { InteractiveDiagram } from '#components/docs/interactive-diagram.js';
-import { ReplicadReference } from '#components/docs/replicad-reference.js';
 import { extractTextFromChildren } from '#utils/react.utils.js';
+import { ClientOnly } from '#components/ui/utils/client-only.js';
+
+const ReplicadReferenceLazy = lazy(async () => {
+  const m = await import('#components/docs/replicad-reference.js');
+  return { default: m.ReplicadReference };
+});
 
 export function getMdxComponents(): MDXComponents {
   return {
@@ -16,7 +22,13 @@ export function getMdxComponents(): MDXComponents {
     TypeTable,
     Mermaid,
     InteractiveDiagram,
-    ReplicadReference,
+    ReplicadReference(properties) {
+      return (
+        <ClientOnly fallback={null}>
+          <ReplicadReferenceLazy {...properties} />
+        </ClientOnly>
+      );
+    },
     a: MarkdownHyperlink,
     pre(properties) {
       const { className, children, title } = properties as {

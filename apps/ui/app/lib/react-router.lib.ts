@@ -6,6 +6,7 @@ import {
   cdnVaryQueryEmptyAllowlist,
   cdnVaryQueryResponseHeader,
   edgeDurableSsrRouteCacheControl,
+  edgeShortLivedSsrRouteCacheControl,
 } from '#constants/cache.constants.js';
 
 /**
@@ -21,9 +22,13 @@ export const cacheTag = {
   llmsRuntimeIndex: 'llms-runtime-index',
   llmsRuntimeFull: 'llms-runtime-full',
   llmsMdx: 'llms-mdx, docs',
+  homepage: 'homepage',
+  publicationViewer: 'publication-viewer',
 } as const;
 
 type CacheTagValue = (typeof cacheTag)[keyof typeof cacheTag];
+
+export type CdnBackedSsrTtl = 'short' | 'long';
 
 /**
  * HTTP headers for SSR routes that are safe to store in the edge CDN with a
@@ -31,10 +36,11 @@ type CacheTagValue = (typeof cacheTag)[keyof typeof cacheTag];
  * provider-specific header names (today Netlify) so a hosting change is a
  * single-file remap.
  */
-export function cdnBackedSsrRouteHeaders(tag: CacheTagValue): Record<string, string> {
+export function cdnBackedSsrRouteHeaders(tag: CacheTagValue, ttl: CdnBackedSsrTtl = 'long'): Record<string, string> {
+  const edgeCacheControl = ttl === 'short' ? edgeShortLivedSsrRouteCacheControl : edgeDurableSsrRouteCacheControl;
   return {
     'Cache-Control': browserRevalidateCacheControl,
-    [cdnCacheControlResponseHeader]: edgeDurableSsrRouteCacheControl,
+    [cdnCacheControlResponseHeader]: edgeCacheControl,
     [cacheTagResponseHeader]: tag,
     [cdnVaryQueryResponseHeader]: cdnVaryQueryEmptyAllowlist,
   };

@@ -1,9 +1,15 @@
+import { lazy } from 'react';
 import { AuthView } from '@daveyplate/better-auth-ui';
 import { Link, useLocation } from 'react-router';
 import { TauWordmark } from '#components/icons/tau-wordmark.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import type { Handle } from '#types/matches.types.js';
-import { AuthSplashback } from '#routes/auth.$/splashback/auth-splashback.js';
+import { ClientOnly } from '#components/ui/utils/client-only.js';
+
+const AuthSplashbackLazy = lazy(async () => {
+  const m = await import('#routes/auth.$/splashback/auth-splashback.js');
+  return { default: m.AuthSplashback };
+});
 
 export const handle: Handle = {
   enablePageWrapper: false,
@@ -33,7 +39,9 @@ export default function AuthPage(): React.JSX.Element {
         </div>
       </div>
       <div className='relative hidden lg:block'>
-        <AuthSplashback />
+        <ClientOnly>
+          <AuthSplashbackLazy />
+        </ClientOnly>
       </div>
     </div>
   );
