@@ -11,6 +11,7 @@ import { useModels } from '#hooks/use-models.js';
 import type { ResolvedModel } from '#hooks/use-models.js';
 import { useActiveChatModel } from '#hooks/use-active-chat-model.js';
 import { openSettingsDialog } from '#hooks/use-settings-dialog.js';
+import { cn } from '#utils/ui.utils.js';
 
 type ChatModelSelectorProps = Omit<React.HTMLAttributes<HTMLDivElement>, 'children' | 'onSelect'> & {
   readonly onSelect?: (modelId: string) => void;
@@ -96,12 +97,12 @@ export const ChatModelSelector = memo(function ({
       renderLabel={(item, selectedItem) => (
         <HoverCard>
           <HoverCardTrigger asChild>
-            <span className='flex w-full items-center justify-between'>
-              <div className='flex items-center gap-2'>
+            <span className='-mx-3 -my-1 flex min-h-0 w-[calc(100%+1.5rem)] shrink-0 items-center justify-between gap-2 px-3 py-1'>
+              <div className='flex min-w-0 items-center gap-2'>
                 <SvgIcon id={item.details.family} />
                 <span>{item.name}</span>
               </div>
-              <div className='flex items-center gap-2'>
+              <div className='flex shrink-0 items-center gap-2'>
                 {item.details.parameterSize ? (
                   <Badge variant='outline' className='bg-background'>
                     {item.details.parameterSize}
@@ -145,12 +146,15 @@ export const ChatModelSelector = memo(function ({
         <Button
           type='button'
           variant='ghost'
-          className='w-full justify-start gap-2 rounded-none border-t'
+          className={cn(
+            'h-auto w-full justify-start gap-2 rounded-t-none rounded-b-md border-t px-4 py-1 text-[13px] font-normal has-[>svg]:px-4',
+            '[&_svg]:-translate-y-[0.5px] [&_svg]:text-muted-foreground',
+          )}
           onClick={() => {
             openSettingsDialog('models');
           }}
         >
-          <Plus className='size-4' />
+          <Plus className='size-3.5 shrink-0' />
           Add models
         </Button>
       }
