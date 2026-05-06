@@ -7,7 +7,7 @@ import { describe, it, expect } from 'vitest';
 import { createGenerator } from 'fumadocs-typescript';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const docsApiDirectory = path.resolve(__dirname, '../../../content/docs/(runtime)/api');
+const docsApiDirectory = path.resolve(__dirname, '../../../content/docs/runtime/api');
 
 const generator = createGenerator({
   tsconfigPath: path.resolve(__dirname, '../../../../../tsconfig.docs.json'),

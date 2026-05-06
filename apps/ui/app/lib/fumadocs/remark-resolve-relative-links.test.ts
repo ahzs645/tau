@@ -70,7 +70,7 @@ const paragraphWithLink = (url: string, textContent = 'x'): TestParagraph => ({
 describe('remarkResolveRelativeLinks', () => {
   describe('findContentDocsDirectory', () => {
     it('walks upward from nested MDX to content/docs directory', () => {
-      expect(findContentDocsDirectory(pseudoContentPath('(runtime)/api/kernels.mdx'))).toBe(
+      expect(findContentDocsDirectory(pseudoContentPath('runtime/api/kernels.mdx'))).toBe(
         path.join(tauUiRoot, 'content', 'docs'),
       );
     });
@@ -79,49 +79,58 @@ describe('remarkResolveRelativeLinks', () => {
   describe('markdownPathToDocsUrlPath', () => {
     const docsRoot = path.join(tauUiRoot, 'content', 'docs');
 
-    it('strips route groups and emits /docs prefixed paths', () => {
-      const resolved = pseudoContentPath('(runtime)/api/kernels');
-      expect(markdownPathToDocsUrlPath(resolved, docsRoot)).toBe('/docs/api/kernels');
+    it('emits /docs prefixed paths for runtime subtree', () => {
+      const resolved = pseudoContentPath('runtime/api/kernels');
+      expect(markdownPathToDocsUrlPath(resolved, docsRoot)).toBe('/docs/runtime/api/kernels');
     });
 
-    it('maps index.mdx folders to /docs root for the bundle index', () => {
-      const resolved = pseudoContentPath('(runtime)');
-      expect(markdownPathToDocsUrlPath(resolved, docsRoot)).toBe('/docs');
+    it('maps runtime index bundle folder to /docs/runtime', () => {
+      const resolved = pseudoContentPath('runtime');
+      expect(markdownPathToDocsUrlPath(resolved, docsRoot)).toBe('/docs/runtime');
+    });
+
+    it('still strips hypothetical route-group directory segments when present', () => {
+      const resolved = path.join(docsRoot, '(sandbox)', 'section', 'page');
+      expect(markdownPathToDocsUrlPath(resolved, docsRoot)).toBe('/docs/section/page');
     });
   });
 
   describe('rewrite via plugin', () => {
-    const docsRootPath = pseudoContentPath('(runtime)/index.mdx');
+    const docsRootPath = pseudoContentPath('runtime/index.mdx');
 
-    it('rewrites sibling relative links from the docs index (/docs) page', () => {
+    it('rewrites sibling relative links from the runtime index page', () => {
       const tree: TestRoot = {
         type: 'root',
         children: [paragraphWithLink('./api/kernels'), paragraphWithLink('./getting-started/quick-start')],
       };
       applyPluginToTree(tree, docsRootPath);
-      expect(assertParagraphHasLink(assertRootChildIsParagraph(tree, 0)).url).toBe('/docs/api/kernels');
-      expect(assertParagraphHasLink(assertRootChildIsParagraph(tree, 1)).url).toBe('/docs/getting-started/quick-start');
+      expect(assertParagraphHasLink(assertRootChildIsParagraph(tree, 0)).url).toBe('/docs/runtime/api/kernels');
+      expect(assertParagraphHasLink(assertRootChildIsParagraph(tree, 1)).url).toBe(
+        '/docs/runtime/getting-started/quick-start',
+      );
     });
 
     it('rewrites links from nested pages with correct directory semantics', () => {
-      const source = pseudoContentPath('(runtime)/concepts/architecture.mdx');
+      const source = pseudoContentPath('runtime/concepts/architecture.mdx');
       const tree: TestRoot = {
         type: 'root',
         children: [paragraphWithLink('./middleware-model')],
       };
       applyPluginToTree(tree, source);
-      expect(assertParagraphHasLink(assertRootChildIsParagraph(tree, 0)).url).toBe('/docs/concepts/middleware-model');
+      expect(assertParagraphHasLink(assertRootChildIsParagraph(tree, 0)).url).toBe(
+        '/docs/runtime/concepts/middleware-model',
+      );
     });
 
     it('preserves hashes on parent-relative hrefs', () => {
-      const source = pseudoContentPath('(runtime)/getting-started/quick-start.mdx');
+      const source = pseudoContentPath('runtime/getting-started/quick-start.mdx');
       const tree: TestRoot = {
         type: 'root',
         children: [paragraphWithLink('../concepts/worker-model#topology-recipes')],
       };
       applyPluginToTree(tree, source);
       expect(assertParagraphHasLink(assertRootChildIsParagraph(tree, 0)).url).toBe(
-        '/docs/concepts/worker-model#topology-recipes',
+        '/docs/runtime/concepts/worker-model#topology-recipes',
       );
     });
 
@@ -129,13 +138,13 @@ describe('remarkResolveRelativeLinks', () => {
       const tree: TestRoot = {
         type: 'root',
         children: [
-          paragraphWithLink('/docs/api/client'),
+          paragraphWithLink('/docs/runtime/api/client'),
           paragraphWithLink('https://tau.new'),
           paragraphWithLink('#section'),
         ],
       };
       applyPluginToTree(tree, docsRootPath);
-      expect(assertParagraphHasLink(assertRootChildIsParagraph(tree, 0)).url).toBe('/docs/api/client');
+      expect(assertParagraphHasLink(assertRootChildIsParagraph(tree, 0)).url).toBe('/docs/runtime/api/client');
       expect(assertParagraphHasLink(assertRootChildIsParagraph(tree, 1)).url).toBe('https://tau.new');
       expect(assertParagraphHasLink(assertRootChildIsParagraph(tree, 2)).url).toBe('#section');
     });
@@ -159,7 +168,7 @@ describe('remarkResolveRelativeLinks', () => {
         true,
       );
       expect((definitionUnknown as TestDefinition).type).toBe('definition');
-      expect((definitionUnknown as TestDefinition).url).toBe('/docs/api/kernels');
+      expect((definitionUnknown as TestDefinition).url).toBe('/docs/runtime/api/kernels');
     });
   });
 });
