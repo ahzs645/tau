@@ -1,9 +1,7 @@
-import { useRouteLoaderData } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { useCallback, useMemo } from 'react';
 import type { Model, ModelFamily, ModelProvider } from '@taucad/chat';
 import { ENV } from '#environment.config.js';
-import type { loader } from '#root.js';
 import { useCookie } from '#hooks/use-cookie.js';
 import { cookieName } from '#constants/cookie.constants.js';
 import { defaultChatModel } from '#constants/chat.constants.js';
@@ -50,7 +48,6 @@ export const getModels = async (): Promise<Model[]> => {
 
 // oxlint-disable-next-line @typescript-eslint/explicit-module-boundary-types -- intentionally allowing inference
 export const useModels = () => {
-  const loaderData = useRouteLoaderData<typeof loader>('root');
   const [selectedModelId, setSelectedModelId] = useCookie(cookieName.chatModel, defaultChatModel);
   const [overrides, setOverrides] = useCookie<Record<string, boolean>>(cookieName.chatModelOverrides, {});
 
@@ -58,7 +55,6 @@ export const useModels = () => {
     queryKey: ['models'],
     queryFn: async () => getModels(),
     refetchInterval: 1000 * 60 * 5, // 5 minutes
-    initialData: loaderData?.models,
   });
 
   const isAvailable = useCallback(

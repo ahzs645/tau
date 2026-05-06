@@ -4,7 +4,6 @@ import { PreventFlashOnWrongTheme, ThemeProvider } from 'remix-themes';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useEffect, useMemo } from 'react';
 import type { ReactNode } from 'react';
-import type { Model } from '@taucad/chat';
 import { throwRedirectIfSubdomain } from '#lib/react-router.lib.js';
 import { useTheme } from '#hooks/use-theme.js';
 import type { ThemeWithSystem } from '#hooks/use-theme.js';
@@ -15,7 +14,6 @@ import { themeSessionResolver } from '#sessions.server.js';
 import { cn } from '#utils/ui.utils.js';
 import { Toaster } from '#components/ui/sonner.js';
 import { webManifestLinks } from '#routes/manifest[.webmanifest].js';
-import { getModels } from '#hooks/use-models.js';
 import { ColorProvider, useColor } from '#hooks/use-color.js';
 import { useFavicon } from '#hooks/use-favicon.js';
 import { TooltipProvider } from '#components/ui/tooltip.js';
@@ -64,19 +62,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
   const { getTheme } = await themeSessionResolver(request);
   const cookie = request.headers.get('Cookie') ?? '';
 
-  let models: Model[] = [];
-  try {
-    models = await getModels();
-  } catch (error) {
-    models = [];
-    console.error(error);
-  }
-
   return {
     theme: getTheme(),
     cookie,
     env: await getEnvironment(),
-    models,
   };
 }
 
