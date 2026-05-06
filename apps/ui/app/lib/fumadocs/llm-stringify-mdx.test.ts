@@ -124,6 +124,36 @@ describe('llmStringifyMdx', () => {
     expect(out).not.toContain(String.raw`\|`);
   });
 
+  it('joins multiple property bullets with single newlines (no blank lines between items)', () => {
+    const generatedDocument: GeneratedDoc = {
+      id: 't.ts-MultiProp',
+      name: 'Opts',
+      entries: [
+        {
+          name: 'a',
+          description: 'one',
+          type: 'string',
+          simplifiedType: 'string',
+          tags: [],
+          required: true,
+          deprecated: false,
+        },
+        {
+          name: 'b',
+          description: 'two',
+          type: 'number',
+          simplifiedType: 'number',
+          tags: [],
+          required: false,
+          deprecated: false,
+        },
+      ],
+    };
+    const out = llmStringifyMdx(typeTableFixture(generatedDocument));
+    expect(out).toContain('- **`a`** (`string`, required) — one\n- **`b`** (`number`, optional) — two');
+    expect(out).not.toContain('- **`a`**\n\n- **`b`**');
+  });
+
   it('renders optional props without required label', () => {
     const generatedDocument: GeneratedDoc = {
       id: 't.ts-Union',

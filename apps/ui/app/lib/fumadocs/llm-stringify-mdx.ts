@@ -219,7 +219,9 @@ const renderTypeAsPropertyList = (generatedDocument: GeneratedDoc): string => {
     return sections.join('\n\n');
   }
 
-  sections.push(generatedDocument.entries.map(formatPropertyBullet).join('\n\n'));
+  // Single `\n` between bullets (tight list) to save tokens; keep `\n\n`
+  // before the first bullet so the header stays a separate block from the list.
+  sections.push(generatedDocument.entries.map(formatPropertyBullet).join('\n'));
   return sections.join('\n\n');
 };
 
