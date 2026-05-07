@@ -50,7 +50,7 @@
   },
   "dependencies": {
     "@ai-sdk/cerebras": "^2.0.34",
-    "@ai-sdk/langchain": "2.0.147",
+    "@ai-sdk/langchain": "2.0.181",
     "@ai-sdk/openai": "^3.0.33",
     "@ai-sdk/provider-utils": "catalog:",
     "@ai-sdk/react": "^3.0.101",
@@ -74,7 +74,7 @@
     "@langchain/classic": "catalog:",
     "@langchain/community": "catalog:",
     "@langchain/core": "catalog:",
-    "@langchain/google-vertexai": "file:tarballs/langchain-fork/langchain-google-vertexai-2.1.27.tgz",
+    "@langchain/google-vertexai": "file:tarballs/langchain-fork/langchain-google-vertexai-2.1.33.tgz",
     "@langchain/langgraph": "catalog:",
     "@langchain/langgraph-checkpoint": "catalog:",
     "@langchain/langgraph-checkpoint-postgres": "catalog:",
@@ -370,16 +370,15 @@
       }
     },
     "patchedDependencies": {
-      "@ai-sdk/langchain@2.0.147": "patches/@ai-sdk__langchain@2.0.147.patch",
+      "@ai-sdk/langchain@2.0.181": "patches/@ai-sdk__langchain@2.0.181.patch",
       "@kittycad/lib@2.0.48": "patches/@kittycad__lib@2.0.48.patch",
-      "@langchain/openai@1.4.0": "patches/@langchain__openai@1.4.0.patch",
       "@taucad/replicad": "patches/replicad.patch",
       "vite-plugin-mkcert@2.0.0": "patches/vite-plugin-mkcert@2.0.0.patch"
     },
     "overrides": {
-      "@langchain/google-common": "file:tarballs/langchain-fork/langchain-google-common-2.1.32.tgz",
-      "@langchain/google-gauth": "2.1.20",
-      "@langchain/google-vertexai": "file:tarballs/langchain-fork/langchain-google-vertexai-2.1.27.tgz",
+      "@langchain/google-common": "file:tarballs/langchain-fork/langchain-google-common-2.1.33.tgz",
+      "@langchain/google-gauth": "2.1.30",
+      "@langchain/google-vertexai": "file:tarballs/langchain-fork/langchain-google-vertexai-2.1.33.tgz",
       "@types/express": "catalog:",
       "vitest": "catalog:"
     },
