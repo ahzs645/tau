@@ -87,6 +87,14 @@ export class MetricsService {
     },
   );
 
+  public readonly genAiInterruptRecoveryReminders = this.meter.createCounter(
+    TauMetrics.genAiInterruptRecoveryReminders.name,
+    {
+      description: TauMetrics.genAiInterruptRecoveryReminders.description,
+      unit: TauMetrics.genAiInterruptRecoveryReminders.unit,
+    },
+  );
+
   public readonly genAiPromptSectionSize = this.meter.createHistogram(TauMetrics.genAiPromptSectionSize.name, {
     description: TauMetrics.genAiPromptSectionSize.description,
     unit: TauMetrics.genAiPromptSectionSize.unit,

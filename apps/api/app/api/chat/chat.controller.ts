@@ -4,9 +4,10 @@ import { convertToModelMessages, createUIMessageStreamResponse } from 'ai';
 import type { UIMessageChunk } from 'ai';
 import type { FastifyReply } from 'fastify';
 import type { ReactAgent } from 'langchain';
-import type { ToolSelection, ChatSnapshot, ContextPayload } from '@taucad/chat';
+import type { MyUIMessage, ToolSelection, ChatSnapshot, ContextPayload } from '@taucad/chat';
 import type { KernelProvider } from '@taucad/runtime';
 import { ChatService } from '#api/chat/chat.service.js';
+import { CheckpointerService } from '#api/chat/checkpointer.service.js';
 import { ChatRpcService } from '#api/chat/chat-rpc.service.js';
 import { ModelService } from '#api/models/model.service.js';
 import { FileEditService } from '#api/file-edit/file-edit.service.js';
@@ -28,6 +29,7 @@ import { Span } from '#telemetry/tracer.service.js';
 import { AttributeKey } from '@taucad/telemetry';
 import { TtftCallbackHandler } from '#api/chat/middleware/ttft-callback.handler.js';
 import { validateImageParts } from '#api/chat/utils/validate-image-parts.js';
+import { mergeCheckpointTail } from '#api/chat/utils/merge-checkpoint-tail.js';
 
 type LangChainMessages = Awaited<ReturnType<typeof toBaseMessages>>;
 
@@ -56,6 +58,7 @@ export class ChatController {
     private readonly fileEditService: FileEditService,
     private readonly geometryAnalysisService: GeometryAnalysisService,
     private readonly metricsService: MetricsService,
+    private readonly checkpointerService: CheckpointerService,
   ) {}
 
   @Post()
@@ -79,7 +82,7 @@ export class ChatController {
       return sendSimpleModelStream(response, result);
     }
 
-    const langchainMessages = await this.prepareMessages(body.messages, snapshot);
+    const langchainMessages = await this.prepareMessages(body.id, body.messages, snapshot);
     const agent = await this.chatService.createAgent({ chatId: body.id, modelId, kernel, mode, tools, contextPayload });
 
     return this.streamAgentResponse({
@@ -231,6 +234,7 @@ export class ChatController {
    * Injects snapshot context into messages and converts to LangChain format.
    */
   private async prepareMessages(
+    chatId: string,
     messages: CreateChatDto['messages'],
     snapshot: ChatSnapshot | undefined,
   ): Promise<LangChainMessages> {
@@ -249,7 +253,29 @@ export class ChatController {
       this.logger.debug(`Injecting snapshot context into last message: ${contextTypes}`);
     }
 
-    return toBaseMessages(messagesWithContext);
+    let mergedMessages = messagesWithContext as unknown as MyUIMessage[];
+
+    try {
+      const tuple = await this.checkpointerService.getCheckpointer().getTuple({
+        configurable: {
+          // eslint-disable-next-line @typescript-eslint/naming-convention -- LangGraph API requires snake_case
+          thread_id: chatId,
+        },
+      });
+
+      if (tuple) {
+        const channelValues = tuple.checkpoint.channel_values as { messages?: unknown[] } | undefined;
+        mergedMessages = mergeCheckpointTail({
+          requestMessages: mergedMessages,
+          checkpointMessages: channelValues?.messages,
+        });
+      }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      this.logger.warn(`Checkpoint merge skipped for thread ${chatId}: ${reason}`);
+    }
+
+    return toBaseMessages(mergedMessages);
   }
 
   private createSseEventCountTransform(): TransformStream<UIMessageChunk, UIMessageChunk> {

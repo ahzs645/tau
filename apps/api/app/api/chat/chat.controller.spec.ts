@@ -8,6 +8,7 @@ import type { FastifyReply } from 'fastify';
 import type { StreamTextResult as StreamTextResultType, ToolSet, UIMessage, UIMessageChunk } from 'ai';
 import { toBaseMessages, toUIMessageStream } from '@ai-sdk/langchain';
 import type { ChatUsageTokens, MyUIMessage, ChatSnapshot } from '@taucad/chat';
+import { ToolMessage } from '@langchain/core/messages';
 import { ChatController } from '#api/chat/chat.controller.js';
 import { ChatService } from '#api/chat/chat.service.js';
 import { ChatRpcService } from '#api/chat/chat-rpc.service.js';
@@ -17,6 +18,7 @@ import { GeometryAnalysisService } from '#api/analysis/geometry-analysis.service
 import { AuthGuard } from '#auth/auth.guard.js';
 import type { CreateChatDto } from '#api/chat/chat.dto.js';
 import { MetricsService } from '#telemetry/metrics.js';
+import { CheckpointerService } from '#api/chat/checkpointer.service.js';
 
 // Mock the @ai-sdk/langchain module
 vi.mock('@ai-sdk/langchain', () => ({
@@ -130,10 +132,13 @@ describe('ChatController', () => {
   let chatService: ChatService;
   let module: TestingModule;
   let mockAgent: ReturnType<typeof createMockAgent>;
+  let checkpointGetTupleMock: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     // Reset all mocks before each test
     vi.clearAllMocks();
+
+    checkpointGetTupleMock = vi.fn().mockResolvedValue(null);
 
     mockAgent = createMockAgent();
 
@@ -162,6 +167,12 @@ describe('ChatController', () => {
 
     const mockGeometryAnalysisService = {};
 
+    const mockCheckpointerService = {
+      getCheckpointer: vi.fn(() => ({
+        getTuple: checkpointGetTupleMock,
+      })),
+    };
+
     const moduleRef = await Test.createTestingModule({
       controllers: [ChatController],
       providers: [
@@ -188,6 +199,10 @@ describe('ChatController', () => {
         {
           provide: MetricsService,
           useValue: new MetricsService(),
+        },
+        {
+          provide: CheckpointerService,
+          useValue: mockCheckpointerService,
         },
         Reflector,
       ],
@@ -231,13 +246,73 @@ describe('ChatController', () => {
       // Verify stream was called with messages and correct config
       const [streamArguments, streamConfig] = mockAgent.graph.stream.mock.calls[0] as [
         { messages: unknown[] },
-        { configurable: { thread_id: string } },
+        { configurable: { thread_id: string }; maxConcurrency?: number },
       ];
       expect(streamArguments).toHaveProperty('messages');
       expect(Array.isArray(streamArguments.messages)).toBe(true);
       expect(streamConfig.configurable.thread_id).toBe('chat_123');
+      // Parallel tool calls run unthrottled. `maxConcurrency: 1` triggers an
+      // upstream off-by-one in @langchain/langgraph 1.1.5
+      // (PregelRunner._executeTasksWithRetry) that drops every task after the
+      // first when the cap is below `tasks.length`.
+      expect(streamConfig.maxConcurrency).toBeUndefined();
 
       expect(mockResponse.send).toHaveBeenCalled();
+    });
+
+    it('splices Postgres checkpoint ToolMessage values into stale assistant tool parts before toBaseMessages', async () => {
+      checkpointGetTupleMock.mockResolvedValueOnce({
+        checkpoint: {
+          // eslint-disable-next-line @typescript-eslint/naming-convention -- LangGraph wire shape uses snake_case
+          channel_values: {
+            messages: [
+              new ToolMessage({
+                content: JSON.stringify({ merged: true }),
+                // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain wire shape uses snake_case
+                tool_call_id: 'cid_ck_merge_controller',
+              }),
+            ],
+          },
+        },
+      });
+
+      vi.mocked(toBaseMessages).mockClear();
+
+      const assistantMessage: MyUIMessage = {
+        id: 'm_as',
+        role: 'assistant',
+        parts: [
+          {
+            type: 'tool-create_file',
+            toolCallId: 'cid_ck_merge_controller',
+            state: 'input-available',
+            input: { targetFile: 'z.scad', content: '//' },
+          },
+        ],
+        metadata: { model: 'test-model', createdAt: 1 },
+      };
+
+      await controller.createChat(
+        {
+          id: 'chat_ck_merge_integration',
+          messages: [createMockUserMessage('test-model'), assistantMessage],
+        } satisfies CreateChatDto,
+        createMockResponse(),
+      );
+
+      expect(checkpointGetTupleMock).toHaveBeenCalledTimes(1);
+      expect(checkpointGetTupleMock).toHaveBeenCalledWith({
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- LangGraph configurable uses snake_case
+        configurable: { thread_id: 'chat_ck_merge_integration' },
+      });
+
+      expect(vi.mocked(toBaseMessages)).toHaveBeenCalledTimes(1);
+      const passedIntoBase = vi.mocked(toBaseMessages).mock.calls[0]?.[0] as MyUIMessage[];
+      expect(passedIntoBase.at(-1)?.parts[0]).toMatchObject({
+        toolCallId: 'cid_ck_merge_controller',
+        state: 'output-available',
+        output: { merged: true },
+      });
     });
 
     it('should use custom tool choice when provided', async () => {

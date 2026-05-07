@@ -9,6 +9,7 @@ export {
   GenAiTokenType,
   GenAiSafeguardAction,
   GenAiSafeguardHelped,
+  GenAiInterruptRecoveryOutcome,
   RpcStatus,
 } from '#attributes.js';
 export { IngestEntryName, clientMetricEntrySchema, ingestPayloadSchema } from '#ingest.js';

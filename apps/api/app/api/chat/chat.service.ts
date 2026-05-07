@@ -29,6 +29,7 @@ import { createCrossProviderContentNormalizerMiddleware } from '#api/chat/middle
 import { latexDelimiterMiddleware } from '#api/chat/middleware/latex-delimiter.middleware.js';
 import { newlineTrimmerMiddleware } from '#api/chat/middleware/newline-trimmer.middleware.js';
 import { createAgentSafeguardsMiddleware } from '#api/chat/middleware/agent-safeguards.middleware.js';
+import { createInterruptRecoveryMiddleware } from '#api/chat/middleware/interrupt-recovery.middleware.js';
 import { createCompactionMiddleware } from '#api/chat/middleware/compaction.middleware.js';
 import { createToolOffloadingMiddleware } from '#api/chat/middleware/tool-offloading.middleware.js';
 import { createTranscriptMiddleware } from '#api/chat/middleware/transcript.middleware.js';
@@ -167,6 +168,14 @@ export class ChatService {
         // injected <system-reminder> nudges become part of the cacheable prefix
         // (see docs/research/agent-loop-safeguards.md, "Cache-Safety Contract").
         createAgentSafeguardsMiddleware(this.metricsService, this.chatRpcService),
+
+        // --- Turn-level interrupt recovery ---
+        // Detects the most recent contiguous tail of `USER_INTERRUPTED`
+        // ToolMessages and injects a one-shot `<system-reminder>` so the LLM
+        // verifies state before retrying. Mirrors the Claude Code / Codex
+        // turn-level guidance pattern; see
+        // docs/research/agent-interrupt-durability-comparison.md.
+        createInterruptRecoveryMiddleware(this.metricsService),
 
         // --- Message processing ---
         createCrossProviderContentNormalizerMiddleware(providerId),

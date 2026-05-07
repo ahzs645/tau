@@ -166,6 +166,30 @@ export const TauMetrics = {
   }),
 
   /**
+   * Counts how often the interrupt-recovery middleware
+   * ([apps/api/app/api/chat/middleware/interrupt-recovery.middleware.ts])
+   * decided to inject a turn-level `<system-reminder>` after detecting a
+   * contiguous tail of `USER_INTERRUPTED` ToolMessages from the previous
+   * turn — and how often it suppressed a duplicate emission for the same
+   * parent AIMessage signature.
+   *
+   * - `outcome = "emitted"` — reminder injected on this turn.
+   * - `outcome = "already_fired"` — detection matched but state-level dedup
+   *   suppressed the emission (the LLM has already seen the reminder for
+   *   this AIMessage signature on a prior superstep).
+   */
+  genAiInterruptRecoveryReminders: defineCounter({
+    name: 'gen_ai.agent.interrupt_recovery.reminders',
+    unit: '{reminder}',
+    description: 'Turn-level interrupt-recovery reminders emitted (or de-duped) by the agent middleware',
+    attributes: z.object({
+      'gen_ai.agent.interrupt_recovery.outcome': z.string().optional(),
+      'gen_ai.request.model': z.string().optional(),
+      'gen_ai.provider.name': z.string().optional(),
+    }),
+  }),
+
+  /**
    * Per-section system-prompt byte budget. Recorded by `chat.service.ts`
    * via the `onSectionResolved` callback exposed by
    * [apps/api/app/api/chat/prompts/prompt-section-registry.ts]. One sample

@@ -5,12 +5,17 @@ describe('TauMetrics', () => {
   const metrics = Object.values(TauMetrics);
 
   it('should define all canonical metrics', () => {
-    expect(metrics).toHaveLength(25);
+    expect(metrics).toHaveLength(26);
   });
 
   it('should expose the agent-safeguard counter with the canonical OTEL name', () => {
     expect(TauMetrics.genAiAgentSafeguardInterventions.name).toBe('gen_ai.agent.safeguard.interventions');
     expect(TauMetrics.genAiAgentSafeguardInterventions.type).toBe('counter');
+  });
+
+  it('should expose the interrupt-recovery counter with the canonical OTEL name', () => {
+    expect(TauMetrics.genAiInterruptRecoveryReminders.name).toBe('gen_ai.agent.interrupt_recovery.reminders');
+    expect(TauMetrics.genAiInterruptRecoveryReminders.type).toBe('counter');
   });
 
   it('should expose the prompt-section-size histogram with the canonical OTEL name', () => {

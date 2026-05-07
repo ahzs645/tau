@@ -31,6 +31,7 @@ export const AttributeKey = {
   GEN_AI_SAFEGUARD_HELPED: 'gen_ai.agent.safeguard.helped',
   GEN_AI_PROMPT_SECTION_NAME: 'gen_ai.prompt.section.name',
   GEN_AI_PROMPT_SECTION_CACHE_BREAK: 'gen_ai.prompt.section.cache_break',
+  GEN_AI_INTERRUPT_RECOVERY_OUTCOME: 'gen_ai.agent.interrupt_recovery.outcome',
 } as const;
 
 /**
@@ -85,6 +86,20 @@ export const GenAiSafeguardAction = {
 export const GenAiSafeguardHelped = {
   TRUE: 'true',
   FALSE: 'false',
+} as const;
+
+/**
+ * Outcome values for the interrupt-recovery middleware counter.
+ *
+ * - `emitted`: the middleware injected a `<system-reminder>` HumanMessage on
+ *   this turn so the next LLM call sees the recovery guidance.
+ * - `already_fired`: detection matched but state-level dedup suppressed the
+ *   emission for the same parent AIMessage signature.
+ * @public
+ */
+export const GenAiInterruptRecoveryOutcome = {
+  EMITTED: 'emitted',
+  ALREADY_FIRED: 'already_fired',
 } as const;
 
 /**

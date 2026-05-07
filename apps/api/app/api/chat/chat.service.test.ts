@@ -290,5 +290,32 @@ describe('ChatService', () => {
       expect(tokenUsageIndex).toBeGreaterThan(compactionIndex);
       expect(safeguardsIndex).toBeGreaterThan(tokenUsageIndex);
     });
+
+    // T1.10: InterruptRecovery is wired into the canonical pipeline immediately
+    // after AgentSafeguards (so doom-loop detection runs first) and before
+    // CrossProviderContentNormalizer / MessageContentSanitizer (so the
+    // injected `<system-reminder>` HumanMessage joins the cacheable prefix).
+    it('should run InterruptRecovery after AgentSafeguards and before CrossProviderContentNormalizer', async () => {
+      await service.createAgent({
+        chatId: 'test-chat-interrupt-recovery',
+        modelId: 'model-1',
+        kernel: 'openscad',
+        tools: { choice: 'auto' },
+      });
+
+      const createAgentMock = vi.mocked(createAgent);
+      const middleware = createAgentMock.mock.calls.at(-1)?.[0]?.middleware ?? [];
+
+      const indexByName = (name: string): number =>
+        middleware.findIndex((m) => (m as { name?: string } | undefined)?.name === name);
+
+      const safeguardsIndex = indexByName('AgentSafeguards');
+      const interruptRecoveryIndex = indexByName('InterruptRecovery');
+      const normalizerIndex = indexByName('CrossProviderContentNormalizer');
+
+      expect(safeguardsIndex).toBeGreaterThanOrEqual(0);
+      expect(interruptRecoveryIndex).toBeGreaterThan(safeguardsIndex);
+      expect(normalizerIndex).toBeGreaterThan(interruptRecoveryIndex);
+    });
   });
 });
