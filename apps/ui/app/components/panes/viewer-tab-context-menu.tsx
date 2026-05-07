@@ -154,4 +154,6 @@ function ViewerTabContextMenu(properties: IDockviewPanelHeaderProps): React.JSX.
  * Viewer tab component with a right-click context menu.
  * Use as `defaultTabComponent` in the viewer Dockview.
  */
-export const ViewerDockviewTab = withTabContextMenu(ViewerTabContextMenu);
+export const ViewerDockviewTab = withTabContextMenu(ViewerTabContextMenu, {
+  leadingIcon: 'viewer',
+});

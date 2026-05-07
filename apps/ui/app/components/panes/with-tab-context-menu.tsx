@@ -1,6 +1,11 @@
 import type { IDockviewPanelHeaderProps } from 'dockview-react';
 import { ContextMenu, ContextMenuTrigger, ContextMenuContent } from '#components/ui/context-menu.js';
 import { DockviewTab } from '#components/panes/dockview-tab.js';
+import type { DockviewTabProps } from '#components/panes/dockview-tab.js';
+
+export type WithTabContextMenuOptions = {
+  readonly leadingIcon?: DockviewTabProps['leadingIcon'];
+};
 
 /**
  * Higher-order component that wraps the DockviewTab with a right-click
@@ -13,12 +18,15 @@ import { DockviewTab } from '#components/panes/dockview-tab.js';
  */
 export function withTabContextMenu(
   MenuContent: React.FunctionComponent<IDockviewPanelHeaderProps>,
+  options?: WithTabContextMenuOptions,
 ): React.FunctionComponent<IDockviewPanelHeaderProps> {
+  const leadingIcon = options?.leadingIcon;
+
   function TabWithContextMenu(properties: IDockviewPanelHeaderProps): React.JSX.Element {
     return (
       <ContextMenu>
         <ContextMenuTrigger className='contents'>
-          <DockviewTab {...properties} />
+          <DockviewTab {...properties} leadingIcon={leadingIcon} />
         </ContextMenuTrigger>
         <ContextMenuContent>
           <MenuContent {...properties} />

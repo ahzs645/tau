@@ -34,7 +34,24 @@
 // oxlint-disable-next-line @typescript-eslint/no-empty-function -- intentional no-op for DOM stub
 const noop = (): void => {};
 
-if (typeof document === 'undefined') {
+/*
+ * Gate the polyfill to actual worker scopes. When `KernelRuntimeWorker` is
+ * imported from a Node test harness (apps/api/app/testing/headless-runtime-client.ts
+ * pulls in `@taucad/runtime/testing` -> `kernel-testing.utils.ts` -> this module),
+ * we must NOT define `window`/`document` on the Node global — `gaxios`'s lazy
+ * fetch resolver checks `typeof window !== 'undefined' && !!window` and would
+ * pick `window.fetch` (undefined) over `node-fetch`'s default, which then
+ * surfaces in google-auth-library as `fetchImpl is not a function`.
+ *
+ * `WorkerGlobalScope` and `importScripts` are scoped to DOM/WebWorker libs
+ * which we don't ambiently include here; access them via `globalThis` so the
+ * polyfill stays type-safe under both Node and worker compilation contexts.
+ */
+const globalScope = globalThis as Record<string, unknown>;
+const inWorkerScope =
+  typeof globalScope['WorkerGlobalScope'] !== 'undefined' || typeof globalScope['importScripts'] === 'function';
+
+if (inWorkerScope && typeof document === 'undefined') {
   const noopElement = {
     rel: '',
     as: '',
@@ -72,7 +89,7 @@ if (typeof document === 'undefined') {
 }
 
 // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- window can be undefined in browser/worker
-if (globalThis.window === undefined) {
+if (inWorkerScope && globalThis.window === undefined) {
   Object.defineProperty(globalThis, 'window', {
     value: {
       dispatchEvent: noop,

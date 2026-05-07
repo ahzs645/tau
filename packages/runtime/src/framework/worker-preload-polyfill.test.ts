@@ -37,12 +37,23 @@ function getWindowStub(): WindowStub {
 describe('worker-preload-polyfill', () => {
   let originalDocument: unknown;
   let originalWindow: unknown;
+  let originalImportScripts: unknown;
 
   beforeEach(() => {
     originalDocument = (globalThis as Record<string, unknown>)['document'];
     originalWindow = (globalThis as Record<string, unknown>)['window'];
+    originalImportScripts = (globalThis as Record<string, unknown>)['importScripts'];
     delete (globalThis as Record<string, unknown>)['document'];
     delete (globalThis as Record<string, unknown>)['window'];
+    /*
+     * Simulate worker scope so the polyfill installs the stubs. The polyfill
+     * is gated on `WorkerGlobalScope`/`importScripts` to avoid corrupting the
+     * Node global namespace when test harnesses pull this module in via
+     * `@taucad/runtime/testing` (see worker-preload-polyfill.ts).
+     */
+    (globalThis as Record<string, unknown>)['importScripts'] = function importScriptsStub(): void {
+      /* noop — presence-only marker for `inWorkerScope` detection */
+    };
     vi.resetModules();
   });
 
@@ -56,6 +67,11 @@ describe('worker-preload-polyfill', () => {
       delete (globalThis as Record<string, unknown>)['window'];
     } else {
       (globalThis as Record<string, unknown>)['window'] = originalWindow;
+    }
+    if (originalImportScripts === undefined) {
+      delete (globalThis as Record<string, unknown>)['importScripts'];
+    } else {
+      (globalThis as Record<string, unknown>)['importScripts'] = originalImportScripts;
     }
   });
 
@@ -221,5 +237,23 @@ describe('worker-preload-polyfill', () => {
     await import('#framework/worker-preload-polyfill.js');
 
     expect((globalThis as Record<string, unknown>)['window']).toBe(existingWindow);
+  });
+
+  /*
+   * Regression: when Node-side test harnesses (apps/api integration tests)
+   * import `@taucad/runtime/testing`, this module loads under Node — NOT a
+   * Web Worker. The polyfill must NOT define `window`/`document` on the Node
+   * global namespace, otherwise `gaxios` (used by `google-auth-library`) sees
+   * `typeof window !== 'undefined'` and tries `window.fetch` (undefined),
+   * surfacing as `fetchImpl is not a function` from Vertex Gemini calls.
+   */
+  it('should NOT install stubs in a non-worker (Node) scope', async () => {
+    delete (globalThis as Record<string, unknown>)['importScripts'];
+    vi.resetModules();
+
+    await import('#framework/worker-preload-polyfill.js');
+
+    expect((globalThis as Record<string, unknown>)['document']).toBeUndefined();
+    expect((globalThis as Record<string, unknown>)['window']).toBeUndefined();
   });
 });

@@ -1,16 +1,24 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { IDockviewPanelHeaderProps } from 'dockview-react';
-import { X } from 'lucide-react';
+import { Box, X } from 'lucide-react';
 import { FileExtensionIcon } from '#components/icons/file-extension-icon.js';
 
+export type DockviewTabProps = IDockviewPanelHeaderProps & {
+  /**
+   * Viewer tabs use the same cube glyph as {@link ViewerLink} / chat viewer
+   * affordances; editor tabs keep extension-based icons.
+   */
+  readonly leadingIcon?: 'extension' | 'viewer';
+};
+
 /**
- * Custom Dockview tab component that adds a file-extension icon before the title.
+ * Custom Dockview tab component that adds a leading icon before the title.
  *
  * Reuses the dv-default-tab / dv-default-tab-content / dv-default-tab-action
  * class names so all built-in + theme CSS applies unchanged.
  */
-export function DockviewTab(properties: IDockviewPanelHeaderProps): React.JSX.Element {
-  const { api } = properties;
+export function DockviewTab(properties: DockviewTabProps): React.JSX.Element {
+  const { api, leadingIcon = 'extension' } = properties;
   const [title, setTitle] = useState(api.title ?? '');
 
   // Keep title in sync when the panel updates it
@@ -35,7 +43,11 @@ export function DockviewTab(properties: IDockviewPanelHeaderProps): React.JSX.El
   return (
     <div className='dv-default-tab group/default-tab'>
       <span className='dv-default-tab-content flex items-center gap-1.5'>
-        <FileExtensionIcon filename={title} className='size-3 shrink-0' />
+        {leadingIcon === 'viewer' ? (
+          <Box aria-hidden className='relative -bottom-px size-3 shrink-0' />
+        ) : (
+          <FileExtensionIcon filename={title} className='size-3 shrink-0' />
+        )}
         <span className='truncate'>{title}</span>
       </span>
       <div
