@@ -17,7 +17,7 @@ Examples: \`format: "stl"\`, \`format: "step"\`, \`format: "glb"\`, \`format: "3
 
 Returns \`artifactPath\` plus \`mimeType\` and \`byteLength\` so callers can correlate with on-disk downloads.
 
-When NOT to use — do not substitute this for deterministic measurement runs; keep using \`${toolName.testModel}\` plus \`${toolName.editTests}\` while iterating requirements.`,
+For deterministic measurement runs, use \`${toolName.testModel}\` plus \`${toolName.editTests}\` instead.`,
   schema: exportGeometryInputSchema,
 } as const;
 

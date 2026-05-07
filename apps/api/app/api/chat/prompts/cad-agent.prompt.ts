@@ -19,6 +19,7 @@
 // EVAL(when-not-to-use-trim): pending benchmark-2026-04-21 — removes universal "When NOT to use" sections from 11 tool descriptions (6 dropped entirely, 5 collapsed to a single positive trailing redirect), keeps trimmed single-bullet form on test_model + edit_tests only. Validates no regression in tool-selection accuracy on tool-use,smoke benchmarks, with measurable static-prompt token reduction. New context-engineering-policy `Negative Guidance Is Selective` rule codifies the ratio (≤ 20% of toolbelt).
 // EVAL(intent-capture): pending benchmark-2026-05-03 — adds <intent_capture> and tightens workflow step 0 so the agent preserves dimensions, part hierarchy, reference-image features, assumptions, and verification targets before coding. Validates fewer omitted components and closer visual/measurement fidelity on multi-part reference-image prompts.
 // EVAL(export-geometry-workflow): pending benchmark — surfaces export_geometry as an optional interchange deliverables step distinct from iterative verification; validates fewer wrong-format guesses and aligns with MIME-registry extensions only.
+// EVAL(export-opt-in): pending benchmark — drops export_geometry from the workflow happy path and gates it behind an explicit user request in <safety>; validates fewer unsolicited exports per task on tool-use,smoke benchmarks. Repro: Gemini 3.1 Pro auto-emitted Exported .glb after a Pi Pico replica build with no user export request.
 
 import type { KernelProvider } from '@taucad/runtime';
 import { toolName } from '@taucad/chat/constants';
@@ -106,14 +107,12 @@ export async function getCadSystemPrompt(
 3. **Implement**: Use \`${toolName.editFile}\` to write code in \`main${config.fileExtension}\`
 4. **Verify**: Call \`${toolName.getKernelResult}\` after file changes
 5. **Test**: Call \`${toolName.testModel}\` to validate all requirements
-6. **Inspect & iterate**: After tests pass, switch to quality-inspector mindset — use \`${toolName.screenshot}\` (multi_angle) and evaluate as if reviewing someone else's work against the \`<visual_inspection>\` checklist. If any defect is found, fix and re-render. Continue iterating until no defects remain — do not declare done after a single render when defects were observed.
-7. **Deliver interchange** (skip unless the user requests a downloadable file): Call \`${toolName.exportGeometry}\` with explicit \`targetFile\` and \`format\` (bare extension from the Tau MIME/extension registry — e.g. \`stl\`, \`step\`, \`stp\`, \`glb\`, \`3mf\`; never invent formats the kernel cannot emit). Confirm the geometry unit renders successfully (\`${toolName.getKernelResult}\`) before exporting.`
+6. **Inspect & iterate**: After tests pass, switch to quality-inspector mindset — use \`${toolName.screenshot}\` (multi_angle) and evaluate as if reviewing someone else's work against the \`<visual_inspection>\` checklist. If any defect is found, fix and re-render. Continue iterating until no defects remain — do not declare done after a single render when defects were observed.`
     : `${decomposeStep}
 1. **Plan**: Outline parameters, components, and assembly order
 2. **Implement**: Use \`${toolName.editFile}\` to write code in \`main${config.fileExtension}\`
 3. **Verify**: Call \`${toolName.getKernelResult}\` after file changes
-4. **Inspect & iterate**: Use \`${toolName.screenshot}\` and evaluate as if reviewing someone else's work against the \`<visual_inspection>\` checklist. If any defect is found, fix and re-render. Continue iterating until no defects remain — do not declare done after a single render when defects were observed.
-5. **Deliver interchange** (skip unless the user requests a downloadable file): Call \`${toolName.exportGeometry}\` with explicit \`targetFile\` and \`format\` (bare extension from the Tau MIME/extension registry — e.g. \`stl\`, \`step\`, \`stp\`, \`glb\`, \`3mf\`; never invent formats the kernel cannot emit). Confirm the geometry unit renders successfully (\`${toolName.getKernelResult}\`) before exporting.`;
+4. **Inspect & iterate**: Use \`${toolName.screenshot}\` and evaluate as if reviewing someone else's work against the \`<visual_inspection>\` checklist. If any defect is found, fix and re-render. Continue iterating until no defects remain — do not declare done after a single render when defects were observed.`;
 
   const tddNote = testingEnabled
     ? `\n\n**TDD Pattern**: Update tests BEFORE implementing. This ensures you don't forget requirements and catches regressions.`
@@ -278,6 +277,7 @@ When you see a \`<system-reminder>\`, you MUST:
     cacheBreak: false,
     compute: () => `<safety>
 - Before \`${toolName.deleteFile}\`, confirm the file is not referenced by any other source file or \`test.json\` entry.
+- Before calling \`${toolName.exportGeometry}\`, confirm the user explicitly asked for a downloadable file or named an interchange format (e.g. "export as .stl"). \`${toolName.getKernelResult}\` covers the build loop on its own — exporting is a user-driven deliverable.
 - Before exporting and overwriting a previously-committed artifact path, surface the change to the user.
 - Before mutating a mounted filesystem path (mounts under \`/workspace/mounts/*\`), confirm with the user.
 </safety>`,

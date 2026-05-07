@@ -659,6 +659,62 @@ describe('getCadSystemPrompt', () => {
   });
 
   // ===================================================================
+  // Export gate — `export_geometry` is opt-in only
+  // ===================================================================
+
+  describe('<safety> export gate', () => {
+    const extractSafety = (prompt: string): string =>
+      prompt.slice(prompt.indexOf('<safety>'), prompt.indexOf('</safety>'));
+
+    it('should mention export_geometry inside <safety>', async () => {
+      const result = await getCadSystemPrompt('openscad');
+      const block = extractSafety(result.static);
+      expect(block).toContain('export_geometry');
+    });
+
+    it('should require an explicit user request before calling export_geometry', async () => {
+      const result = await getCadSystemPrompt('openscad');
+      const block = extractSafety(result.static);
+      expect(block).toMatch(/explicitly ask/i);
+    });
+
+    it('should follow the `Before X, confirm Y` style used by other safety bullets', async () => {
+      const result = await getCadSystemPrompt('openscad');
+      const block = extractSafety(result.static);
+      expect(block).toMatch(/Before calling `export_geometry`, confirm/);
+      expect(block).not.toMatch(/Never call `export_geometry`/);
+    });
+
+    it('should still keep the previously-committed-overwrite warning', async () => {
+      const result = await getCadSystemPrompt('openscad');
+      const block = extractSafety(result.static);
+      expect(block).toMatch(/overwrit/i);
+      expect(block).toMatch(/committed/i);
+    });
+  });
+
+  describe('workflow does not list export as a step', () => {
+    const extractWorkflow = (prompt: string): string =>
+      prompt.slice(prompt.indexOf('<workflow>'), prompt.indexOf('</workflow>'));
+
+    it('should not list export_geometry inside the workflow when testing enabled', async () => {
+      const result = await getCadSystemPrompt('openscad', 'agent', true);
+      const block = extractWorkflow(result.static);
+      expect(block).not.toContain('export_geometry');
+      expect(block).not.toContain('exportGeometry');
+      expect(block).not.toContain('Deliver interchange');
+    });
+
+    it('should not list export_geometry inside the workflow when testing disabled', async () => {
+      const result = await getCadSystemPrompt('openscad', 'agent', false);
+      const block = extractWorkflow(result.static);
+      expect(block).not.toContain('export_geometry');
+      expect(block).not.toContain('exportGeometry');
+      expect(block).not.toContain('Deliver interchange');
+    });
+  });
+
+  // ===================================================================
   // <system_rules> (no-identical-retry on denial, URL guard)
   // ===================================================================
 
