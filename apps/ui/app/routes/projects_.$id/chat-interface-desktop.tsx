@@ -26,6 +26,7 @@ import {
 } from '#constants/editor.constants.js';
 import type { PanelId } from '#constants/editor.constants.js';
 
+// oxlint-disable-next-line complexity -- coordinates many independent panels; extracted hooks still share one render
 export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
   const {
     isEditorReady,
