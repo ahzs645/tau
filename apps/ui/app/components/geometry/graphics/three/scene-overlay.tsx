@@ -3,39 +3,17 @@ import { useMemo } from 'react';
 import * as THREE from 'three';
 import { createPortal, useFrame } from '@react-three/fiber';
 
-type SceneOverlayProperties = {
-  readonly children: ReactNode;
-};
+type SceneOverlayFrameLoopProps = Readonly<{
+  overlayScene: THREE.Scene;
+}>;
 
 /**
- * Renders children in a separate THREE.Scene that composites on top of the
- * post-processed output.  This keeps overlay elements (Grid, AxesHelper)
- * outside the EffectComposer pipeline so they are not affected by N8AO
- * ambient-occlusion darkening.
- *
- * Runs at `renderPriority = 2` (after EffectComposer at priority 1).
- *
- * ### Automatic adaptation
- *
- * The component auto-detects whether an EffectComposer (or any other
- * positive-priority render owner) is active by reading R3F's internal
- * subscriber count (`state.internal.priority`).
- *
- * - **Post-processing active** (`priority > 1`): the EffectComposer already
- *   wrote colour to the screen but clobbered the depth buffer with its
- *   fullscreen-quad output.  We restore scene depth via a depth-only
- *   re-render (`colorMask(false …)`) before compositing the overlay.
- *
- * - **No post-processing** (`priority === 1`, i.e. we are the sole render
- *   owner): we render the full scene ourselves (colour + depth), then
- *   composite the overlay on top.  This means the EffectComposer can be
- *   freely added or removed without any prop changes to SceneOverlay.
+ * Runs the depth-restore / main-scene / overlay renders at R3F priority `2`.
+ * Mounted only when the overlay subtree has geometry to draw so we do not hold a
+ * positive-priority subscriber when overlay children are absent (fixes blank CAD when
+ * both grid and axes are disabled — see audit R4).
  */
-export function SceneOverlay({ children }: SceneOverlayProperties): React.JSX.Element {
-  const overlayScene = useMemo(() => new THREE.Scene(), []);
-
-  // Lightweight material for the depth-only pass. MeshBasicMaterial has built-in
-  // logarithmic depth support and skips all PBR/matcap/environment shader work.
+function SceneOverlayFrameLoop({ overlayScene }: SceneOverlayFrameLoopProps): ReactNode {
   const depthOnlyMaterial = useMemo(() => {
     const mat = new THREE.MeshBasicMaterial();
     mat.colorWrite = false;
@@ -43,35 +21,67 @@ export function SceneOverlay({ children }: SceneOverlayProperties): React.JSX.El
   }, []);
 
   useFrame((state) => {
-    // Skip entirely when the overlay scene has no children to render
-    if (overlayScene.children.length === 0) {
-      return;
-    }
-
     const { gl, scene, camera } = state;
     const previousAutoClear = gl.autoClear;
     gl.autoClear = false;
 
+    // `internal.priority` is the count of subscribed `useFrame` callbacks with
+    // `priority > 0`, not an EffectComposer/WebGPU sentinel. When it is strictly
+    // greater than `1`, at least two positive-priority owners exist — typically
+    // WebGL `@react-three/postprocessing` `EffectComposer` or WebGPU
+    // `PostProcessingWebGPU` (priority `1`), plus this overlay (priority `2`).
     if (state.internal.priority > 1) {
-      // Another render-owner (EffectComposer) already wrote colour.
-      // Restore scene depth only with a lightweight override material,
-      // preserving the post-processed image while avoiding full material shaders.
+      // Another owner already drew colour (`composer.render`, `RenderPipeline.render`, …).
+      // Restore scene depth with a lightweight override pass before drawing the overlay.
       const previousOverrideMaterial = scene.overrideMaterial;
       scene.overrideMaterial = depthOnlyMaterial;
       gl.render(scene, camera);
       scene.overrideMaterial = previousOverrideMaterial;
     } else {
-      // We are the sole render-owner. Render the full scene ourselves.
+      // Sole positive-priority subscriber: R3F has disabled its default terminal
+      // `gl.render(scene, camera)` — we must shade the full main scene ourselves.
       gl.autoClear = true;
       gl.render(scene, camera);
       gl.autoClear = false;
     }
 
-    // Overlay pass: grid / axes depth-test correctly against the model.
     gl.render(overlayScene, camera);
 
     gl.autoClear = previousAutoClear;
-  }, 2); // Priority 2: runs after EffectComposer (priority 1)
+  }, 2);
 
-  return <>{createPortal(children, overlayScene)}</>;
+  return null;
+}
+
+type SceneOverlayProperties = Readonly<{
+  children: ReactNode;
+  /**
+   * When `false`, omit the priority-2 subscriber entirely so CAD still renders via
+   * R3F's default pipeline when overlay children are omitted (axes + grid off).
+   */
+  overlayActive: boolean;
+}>;
+
+/**
+ * Renders children in a separate THREE.Scene composited above the viewport output.
+ *
+ * Keeps overlays (Grid, AxesHelper) outside N8AO / GTAO stacks so ambient occlusion does
+ * not darken them.
+ *
+ * When {@link SceneOverlayProperties.overlayActive} is `true`, registers at R3F
+ * **`renderPriority = 2`**, ordered after priority-**1** viewport post-processing
+ * (WebGL **`EffectComposer`**, WebGPU **`RenderPipeline`** via `PostProcessingWebGPU`).
+ *
+ * `frameloop` / demand-render conventions for the parent `<Canvas>` are policy-bound in
+ * **`docs/policy/graphics-backend-policy.md`** §7.
+ */
+export function SceneOverlay({ children, overlayActive }: SceneOverlayProperties): React.JSX.Element {
+  const overlayScene = useMemo(() => new THREE.Scene(), []);
+
+  return (
+    <>
+      {createPortal(children, overlayScene)}
+      {overlayActive ? <SceneOverlayFrameLoop overlayScene={overlayScene} /> : null}
+    </>
+  );
 }

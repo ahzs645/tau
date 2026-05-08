@@ -29,7 +29,7 @@ import {
 import { cn } from '#utils/ui.utils.js';
 import { InfoTooltip } from '#components/ui/info-tooltip.js';
 import { axesColors } from '#constants/color.constants.js';
-import type { EnvironmentPreset } from '#constants/editor.constants.js';
+import type { EnvironmentPreset, GraphicsBackendPreference } from '#constants/editor.constants.js';
 import { useGraphics, useGraphicsSelector } from '#hooks/use-graphics.js';
 import { useCad, useCadSelector } from '#hooks/use-cad.js';
 
@@ -64,7 +64,7 @@ type EnvironmentPresetOption = {
 };
 
 function isEnvironmentPreset(value: string): value is EnvironmentPreset {
-  return value === 'studio' || value === 'neutral' || value === 'soft' || value === 'performance';
+  return value === 'studio' || value === 'performance';
 }
 
 const environmentPresetOptions: EnvironmentPresetOption[] = [
@@ -74,19 +74,31 @@ const environmentPresetOptions: EnvironmentPresetOption[] = [
     description: 'Full lighting rig with reflections',
   },
   {
-    id: 'neutral',
-    label: 'Neutral',
-    description: 'Reduced intensity, minimal reflections',
-  },
-  {
-    id: 'soft',
-    label: 'Soft',
-    description: 'Hemisphere lighting, no environment',
-  },
-  {
     id: 'performance',
     label: 'Performance',
     description: 'Minimal lights for best performance',
+  },
+];
+
+const graphicsBackendOptions: Array<{
+  id: GraphicsBackendPreference;
+  label: string;
+  description: string;
+}> = [
+  {
+    id: 'auto',
+    label: 'Auto',
+    description: 'Use WebGPU when available; otherwise WebGL2.',
+  },
+  {
+    id: 'webgl',
+    label: 'WebGL 2',
+    description: 'Legacy path; widest browser support.',
+  },
+  {
+    id: 'webgpu',
+    label: 'WebGPU',
+    description: 'Faster when supported; falls back automatically if unavailable.',
   },
 ];
 
@@ -121,6 +133,9 @@ export function ViewerSettings({ className, overflowControls }: ViewerSettingsPr
   const enableMatcap = useGraphicsSelector((state) => state.context.enableMatcap);
   const enablePostProcessing = useGraphicsSelector((state) => state.context.enablePostProcessing);
   const environmentPreset = useGraphicsSelector((state) => state.context.environmentPreset);
+  const graphicsBackendPreference = useGraphicsSelector((state) => state.context.graphicsBackendPreference);
+  const webGpuAvailable = useGraphicsSelector((state) => state.context.webGpuAvailable);
+  const resolvedGraphicsBackend = useGraphicsSelector((state) => state.context.resolvedGraphicsBackend);
   const upDirection = useGraphicsSelector((state) => state.context.upDirection);
   const is2dGeometry = useGraphicsSelector((state) =>
     state.context.geometries.some((geometry) => geometry.format === 'svg'),
@@ -196,6 +211,23 @@ export function ViewerSettings({ className, overflowControls }: ViewerSettingsPr
     [graphicsRef],
   );
 
+  const handleGraphicsBackendChange = useCallback(
+    (value: string): void => {
+      if (value !== 'auto' && value !== 'webgl' && value !== 'webgpu') {
+        return;
+      }
+
+      graphicsRef.send({ type: 'setGraphicsBackendPreference', payload: value });
+    },
+    [graphicsRef],
+  );
+
+  const currentGraphicsBackendOption = useMemo(() => {
+    return (
+      graphicsBackendOptions.find((option) => option.id === graphicsBackendPreference) ?? graphicsBackendOptions[0]!
+    );
+  }, [graphicsBackendPreference]);
+
   const handleRenderTimeoutChange = useCallback(
     (value: string) => {
       cadRef?.send({ type: 'setRenderTimeout', renderTimeout: Number(value) });
@@ -211,6 +243,24 @@ export function ViewerSettings({ className, overflowControls }: ViewerSettingsPr
   const currentEnvironmentPresetOption = useMemo(
     () => environmentPresetOptions.find((option) => option.id === environmentPreset) ?? environmentPresetOptions[0]!,
     [environmentPreset],
+  );
+
+  const getGraphicsBackendValue = useCallback(
+    (option: (typeof graphicsBackendOptions)[number]): string => option.id,
+    [],
+  );
+  const getGraphicsBackendLabel = useCallback(
+    (option: (typeof graphicsBackendOptions)[number]): string => {
+      let suffix = '';
+      if (option.id === 'auto') {
+        suffix = resolvedGraphicsBackend === 'webgpu' ? ' (WebGPU)' : ' (WebGL)';
+      } else if (option.id === 'webgpu' && !webGpuAvailable) {
+        suffix = ' — falls back to WebGL';
+      }
+
+      return `${option.label}${suffix}`;
+    },
+    [resolvedGraphicsBackend, webGpuAvailable],
   );
 
   const getEnvironmentPresetOptionValue = useCallback((option: EnvironmentPresetOption): string => option.id, []);
@@ -345,6 +395,38 @@ export function ViewerSettings({ className, overflowControls }: ViewerSettingsPr
         )}
         <DropdownMenuSeparator />
         <DropdownMenuLabel>Rendering</DropdownMenuLabel>
+        {!is2dGeometry && (
+          <DropdownMenuSelectItem
+            value={currentGraphicsBackendOption}
+            options={graphicsBackendOptions}
+            title='Graphics backend'
+            description='WebGPU enables the modern renderer when the browser exposes an adapter.'
+            getOptionValue={getGraphicsBackendValue}
+            getOptionLabel={getGraphicsBackendLabel}
+            renderOption={(option, isSelected) => (
+              <span className='flex w-full items-center justify-between gap-2'>
+                <span className='flex min-w-0 flex-1 flex-col'>
+                  <span>{option.label}</span>
+                  <span className='text-xs leading-snug whitespace-normal text-muted-foreground'>
+                    {option.description}
+                  </span>
+                </span>
+                {isSelected ? <Check className='size-4 shrink-0' /> : null}
+              </span>
+            )}
+            selectPopoverContentClassName='min-w-72 w-auto max-w-[min(var(--radix-popover-content-available-width))]'
+            shouldCloseOnSelect={() => false}
+            infoTooltip={
+              <InfoTooltip>
+                Beta: WebGPU uses the experimental three.js renderer. Use WebGL if you hit compatibility issues.
+              </InfoTooltip>
+            }
+            onValueChange={handleGraphicsBackendChange}
+          >
+            <Layers />
+            Rendering API
+          </DropdownMenuSelectItem>
+        )}
         <DropdownMenuSelectItem
           value={currentTimeoutOption}
           options={timeoutOptions}

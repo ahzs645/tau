@@ -87,6 +87,7 @@ groups:
       - drizzle-orm
       - elysia
       - VSCode_SysML_Extension
+      - vscode-wasm
   tscircuit:
     description: tscircuit EDA ecosystem
     repos:
@@ -450,7 +451,7 @@ repos:
     upstream: Fennec-hub/three-viewport-gizmo
     description: Three Viewport Gizmo - interactive three.js view helper
     fork: taucad/three-viewport-gizmo
-    commit: 3c22fb7b4da17aa5aaa33b169f144d1d3e2254dc
+    commit: ba52643f1c5e3f72cfbded53e5fbf93ff9951429
   terraform-provider-netlify:
     upstream: netlify/terraform-provider-netlify
     description: Netlify Terraform provider source (schema/release reference for Tau cloud-infra stacks).
@@ -460,3 +461,6 @@ repos:
   VSCode_SysML_Extension:
     upstream: daltskin/VSCode_SysML_Extension
     description: SysML v2 extension for VS Code
+  vscode-wasm:
+    upstream: microsoft/vscode-wasm
+    description: A WASI implementation that uses VS Code's extension host as the implementing API

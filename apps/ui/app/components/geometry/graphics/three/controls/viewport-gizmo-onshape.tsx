@@ -10,12 +10,15 @@ import { useColor } from '#hooks/use-color.js';
 import { Theme, useTheme } from '#hooks/use-theme.js';
 import { createViewportGizmoCubeAxes } from '#components/geometry/graphics/three/controls/viewport-gizmo-cube-axes.js';
 import { useGraphicsSelector } from '#hooks/use-graphics.js';
+import { useThreeGraphicsBackend } from '#components/geometry/graphics/three/three-graphics-backend-context.js';
+import type { GizmoRenderer } from '#components/geometry/graphics/three/utils/gizmo.utils.js';
 import {
   syncGizmoFov,
   resolveGizmoContainer,
   createGizmoCanvas,
-  createGizmoRenderer,
+  createGizmoRendererForBackend,
   disposeGizmoResources,
+  disposeStandaloneGizmoRenderer,
 } from '#components/geometry/graphics/three/utils/gizmo.utils.js';
 
 type ViewportGizmoOnshapeProps = {
@@ -61,7 +64,9 @@ export function ViewportGizmoOnshape({
   // Ref to the live gizmo instance for the FOV sync effect
   const gizmoRef = useRef<ViewportGizmo | undefined>(null);
   // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- React ref
-  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
+  const rendererRef = useRef<GizmoRenderer | null>(null);
+
+  const graphicsBackendThree = useThreeGraphicsBackend();
 
   const handleChange = useCallback((): void => {
     invalidate();
@@ -95,103 +100,128 @@ export function ViewportGizmoOnshape({
 
     containerToUse.append(canvas);
 
-    const renderer = createGizmoRenderer(canvas, size);
+    let cancelled = false;
 
-    const backgroundColor = theme === Theme.DARK ? 0x44_44_44 : 0xcc_cc_cc;
-    const faceConfig = {
-      color: theme === Theme.DARK ? 0x33_33_33 : 0xdd_dd_dd,
-      labelColor: theme === Theme.DARK ? 0xff_ff_ff : 0x00_00_00,
-      hover: {
-        color: serialized.hex,
-      },
-    } as const satisfies GizmoAxisOptions;
-    const edgeConfig = {
-      color: theme === Theme.DARK ? 0x55_55_55 : 0xee_ee_ee,
-      opacity: 1,
-      hover: {
-        color: serialized.hex,
-      },
-    } as const satisfies GizmoAxisOptions;
-    const cornerConfig = {
-      ...faceConfig,
-      color: theme === Theme.DARK ? 0x33_33_33 : 0xdd_dd_dd,
-      hover: {
-        color: serialized.hex,
-      },
-    } as const satisfies GizmoAxisOptions;
+    // async-iife: bootstrap — standalone gizmo renderer + ViewportGizmo init must run off the sync effect teardown path
+    void (async (): Promise<void> => {
+      const renderer = await createGizmoRendererForBackend(canvas, size, graphicsBackendThree);
+      if (cancelled) {
+        disposeStandaloneGizmoRenderer(renderer);
+        return;
+      }
 
-    // Configure the gizmo options
-    const gizmoConfig: GizmoOptions = {
-      type: 'cube',
-      placement: 'bottom-right',
-      size,
-      font: {
-        weight: 'normal',
-        family: 'monospace',
-      },
-      resolution: 256,
-      className,
-      container: containerToUse,
-      background: {
-        color: backgroundColor,
-        hover: { color: backgroundColor },
-      },
-      offset: {
-        bottom: 0,
-        right: 0,
-      },
-      corners: cornerConfig,
-      edges: edgeConfig,
-      right: faceConfig,
-      top: faceConfig,
-      front: faceConfig,
-      back: faceConfig,
-      left: faceConfig,
-      bottom: faceConfig,
-    };
+      const backgroundColor = theme === Theme.DARK ? 0x44_44_44 : 0xcc_cc_cc;
+      const faceConfig = {
+        color: theme === Theme.DARK ? 0x33_33_33 : 0xdd_dd_dd,
+        labelColor: theme === Theme.DARK ? 0xff_ff_ff : 0x00_00_00,
+        hover: {
+          color: serialized.hex,
+        },
+      } as const satisfies GizmoAxisOptions;
+      const edgeConfig = {
+        color: theme === Theme.DARK ? 0x55_55_55 : 0xee_ee_ee,
+        opacity: 1,
+        hover: {
+          color: serialized.hex,
+        },
+      } as const satisfies GizmoAxisOptions;
+      const cornerConfig = {
+        ...faceConfig,
+        color: theme === Theme.DARK ? 0x33_33_33 : 0xdd_dd_dd,
+        hover: {
+          color: serialized.hex,
+        },
+      } as const satisfies GizmoAxisOptions;
 
-    // Create the gizmo
-    const gizmo = new ViewportGizmo(camera, renderer, gizmoConfig);
-    gizmoRef.current = gizmo;
-    rendererRef.current = renderer;
+      const gizmoConfig: GizmoOptions = {
+        type: 'cube',
+        placement: 'bottom-right',
+        size,
+        font: {
+          weight: 'normal',
+          family: 'monospace',
+        },
+        resolution: 256,
+        className,
+        container: containerToUse,
+        background: {
+          color: backgroundColor,
+          hover: { color: backgroundColor },
+        },
+        offset: {
+          bottom: 0,
+          right: 0,
+        },
+        corners: cornerConfig,
+        edges: edgeConfig,
+        right: faceConfig,
+        top: faceConfig,
+        front: faceConfig,
+        back: faceConfig,
+        left: faceConfig,
+        bottom: faceConfig,
+      };
 
-    // Synchronize the gizmo's internal camera FOV with the current viewport FOV
-    syncGizmoFov(gizmo, cameraFovAngleRef.current);
+      const gizmo = new ViewportGizmo(camera, renderer, gizmoConfig);
+      gizmoRef.current = gizmo;
+      rendererRef.current = renderer;
 
-    // Add event listeners for the gizmo
-    gizmo.addEventListener('change', handleChange);
-    gizmo.addEventListener('hoverchange', handleChange);
+      syncGizmoFov(gizmo, cameraFovAngleRef.current);
 
-    gizmo.scale.multiplyScalar(0.7);
-    gizmo.add(
-      createViewportGizmoCubeAxes({
-        axesSize: 2.1,
-        rendererSize: size,
-        xAxisColor: 'red',
-        yAxisColor: 'green',
-        // oxlint-disable-next-line tau-lint/no-hardcoded-color -- Three.js axis color
-        zAxisColor: 'rgb(37, 78, 136)',
-        xLabelColor: 'red',
-        yLabelColor: 'green',
-        // oxlint-disable-next-line tau-lint/no-hardcoded-color -- Three.js axis color
-        zLabelColor: 'rgb(37, 78, 136)',
-        lineWidth: 2,
-      }),
-    );
+      gizmo.addEventListener('change', handleChange);
+      gizmo.addEventListener('hoverchange', handleChange);
 
-    // Attach the controls to enable proper interaction
-    gizmo.attachControls(controls);
+      gizmo.scale.multiplyScalar(0.7);
+      gizmo.add(
+        createViewportGizmoCubeAxes({
+          axesSize: 2.1,
+          rendererSize: size,
+          xAxisColor: 'red',
+          yAxisColor: 'green',
+          // oxlint-disable-next-line tau-lint/no-hardcoded-color -- Three.js axis color
+          zAxisColor: 'rgb(37, 78, 136)',
+          xLabelColor: 'red',
+          yLabelColor: 'green',
+          // oxlint-disable-next-line tau-lint/no-hardcoded-color -- Three.js axis color
+          zLabelColor: 'rgb(37, 78, 136)',
+          lineWidth: 2,
+          renderingBackend: graphicsBackendThree,
+        }),
+      );
 
-    // Cleanup function
+      gizmo.attachControls(controls);
+
+      invalidate();
+    })();
+
     return () => {
-      // Clear refs so the useFrame and FOV sync effect cannot operate on disposed objects
-      gizmoRef.current = null;
+      cancelled = true;
+      const gizmo = gizmoRef.current;
+      const renderer = rendererRef.current;
+      gizmoRef.current = undefined;
       rendererRef.current = null;
 
-      disposeGizmoResources({ gizmo, renderer, canvas, handleChange });
+      if (gizmo && renderer) {
+        disposeGizmoResources({ gizmo, renderer, canvas, handleChange });
+      } else if (canvas.parentElement) {
+        canvas.remove();
+      }
     };
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- dependencies array is user-provided for custom recreation triggers
-  }, [camera, gl, controls, scene, serialized.hex, theme, size, handleChange, container, ...dependencies]);
+  }, [
+    camera,
+    gl,
+    controls,
+    graphicsBackendThree,
+    scene,
+    serialized.hex,
+    theme,
+    size,
+    handleChange,
+    container,
+    invalidate,
+    ...dependencies,
+  ]);
 
   // Real-time FOV sync: update the gizmo's internal camera when the viewport FOV changes.
   // This is a separate effect to avoid expensive gizmo recreation on every slider tick.

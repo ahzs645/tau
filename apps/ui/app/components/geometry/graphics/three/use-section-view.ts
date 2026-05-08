@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
-import { createStripedMaterial } from '#components/geometry/graphics/three/materials/striped-material.js';
+import { createStripedMaterialForBackend } from '#components/geometry/graphics/three/materials/striped-material.js';
+import { useThreeGraphicsBackend } from '#components/geometry/graphics/three/three-graphics-backend-context.js';
 import { useGraphicsSelector } from '#hooks/use-graphics.js';
 
 export type SectionViewState = {
   /** The computed clipping plane for the active section view. */
   readonly plane: THREE.Plane;
   /** The capping material used for the cross-section surface. */
-  readonly cappingMaterial: THREE.ShaderMaterial;
+  readonly cappingMaterial: THREE.Material;
   /** Whether the section view is currently active and has a selected plane. */
   readonly isActive: boolean;
   /** The ID of the selected section view plane, if any. */
@@ -29,6 +30,8 @@ const defaultPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
  * and on unmount to prevent GPU resource leaks.
  */
 export function useSectionView(): SectionViewState {
+  const graphicsBackendResolved = useThreeGraphicsBackend();
+
   const isSectionViewActive = useGraphicsSelector((state) => state.context.isSectionViewActive);
   const selectedSectionViewId = useGraphicsSelector((state) => state.context.selectedSectionViewId);
   const sectionViewRotation = useGraphicsSelector((state) => state.context.sectionViewRotation);
@@ -72,7 +75,7 @@ export function useSectionView(): SectionViewState {
 
   // Create striped material for the capping surface.
   // Tracked via ref so the previous material can be disposed when deps change or on unmount.
-  const cappingMaterialRef = useRef<THREE.ShaderMaterial | undefined>(undefined);
+  const cappingMaterialRef = useRef<THREE.Material | undefined>(undefined);
 
   const cappingMaterial = useMemo(() => {
     cappingMaterialRef.current?.dispose();
@@ -80,14 +83,14 @@ export function useSectionView(): SectionViewState {
     const stripeSpacing = gridSizesComputed.largeSize * 0.1;
     const stripeWidth = stripeSpacing * 0.2;
 
-    const material = createStripedMaterial({
+    const material = createStripedMaterialForBackend(graphicsBackendResolved, {
       stripeFrequency: stripeSpacing,
       stripeWidth,
     });
 
     cappingMaterialRef.current = material;
     return material;
-  }, [gridSizesComputed.largeSize]);
+  }, [graphicsBackendResolved, gridSizesComputed.largeSize]);
 
   // Dispose capping material on unmount
   useEffect(() => {

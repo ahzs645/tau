@@ -1,12 +1,18 @@
 import { EffectComposer, N8AO } from '@react-three/postprocessing';
 import { useGraphicsSelector } from '#hooks/use-graphics.js';
+import { useThreeGraphicsBackend } from '#components/geometry/graphics/three/three-graphics-backend-context.js';
+import { PostProcessingWebGPU } from '#components/geometry/graphics/three/post-processing-webgpu.js';
 
 /**
- * Conditionally renders the EffectComposer with N8AO ambient occlusion.
- * When disabled, the EffectComposer unmounts and SceneOverlay auto-adapts
- * to render the full scene itself via `state.internal.priority` detection.
+ * Conditionally mounts the post-processing subtree for the active graphics backend.
  *
- * N8AO is configured with `screenSpaceRadius={true}`, which means `aoRadius`
+ * **Disabling** `enablePostProcessing` **fully unmounts** the entire post stack on **both**
+ * backends: WebGPU drops `PostProcessingWebGPU` / `RenderPipeline`, and WebGL drops
+ * `EffectComposer` + `N8AO` (no partial graph / no TRAA-only continuation). `SceneOverlay`
+ * then auto-adapts via `state.internal.priority` detection because the priority-1 owner
+ * disappears.
+ *
+ * WebGL `N8AO` path (when mounted) is configured with `screenSpaceRadius={true}`, which means `aoRadius`
  * is measured in **pixels** (not world units). This makes the ambient occlusion
  * effect scale-independent -- models of any size receive visually consistent AO
  * without needing access to `sceneRadius`. If `screenSpaceRadius` were `false`,
@@ -26,9 +32,14 @@ import { useGraphicsSelector } from '#hooks/use-graphics.js';
  */
 export function PostProcessing(): React.JSX.Element | undefined {
   const enablePostProcessing = useGraphicsSelector((state) => state.context.enablePostProcessing);
+  const backend = useThreeGraphicsBackend();
 
   if (!enablePostProcessing) {
     return undefined;
+  }
+
+  if (backend === 'webgpu') {
+    return <PostProcessingWebGPU />;
   }
 
   return (

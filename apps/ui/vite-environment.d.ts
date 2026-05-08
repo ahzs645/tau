@@ -18,3 +18,46 @@ declare module 'qrcode-terminal' {
 
   export default qrcodeTerminal;
 }
+
+declare module 'monaco-editor/esm/vs/language/typescript/languageFeatures.js' {
+  import type * as Monaco from 'monaco-editor';
+
+  export class Adapter {
+    public constructor(worker: (...uris: Monaco.Uri[]) => Promise<unknown>);
+  }
+
+  export class LibFiles {
+    public constructor(worker: (...uris: Monaco.Uri[]) => Promise<unknown>);
+    public getOrCreateModel(fileName: string): Monaco.editor.ITextModel | null;
+    public fetchLibFilesIfNecessary(uris: readonly Monaco.Uri[]): Promise<void>;
+  }
+
+  export class DefinitionAdapter extends Adapter {
+    public constructor(libFiles: LibFiles, worker: (...uris: Monaco.Uri[]) => Promise<unknown>);
+    public provideDefinition(
+      model: Monaco.editor.ITextModel,
+      position: Monaco.Position,
+      token: Monaco.CancellationToken,
+    ): Promise<Monaco.languages.Definition | undefined>;
+  }
+
+  export class ReferenceAdapter extends Adapter {
+    public constructor(libFiles: LibFiles, worker: (...uris: Monaco.Uri[]) => Promise<unknown>);
+    public provideReferences(
+      model: Monaco.editor.ITextModel,
+      position: Monaco.Position,
+      context: Monaco.languages.ReferenceContext,
+      token: Monaco.CancellationToken,
+    ): Promise<Monaco.languages.Location[] | undefined>;
+  }
+
+  export class RenameAdapter extends Adapter {
+    public constructor(libFiles: LibFiles, worker: (...uris: Monaco.Uri[]) => Promise<unknown>);
+    public provideRenameEdits(
+      model: Monaco.editor.ITextModel,
+      position: Monaco.Position,
+      newName: string,
+      token: Monaco.CancellationToken,
+    ): Promise<(Monaco.languages.WorkspaceEdit & Monaco.languages.Rejection) | undefined>;
+  }
+}

@@ -2,11 +2,16 @@ import { setup, sendTo, fromCallback, assertEvent, enqueueActions, assign } from
 import type { AnyActorRef } from 'xstate';
 import * as THREE from 'three';
 import type { ScreenshotOptions, CameraAngle, CompositeScreenshotOptions } from '@taucad/types';
+import type { ResolvedGraphicsBackend } from '#constants/editor.constants.js';
 import {
   applyMatcapToClonedScene,
   disposeClonedSceneMaterials,
 } from '#components/geometry/graphics/three/materials/gltf-matcap.js';
 import { ensureMatcapTextureLoaded } from '#components/geometry/graphics/three/materials/matcap-material.js';
+import type { TauRendererInstance } from '#components/geometry/graphics/three/tau-renderer.js';
+import { createTauRenderer } from '#components/geometry/graphics/three/tau-renderer.js';
+import type { ViewportCadGl } from '#components/geometry/graphics/three/viewport-cad-renderer.js';
+import { isViewportWebGpu } from '#components/geometry/graphics/three/viewport-cad-renderer.js';
 import { calculateFovDistanceCompensation } from '#components/geometry/graphics/three/utils/math.utils.js';
 import { computeViewFittingZoom } from '#components/geometry/graphics/three/utils/camera.utils.js';
 import { defaultStageOptions } from '#components/geometry/graphics/three/stage.js';
@@ -18,7 +23,7 @@ type CaptureMode = 'threejs' | 'svg';
 // Context type
 type ScreenshotCapabilityContext = {
   graphicsRef: AnyActorRef;
-  gl?: THREE.WebGLRenderer;
+  gl?: ViewportCadGl;
   scene?: THREE.Scene;
   camera?: THREE.Camera;
   svgElement?: SVGSVGElement;
@@ -36,7 +41,7 @@ type ScreenshotCapabilityContext = {
 type ScreenshotCapabilityEvent =
   | {
       type: 'registerCapture';
-      gl: THREE.WebGLRenderer;
+      gl: ViewportCadGl;
       scene: THREE.Scene;
       camera: THREE.Camera;
     }
@@ -492,13 +497,14 @@ export function removeCloneUnsafeObjects(scene: THREE.Scene): void {
  * Core screenshot capture logic.
  * Renders each camera angle into a temporary canvas and returns data URLs.
  */
+// oxlint-disable-next-line eslint(complexity) -- multi-angle capture composes camera fitting, cropping, DPI, cloning, matcap, and teardown in one tool entry point
 async function captureScreenshots({
   gl,
   scene,
   camera,
   options,
 }: {
-  gl: THREE.WebGLRenderer;
+  gl: ViewportCadGl;
   scene: THREE.Scene;
   camera: THREE.Camera;
   options?: ScreenshotOptions;
@@ -550,16 +556,12 @@ async function captureScreenshots({
   screenshotCanvas.width = width;
   screenshotCanvas.height = height;
 
-  const screenshotRenderer = new THREE.WebGLRenderer({
-    canvas: screenshotCanvas,
-    alpha: true,
-    antialias: true,
-    logarithmicDepthBuffer: true,
-    preserveDrawingBuffer: true,
-    stencil: true,
-  });
+  let screenshotRenderer: TauRendererInstance | undefined;
 
   try {
+    const screenshotBackend: ResolvedGraphicsBackend = isViewportWebGpu(gl) ? 'webgpu' : 'webgl';
+    screenshotRenderer = await createTauRenderer('screenshot', screenshotBackend, screenshotCanvas);
+
     screenshotRenderer.setSize(width, height, false);
 
     const useHighDpi = config.cameraAngles.length === 1;
@@ -569,7 +571,9 @@ async function captureScreenshots({
     screenshotRenderer.outputColorSpace = gl.outputColorSpace;
     screenshotRenderer.toneMapping = THREE.NoToneMapping;
     screenshotRenderer.toneMappingExposure = 1;
-    screenshotRenderer.localClippingEnabled = gl.localClippingEnabled;
+    if (screenshotRenderer instanceof THREE.WebGLRenderer && gl instanceof THREE.WebGLRenderer) {
+      screenshotRenderer.localClippingEnabled = gl.localClippingEnabled;
+    }
 
     const dataUrls: string[] = [];
 
@@ -585,7 +589,8 @@ async function captureScreenshots({
     }
 
     const matcapTexture = await ensureMatcapTextureLoaded();
-    applyMatcapToClonedScene(screenshotScene, matcapTexture);
+    const screenshotMatcapBackend: ResolvedGraphicsBackend = isViewportWebGpu(gl) ? 'webgpu' : 'webgl';
+    applyMatcapToClonedScene(screenshotScene, matcapTexture, { tint: 1, backend: screenshotMatcapBackend });
 
     screenshotScene.environment = null;
     screenshotScene.environmentIntensity = 0;
@@ -671,8 +676,13 @@ async function captureScreenshots({
 
     return dataUrls;
   } finally {
-    screenshotRenderer.dispose();
-    screenshotRenderer.forceContextLoss();
+    if (screenshotRenderer !== undefined) {
+      screenshotRenderer.dispose();
+      if (!isViewportWebGpu(screenshotRenderer)) {
+        screenshotRenderer.forceContextLoss();
+      }
+    }
+
     screenshotCanvas.width = 0;
     screenshotCanvas.height = 0;
   }
@@ -701,7 +711,7 @@ export const screenshotCapabilityMachine = setup({
       | { type: 'screenshotCompleted'; dataUrls: string[]; requestId: string }
       | { type: 'screenshotFailed'; error: string; requestId: string },
       {
-        gl: THREE.WebGLRenderer;
+        gl: ViewportCadGl;
         scene: THREE.Scene;
         camera: THREE.Camera;
         options?: ScreenshotOptions;
@@ -728,7 +738,7 @@ export const screenshotCapabilityMachine = setup({
       | { type: 'screenshotCompleted'; dataUrls: string[]; requestId: string }
       | { type: 'screenshotFailed'; error: string; requestId: string },
       {
-        gl: THREE.WebGLRenderer;
+        gl: ViewportCadGl;
         scene: THREE.Scene;
         camera: THREE.Camera;
         options?: ScreenshotOptions;

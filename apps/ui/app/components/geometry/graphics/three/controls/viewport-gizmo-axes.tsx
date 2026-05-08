@@ -8,11 +8,14 @@ import type { OrbitControls } from 'three/addons';
 import type { ReactNode } from 'react';
 import { useColor } from '#hooks/use-color.js';
 import { useTheme } from '#hooks/use-theme.js';
+import { useThreeGraphicsBackend } from '#components/geometry/graphics/three/three-graphics-backend-context.js';
+import type { GizmoRenderer } from '#components/geometry/graphics/three/utils/gizmo.utils.js';
 import {
   resolveGizmoContainer,
   createGizmoCanvas,
-  createGizmoRenderer,
+  createGizmoRendererForBackend,
   disposeGizmoResources,
+  disposeStandaloneGizmoRenderer,
 } from '#components/geometry/graphics/three/utils/gizmo.utils.js';
 
 type ViewportGizmoAxesProps = {
@@ -50,7 +53,9 @@ export function ViewportGizmoAxes({
   // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- React ref
   const gizmoRef = useRef<ViewportGizmo | null>(null);
   // oxlint-disable-next-line @typescript-eslint/no-restricted-types -- React ref
-  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
+  const rendererRef = useRef<GizmoRenderer | null>(null);
+
+  const graphicsBackendThree = useThreeGraphicsBackend();
 
   const handleChange = useCallback((): void => {
     invalidate();
@@ -80,50 +85,75 @@ export function ViewportGizmoAxes({
 
     containerToUse.append(canvas);
 
-    const renderer = createGizmoRenderer(canvas, size);
+    let cancelled = false;
 
-    // Configure the gizmo options
-    const gizmoConfig: GizmoOptions = {
-      type: 'sphere',
-      placement: 'bottom-right',
-      size,
-      resolution: 256,
-      className,
-      container: containerToUse,
-      font: {
-        weight: 'normal',
-        family: 'monospace',
-      },
-      offset: {
-        bottom: 0,
-        right: 0,
-      },
-    };
+    // async-iife: bootstrap — standalone gizmo renderer + ViewportGizmo init must run off the sync effect teardown path
+    void (async (): Promise<void> => {
+      const renderer = await createGizmoRendererForBackend(canvas, size, graphicsBackendThree);
+      if (cancelled) {
+        disposeStandaloneGizmoRenderer(renderer);
+        return;
+      }
 
-    // Create the gizmo
-    const gizmo = new ViewportGizmo(camera, renderer, gizmoConfig);
-    gizmoRef.current = gizmo;
-    rendererRef.current = renderer;
+      const gizmoConfig: GizmoOptions = {
+        type: 'sphere',
+        placement: 'bottom-right',
+        size,
+        resolution: 256,
+        className,
+        container: containerToUse,
+        font: {
+          weight: 'normal',
+          family: 'monospace',
+        },
+        offset: {
+          bottom: 0,
+          right: 0,
+        },
+      };
 
-    // Add event listeners for the gizmo
-    gizmo.addEventListener('change', handleChange);
-    gizmo.addEventListener('hoverchange', handleChange);
+      const gizmo = new ViewportGizmo(camera, renderer, gizmoConfig);
+      gizmoRef.current = gizmo;
+      rendererRef.current = renderer;
 
-    gizmo.scale.multiplyScalar(0.7);
+      gizmo.addEventListener('change', handleChange);
+      gizmo.addEventListener('hoverchange', handleChange);
 
-    // Attach the controls to enable proper interaction
-    gizmo.attachControls(controls);
+      gizmo.scale.multiplyScalar(0.7);
 
-    // Cleanup function
+      gizmo.attachControls(controls);
+
+      invalidate();
+    })();
+
     return () => {
-      // Clear refs so the useFrame callback cannot operate on disposed objects
+      cancelled = true;
+      const gizmo = gizmoRef.current;
+      const renderer = rendererRef.current;
       gizmoRef.current = null;
       rendererRef.current = null;
 
-      disposeGizmoResources({ gizmo, renderer, canvas, handleChange });
+      if (gizmo && renderer) {
+        disposeGizmoResources({ gizmo, renderer, canvas, handleChange });
+      } else if (canvas.parentElement) {
+        canvas.remove();
+      }
     };
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- dependencies array is user-provided for custom recreation triggers
-  }, [camera, gl, controls, scene, serialized.hex, theme, size, handleChange, container, ...dependencies]);
+  }, [
+    camera,
+    gl,
+    controls,
+    graphicsBackendThree,
+    scene,
+    serialized.hex,
+    theme,
+    size,
+    handleChange,
+    container,
+    invalidate,
+    ...dependencies,
+  ]);
 
   return null;
 }

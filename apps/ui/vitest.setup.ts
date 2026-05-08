@@ -14,6 +14,47 @@ Object.defineProperty(globalThis, 'ENV', {
   value: mockEnv,
 });
 
+// Monaco 0.55+ evaluates `document.queryCommandSupported('paste')` at module load
+// (see monaco-editor clipboard contribution). jsdom does not implement it.
+if (typeof document !== 'undefined' && typeof document.queryCommandSupported !== 'function') {
+  Object.defineProperty(document, 'queryCommandSupported', {
+    configurable: true,
+    writable: true,
+    value: () => false,
+  });
+}
+
+// oxlint-disable-next-line @typescript-eslint/naming-convention -- Monaco's global contract
+const g = globalThis as typeof globalThis & {
+  MonacoEnvironment?: { getWorkerUrl?: (moduleId: string, label: string) => string };
+};
+g.MonacoEnvironment ??= {
+  getWorkerUrl(): string {
+    const src = 'self.onmessage=function(){};';
+    return `data:application/javascript;charset=utf-8,${encodeURIComponent(src)}`;
+  },
+};
+
+// jsdom does not define the Web `Worker` global; Monaco still constructs one for TS diagnostics.
+if (typeof globalThis.Worker === 'undefined') {
+  globalThis.Worker = class Worker {
+    // oxlint-disable-next-line no-empty-function -- test stub
+    public constructor(_scriptURL: string | URL, _options?: WorkerOptions) {}
+
+    public postMessage(_message: unknown): void {}
+
+    public terminate(): void {}
+
+    public addEventListener(): void {}
+
+    public removeEventListener(): void {}
+
+    public dispatchEvent(): boolean {
+      return true;
+    }
+  } as unknown as typeof Worker;
+}
+
 // Mock common browser APIs for testing
 Object.defineProperty(globalThis, 'matchMedia', {
   writable: true,

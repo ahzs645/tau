@@ -1,0 +1,40 @@
+{
+  "blendColor": 0,
+  "color": 16777215,
+  "envMapRotation": [0, 0, 0, "XYZ"],
+  "inputNodes": {
+    "colorNode": "<nodeRef>"
+  },
+  "metadata": {
+    "generator": "Material.toJSON",
+    "type": "Material",
+    "version": 4.7
+  },
+  "nodes": [
+    {
+      "inputNodes": {
+        "node": "<nodeRef>"
+      },
+      "type": "VarNode"
+    },
+    {
+      "inputNodes": {
+        "shaderNode": "<nodeRef>"
+      },
+      "type": "Node"
+    },
+    {
+      "type": "Node"
+    }
+  ],
+  "reflectivity": 1,
+  "refractionRatio": 0.98,
+  "side": 2,
+  "stencilFail": 7681,
+  "stencilFunc": 517,
+  "stencilWrite": true,
+  "stencilZFail": 7681,
+  "stencilZPass": 7681,
+  "transparent": true,
+  "type": "MeshBasicNodeMaterial"
+}

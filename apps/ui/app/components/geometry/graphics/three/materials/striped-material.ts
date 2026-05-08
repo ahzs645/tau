@@ -1,32 +1,10 @@
 import * as THREE from 'three';
+import type { ResolvedGraphicsBackend } from '#constants/editor.constants.js';
+import { createStripedNodeMaterial } from '#components/geometry/graphics/three/materials/striped-material.node.js';
+import type { StripedMaterialProperties } from '#components/geometry/graphics/three/materials/striped-material.types.js';
 
-type StripedMaterialProperties = {
-  /**
-   * The frequency of the stripes (distance between stripes in pixels).
-   * @default 2
-   */
-  readonly stripeFrequency?: number;
-  /**
-   * The width of each stripe in pixels.
-   * @default 0.25
-   */
-  readonly stripeWidth?: number;
-  /**
-   * The base color of the material.
-   * @default 0xffffff (white)
-   */
-  readonly baseColor?: number;
-  /**
-   * The color of the stripes.
-   * @default 0xffffff (white)
-   */
-  readonly stripeColor?: number;
-  /**
-   * Stripe angle in radians (screen space). 0 = horizontal, PI/2 = vertical.
-   * @default Math.PI / 4 (45° diagonal)
-   */
-  readonly stripeAngle?: number;
-};
+/* oxlint-disable-next-line no-barrel-files/no-barrel-files -- façade consumers resolve `StripedMaterialProperties` from this module */
+export type { StripedMaterialProperties } from '#components/geometry/graphics/three/materials/striped-material.types.js';
 
 /**
  * Creates a striped material for cap planes.
@@ -131,4 +109,18 @@ export function createStripedMaterial(properties?: StripedMaterialProperties): T
   });
 
   return stripedMaterial;
+}
+
+/**
+ * Discriminated striped cap material factory for dual WebGL/WebGPU stacks.
+ */
+export function createStripedMaterialForBackend(
+  backend: ResolvedGraphicsBackend,
+  properties?: StripedMaterialProperties,
+): THREE.Material {
+  if (backend === 'webgpu') {
+    return createStripedNodeMaterial(properties);
+  }
+
+  return createStripedMaterial(properties);
 }

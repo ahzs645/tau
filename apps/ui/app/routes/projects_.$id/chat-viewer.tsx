@@ -20,7 +20,7 @@ import { ChatInterfaceStatus } from '#routes/projects_.$id/chat-interface-status
 import { useIsTopRightPanel } from '#components/panes/use-is-top-right-group.js';
 import { useIsMobile } from '#hooks/use-mobile.js';
 import { cn } from '#utils/ui.utils.js';
-import { ChatArButton } from '#routes/projects_.$id/chat-ar-button.js';
+import { ArButton } from '#components/cad/ar-button.js';
 
 type ChatViewerProps = {
   /** Unique Dockview panel ID for this viewer instance */
@@ -339,7 +339,7 @@ const ViewerContent = memo(function ({
       )}
 
       {/* AR button — mobile iOS only, positioned bottom-right above controls */}
-      <ChatArButton geometries={geometries} kernelClient={kernelClient} className='absolute right-3 bottom-14 z-10' />
+      <ArButton geometries={geometries} kernelClient={kernelClient} className='absolute right-3 bottom-14 z-10' />
 
       {/* Bottom controls */}
       <div className='absolute right-2 bottom-2 left-2 z-10 flex shrink-0 flex-col gap-2'>

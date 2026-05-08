@@ -1,7 +1,8 @@
 import type { GLTF } from 'three/addons/loaders/GLTFLoader.js';
 import type { Mesh, Material, Scene, Texture } from 'three';
 import { DoubleSide, MeshMatcapMaterial } from 'three';
-import { LineSegments2 } from 'three/addons';
+import type { ResolvedGraphicsBackend } from '#constants/editor.constants.js';
+import { MeshMatcapNodeMaterial } from 'three/webgpu';
 import { matcapMaterial } from '#components/geometry/graphics/three/materials/matcap-material.js';
 import { sceneTag, hasSceneTag } from '#components/geometry/graphics/three/utils/scene-tags.js';
 
@@ -15,30 +16,51 @@ function disposeMaterials(material: Material | Material[]): void {
   }
 }
 
+type ApplyMatcapToClonedSceneOptions = Readonly<{
+  /** Color multiplier applied to every matcap material (1.0 = unchanged). */
+  tint?: number;
+  /** WebGL shader matcap vs WebGPU/TSL {@link MeshMatcapNodeMaterial}. */
+  backend?: ResolvedGraphicsBackend;
+}>;
+
+function createMeshMatcapReplacement(
+  backend: ResolvedGraphicsBackend,
+  matcapTexture: Texture,
+): MeshMatcapMaterial | MeshMatcapNodeMaterial {
+  return backend === 'webgpu'
+    ? new MeshMatcapNodeMaterial({
+        matcap: matcapTexture,
+        side: DoubleSide,
+      })
+    : new MeshMatcapMaterial({
+        matcap: matcapTexture,
+        side: DoubleSide,
+      });
+}
+
 /**
  * Apply Three.js matcap to a GLTF scene, respecting vertex colors and material colors.
  *
  * Note: LineSegments2 extends Mesh but uses LineMaterial for fat line rendering.
  * We must exclude LineSegments2 from matcap application to preserve edge rendering.
  *
- * @param gltf - The GLTF scene to apply matcap to.
+ * @param gltf - Loaded glTF root (scene is traversed in place).
  * @param tint - Color multiplier applied to every matcap material (1.0 = full brightness, lower = dimmed).
+ * @param backend - WebGL shader matcap vs WebGPU/TSL {@link MeshMatcapNodeMaterial}.
  */
-export const applyMatcap = async (gltf: GLTF, tint = 1): Promise<void> => {
+export const applyMatcap = async (gltf: GLTF, tint = 1, backend: ResolvedGraphicsBackend = 'webgl'): Promise<void> => {
   // Load matcap texture
   const matcapTexture = matcapMaterial();
 
   gltf.scene.traverse((child) => {
-    // Skip LineSegments2 - they extend Mesh but use LineMaterial for fat lines
-    if (child instanceof LineSegments2) {
+    // Skip fat-line meshes (`LineSegments2`) — WebGL + WebGPU both use `.type === 'LineSegments2'`.
+    // They extend Mesh but use fat-line materials; matcap breaks edge rendering.
+    if ('type' in child && child.type === 'LineSegments2') {
       return;
     }
 
     if ('isMesh' in child && child.isMesh) {
-      const meshMatcap = new MeshMatcapMaterial({
-        matcap: matcapTexture,
-        side: DoubleSide,
-      });
+      const meshMatcap = createMeshMatcapReplacement(backend, matcapTexture);
       const mesh = child as Mesh;
 
       // Preserve clipping planes so section-view clipping survives matcap replacement
@@ -86,12 +108,19 @@ export const applyMatcap = async (gltf: GLTF, tint = 1): Promise<void> => {
  *
  * @param scene - The cloned THREE.Scene to apply matcap materials to.
  * @param matcapTexture - A fully-loaded matcap texture (use `ensureMatcapTextureLoaded()`).
- * @param tint - Color multiplier applied to every matcap material (1.0 = full brightness, lower = dimmed).
+ * @param options - Optional `tint` and `backend`; defaults match `applyMatcap` (`tint` 1, backend `webgl`).
  */
-export function applyMatcapToClonedScene(scene: Scene, matcapTexture: Texture, tint = 1): void {
+export function applyMatcapToClonedScene(
+  scene: Scene,
+  matcapTexture: Texture,
+  options?: ApplyMatcapToClonedSceneOptions,
+): void {
+  const tint = options?.tint ?? 1;
+  const backend = options?.backend ?? 'webgl';
+
   scene.traverse((child) => {
-    // Skip LineSegments2 — they extend Mesh but use LineMaterial for fat lines
-    if (child instanceof LineSegments2) {
+    // Skip fat-line meshes (`LineSegments2`) — WebGL + WebGPU both use `.type === 'LineSegments2'`.
+    if ('type' in child && child.type === 'LineSegments2') {
       return;
     }
 
@@ -103,10 +132,7 @@ export function applyMatcapToClonedScene(scene: Scene, matcapTexture: Texture, t
 
     if ('isMesh' in child && child.isMesh) {
       const mesh = child as Mesh;
-      const meshMatcap = new MeshMatcapMaterial({
-        matcap: matcapTexture,
-        side: DoubleSide,
-      });
+      const meshMatcap = createMeshMatcapReplacement(backend, matcapTexture);
 
       // Preserve clipping planes so section-view clipping survives matcap replacement
       if (!Array.isArray(mesh.material) && mesh.material.clippingPlanes?.length) {

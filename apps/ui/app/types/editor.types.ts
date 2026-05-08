@@ -14,6 +14,8 @@ export type OpenFile = {
   name: string;
   /** Timestamp of last focus/access for LRU eviction. */
   lastAccessedAt: number;
+  /** Bundled kernel typings (`node_modules/…` workspace-relative) open read-only. */
+  readOnly?: boolean;
 };
 
 /**

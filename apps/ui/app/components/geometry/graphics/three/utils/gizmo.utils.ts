@@ -8,6 +8,9 @@
 
 import type { ViewportGizmo } from 'three-viewport-gizmo';
 import * as THREE from 'three';
+import type { WebGPURenderer } from 'three/webgpu';
+import type { ResolvedGraphicsBackend } from '#constants/editor.constants.js';
+import { createTauRenderer } from '#components/geometry/graphics/three/tau-renderer.js';
 import {
   calculateGizmoFovFromAngle,
   calculateFovDistanceCompensation,
@@ -16,6 +19,9 @@ import {
   gizmoDepthMargin,
   gizmoFocusOffset,
 } from '#components/geometry/graphics/three/utils/math.utils.js';
+
+/** Renderer used by the overlay `ViewportGizmo` instances. */
+export type GizmoRenderer = THREE.WebGLRenderer | InstanceType<typeof WebGPURenderer>;
 
 // ── FOV synchronization ─────────────────────────────────────────────────────
 
@@ -86,17 +92,20 @@ export function createGizmoCanvas(className: string): HTMLCanvasElement {
   return canvas;
 }
 
-/**
- * Create and configure a WebGL renderer for a viewport gizmo.
- *
- * Uses alpha + antialias, caps pixel ratio at 2, and clears to transparent.
- */
-export function createGizmoRenderer(canvas: HTMLCanvasElement, size: number): THREE.WebGLRenderer {
-  const renderer = new THREE.WebGLRenderer({
-    canvas,
-    alpha: true,
-    antialias: true,
-  });
+export function disposeStandaloneGizmoRenderer(renderer: GizmoRenderer): void {
+  if ('forceContextLoss' in renderer && typeof renderer.forceContextLoss === 'function') {
+    renderer.forceContextLoss();
+  }
+
+  renderer.dispose();
+}
+
+export async function createGizmoRendererForBackend(
+  canvas: HTMLCanvasElement,
+  size: number,
+  backend: ResolvedGraphicsBackend,
+): Promise<GizmoRenderer> {
+  const renderer = await createTauRenderer('gizmo', backend, canvas);
   renderer.setSize(size, size);
   const dpr = Math.min(globalThis.devicePixelRatio, 2);
   renderer.setPixelRatio(dpr);
@@ -111,7 +120,7 @@ export function createGizmoRenderer(canvas: HTMLCanvasElement, size: number): TH
  *
  * Removes event listeners, disposes the gizmo and renderer, removes the
  * canvas from the DOM, and forces WebGL context loss to prevent GPU context
- * exhaustion.
+ * exhaustion where applicable (WebGPU has no analogous API).
  */
 export function disposeGizmoResources({
   gizmo,
@@ -120,7 +129,7 @@ export function disposeGizmoResources({
   handleChange,
 }: {
   gizmo: ViewportGizmo;
-  renderer: THREE.WebGLRenderer;
+  renderer: GizmoRenderer;
   canvas: HTMLCanvasElement;
   handleChange: () => void;
 }): void {
@@ -132,6 +141,5 @@ export function disposeGizmoResources({
     canvas.remove();
   }
 
-  renderer.forceContextLoss();
-  renderer.dispose();
+  disposeStandaloneGizmoRenderer(renderer);
 }

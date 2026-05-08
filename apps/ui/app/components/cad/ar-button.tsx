@@ -3,7 +3,7 @@ import { Loader2 } from 'lucide-react';
 import type { Geometry } from '@taucad/types';
 import { Button } from '#components/ui/button.js';
 import { useIsMobile } from '#hooks/use-mobile.js';
-import { useAr } from '#hooks/use-ar.js';
+import { useAr } from '#components/cad/use-ar.js';
 import type { AppRuntimeClient } from '#types/runtime-client.alias.js';
 import { cn } from '#utils/ui.utils.js';
 
@@ -33,7 +33,7 @@ function ArIcon({ className }: { readonly className?: string }): React.JSX.Eleme
   );
 }
 
-export const ChatArButton = memo(function ({
+export const ArButton = memo(function ({
   geometries,
   kernelClient,
   className,

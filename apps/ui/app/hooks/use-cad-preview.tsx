@@ -127,6 +127,7 @@ export function CadPreviewProvider({
       enablePostProcessing: defaultGraphicsSettings.enablePostProcessing,
       upDirection: defaultGraphicsSettings.upDirection,
       environmentPreset: defaultGraphicsSettings.environmentPreset,
+      graphicsBackendPreference: defaultGraphicsSettings.graphicsBackend ?? 'auto',
     },
   });
 
