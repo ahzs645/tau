@@ -24,6 +24,26 @@ export class WorkspacePathEscapeError extends Error {
   }
 }
 
+/**
+ * FM worker global OPFS mount for bundled kernel typings (`/node_modules/<pkg>/`).
+ * Workspace-relative keys use the same `node_modules/...` prefix as the UI file tree.
+ */
+const BUNDLED_TYPES_WORKSPACE_ROOT_SEGMENT = 'node_modules';
+
+function isWorkspaceRelativeGlobalNodeModules(relativePath: string): boolean {
+  return (
+    relativePath === BUNDLED_TYPES_WORKSPACE_ROOT_SEGMENT ||
+    relativePath.startsWith(`${BUNDLED_TYPES_WORKSPACE_ROOT_SEGMENT}/`)
+  );
+}
+
+function isAbsoluteGlobalNodeModules(absoluteNorm: string): boolean {
+  return (
+    absoluteNorm === `/${BUNDLED_TYPES_WORKSPACE_ROOT_SEGMENT}` ||
+    absoluteNorm.startsWith(`/${BUNDLED_TYPES_WORKSPACE_ROOT_SEGMENT}/`)
+  );
+}
+
 function resolvePathSegmentsUnderRoot(rootNorm: string, relativeSegments: string[], originalInput: string): string {
   const rootSegments = rootNorm.split('/').filter((segment) => segment.length > 0);
   const stack = [...rootSegments];
@@ -97,6 +117,11 @@ export class WorkspacePathResolver {
   public toRelativePath(absolutePath: string): string | undefined {
     const rootNorm = normalizePath(this.rootDirectory);
     const absNorm = normalizePath(absolutePath);
+    if (isAbsoluteGlobalNodeModules(absNorm)) {
+      return absNorm === `/${BUNDLED_TYPES_WORKSPACE_ROOT_SEGMENT}`
+        ? BUNDLED_TYPES_WORKSPACE_ROOT_SEGMENT
+        : absNorm.slice(1);
+    }
     if (absNorm === rootNorm) {
       return '';
     }
@@ -113,6 +138,9 @@ export class WorkspacePathResolver {
    * @returns Joined absolute path under the configured workspace root.
    */
   public toAbsolutePath(relativePath: string): string {
+    if (isWorkspaceRelativeGlobalNodeModules(relativePath)) {
+      return normalizePath(`/${relativePath}`);
+    }
     return joinPath(this.rootDirectory, relativePath);
   }
 
@@ -149,11 +177,18 @@ export class WorkspacePathResolver {
         return rootNorm;
       }
 
+      if (isWorkspaceRelativeGlobalNodeModules(trimmedRelative)) {
+        return normalizePath(`/${trimmedRelative}`);
+      }
+
       const segments = trimmedRelative.split('/').filter((s) => s.length > 0 && s !== '.');
       return resolvePathSegmentsUnderRoot(rootNorm, segments, input);
     }
 
     const absNormalized = normalizePath(trimmed);
+    if (isAbsoluteGlobalNodeModules(absNormalized)) {
+      return absNormalized;
+    }
     if (absNormalized === rootNorm || absNormalized.startsWith(`${rootNorm}/`)) {
       return absNormalized;
     }

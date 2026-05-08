@@ -123,6 +123,12 @@ export class TypeAcquisitionService {
       this.staticDisposables.push(tsDisposable, jsDisposable);
       this.builtinTypePackages.add(staticType.packageName);
       this.acquiredTypes.add(staticType.packageName);
+
+      const packageJsonPath = `file:///node_modules/${staticType.packageName}/package.json`;
+      const packageJsonContent = JSON.stringify({ name: staticType.packageName, types: 'index.d.ts' });
+      const tsPkgDisposable = monaco.typescript.typescriptDefaults.addExtraLib(packageJsonContent, packageJsonPath);
+      const jsPkgDisposable = monaco.typescript.javascriptDefaults.addExtraLib(packageJsonContent, packageJsonPath);
+      this.staticDisposables.push(tsPkgDisposable, jsPkgDisposable);
     }
   }
 

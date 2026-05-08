@@ -159,6 +159,15 @@ export class MountTable {
   }
 
   /**
+   * All mount entries, longest-prefix-first (same order as internal resolution).
+   *
+   * @public
+   */
+  public listMounts(): readonly MountEntry[] {
+    return this._mounts;
+  }
+
+  /**
    * Get child mounts under a given path (for readdir merge).
    *
    * @param path - Parent path to check for child mounts.

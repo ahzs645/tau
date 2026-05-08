@@ -6,6 +6,8 @@ export type ChatEditorViewerProps = {
   readonly language: string;
   readonly onChange: (value: string | undefined) => void;
   readonly onValidate: (markers: editor.IMarkerData[]) => void;
+  /** When true, Monaco is read-only and `onChange` is not invoked for edits. */
+  readonly readOnly?: boolean;
 };
 
 /**

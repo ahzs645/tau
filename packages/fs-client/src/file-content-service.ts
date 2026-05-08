@@ -4,7 +4,6 @@ import type { RefreshGenerationGuard } from '#refresh-generation-guard.js';
 import type { WorkerChangeChannel, WorkerRelativeRenameEvent } from '#worker-change-channel.js';
 import type { WorkspacePathResolver } from '#workspace-path-resolver.js';
 import type { SharedPool } from '@taucad/memory';
-import { joinPath } from '@taucad/utils/path';
 import type { FileSystemClient } from '#file-system-client.js';
 import type { FileWriteSource } from '#file-write-source.js';
 import { headSniffByteLength, seemsBinary } from '#seems-binary.js';
@@ -273,6 +272,42 @@ export class FileContentService {
   }
 
   /**
+   * Sync-backfill main-thread cache + `text` outcome after a successful read
+   * from the worker outside the usual resolve path (e.g. Monaco workspace FS
+   * proxy fall-through). Skips async worker round-trip on subsequent resolves.
+   *
+   * @param path - Workspace-relative path.
+   * @param data - File bytes already validated as openable text-sized UTF-8.
+   * @public
+   */
+  public populateText(path: string, data: Uint8Array<ArrayBuffer>): void {
+    this.pendingResolves.delete(path);
+    const limit = this.openSizeBytes;
+    if (seemsBinary(data)) {
+      const head = data.slice(0, headSniffByteLength);
+      const outcome: FileContentResult = { kind: 'binary', size: data.byteLength, head };
+      this.cache.delete(path);
+      this.publishOutcome(path, outcome);
+      return;
+    }
+
+    if (data.byteLength > limit) {
+      const outcome: FileContentResult = { kind: 'too-large', size: data.byteLength, limit };
+      this.cache.delete(path);
+      this.publishOutcome(path, outcome);
+      return;
+    }
+
+    const copy = new Uint8Array(data.byteLength);
+    copy.set(data);
+    this.cache.set(path, copy);
+    const outcome: FileContentResult = { kind: 'text', content: copy };
+    this.publishOutcome(path, outcome);
+    this.setOrphaned(path, false);
+    this.notifyGlobalSubscribers({ type: 'read', path, data: copy });
+  }
+
+  /**
    * Write file content. Clones buffer before transfer to prevent detachment.
    * @param path - Workspace-relative path.
    * @param data - Bytes to persist (copied before crossing the worker boundary).
@@ -280,7 +315,7 @@ export class FileContentService {
    */
   public async write(path: string, data: Uint8Array<ArrayBuffer>, source: FileWriteSource): Promise<void> {
     const localCopy = new Uint8Array(data);
-    const absolutePath = joinPath(this.paths.root, path);
+    const absolutePath = this.paths.toAbsolutePath(path);
     await this.proxy.writeFile(absolutePath, data);
     this.cache.set(path, localCopy);
     this.setOrphaned(path, false);
@@ -304,7 +339,7 @@ export class FileContentService {
     for (const [path, file] of Object.entries(files)) {
       const localCopy = new Uint8Array(file.content);
       clones.set(path, localCopy);
-      absoluteFiles[joinPath(this.paths.root, path)] = file;
+      absoluteFiles[this.paths.toAbsolutePath(path)] = file;
       paths.push(path);
     }
 
@@ -324,8 +359,8 @@ export class FileContentService {
    * @param newPath - Target workspace-relative path.
    */
   public async rename(oldPath: string, newPath: string): Promise<void> {
-    const absoluteOldPath = joinPath(this.paths.root, oldPath);
-    const absoluteNewPath = joinPath(this.paths.root, newPath);
+    const absoluteOldPath = this.paths.toAbsolutePath(oldPath);
+    const absoluteNewPath = this.paths.toAbsolutePath(newPath);
     await this.proxy.rename(absoluteOldPath, absoluteNewPath);
     this.cache.rename(oldPath, newPath);
     const oldOutcome = this.outcomes.get(oldPath);
@@ -343,7 +378,7 @@ export class FileContentService {
    * @param source - Provenance tag for downstream refresh heuristics.
    */
   public async delete(path: string, source: FileWriteSource): Promise<void> {
-    const absolutePath = joinPath(this.paths.root, path);
+    const absolutePath = this.paths.toAbsolutePath(path);
     await this.proxy.unlink(absolutePath);
     this.cache.delete(path);
     this.setOrphaned(path, true);
@@ -665,7 +700,7 @@ export class FileContentService {
 
   private async readBytes(path: string): Promise<Uint8Array<ArrayBuffer> | undefined> {
     if (this.filePool) {
-      const absolutePath = joinPath(this.paths.root, path);
+      const absolutePath = this.paths.toAbsolutePath(path);
       const poolData = this.filePool.resolveCopy(absolutePath);
       if (poolData) {
         this.setOrphaned(path, false);
@@ -673,7 +708,7 @@ export class FileContentService {
       }
     }
 
-    const absolutePath = joinPath(this.paths.root, path);
+    const absolutePath = this.paths.toAbsolutePath(path);
     try {
       const data = await this.proxy.readFile(absolutePath);
       this.setOrphaned(path, false);

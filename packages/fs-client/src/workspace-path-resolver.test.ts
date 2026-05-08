@@ -97,4 +97,28 @@ describe('WorkspacePathResolver', () => {
     const paths = new WorkspacePathResolver('/foo');
     expect(paths.toAbsolutePath('bar/baz.ts')).toBe('/foo/bar/baz.ts');
   });
+
+  it('routes bundled typings under /node_modules to the global mount, not the project root', () => {
+    const paths = new WorkspacePathResolver(projectRoot);
+    expect(paths.toAbsolutePath('node_modules/replicad/index.d.ts')).toBe('/node_modules/replicad/index.d.ts');
+    expect(paths.toAbsolutePath('main.ts')).toBe('/projects/abc/main.ts');
+    expect(paths.toRelativePath('/node_modules/replicad/index.d.ts')).toBe('node_modules/replicad/index.d.ts');
+    expect(paths.toRelativePath('/projects/abc/main.ts')).toBe('main.ts');
+  });
+});
+
+describe('WorkspacePathResolver global node_modules', () => {
+  it('maps global /node_modules absolute paths via toRelativePath', () => {
+    const paths = new WorkspacePathResolver('/projects/xyz');
+    expect(paths.toRelativePath('/node_modules/pkg/index.d.ts')).toBe('node_modules/pkg/index.d.ts');
+    expect(paths.toRelativePath('/node_modules')).toBe('node_modules');
+  });
+
+  it('resolves node_modules segments in toAbsoluteWorkspacePath', () => {
+    const paths = new WorkspacePathResolver(projectRoot);
+    expect(paths.toAbsoluteWorkspacePath('node_modules/replicad/index.d.ts')).toBe('/node_modules/replicad/index.d.ts');
+    expect(paths.toAbsoluteWorkspacePath('/node_modules/replicad/index.d.ts')).toBe(
+      '/node_modules/replicad/index.d.ts',
+    );
+  });
 });

@@ -58,14 +58,15 @@ function createMonacoUri(monaco: typeof Monaco, relativePath: string): Monaco.Ur
  */
 type EditorPanelParameters = {
   filePath: string;
+  readOnly?: boolean;
 };
 
 /**
  * Single file editor panel rendered inside each Dockview panel.
  */
 function EditorPanel(properties: IDockviewPanelProps<EditorPanelParameters>): React.JSX.Element {
-  const { filePath } = properties.params;
-  return <FileEditor filePath={filePath} panelApi={properties.api} />;
+  const { filePath, readOnly } = properties.params;
+  return <FileEditor filePath={filePath} readOnly={readOnly} panelApi={properties.api} />;
 }
 
 const components = {
@@ -78,9 +79,11 @@ const components = {
  */
 export const FileEditor = memo(function ({
   filePath,
+  readOnly: readOnlyFromParams,
   panelApi,
 }: {
   readonly filePath: string;
+  readonly readOnly?: boolean;
   readonly panelApi: IDockviewPanelProps['api'];
 }): React.JSX.Element {
   const monaco = useMonaco();
@@ -90,6 +93,11 @@ export const FileEditor = memo(function ({
   const { contentService } = fileManager;
   const { modelService, markerService } = useMonacoServices();
   const planModeEnabled = useFeature('planMode');
+  const openFiles = useSelector(editorRef, (state) => state.context.openFiles);
+  const readOnly =
+    readOnlyFromParams !== undefined
+      ? readOnlyFromParams
+      : (openFiles.find((file) => file.path === filePath)?.readOnly ?? false);
 
   // Kernel diagnostics
   const { handleValidate } = useKernelDiagnostics({
@@ -133,12 +141,16 @@ export const FileEditor = memo(function ({
 
   const handleCodeChange = useCallback(
     (value: ComponentProps<typeof CodeEditor>['value']) => {
+      if (readOnly) {
+        return;
+      }
+
       const encoded = encodeTextFile(value ?? '');
       void fileManager.writeFile(filePath, encoded, {
         source: 'editor',
       });
     },
-    [fileManager, filePath],
+    [readOnly, fileManager, filePath],
   );
 
   // Acquire/release ref-counted editor model hold
@@ -204,6 +216,7 @@ export const FileEditor = memo(function ({
             language={language}
             onChange={handleCodeChange}
             onValidate={handleValidate}
+            readOnly={readOnly}
           />
         </div>
       );
@@ -355,7 +368,7 @@ export const EditorDockview = memo(function (): React.JSX.Element {
             id: event.path,
             component: 'editor',
             title: fileName,
-            params: { filePath: event.path },
+            params: { filePath: event.path, readOnly: event.readOnly },
           });
         }
 

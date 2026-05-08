@@ -62,7 +62,19 @@ export type EditorStateContext = {
   error: Error | undefined;
   /** Flag indicating changes occurred during a write operation that need persisting */
   hasPendingChanges: boolean;
+  /** Optional: awaited before new tabs emit `fileOpened` (Monaco model materialisation). */
+  materialiseModel?: (path: string) => Promise<void>;
+  /** In-flight deferred open (only set while materialising). */
+  pendingOpenFile?: PendingOpenFile;
 };
+
+type PendingOpenFile = Readonly<{
+  path: string;
+  source: FileOpenSource;
+  lineNumber?: number;
+  column?: number;
+  readOnly?: boolean;
+}>;
 
 /**
  * Editor state Machine Input
@@ -78,7 +90,8 @@ type EditorStateEvent =
   | { type: 'load' }
   | { type: 'reload'; projectId: string }
   // File operations (consolidated from fileExplorerMachine)
-  | { type: 'openFile'; path: string; source: FileOpenSource; lineNumber?: number; column?: number }
+  | { type: 'openFile'; path: string; source: FileOpenSource; lineNumber?: number; column?: number; readOnly?: boolean }
+  | { type: 'registerMaterialiseModel'; materialiseModel: ((path: string) => Promise<void>) | undefined }
   | { type: 'closeFile'; path: string }
   | { type: 'setActiveFile'; path: string }
   | { type: 'revealFileInTree'; path: string; expandTarget?: boolean }
@@ -104,7 +117,16 @@ type EditorStateEvent =
  */
 type EditorStateEmitted =
   | { type: 'editorStateLoaded'; editorState: EditorState | undefined }
-  | { type: 'fileOpened'; path: string; lineNumber?: number; column?: number; source?: FileOpenSource }
+  | {
+      type: 'fileOpened';
+      path: string;
+      lineNumber?: number;
+      column?: number;
+      source?: FileOpenSource;
+      readOnly?: boolean;
+    }
+  | { type: 'fileOpening'; path: string }
+  | { type: 'fileOpenFailed'; path: string; error: Error }
   | { type: 'fileRevealRequested'; path: string; expandTarget?: boolean };
 
 // Actors to be provided by the consumer
@@ -118,6 +140,16 @@ const loadEditorStateActor = fromSafeAsync<
 const saveEditorStateActor = fromSafeAsync<void, { editorState: EditorStateInput }>(async () => {
   throw new Error('Not implemented. Please supply via provide.');
 });
+
+const materialiseOpenFileActor = fromSafeAsync<void, { path: string; materialise: (path: string) => Promise<void> }>(
+  async ({ input, signal }) => {
+    if (signal.aborted) {
+      return;
+    }
+
+    await input.materialise(input.path);
+  },
+);
 
 /**
  * Editor State Machine
@@ -144,6 +176,7 @@ export const editorMachine = setup({
   actors: {
     loadEditorStateActor,
     saveEditorStateActor,
+    materialiseOpenFileActor,
   },
   actions: {
     // ============================================================================
@@ -202,10 +235,12 @@ export const editorMachine = setup({
 
       // Emit fileOpened for active file (for CAD, tabs, etc.)
       if (loadedState?.activeFilePath) {
+        const activeMeta = loadedState.openFiles.find((f) => f.path === loadedState.activeFilePath);
         enqueue.emit({
           type: 'fileOpened',
           path: loadedState.activeFilePath,
           source: 'machine',
+          readOnly: activeMeta?.readOnly,
         });
       }
 
@@ -227,6 +262,8 @@ export const editorMachine = setup({
         editorLayout: undefined,
         viewerLayout: undefined,
         viewSettings: {},
+        materialiseModel: undefined,
+        pendingOpenFile: undefined,
       };
     }),
 
@@ -234,6 +271,73 @@ export const editorMachine = setup({
       type: 'editorStateLoaded',
       editorState: undefined,
     })),
+
+    setMaterialiseModel: assign(({ event }) => {
+      assertEvent(event, 'registerMaterialiseModel');
+      return { materialiseModel: event.materialiseModel };
+    }),
+
+    stashPendingOpenAndEmitOpening: enqueueActions(({ enqueue, event }) => {
+      assertEvent(event, 'openFile');
+      enqueue.assign({
+        pendingOpenFile: {
+          path: event.path,
+          source: event.source,
+          lineNumber: event.lineNumber,
+          column: event.column,
+          readOnly: event.readOnly,
+        },
+      });
+      enqueue.emit({ type: 'fileOpening', path: event.path });
+    }),
+
+    finalizeMaterializedOpenSuccess: enqueueActions(({ enqueue, context }) => {
+      const pending = context.pendingOpenFile;
+      if (!pending) {
+        return;
+      }
+
+      const now = Date.now();
+      const newFile: OpenFile = {
+        path: pending.path,
+        name: pending.path.split('/').pop() ?? pending.path,
+        lastAccessedAt: now,
+        readOnly: pending.readOnly,
+      };
+
+      let updatedFiles = [...context.openFiles, newFile];
+
+      if (updatedFiles.length > maxOpenFiles) {
+        const sorted = [...updatedFiles].sort((a, b) => a.lastAccessedAt - b.lastAccessedAt);
+        const victim = sorted.find((f) => f.path !== newFile.path);
+        if (victim) {
+          updatedFiles = updatedFiles.filter((f) => f.path !== victim.path);
+        }
+      }
+
+      enqueue.assign({
+        openFiles: updatedFiles,
+        activeFilePath: newFile.path,
+        pendingOpenFile: undefined,
+      });
+
+      enqueue.emit({
+        type: 'fileOpened',
+        path: pending.path,
+        lineNumber: pending.lineNumber,
+        column: pending.column,
+        source: pending.source,
+        readOnly: pending.readOnly,
+      });
+    }),
+
+    finalizeMaterializedOpenFailure: enqueueActions(({ enqueue, event, context }) => {
+      const path = context.pendingOpenFile?.path ?? 'unknown';
+      const err =
+        'error' in event && event.error instanceof Error ? event.error : new Error('Materialise model failed');
+      enqueue.assign({ pendingOpenFile: undefined });
+      enqueue.emit({ type: 'fileOpenFailed', path, error: err });
+    }),
 
     // ============================================================================
     // File operations (consolidated from fileExplorerMachine)
@@ -244,9 +348,10 @@ export const editorMachine = setup({
       const now = Date.now();
       const existingFile = context.openFiles.find((f) => f.path === event.path);
       if (existingFile) {
-        // File already open - update lastAccessedAt
         enqueue.assign({
-          openFiles: context.openFiles.map((f) => (f.path === event.path ? { ...f, lastAccessedAt: now } : f)),
+          openFiles: context.openFiles.map((f) =>
+            f.path === event.path ? { ...f, lastAccessedAt: now, readOnly: event.readOnly ?? f.readOnly } : f,
+          ),
           activeFilePath: event.path,
         });
         enqueue.emit({
@@ -255,6 +360,7 @@ export const editorMachine = setup({
           lineNumber: event.lineNumber,
           column: event.column,
           source: event.source,
+          readOnly: event.readOnly ?? existingFile.readOnly,
         });
         return;
       }
@@ -264,6 +370,7 @@ export const editorMachine = setup({
         path: event.path,
         name: event.path.split('/').pop() ?? event.path,
         lastAccessedAt: now,
+        readOnly: event.readOnly,
       };
 
       let updatedFiles = [...context.openFiles, newFile];
@@ -288,6 +395,7 @@ export const editorMachine = setup({
         lineNumber: event.lineNumber,
         column: event.column,
         source: event.source,
+        readOnly: event.readOnly,
       });
     }),
 
@@ -487,6 +595,18 @@ export const editorMachine = setup({
     hasPendingChanges({ context }) {
       return context.hasPendingChanges;
     },
+    shouldDeferOpenFile({ context, event }) {
+      assertEvent(event, 'openFile');
+      if (context.pendingOpenFile !== undefined) {
+        return false;
+      }
+
+      if (context.materialiseModel === undefined) {
+        return false;
+      }
+
+      return !context.openFiles.some((f) => f.path === event.path);
+    },
   },
   delays: {
     storeDebounce: 500,
@@ -506,6 +626,8 @@ export const editorMachine = setup({
       isLoading: false,
       error: undefined,
       hasPendingChanges: false,
+      materialiseModel: undefined,
+      pendingOpenFile: undefined,
     };
   },
   initial: 'idle',
@@ -553,12 +675,36 @@ export const editorMachine = setup({
           initial: 'idle',
           states: {
             idle: {},
+            materializingOpenFile: {
+              invoke: {
+                src: 'materialiseOpenFileActor',
+                input: ({ context }) => ({
+                  path: context.pendingOpenFile?.path ?? '',
+                  materialise: context.materialiseModel!,
+                }),
+                onDone: {
+                  target: 'idle',
+                  actions: 'finalizeMaterializedOpenSuccess',
+                },
+                onError: {
+                  target: 'idle',
+                  actions: 'finalizeMaterializedOpenFailure',
+                },
+              },
+            },
           },
           on: {
-            // File operations
-            openFile: {
-              actions: 'openFile',
+            registerMaterialiseModel: {
+              actions: 'setMaterialiseModel',
             },
+            openFile: [
+              {
+                guard: 'shouldDeferOpenFile',
+                target: '.materializingOpenFile',
+                actions: 'stashPendingOpenAndEmitOpening',
+              },
+              { actions: 'openFile' },
+            ],
             closeFile: {
               actions: 'closeFile',
             },
@@ -574,22 +720,18 @@ export const editorMachine = setup({
             closeAll: {
               actions: 'closeAll',
             },
-            // Chat operations
             setFocusedChatId: {
               actions: 'setFocusedChatIdInContext',
             },
-            // Panel operations
             setPanelState: {
               actions: 'setPanelStateInContext',
             },
-            // Dockview layout operations
             setEditorLayout: {
               actions: 'setEditorLayoutInContext',
             },
             setViewerLayout: {
               actions: 'setViewerLayoutInContext',
             },
-            // View settings operations
             setViewSettings: {
               actions: 'setViewSettingsInContext',
             },
@@ -599,7 +741,6 @@ export const editorMachine = setup({
             removeViewSettings: {
               actions: 'removeViewSettingsInContext',
             },
-            // Reload
             reload: {
               target: '#editor.loading',
               actions: ['updateProjectId', 'setLoading'],
@@ -623,6 +764,7 @@ export const editorMachine = setup({
                 setViewSettings: { target: 'pending' },
                 updateViewSettings: { target: 'pending' },
                 removeViewSettings: { target: 'pending' },
+                registerMaterialiseModel: { target: 'pending' },
               },
             },
             pending: {
@@ -642,6 +784,7 @@ export const editorMachine = setup({
                 setViewSettings: { target: 'pending', reenter: true },
                 updateViewSettings: { target: 'pending', reenter: true },
                 removeViewSettings: { target: 'pending', reenter: true },
+                registerMaterialiseModel: { target: 'pending', reenter: true },
                 // Immediately bypass debounce and write
                 flushNow: { target: 'writing' },
               },
@@ -687,6 +830,7 @@ export const editorMachine = setup({
                 setViewSettings: { actions: 'setPendingChanges' },
                 updateViewSettings: { actions: 'setPendingChanges' },
                 removeViewSettings: { actions: 'setPendingChanges' },
+                registerMaterialiseModel: { actions: 'setPendingChanges' },
               },
             },
           },

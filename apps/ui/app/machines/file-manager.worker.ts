@@ -9,17 +9,20 @@
 
 import { exposeFileSystem, workerReadyMessageType } from '@taucad/runtime/transport-internals';
 
+import { populateBundledTypesMount, type BundledTypesPayload } from '@taucad/filesystem/bundled-types-mount';
+import { FileSystemAccessProvider } from '@taucad/filesystem/backend';
 import {
+  ChangeEventBus,
+  EventCoalescer,
+  MountTable,
   ProviderRegistry,
   ResourceQueue,
-  ChangeEventBus,
-  WorkspaceFileService,
-  MountTable,
-  EventCoalescer,
   ThrottledWorker,
+  WorkspaceFileService,
 } from '@taucad/filesystem';
-import { FileSystemAccessProvider } from '@taucad/filesystem/backend';
 import { SharedPool } from '@taucad/memory';
+import type { SyncFsWorkspaceAdapter } from '@taucad/lsp-fs/sync';
+import { attachSyncFsServer } from '@taucad/lsp-fs/sync';
 import { metaConfig } from '#constants/meta.constants.js';
 
 const providerRegistry = new ProviderRegistry({ databasePrefix: metaConfig.databasePrefix });
@@ -155,13 +158,66 @@ exposeFileSystem(fileService, {
   createThrottledWorker: (handler) => new ThrottledWorker(handler),
 });
 
-self.addEventListener('message', (event: MessageEvent<{ type: string; buffer?: SharedArrayBuffer }>) => {
-  const { data } = event;
-  if (data.type === 'filePool' && data.buffer instanceof SharedArrayBuffer) {
-    fileService.setFilePool(new SharedPool(data.buffer));
-    console.debug('[FM-Worker] filePool attached');
-  }
-});
+let languageFsSyncDispose: { dispose(): void } | undefined;
+
+self.addEventListener(
+  'message',
+  (
+    event: MessageEvent<{
+      type?: string;
+      buffer?: SharedArrayBuffer;
+      port?: MessagePort;
+      slotSab?: SharedArrayBuffer;
+      arenaSab?: SharedArrayBuffer;
+    }>,
+  ) => {
+    const { data } = event;
+    if (data.type === 'filePool' && data.buffer instanceof SharedArrayBuffer) {
+      fileService.setFilePool(new SharedPool(data.buffer));
+      console.debug('[FM-Worker] filePool attached');
+      return;
+    }
+
+    if (data.type === 'tau:populate-bundled-types' && Array.isArray((data as { payload?: unknown }).payload)) {
+      const payload = (data as { payload: BundledTypesPayload }).payload;
+      void populateBundledTypesMount(fileService, payload).catch((error: unknown) => {
+        console.error('[FM-Worker] tau:populate-bundled-types failed', error);
+      });
+      return;
+    }
+
+    if (
+      data.type === 'languageFsSyncAttach' &&
+      data.port instanceof MessagePort &&
+      data.slotSab instanceof SharedArrayBuffer &&
+      data.arenaSab instanceof SharedArrayBuffer
+    ) {
+      languageFsSyncDispose?.dispose();
+      const workspace: SyncFsWorkspaceAdapter = {
+        readFileBytes: async (path) => {
+          const bytes = await fileService.readFile(path);
+          if (typeof bytes === 'string') {
+            return new TextEncoder().encode(bytes);
+          }
+          return bytes;
+        },
+        stat: async (path) => {
+          const stat = await fileService.stat(path);
+          return { mtimeMs: stat.mtimeMs, isDirectory: stat.type === 'dir' };
+        },
+        readdir: async (path) => fileService.readdir(path),
+      };
+      languageFsSyncDispose = attachSyncFsServer({
+        port: data.port,
+        slotSab: data.slotSab,
+        arenaSab: data.arenaSab,
+        workspace,
+      });
+      console.debug('[FM-Worker] languageFs sync FS attach');
+      return;
+    }
+  },
+);
 
 console.debug(`[FM-Worker] exposeFileSystem registered at +${(performance.now() - t0).toFixed(1)}ms`);
 self.postMessage({ type: workerReadyMessageType });

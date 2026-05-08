@@ -19,6 +19,17 @@ import { MonacoMarkerService } from '#lib/monaco-marker-service.js';
 import { MonacoModelService } from '#lib/monaco-model-service.js';
 import { registry } from '#lib/monaco-language-registry.js';
 import { registerMonacoNavigation } from '#lib/monaco-navigation-service.js';
+import {
+  createMonacoWorkspaceFs,
+  createExtraLibsFileSystemProvider,
+  createWorkspaceFileSystemProvider,
+  subscribeWorkspaceContentDispatch,
+} from '#lib/monaco-workspace-fs/index.js';
+import {
+  clearTauLanguageHostPortFactory,
+  openTauLanguageHostPort,
+  setTauLanguageHostPortFactory,
+} from '@taucad/lsp/language-fs-sync-host';
 import type { ActorRefFrom } from 'xstate';
 import type { cadMachine } from '#machines/cad.machine.js';
 import { useProject } from '#hooks/use-project.js';
@@ -54,12 +65,32 @@ export function MonacoModelServiceProvider({ children }: { readonly children: Re
     const markerService = new MonacoMarkerService();
     markerService.initialize(monaco);
 
+    setTauLanguageHostPortFactory(() => openTauLanguageHostPort(fileManagerRef));
+
+    const workspaceFs = createMonacoWorkspaceFs(monaco);
+    workspaceFs.registerFileSystemProvider(
+      createWorkspaceFileSystemProvider({
+        monaco,
+        contentService,
+        searchFiles: async (query, options) => treeService.searchFiles(query, options),
+      }),
+    );
+    workspaceFs.registerFileSystemProvider(createExtraLibsFileSystemProvider(monaco));
+
     const modelService = new MonacoModelService();
     modelService.initialize({
       monaco,
+      workspaceFs,
       contentService,
-      treeService,
       markerService,
+    });
+    workspaceFs.bindModelService({
+      async refreshContent(uri) {
+        await modelService.refreshContent(uri);
+      },
+    });
+    const workspaceContentDispatch = subscribeWorkspaceContentDispatch(contentService, (event) => {
+      modelService.applyContentChange(event);
     });
 
     // Surface deferred activation failures via toast (deduped per language id
@@ -76,33 +107,58 @@ export function MonacoModelServiceProvider({ children }: { readonly children: Re
       });
     });
 
-    const handlers = registry.activate({
+    registry.activate({
       monaco,
       modelService,
       markerService,
+      workspaceFs,
       fileManager: fileManagerApi,
       fileManagerRef,
+      treeService,
+      filePoolBuffer: fileManagerRef.getSnapshot().context.filePoolBuffer,
+      openLanguageHostPort: () => openTauLanguageHostPort(fileManagerRef),
     });
 
     const openerDisposable = registerMonacoNavigation({
       monaco,
       editorRef,
-      modelService,
-      handlers,
+      workspaceFs,
     });
 
     setServices({ modelService, markerService });
 
     return () => {
+      clearTauLanguageHostPortFactory();
       openerDisposable.dispose();
+      workspaceContentDispatch.dispose();
       registry.setActivationErrorHandler(undefined);
       registry.dispose();
       modelService.dispose();
+      workspaceFs.dispose();
       markerService.dispose();
+
+      editorRef.send({ type: 'registerMaterialiseModel', materialiseModel: undefined });
 
       setServices(defaultContextValue);
     };
   }, [monaco, contentService, treeService, fileManagerApi, fileManagerRef, editorRef]);
+
+  useEffect(() => {
+    const ms = services.modelService;
+    if (!ms) {
+      return;
+    }
+
+    const materialiseModel = async (path: string): Promise<void> => {
+      await ms.getOrEnsureModel(path);
+    };
+
+    editorRef.send({ type: 'registerMaterialiseModel', materialiseModel });
+
+    return () => {
+      editorRef.send({ type: 'registerMaterialiseModel', materialiseModel: undefined });
+    };
+  }, [services.modelService, editorRef]);
 
   // Forward project session changes to services
   useEffect(() => {

@@ -112,6 +112,36 @@ describe('FileContentService', () => {
     emitFileChanged = harness.emitFileChanged;
   });
 
+  it('resolve reads bundled typings from the global /node_modules mount, not under the project root', async () => {
+    const harness = createHarness({ workspaceRoot: '/projects/abc' });
+    const localService = harness.service;
+    const localProxy = harness.proxy;
+    const dts = new TextEncoder().encode('export declare const x: 1;');
+    vi.mocked(localProxy.readFile).mockImplementation(async (absolutePath: string) => {
+      if (absolutePath === '/node_modules/replicad/index.d.ts') {
+        return dts;
+      }
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    });
+
+    const result = await localService.resolve('node_modules/replicad/index.d.ts');
+    expectTextContent(result, dts);
+    expect(localProxy.readFile).toHaveBeenCalledWith('/node_modules/replicad/index.d.ts');
+    expect(localProxy.readFile).not.toHaveBeenCalledWith('/projects/abc/node_modules/replicad/index.d.ts');
+    harness.disposeChannel();
+  });
+
+  it('populateText sets text outcome and cache without worker read', async () => {
+    vi.mocked(proxy.readFile).mockClear();
+    const data = new TextEncoder().encode('manual');
+    service.populateText('typed.ts', data);
+
+    expect(service.peekOutcome('typed.ts').kind).toBe('text');
+    const result = await service.resolve('typed.ts');
+    expect(proxy.readFile).not.toHaveBeenCalled();
+    expectTextContent(result, data);
+  });
+
   it('should resolve text content from worker on cache miss', async () => {
     const data = new Uint8Array([10, 20, 30]);
     vi.mocked(proxy.readFile).mockResolvedValue(data);

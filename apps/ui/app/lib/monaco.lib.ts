@@ -15,13 +15,15 @@ import {
 import { getHighlighter } from '#lib/shiki.lib.js';
 import { registry } from '#lib/monaco-language-registry.js';
 import { monacoLanguages } from '#lib/monaco.constants.js';
+import { createTauLanguageHostInit } from '@taucad/lsp/language-fs-sync-host';
 import { kclContribution } from '#lib/kcl-language/kcl-register-language.js';
 import { openscadContribution } from '#lib/openscad-language/openscad-register-language.js';
 import { stepfileContribution } from '#lib/stepfile-language/stepfile-register-language.js';
 import { stlContribution } from '#lib/stl-language/stl-register-language.js';
 import { usdContribution } from '#lib/usd-language/usd-register-language.js';
 import { sysmlContribution } from '#lib/sysml-language/sysml-register-language.js';
-import { jsTsContribution } from '#lib/javascript-contribution.js';
+import { jsContribution } from '#lib/javascript-contribution.js';
+import { tsContribution } from '#lib/typescript-contribution.js';
 
 /**
  * Register-eager / activate-lazy contract:
@@ -45,7 +47,8 @@ registry.addContribution(stepfileContribution);
 registry.addContribution(stlContribution);
 registry.addContribution(usdContribution);
 registry.addContribution(sysmlContribution);
-registry.addContribution(jsTsContribution);
+registry.addContribution(tsContribution);
+registry.addContribution(jsContribution);
 
 // Guard to ensure configureMonaco runs only once. shikiToMonaco monkey-patches
 // monaco.editor.create and monaco.editor.setTheme, creating chained wrappers
@@ -74,6 +77,29 @@ export const configureMonaco = async (): Promise<void> => {
 
       if (label === 'typescript' || label === 'javascript') {
         performance.mark('ts-worker:create');
+        const init = createTauLanguageHostInit();
+        if (init) {
+          const worker = new Worker(
+            new URL('../../node_modules/@taucad/lsp/src/monaco-ts-worker/monaco-ts-worker.entry.ts', import.meta.url),
+            {
+              type: 'module',
+              name: 'tau-ts-worker',
+            },
+          );
+          worker.postMessage(
+            {
+              type: 'tau:init',
+              port: init.port,
+              slotSab: init.slotSab,
+              arenaSab: init.arenaSab,
+              filePoolBuffer: init.filePoolBuffer,
+              workspaceRootAbsolute: init.workspaceRootAbsolute,
+            },
+            [init.port],
+          );
+          performance.measure('ts-worker:cold-start', 'ts-worker:create');
+          return worker;
+        }
         const worker = new TsWorker();
         performance.measure('ts-worker:cold-start', 'ts-worker:create');
         return worker;

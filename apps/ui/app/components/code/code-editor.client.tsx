@@ -107,7 +107,7 @@ const monacoOverlayRestoreStyles = [
 
 await configureMonaco();
 
-export function CodeEditor({ className, ...rest }: CodeEditorProperties): React.JSX.Element {
+export function CodeEditor({ className, options: optionsFromProps, ...rest }: CodeEditorProperties): React.JSX.Element {
   const { theme } = useTheme();
   const completionRef = useRef<CompletionRegistration | undefined>(null);
   const isMobile = useIsMobile();
@@ -158,7 +158,7 @@ export function CodeEditor({ className, ...rest }: CodeEditorProperties): React.
     };
   }, []);
 
-  const options = useMemo(
+  const baseOptions = useMemo(
     () =>
       ({
         fontSize: isMobile ? 16 : 14,
@@ -219,6 +219,8 @@ export function CodeEditor({ className, ...rest }: CodeEditorProperties): React.
       }) as const satisfies Monaco.editor.IStandaloneEditorConstructionOptions,
     [isMobile],
   );
+
+  const options = useMemo(() => ({ ...baseOptions, ...optionsFromProps }), [baseOptions, optionsFromProps]);
 
   const classNames = useMemo(
     () =>

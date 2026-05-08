@@ -44,7 +44,11 @@ vi.mock('#lib/openscad-language/openscad-register-language.js', () => ({ opensca
 vi.mock('#lib/stepfile-language/stepfile-register-language.js', () => ({ stepfileContribution: {} }));
 vi.mock('#lib/stl-language/stl-register-language.js', () => ({ stlContribution: {} }));
 vi.mock('#lib/usd-language/usd-register-language.js', () => ({ usdContribution: {} }));
-vi.mock('#lib/javascript-contribution.js', () => ({ jsTsContribution: {} }));
+vi.mock('#lib/javascript-contribution.js', () => ({ jsContribution: {} }));
+vi.mock('#lib/typescript-contribution.js', () => ({ tsContribution: {} }));
+vi.mock('@taucad/lsp/language-fs-sync-host', () => ({
+  createTauLanguageHostInit: vi.fn(() => undefined),
+}));
 vi.mock('monaco-editor', () => ({
   languages: { setTokensProvider: vi.fn(), register: vi.fn() },
   editor: { defineTheme: vi.fn() },

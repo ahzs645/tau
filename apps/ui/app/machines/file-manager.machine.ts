@@ -16,6 +16,7 @@ import { WorkerChangeChannel } from '@taucad/fs-client/worker-change-channel';
 import { WorkspacePathResolver } from '@taucad/fs-client/workspace-path-resolver';
 import { RefreshGenerationGuard } from '@taucad/fs-client/refresh-generation-guard';
 import { createDomVisibilityProvider } from '@taucad/fs-client/visibility-provider';
+import { kernelTypeMaps } from '@taucad/api-extractor';
 import type { FileManagerProxy, FileManagerProtocol } from '#machines/file-manager.machine.types.js';
 import {
   formatWorkerError,
@@ -29,6 +30,20 @@ const fileCacheMaxTotalBytes = 128 * 1024 * 1024;
 const fileCacheMaxSingleFileBytes = 1024 * 1024;
 
 const filePoolBytes = 50 * 1024 * 1024;
+
+function bundledKernelTypesPayload(): ReadonlyArray<{
+  readonly packageName: string;
+  readonly content: string;
+  readonly prewrapped: true;
+}> {
+  return kernelTypeMaps.flatMap((typesMap) =>
+    Object.entries(typesMap).map(([packageName, content]) => ({
+      packageName,
+      content,
+      prewrapped: true as const,
+    })),
+  );
+}
 
 type FileManagerContext = {
   worker: Worker | undefined;
@@ -276,6 +291,11 @@ const initializeServicesActor = fromSafeAsync<WorkerInitializedEvent, { context:
     });
 
     treeService.connectToContentService(contentService);
+
+    const bundledPayload = bundledKernelTypesPayload();
+    if (context.worker !== undefined && bundledPayload.length > 0) {
+      context.worker.postMessage({ type: 'tau:populate-bundled-types', payload: bundledPayload });
+    }
 
     console.debug('[FileManager] initializeServicesActor: success');
     return {

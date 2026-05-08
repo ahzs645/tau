@@ -26,7 +26,8 @@
   "license": "MIT",
   "exports": {
     ".": "./src/index.ts",
-    "./backend": "./src/backend/index.ts"
+    "./backend": "./src/backend/index.ts",
+    "./bundled-types-mount": "./src/bundled-types-mount.ts"
   },
   "publishConfig": {
     "access": "public",
@@ -49,6 +50,16 @@
         "import": {
           "types": "./dist/esm/backend/index.d.ts",
           "default": "./dist/esm/backend/index.js"
+        }
+      },
+      "./bundled-types-mount": {
+        "import": {
+          "types": "./dist/esm/bundled-types-mount.d.ts",
+          "default": "./dist/esm/bundled-types-mount.js"
+        },
+        "require": {
+          "types": "./dist/cjs/bundled-types-mount.d.cts",
+          "default": "./dist/cjs/bundled-types-mount.cjs"
         }
       }
     }

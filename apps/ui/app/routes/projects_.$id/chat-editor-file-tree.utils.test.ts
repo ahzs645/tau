@@ -5,6 +5,7 @@ import {
   isPathFolder,
   sortChildrenFoldersFirst,
 } from '#routes/projects_.$id/chat-editor-file-tree.utils.js';
+import { bundledTypesWorkspaceRootSegment } from '#lib/bundled-types-tree.constants.js';
 
 // ===================================================================
 // Factories
@@ -166,5 +167,38 @@ describe('sortChildrenFoldersFirst', () => {
     expect(sorted[0]).toBe('lib');
     expect(sorted[1]).toBe('src');
     expect(sorted[2]).toBe('index.ts');
+  });
+});
+
+// ===================================================================
+// Bundled types tree (synthetic node_modules)
+// ===================================================================
+
+describe('getItemData with bundled paths', () => {
+  it('treats node_modules as a folder before children are listed', () => {
+    const bundled = new Set([bundledTypesWorkspaceRootSegment]);
+    const result = getItemData([], rootId, bundledTypesWorkspaceRootSegment, bundled);
+
+    expect(result.isFolder).toBe(true);
+    expect(result.name).toBe(bundledTypesWorkspaceRootSegment);
+  });
+
+  it('treats leaf paths under node_modules as files', () => {
+    const path = `${bundledTypesWorkspaceRootSegment}/replicad/index.d.ts`;
+    const bundled = new Set([bundledTypesWorkspaceRootSegment, `${bundledTypesWorkspaceRootSegment}/replicad`, path]);
+    const result = getItemData([], rootId, path, bundled);
+
+    expect(result.isFolder).toBe(false);
+    expect(result.name).toBe('index.d.ts');
+  });
+});
+
+describe('isPathFolder with bundled paths', () => {
+  it('uses bundled subtree rules for leaf files', () => {
+    const path = `${bundledTypesWorkspaceRootSegment}/replicad/index.d.ts`;
+    const bundled = new Set([bundledTypesWorkspaceRootSegment, `${bundledTypesWorkspaceRootSegment}/replicad`, path]);
+    const allPaths = new Set([path]);
+
+    expect(isPathFolder(path, [], allPaths, bundled)).toBe(false);
   });
 });

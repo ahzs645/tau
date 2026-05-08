@@ -14,6 +14,7 @@ export function ChatEditorMarkdownViewer({
   language,
   onChange,
   onValidate,
+  readOnly,
 }: ChatEditorViewerProps): React.JSX.Element {
   return (
     <Tabs key={filePath} defaultValue='markdown' className='flex min-h-0 flex-1 flex-col'>
@@ -46,6 +47,7 @@ export function ChatEditorMarkdownViewer({
           path={createMonacoPath(filePath)}
           onChange={onChange}
           onValidate={onValidate}
+          options={readOnly === true ? { readOnly: true } : undefined}
         />
       </TabsContent>
     </Tabs>

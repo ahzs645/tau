@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createActor, setup, assign } from 'xstate';
 
-import { awaitFreshRender, AwaitFreshRenderTimeoutError } from '#lib/await-fresh-render.js';
+import { awaitFreshRender, AwaitFreshRenderTimeoutError } from '#machines/await-fresh-render.js';
 
 /**
  * Minimal stand-in for `cadMachine` that exposes the same public-context shape

@@ -89,6 +89,8 @@ import { parentDirectory } from '@taucad/utils/path';
 
 import type { TreeItemData } from '#routes/projects_.$id/chat-editor-file-tree.utils.js';
 import { getItemData, isPathFolder } from '#routes/projects_.$id/chat-editor-file-tree.utils.js';
+import { bundledTypesWorkspaceRootSegment, isBundledTypesWorkspacePath } from '#lib/bundled-types-tree.constants.js';
+import { useBundledTypesTree } from '#hooks/use-bundled-types-tree.js';
 
 const rootId = '';
 
@@ -199,8 +201,18 @@ export const ChatEditorFileTree = memo(function ({
   const { projectRef, editorRef } = useProject();
   const projectId = useSelector(projectRef, (state) => state.context.projectId);
   const fileManager = useFileManager();
-  const { contentService, readFile, writeFile, renameFile, duplicateFile, deleteFile, getZippedDirectory } =
-    fileManager;
+  const {
+    contentService,
+    readFile,
+    writeFile,
+    renameFile,
+    duplicateFile,
+    deleteFile,
+    getZippedDirectory,
+    fileManagerRef,
+  } = fileManager;
+  const proxy = useSelector(fileManagerRef, (state) => state.context.proxy);
+  const { bundledPaths, ensureRootListed, ensurePkgListed } = useBundledTypesTree(proxy ?? undefined);
 
   useEffect(() => {
     // Editor → FileManager coordination (reading file content for the editor)
@@ -414,14 +426,18 @@ export const ChatEditorFileTree = memo(function ({
       }
     }
 
+    for (const path of bundledPaths) {
+      paths.add(path);
+    }
+
     return paths;
-  }, [fileTree]);
+  }, [fileTree, bundledPaths]);
 
   // Data loader for headless-tree
   const dataLoader = useMemo(
     () => ({
       getItem(itemId: string): TreeItemData {
-        return getItemData(fileTree, rootId, itemId);
+        return getItemData(fileTree, rootId, itemId, bundledPaths);
       },
 
       getChildren(itemId: string): string[] {
@@ -448,8 +464,8 @@ export const ChatEditorFileTree = memo(function ({
         return children.sort((a, b) => {
           const aName = a.split('/').pop() ?? a;
           const bName = b.split('/').pop() ?? b;
-          const aIsFolder = isPathFolder(a, fileTree, allPaths);
-          const bIsFolder = isPathFolder(b, fileTree, allPaths);
+          const aIsFolder = isPathFolder(a, fileTree, allPaths, bundledPaths);
+          const bIsFolder = isPathFolder(b, fileTree, allPaths, bundledPaths);
 
           if (aIsFolder && !bIsFolder) {
             return -1;
@@ -463,7 +479,7 @@ export const ChatEditorFileTree = memo(function ({
         });
       },
     }),
-    [fileTree, allPaths],
+    [fileTree, allPaths, bundledPaths],
   );
 
   // Initialize headless-tree
@@ -508,6 +524,9 @@ export const ChatEditorFileTree = memo(function ({
       // Move each dragged item
       for (const item of draggedItems) {
         const oldPath = item.getId();
+        if (isBundledTypesWorkspacePath(oldPath)) {
+          continue;
+        }
         const fileName = oldPath.split('/').pop() ?? oldPath;
         const newPath = targetFolder ? `${targetFolder}/${fileName}` : fileName;
 
@@ -525,7 +544,7 @@ export const ChatEditorFileTree = memo(function ({
     },
     onRename(item, newName) {
       const oldPath = item.getId();
-      if (oldPath === rootId) {
+      if (oldPath === rootId || isBundledTypesWorkspacePath(oldPath)) {
         return;
       }
 
@@ -560,10 +579,13 @@ export const ChatEditorFileTree = memo(function ({
     },
     onPrimaryAction(item) {
       if (!item.isFolder()) {
+        const path = item.getId();
+        const readOnly = isBundledTypesWorkspacePath(path);
         editorRef.send({
           type: 'openFile',
-          path: item.getId(),
+          path,
           source: 'user',
+          readOnly,
         });
       }
     },
@@ -614,6 +636,14 @@ export const ChatEditorFileTree = memo(function ({
         targetFolder = parts.join('/');
       }
 
+      if (isBundledTypesWorkspacePath(targetFolder)) {
+        return false;
+      }
+
+      if (draggedItems.some((item) => isBundledTypesWorkspacePath(item.getId()))) {
+        return false;
+      }
+
       // Check if ALL dragged items are already in the target folder
       // If so, disallow the drop (nothing would change)
       const allItemsAlreadyInTarget = draggedItems.every((item) => {
@@ -628,7 +658,7 @@ export const ChatEditorFileTree = memo(function ({
     },
     // Set custom data on the drag event so Dockview panels can receive file drops
     createForeignDragObject(items) {
-      const paths = items.map((item) => item.getId()).filter((id) => id !== rootId);
+      const paths = items.map((item) => item.getId()).filter((id) => id !== rootId && !isBundledTypesWorkspacePath(id));
       return {
         format: tauFileDragMime,
         data: JSON.stringify(paths),
@@ -637,6 +667,10 @@ export const ChatEditorFileTree = memo(function ({
     // Allow file drops from computer on folders, root, or root-level files
     canDropForeignDragObject(_dataTransfer, target) {
       const targetId = target.item.getId();
+      if (isBundledTypesWorkspacePath(targetId)) {
+        return false;
+      }
+
       const isRoot = targetId === rootId;
       const isFolder = target.item.isFolder();
       const isRootLevelFile = !targetId.includes('/') && !isFolder;
@@ -691,6 +725,27 @@ export const ChatEditorFileTree = memo(function ({
     tree.rebuildTree();
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- tree object is not stable, only rebuild when fileTree changes
   }, [fileTree]);
+
+  useEffect(() => {
+    tree.rebuildTree();
+    // oxlint-disable-next-line react-hooks/exhaustive-deps -- tree object is not stable; virtual bundled rows
+  }, [bundledPaths]);
+
+  useEffect(() => {
+    for (const id of expandedItems) {
+      if (id === bundledTypesWorkspaceRootSegment) {
+        void ensureRootListed();
+        continue;
+      }
+
+      if (id.startsWith(`${bundledTypesWorkspaceRootSegment}/`)) {
+        const rest = id.slice(bundledTypesWorkspaceRootSegment.length + 1);
+        if (!rest.includes('/')) {
+          void ensurePkgListed(rest);
+        }
+      }
+    }
+  }, [expandedItems, ensureRootListed, ensurePkgListed]);
 
   // Sync tree search state with external enableSearch prop
   useEffect(() => {
@@ -814,7 +869,14 @@ export const ChatEditorFileTree = memo(function ({
   }, [focusedItem, tree]);
 
   const handleDelete = useCallback((items: Array<ItemInstance<TreeItemData>>) => {
-    setItemsToDelete(items.map((item) => item.getId()));
+    const paths = items
+      .map((item) => item.getId())
+      .filter((path) => path !== rootId && !isBundledTypesWorkspacePath(path));
+    if (paths.length === 0) {
+      return;
+    }
+
+    setItemsToDelete(paths);
     setDeleteDialogOpen(true);
   }, []);
 
@@ -822,7 +884,7 @@ export const ChatEditorFileTree = memo(function ({
     const deletedPaths = new Set<string>();
 
     for (const path of itemsToDelete) {
-      if (path === rootId) {
+      if (path === rootId || isBundledTypesWorkspacePath(path)) {
         continue;
       }
 
@@ -865,7 +927,7 @@ export const ChatEditorFileTree = memo(function ({
     (items: Array<ItemInstance<TreeItemData>>) => {
       for (const item of items) {
         const originalPath = item.getId();
-        if (originalPath === rootId || item.isFolder()) {
+        if (originalPath === rootId || item.isFolder() || isBundledTypesWorkspacePath(originalPath)) {
           continue;
         }
 
@@ -910,7 +972,8 @@ export const ChatEditorFileTree = memo(function ({
 
   const handleOpenInEditor = useCallback(
     (path: string) => {
-      editorRef.send({ type: 'openFile', path, source: 'user' });
+      const readOnly = isBundledTypesWorkspacePath(path);
+      editorRef.send({ type: 'openFile', path, source: 'user', readOnly });
     },
     [editorRef],
   );

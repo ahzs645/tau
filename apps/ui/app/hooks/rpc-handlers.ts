@@ -9,7 +9,7 @@
  */
 import { createActor } from 'xstate';
 import type { ActorRefFrom, SnapshotFrom } from 'xstate';
-import { awaitFreshRender, AwaitFreshRenderTimeoutError } from '#lib/await-fresh-render.js';
+import { awaitFreshRender, AwaitFreshRenderTimeoutError } from '#machines/await-fresh-render.js';
 import type {
   RpcCall,
   RpcClientErrorCode,

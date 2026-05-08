@@ -10,6 +10,7 @@ export function ChatEditorCodeViewer({
   language,
   onChange,
   onValidate,
+  readOnly,
 }: ChatEditorViewerProps): React.JSX.Element {
   return (
     <>
@@ -22,6 +23,7 @@ export function ChatEditorCodeViewer({
         path={createMonacoPath(filePath)}
         onChange={onChange}
         onValidate={onValidate}
+        options={readOnly === true ? { readOnly: true } : undefined}
       />
     </>
   );

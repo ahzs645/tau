@@ -73,6 +73,16 @@ describe('MountTable', () => {
     });
   });
 
+  describe('listMounts', () => {
+    it('should enumerate mounts in longest-prefix-first order', () => {
+      mountTable.mount('/', rootProvider, { backend: 'memory' });
+      mountTable.mount('/node_modules', nodeModulesProvider, { backend: 'memory' });
+      const list = mountTable.listMounts();
+      expect(list.map((m) => m.prefix)).toEqual(['/node_modules', '/']);
+      expect(list.map((m) => m.provider)).toEqual([nodeModulesProvider, rootProvider]);
+    });
+  });
+
   describe('getMountsUnder', () => {
     it('should return child mounts', () => {
       mountTable.mount('/', rootProvider, { backend: 'memory' });

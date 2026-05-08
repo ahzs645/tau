@@ -20,9 +20,22 @@ vi.mock('#hooks/use-file-manager.js', () => ({
   }),
 }));
 
+const editorMachineSnapshot = {
+  context: { openFiles: [] as { path: string; readOnly?: boolean }[] },
+  status: 'active' as const,
+  output: undefined,
+  error: undefined,
+};
+
+const mockEditorRef = {
+  send: vi.fn(),
+  getSnapshot: () => editorMachineSnapshot,
+  subscribe: () => ({ unsubscribe: vi.fn() }),
+};
+
 vi.mock('#hooks/use-project.js', () => ({
   useProject: () => ({
-    editorRef: { send: vi.fn() },
+    editorRef: mockEditorRef,
     geometryUnits: new Map(),
     mainEntryFile: 'main.ts',
   }),

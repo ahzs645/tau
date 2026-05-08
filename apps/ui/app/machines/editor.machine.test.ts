@@ -492,3 +492,65 @@ describe('editorMachine', () => {
     });
   });
 });
+
+describe('ready – deferred model materialisation', () => {
+  it('defers fileOpened until registerMaterialiseModel handler resolves', async () => {
+    const actor = await startAndLoad({ loadResult: undefined });
+    const opened: unknown[] = [];
+    const opening: unknown[] = [];
+    actor.on('fileOpened', (event) => opened.push(event));
+    actor.on('fileOpening', (event) => opening.push(event));
+
+    let release!: () => void;
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    actor.send({
+      type: 'registerMaterialiseModel',
+      materialiseModel: () => barrier,
+    });
+
+    actor.send({ type: 'openFile', path: 'src/deferred.ts', source: 'user' });
+
+    expect(opening).toHaveLength(1);
+    expect(opened).toHaveLength(0);
+    expect(actor.getSnapshot().context.openFiles.some((f) => f.path === 'src/deferred.ts')).toBe(false);
+
+    release!();
+    await waitFor(actor, () => opened.length > 0);
+    expect(opened[0]).toMatchObject({ type: 'fileOpened', path: 'src/deferred.ts' });
+    expect(actor.getSnapshot().context.openFiles.some((f) => f.path === 'src/deferred.ts')).toBe(true);
+    actor.stop();
+  });
+
+  it('emits fileOpenFailed when materialise rejects', async () => {
+    const actor = await startAndLoad({ loadResult: undefined });
+    const failed: unknown[] = [];
+    actor.on('fileOpenFailed', (event) => failed.push(event));
+
+    actor.send({
+      type: 'registerMaterialiseModel',
+      materialiseModel: () => Promise.reject(new Error('boom')),
+    });
+
+    actor.send({ type: 'openFile', path: 'src/broken.ts', source: 'user' });
+
+    await waitFor(actor, () => failed.length > 0);
+    expect(failed[0]).toMatchObject({ type: 'fileOpenFailed', path: 'src/broken.ts' });
+    expect(actor.getSnapshot().context.openFiles.some((f) => f.path === 'src/broken.ts')).toBe(false);
+    actor.stop();
+  });
+
+  it('opens new files synchronously when materialiseModel is not registered', async () => {
+    const actor = await startAndLoad({ loadResult: undefined });
+    const opened: unknown[] = [];
+    actor.on('fileOpened', (event) => opened.push(event));
+
+    actor.send({ type: 'openFile', path: 'src/sync.ts', source: 'user' });
+
+    expect(opened).toHaveLength(1);
+    expect(actor.getSnapshot().context.openFiles.some((f) => f.path === 'src/sync.ts')).toBe(true);
+    actor.stop();
+  });
+});

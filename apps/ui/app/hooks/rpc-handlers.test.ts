@@ -688,7 +688,7 @@ describe('rpc-handlers', () => {
         const cadUnit = createMockCadUnit();
         const geometryUnits = new Map<string, unknown>([['main.scad', cadUnit]]);
         const projectRef = createMockBuildRef({ geometryUnits });
-        const awaitFreshRenderModule = await import('#lib/await-fresh-render.js');
+        const awaitFreshRenderModule = await import('#machines/await-fresh-render.js');
         mockWaitFor.mockRejectedValue(new awaitFreshRenderModule.AwaitFreshRenderTimeoutError(5000, 0));
 
         const deps = buildDeps({ projectRef, resolveGraphicsForFile: stubResolver });
