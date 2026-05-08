@@ -1,5 +1,7 @@
 import type { KernelConfig } from '#api/chat/prompts/kernel-prompt-configs/kernel.prompt.config.types.js';
 import canonicalExample from '#api/chat/prompts/kernel-prompt-configs/openscad.prompt.example.scad?raw';
+import multiFileMain from '#api/chat/prompts/kernel-prompt-configs/openscad.prompt.example-multifile/main.scad?raw';
+import multiFileLibWidget from '#api/chat/prompts/kernel-prompt-configs/openscad.prompt.example-multifile/lib/widget.scad?raw';
 
 export const openscadConfig: KernelConfig = {
   fileExtension: '.scad',
@@ -14,4 +16,12 @@ export const openscadConfig: KernelConfig = {
   canonicalExample,
 
   topLevelExportExample: 'myModule();',
+
+  multiFileExample: {
+    mainFile: 'main.scad',
+    files: [
+      { path: 'main.scad', content: multiFileMain },
+      { path: 'lib/widget.scad', content: multiFileLibWidget },
+    ],
+  },
 };

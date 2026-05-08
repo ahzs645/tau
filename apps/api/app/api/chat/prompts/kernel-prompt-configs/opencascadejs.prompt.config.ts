@@ -1,5 +1,7 @@
 import type { KernelConfig } from '#api/chat/prompts/kernel-prompt-configs/kernel.prompt.config.types.js';
 import canonicalExample from '#api/chat/prompts/kernel-prompt-configs/opencascadejs.prompt.example.ts?raw';
+import multiFileMain from '#api/chat/prompts/kernel-prompt-configs/opencascadejs.prompt.example-multifile/main.ts?raw';
+import multiFileLibWidget from '#api/chat/prompts/kernel-prompt-configs/opencascadejs.prompt.example-multifile/lib/widget.ts?raw';
 
 export const opencascadejsConfig: KernelConfig = {
   fileExtension: '.ts',
@@ -14,4 +16,12 @@ export const opencascadejsConfig: KernelConfig = {
   canonicalExample,
 
   topLevelExportExample: 'export default function main(p = defaultParams): TopoDS_Shape { return makePart(p); }',
+
+  multiFileExample: {
+    mainFile: 'main.ts',
+    files: [
+      { path: 'main.ts', content: multiFileMain },
+      { path: 'lib/widget.ts', content: multiFileLibWidget },
+    ],
+  },
 };

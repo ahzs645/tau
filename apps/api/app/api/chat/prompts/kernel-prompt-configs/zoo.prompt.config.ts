@@ -1,6 +1,8 @@
 import { kclStdlibReference } from '@taucad/api-extractor';
 import type { KernelConfig } from '#api/chat/prompts/kernel-prompt-configs/kernel.prompt.config.types.js';
 import canonicalExample from '#api/chat/prompts/kernel-prompt-configs/zoo.prompt.example.kcl?raw';
+import multiFileMain from '#api/chat/prompts/kernel-prompt-configs/zoo.prompt.example-multifile/main.kcl?raw';
+import multiFileWidget from '#api/chat/prompts/kernel-prompt-configs/zoo.prompt.example-multifile/widget.kcl?raw';
 
 export const zooConfig: KernelConfig = {
   fileExtension: '.kcl',
@@ -18,4 +20,12 @@ ${kclStdlibReference}
   canonicalExample,
 
   topLevelExportExample: 'part = startSketchOn(XY) |> ... |> extrude(length = 10)',
+
+  multiFileExample: {
+    mainFile: 'main.kcl',
+    files: [
+      { path: 'main.kcl', content: multiFileMain },
+      { path: 'widget.kcl', content: multiFileWidget },
+    ],
+  },
 };

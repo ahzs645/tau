@@ -6,6 +6,25 @@
 export type FileLayoutMode = 'full-nesting' | 'assembly-only';
 
 /**
+ * A minimal multi-file canonical example for a kernel. Demonstrates the
+ * idiomatic library-import idiom (`use <…>` for OpenSCAD, ESM relative
+ * imports for TS-based kernels, flat KCL `import … from "…"` for the
+ * `assembly-only` layout) so the agent never has to guess between
+ * `include` / `use`, deep-relative TypeScript imports, etc.
+ *
+ * Authoring rule: keep this DEMO-MINIMAL — one entry file plus one
+ * library file is sufficient. Each file must carry the import statement
+ * the agent should mirror; complex parametric models belong in
+ * {@link KernelConfig.canonicalExample} instead.
+ */
+export type MultiFileExample = {
+  /** Entry-point filename relative to the example root (e.g. `'main.scad'`). Must appear in {@link MultiFileExample.files}. */
+  mainFile: string;
+  /** Idiomatic library file(s) plus the entry point. Order is rendering order in the system prompt. */
+  files: ReadonlyArray<{ path: string; content: string }>;
+};
+
+/**
  * Configuration for a CAD kernel's system prompt.
  * Optimized per context-engineering.mdc: minimal fields, canonical example demonstrates behavior.
  */
@@ -53,4 +72,17 @@ export type KernelConfig = {
    * undefined and the section is omitted entirely.
    */
   multiShapeExample?: string;
+
+  /**
+   * Minimal multi-file canonical example demonstrating the kernel's idiomatic
+   * library-import idiom (entry file + one library file). Wired into a
+   * `<multi_file_pattern>` section in the system prompt so the agent mirrors
+   * the correct import token instead of guessing between
+   * `include <…>` / `use <…>` (OpenSCAD), `'./lib/x.js'` / `'./lib/x'` (TS),
+   * or flat-vs-nested KCL layouts.
+   *
+   * Slot is optional in the type for safety, but every shipped kernel is
+   * expected to populate it (see {@link kernel.prompt.config.test.ts}).
+   */
+  multiFileExample?: MultiFileExample;
 };

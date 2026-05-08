@@ -490,6 +490,81 @@ describe('getCadSystemPrompt', () => {
   });
 
   // ===================================================================
+  // Multi-file pattern guidance (per-kernel idiomatic library imports)
+  //   Source: dollhouse `include`-duplicate smoking gun — `include <…>`
+  //   re-emits every top-level invocation in the imported file, so a
+  //   standalone `dollhouse_base()` call inside `lib/base.scad` renders
+  //   alongside the assembled house. Each kernel ships a minimal
+  //   multi-file canonical example so the agent mirrors the correct
+  //   import token rather than guessing.
+  // ===================================================================
+
+  describe('<multi_file_pattern> for every kernel', () => {
+    const allKernels: readonly KernelProvider[] = ['openscad', 'replicad', 'jscad', 'manifold', 'opencascadejs', 'zoo'];
+
+    describe.each(allKernels)('%s', (kernel) => {
+      it('should embed a <multi_file_pattern> section in the static prompt', async () => {
+        const result = await getCadSystemPrompt(kernel, 'agent', true);
+        expect(result.static).toContain('<multi_file_pattern>');
+        expect(result.static).toContain('</multi_file_pattern>');
+      });
+
+      it('should embed each declared file path verbatim', async () => {
+        const config = getKernelConfig(kernel);
+        const example = config.multiFileExample;
+        if (!example) {
+          throw new Error(`${kernel} must ship multiFileExample`);
+        }
+        const result = await getCadSystemPrompt(kernel, 'agent', true);
+        const block = result.static.slice(
+          result.static.indexOf('<multi_file_pattern>'),
+          result.static.indexOf('</multi_file_pattern>'),
+        );
+        for (const file of example.files) {
+          expect(block).toContain(`\`${file.path}\``);
+        }
+      });
+
+      it('should NOT leak into the dynamic prompt', async () => {
+        const result = await getCadSystemPrompt(kernel, 'agent', true);
+        expect(result.dynamic).not.toContain('<multi_file_pattern>');
+      });
+    });
+
+    it('should render OpenSCAD with `use <…>` and never `include <…>` (regression guard)', async () => {
+      const result = await getCadSystemPrompt('openscad', 'agent', true);
+      const block = result.static.slice(
+        result.static.indexOf('<multi_file_pattern>'),
+        result.static.indexOf('</multi_file_pattern>'),
+      );
+      expect(block).toMatch(/use\s*</);
+      expect(block).not.toMatch(/include\s*</);
+    });
+
+    it("should render TS-based kernels with `from './lib/<name>.js'` ESM relative imports", async () => {
+      const tsKernels = ['replicad', 'jscad', 'manifold', 'opencascadejs'] as const;
+      const results = await Promise.all(tsKernels.map(async (k) => getCadSystemPrompt(k, 'agent', true)));
+      for (const result of results) {
+        const block = result.static.slice(
+          result.static.indexOf('<multi_file_pattern>'),
+          result.static.indexOf('</multi_file_pattern>'),
+        );
+        expect(block).toMatch(/from\s+["']\.\/lib\/[\w-]+\.js["']/);
+      }
+    });
+
+    it('should render KCL flat (no `lib/`) with the `import … from "…"` idiom', async () => {
+      const result = await getCadSystemPrompt('zoo', 'agent', true);
+      const block = result.static.slice(
+        result.static.indexOf('<multi_file_pattern>'),
+        result.static.indexOf('</multi_file_pattern>'),
+      );
+      expect(block).not.toContain('lib/');
+      expect(block).toMatch(/import\s+\w+\s+from\s+"[^"]+\.kcl"/);
+    });
+  });
+
+  // ===================================================================
   // Screenshot frequency cap in <visual_inspection>
   // ===================================================================
 

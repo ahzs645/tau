@@ -20,6 +20,7 @@
 // EVAL(intent-capture): pending benchmark-2026-05-03 — adds <intent_capture> and tightens workflow step 0 so the agent preserves dimensions, part hierarchy, reference-image features, assumptions, and verification targets before coding. Validates fewer omitted components and closer visual/measurement fidelity on multi-part reference-image prompts.
 // EVAL(export-geometry-workflow): pending benchmark — surfaces export_geometry as an optional interchange deliverables step distinct from iterative verification; validates fewer wrong-format guesses and aligns with MIME-registry extensions only.
 // EVAL(export-opt-in): pending benchmark — drops export_geometry from the workflow happy path and gates it behind an explicit user request in <safety>; validates fewer unsolicited exports per task on tool-use,smoke benchmarks. Repro: Gemini 3.1 Pro auto-emitted Exported .glb after a Pi Pico replica build with no user export request.
+// EVAL(multi-file-pattern): pending benchmark — adds a per-kernel <multi_file_pattern> static section sourced from KernelConfig.multiFileExample. Each kernel ships a minimal entry+library pair demonstrating the correct import idiom (OpenSCAD `use <…>` not `include`, TS-based kernels relative `./lib/x.js`, KCL flat `import x from "x.kcl"`). Validates the dollhouse `include`-duplicate failure mode (a copy of every imported component re-rendered next to the assembly) disappears on tool-use,smoke and that non-OpenSCAD kernels also stop guessing import paths.
 
 import type { KernelProvider } from '@taucad/runtime';
 import { toolName } from '@taucad/chat/constants';
@@ -320,6 +321,24 @@ Companion \`test.json\`. Touching parts (the wheels overlap the body) cluster in
 
 For an assembly whose parts are *deliberately* separate (e.g. two skids that do not touch), either omit the top-level \`connectedComponents\` requirement or assert \`expected.count\` equal to the number of separate clusters.
 </multi_shape_pattern>`;
+    },
+  });
+
+  registry.register({
+    name: 'multi_file_pattern',
+    cacheBreak: false,
+    compute: () => {
+      if (!config.multiFileExample) {
+        return '';
+      }
+      const blocks = config.multiFileExample.files
+        .map(({ path, content }) => `\`${path}\`:\n\`\`\`\n${content.trim()}\n\`\`\``)
+        .join('\n\n');
+      return `<multi_file_pattern>
+Idiomatic multi-file layout for ${config.languageName}. Mirror the import statement and entry shape; the entry file (\`${config.multiFileExample.mainFile}\`) renders the assembled model.
+
+${blocks}
+</multi_file_pattern>`;
     },
   });
 
