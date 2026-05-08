@@ -520,6 +520,7 @@ function FileSelectorBrowseErrorRow({
   );
 }
 
+// oxlint-disable-next-line complexity -- virtualized selector with explicit browse/search modes
 export function FileSelector({
   dataSource: explicitSource,
   shouldIncludeDirectories,
