@@ -116,6 +116,19 @@ export class MetricsService {
     unit: TauMetrics.sseEvents.unit,
   });
 
+  public readonly publicationViewsTotal = this.meter.createCounter(TauMetrics.publicationViewsTotal.name, {
+    description: TauMetrics.publicationViewsTotal.description,
+    unit: TauMetrics.publicationViewsTotal.unit,
+  });
+
+  public readonly publicationViewsRejectedTotal = this.meter.createCounter(
+    TauMetrics.publicationViewsRejectedTotal.name,
+    {
+      description: TauMetrics.publicationViewsRejectedTotal.description,
+      unit: TauMetrics.publicationViewsRejectedTotal.unit,
+    },
+  );
+
   // Client-reported metrics (ingested via TelemetryController)
   public readonly kernelExecutionDuration = this.clientMeter.createHistogram(TauMetrics.kernelExecutionDuration.name, {
     description: TauMetrics.kernelExecutionDuration.description,
