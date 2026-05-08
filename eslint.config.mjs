@@ -207,6 +207,7 @@ const config = [
       '**/.source/**/*',
       '**/.netlify',
       '**/*.prompt.example.*',
+      '**/*.prompt.example-multifile/**',
       '**/*.cjs',
       '**/*.jscad.js',
       '**/content/docs/**/props/**',
@@ -444,7 +445,9 @@ const config = [
       '**/__tests__/**',
       'packages/runtime/src/testing/**',
     ],
+    plugins: { 'tau-lint': tauLintPlugin },
     rules: {
+      'tau-lint/no-monaco-create-model': 'error',
       'no-restricted-imports': [
         'error',
         {
