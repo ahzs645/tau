@@ -205,6 +205,11 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
             // Set the height of the sash to the height of the content.
             '[&_.sash.sash-vertical:before]:h-[calc(100dvh-var(--header-height)-var(--spacing)*2)]!',
 
+            // ── Sash (resize handles) — match Dockview primary-on-hover styling ──
+            '[--focus-border:var(--primary)]',
+            '[--sash-hover-transition-duration:0.1s]',
+            '[&_.sash:before]:[transition-delay:0.5s]',
+
             // Apply top+bottom border to the floating panels.
             '**:data-[slot=floating-panel]:border-y',
 
