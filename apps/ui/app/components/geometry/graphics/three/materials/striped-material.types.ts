@@ -13,6 +13,11 @@ export type StripedMaterialProperties = {
    */
   readonly stripeWidth?: number;
   /**
+   * When set, derives `baseColor` and `stripeColor` from this tint (mid-tone + contrast).
+   * For viewport BVH fills prefer the LRU-cached `createTintedStripedMaterial` factory (`striped-material-tinted`).
+   */
+  readonly tintColor?: number;
+  /**
    * The base color of the material.
    * @default 0xdddddd
    */
