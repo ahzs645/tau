@@ -16,10 +16,10 @@ import { coordinateSystemSchema } from '#types/export-option-schemas.js';
 const occtRenderOptionSchema = z.object({
   tessellation: z
     .object({
-      linearTolerance: z.number().positive().default(0.1).describe('Linear tolerance (distance) for tessellation'),
+      linearTolerance: z.number().positive().default(0.01).describe('Linear tolerance (distance) for tessellation'),
       angularTolerance: z.number().positive().default(30).describe('Angular tolerance (degrees) for tessellation'),
     })
-    .default({ linearTolerance: 0.1, angularTolerance: 30 })
+    .default({ linearTolerance: 0.01, angularTolerance: 30 })
     .describe('Tessellation quality for preview rendering'),
 });
 
@@ -27,10 +27,10 @@ const occtRenderOptionSchema = z.object({
 const occtExportTessellationSchema = z.object({
   tessellation: z
     .object({
-      linearTolerance: z.number().positive().default(0.01).describe('Linear tolerance (distance) for tessellation'),
+      linearTolerance: z.number().positive().default(0.001).describe('Linear tolerance (distance) for tessellation'),
       angularTolerance: z.number().positive().default(30).describe('Angular tolerance (degrees) for tessellation'),
     })
-    .default({ linearTolerance: 0.01, angularTolerance: 30 })
+    .default({ linearTolerance: 0.001, angularTolerance: 30 })
     .describe('Tessellation quality for mesh-based exports'),
 });
 
