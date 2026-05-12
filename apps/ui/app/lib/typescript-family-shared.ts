@@ -6,7 +6,6 @@
  */
 
 import type * as Monaco from 'monaco-editor';
-import { kernelTypeMaps } from '@taucad/api-extractor';
 import type { FileManagerRef, FileManagerProxy } from '#machines/file-manager.machine.types.js';
 import type { StaticTypeDefinition } from '#lib/type-acquisition-service.js';
 import { TypeAcquisitionService } from '#lib/type-acquisition-service.js';
@@ -21,38 +20,63 @@ let ataInstance: TypeAcquisitionService | undefined;
 let ataBootPromise: Promise<void> | undefined;
 let ataRefCount = 0;
 
+const decoder = new TextDecoder();
+
+async function waitForProxy(fileManagerRef: FileManagerRef): Promise<FileManagerProxy | undefined> {
+  const initial = fileManagerRef.getSnapshot().context.proxy;
+  if (initial) {
+    return initial;
+  }
+
+  return new Promise<FileManagerProxy | undefined>((resolve) => {
+    const subscription = fileManagerRef.subscribe((snapshot) => {
+      const { proxy } = snapshot.context;
+      if (proxy) {
+        subscription.unsubscribe();
+        resolve(proxy);
+      } else if (snapshot.matches('error')) {
+        subscription.unsubscribe();
+        resolve(undefined);
+      }
+    });
+  });
+}
+
 /**
- * Prefer typings bytes from the FM worker `/node_modules` mount; fall back to
- * bundled {@link kernelTypeMaps} when the mount is not ready or read fails.
+ * Read kernel static type definitions from the FM worker's `/node_modules`
+ * mount. The mount is populated eagerly during FM worker init (see
+ * `apps/ui/app/machines/file-manager.worker.ts`) so by the time the proxy
+ * is non-undefined, every package's `index.d.ts` is on disk.
  *
  * @public
  */
 export async function loadKernelStaticTypesFromMount(
   proxy: FileManagerProxy | undefined,
 ): Promise<StaticTypeDefinition[]> {
-  const fallback: StaticTypeDefinition[] = kernelTypeMaps.flatMap((typesMap) =>
-    Object.entries(typesMap).map(([packageName, content]) => ({
-      packageName,
-      content,
-      prewrapped: true,
-    })),
-  );
-
   if (!proxy) {
-    return fallback;
+    return [];
   }
 
-  return Promise.all(
-    fallback.map(async (staticTypeDefinition) => {
+  let packageNames: readonly string[];
+  try {
+    packageNames = await proxy.readdir('/node_modules');
+  } catch {
+    return [];
+  }
+
+  const definitions = await Promise.all(
+    packageNames.map(async (packageName): Promise<StaticTypeDefinition | undefined> => {
       try {
-        const bytes = await proxy.readFile(`/node_modules/${staticTypeDefinition.packageName}/index.d.ts`);
-        const content = new TextDecoder().decode(bytes);
-        return { packageName: staticTypeDefinition.packageName, content, prewrapped: true };
+        const bytes = await proxy.readFile(`/node_modules/${packageName}/index.d.ts`);
+        const content = typeof bytes === 'string' ? bytes : decoder.decode(bytes);
+        return { packageName, content, prewrapped: true };
       } catch {
-        return staticTypeDefinition;
+        return undefined;
       }
     }),
   );
+
+  return definitions.filter((definition): definition is StaticTypeDefinition => definition !== undefined);
 }
 
 /**
@@ -62,9 +86,7 @@ export async function loadKernelStaticTypesFromMount(
 export function ensureAtaBoot(monaco: typeof Monaco, fileManagerRef: FileManagerRef): Monaco.IDisposable {
   ataRefCount += 1;
   ataBootPromise ??= (async (): Promise<void> => {
-    const {
-      context: { proxy },
-    } = fileManagerRef.getSnapshot();
+    const proxy = await waitForProxy(fileManagerRef);
     const staticTypes = await loadKernelStaticTypesFromMount(proxy);
     ataInstance = new TypeAcquisitionService();
     ataInstance.initialize(monaco, { staticTypes });

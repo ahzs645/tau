@@ -23,11 +23,11 @@ vi.mock('#lib/type-acquisition-service.js', () => ({
   }),
 }));
 
-vi.mock('@taucad/api-extractor', () => ({
-  kernelTypeMaps: [],
-}));
-
 function createMockContext(stub: MonacoTestStub): ActivationContext {
+  const proxyStub = {
+    readdir: vi.fn(async () => [] as string[]),
+    readFile: vi.fn(async () => new Uint8Array()),
+  };
   // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- minimal context for contribution.activate
   return {
     monaco: stub.monaco,
@@ -38,7 +38,8 @@ function createMockContext(stub: MonacoTestStub): ActivationContext {
       getDirectoryStat: vi.fn(),
     },
     fileManagerRef: {
-      getSnapshot: () => ({ context: { proxy: undefined } }),
+      getSnapshot: () => ({ context: { proxy: proxyStub } }),
+      subscribe: () => ({ unsubscribe: () => undefined }),
     } as unknown as FileManagerRef,
     workspaceFs: {
       registerFileSystemProvider: vi.fn(() => ({ dispose: vi.fn() })),

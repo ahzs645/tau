@@ -89,8 +89,7 @@ import { parentDirectory } from '@taucad/utils/path';
 
 import type { TreeItemData } from '#routes/projects_.$id/chat-editor-file-tree.utils.js';
 import { getItemData, isPathFolder } from '#routes/projects_.$id/chat-editor-file-tree.utils.js';
-import { bundledTypesWorkspaceRootSegment, isBundledTypesWorkspacePath } from '#lib/bundled-types-tree.constants.js';
-import { useBundledTypesTree } from '#hooks/use-bundled-types-tree.js';
+import { isBundledTypesWorkspacePath } from '#lib/bundled-types-tree.constants.js';
 
 const rootId = '';
 
@@ -201,18 +200,8 @@ export const ChatEditorFileTree = memo(function ({
   const { projectRef, editorRef } = useProject();
   const projectId = useSelector(projectRef, (state) => state.context.projectId);
   const fileManager = useFileManager();
-  const {
-    contentService,
-    readFile,
-    writeFile,
-    renameFile,
-    duplicateFile,
-    deleteFile,
-    getZippedDirectory,
-    fileManagerRef,
-  } = fileManager;
-  const proxy = useSelector(fileManagerRef, (state) => state.context.proxy);
-  const { bundledPaths, ensureRootListed, ensurePkgListed } = useBundledTypesTree(proxy ?? undefined);
+  const { contentService, readFile, writeFile, renameFile, duplicateFile, deleteFile, getZippedDirectory } =
+    fileManager;
 
   useEffect(() => {
     // Editor → FileManager coordination (reading file content for the editor)
@@ -426,18 +415,14 @@ export const ChatEditorFileTree = memo(function ({
       }
     }
 
-    for (const path of bundledPaths) {
-      paths.add(path);
-    }
-
     return paths;
-  }, [fileTree, bundledPaths]);
+  }, [fileTree]);
 
   // Data loader for headless-tree
   const dataLoader = useMemo(
     () => ({
       getItem(itemId: string): TreeItemData {
-        return getItemData(fileTree, rootId, itemId, bundledPaths);
+        return getItemData(fileTree, rootId, itemId);
       },
 
       getChildren(itemId: string): string[] {
@@ -464,8 +449,8 @@ export const ChatEditorFileTree = memo(function ({
         return children.sort((a, b) => {
           const aName = a.split('/').pop() ?? a;
           const bName = b.split('/').pop() ?? b;
-          const aIsFolder = isPathFolder(a, fileTree, allPaths, bundledPaths);
-          const bIsFolder = isPathFolder(b, fileTree, allPaths, bundledPaths);
+          const aIsFolder = isPathFolder(a, fileTree, allPaths);
+          const bIsFolder = isPathFolder(b, fileTree, allPaths);
 
           if (aIsFolder && !bIsFolder) {
             return -1;
@@ -479,7 +464,7 @@ export const ChatEditorFileTree = memo(function ({
         });
       },
     }),
-    [fileTree, allPaths, bundledPaths],
+    [fileTree, allPaths],
   );
 
   // Initialize headless-tree
@@ -725,27 +710,6 @@ export const ChatEditorFileTree = memo(function ({
     tree.rebuildTree();
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- tree object is not stable, only rebuild when fileTree changes
   }, [fileTree]);
-
-  useEffect(() => {
-    tree.rebuildTree();
-    // oxlint-disable-next-line react-hooks/exhaustive-deps -- tree object is not stable; virtual bundled rows
-  }, [bundledPaths]);
-
-  useEffect(() => {
-    for (const id of expandedItems) {
-      if (id === bundledTypesWorkspaceRootSegment) {
-        void ensureRootListed();
-        continue;
-      }
-
-      if (id.startsWith(`${bundledTypesWorkspaceRootSegment}/`)) {
-        const rest = id.slice(bundledTypesWorkspaceRootSegment.length + 1);
-        if (!rest.includes('/')) {
-          void ensurePkgListed(rest);
-        }
-      }
-    }
-  }, [expandedItems, ensureRootListed, ensurePkgListed]);
 
   // Sync tree search state with external enableSearch prop
   useEffect(() => {

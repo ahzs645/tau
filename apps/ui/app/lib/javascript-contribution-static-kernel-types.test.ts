@@ -1,7 +1,7 @@
 /**
- * Ensures TS/JS contributions pass bundled kernel types into the real
- * {@link TypeAcquisitionService} so each package receives both `index.d.ts` and
- * synthetic `package.json` registrations.
+ * Ensures TS/JS contributions read kernel typings from the FM `/node_modules`
+ * mount and pass them through {@link TypeAcquisitionService}, which then
+ * registers each package's `index.d.ts` plus a synthetic `package.json`.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { ActivationContext } from '#lib/monaco-language-registry.js';
@@ -14,11 +14,28 @@ import { createMonacoTestStub } from '#lib/testing/monaco-language-stub.js';
 import { attachTypescriptShim } from '#lib/testing/monaco-typescript-shim.js';
 import type { FileManagerRef, FileManagerProxy } from '#machines/file-manager.machine.types.js';
 
-vi.mock('@taucad/api-extractor', () => ({
-  kernelTypeMaps: [{ replicad: 'export declare const stubKernel: 1;' }],
-}));
+const packageDtsPattern = /^\/node_modules\/([^/]+)\/index\.d\.ts$/;
 
-function createMockContext(stub: MonacoTestStub, proxy?: FileManagerProxy): ActivationContext {
+function createMountProxy(packages: Record<string, string>): FileManagerProxy {
+  return {
+    readdir: vi.fn(async (path: string) => {
+      if (path === '/node_modules') {
+        return Object.keys(packages);
+      }
+      throw new Error(`unexpected readdir: ${path}`);
+    }),
+    readFile: vi.fn(async (path: string) => {
+      const match = packageDtsPattern.exec(path);
+      const content = match ? packages[match[1]!] : undefined;
+      if (content === undefined) {
+        throw new Error(`ENOENT: ${path}`);
+      }
+      return new TextEncoder().encode(content);
+    }),
+  } as unknown as FileManagerProxy;
+}
+
+function createMockContext(stub: MonacoTestStub, proxy: FileManagerProxy): ActivationContext {
   // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- minimal context for contribution.activate
   return {
     monaco: stub.monaco,
@@ -30,6 +47,7 @@ function createMockContext(stub: MonacoTestStub, proxy?: FileManagerProxy): Acti
     },
     fileManagerRef: {
       getSnapshot: () => ({ context: { proxy } }),
+      subscribe: () => ({ unsubscribe: () => undefined }),
     } as unknown as FileManagerRef,
     workspaceFs: {
       registerFileSystemProvider: vi.fn(() => ({ dispose: vi.fn() })),
@@ -52,15 +70,12 @@ function createMockContext(stub: MonacoTestStub, proxy?: FileManagerProxy): Acti
 describe('tsContribution static kernel types', () => {
   let stub: MonacoTestStub;
   let registry: LanguageContributionRegistry;
-  let context: ActivationContext;
 
   beforeEach(() => {
     stub = createMonacoTestStub();
     attachTypescriptShim(stub);
     registry = new LanguageContributionRegistry();
     vi.spyOn(TypeAcquisitionService.prototype, 'startWatching').mockImplementation(() => undefined);
-
-    context = createMockContext(stub);
   });
 
   afterEach(() => {
@@ -70,7 +85,9 @@ describe('tsContribution static kernel types', () => {
     vi.clearAllMocks();
   });
 
-  it('registers index.d.ts and synthetic package.json for each kernel map entry', async () => {
+  it('registers index.d.ts and synthetic package.json for each kernel discovered on the mount', async () => {
+    const proxy = createMountProxy({ replicad: 'export declare const stubKernel: 1;' });
+    const context = createMockContext(stub, proxy);
     registry.addContribution(tsContribution);
     registry.activate(context);
     stub.__createModel('inmemory://t/kernel', 'typescript');
@@ -95,18 +112,9 @@ describe('tsContribution static kernel types', () => {
     expect(JSON.parse(packageCall![0] as string)).toEqual({ name: 'replicad', types: 'index.d.ts' });
   });
 
-  it('uses /node_modules bytes from the FM proxy when readFile succeeds', async () => {
-    const proxy = {
-      readFile: vi.fn(async (path: string) => {
-        if (path === '/node_modules/replicad/index.d.ts') {
-          return new TextEncoder().encode('export declare const fromMount: 42;');
-        }
-
-        throw new Error('ENOENT');
-      }),
-    } as unknown as FileManagerProxy;
-
-    context = createMockContext(stub, proxy);
+  it('uses /node_modules bytes from the FM proxy for each package', async () => {
+    const proxy = createMountProxy({ replicad: 'export declare const fromMount: 42;' });
+    const context = createMockContext(stub, proxy);
     registry.addContribution(tsContribution);
     registry.activate(context);
     stub.__createModel('inmemory://t/kernel2', 'typescript');
@@ -125,15 +133,12 @@ describe('tsContribution static kernel types', () => {
 describe('jsContribution static kernel types', () => {
   let stub: MonacoTestStub;
   let registry: LanguageContributionRegistry;
-  let context: ActivationContext;
 
   beforeEach(() => {
     stub = createMonacoTestStub();
     attachTypescriptShim(stub);
     registry = new LanguageContributionRegistry();
     vi.spyOn(TypeAcquisitionService.prototype, 'startWatching').mockImplementation(() => undefined);
-
-    context = createMockContext(stub);
   });
 
   afterEach(() => {
@@ -143,7 +148,9 @@ describe('jsContribution static kernel types', () => {
     vi.clearAllMocks();
   });
 
-  it('registers kernel map extras when a javascript model opens', async () => {
+  it('registers kernel mount extras when a javascript model opens', async () => {
+    const proxy = createMountProxy({ replicad: 'export declare const stubKernel: 1;' });
+    const context = createMockContext(stub, proxy);
     registry.addContribution(jsContribution);
     registry.activate(context);
     stub.__createModel('inmemory://j/kernel', 'javascript');
