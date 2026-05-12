@@ -5,8 +5,9 @@ import type { ScreenshotOptions, CameraAngle, CompositeScreenshotOptions } from 
 import type { ResolvedGraphicsBackend } from '#constants/editor.constants.js';
 import {
   applyMatcapToClonedScene,
-  disposeClonedSceneMaterials,
+  disposeCloneOwnedMaterials,
 } from '#components/geometry/graphics/three/materials/gltf-matcap.js';
+import { applyEdgeMaterialsToClonedScene } from '#components/geometry/graphics/three/materials/gltf-edges.js';
 import { ensureMatcapTextureLoaded } from '#components/geometry/graphics/three/materials/matcap-material.js';
 import type { RendererInstance } from '#components/geometry/graphics/three/renderer.js';
 import { createRenderer } from '#components/geometry/graphics/three/renderer.js';
@@ -589,8 +590,24 @@ async function captureScreenshots({
     }
 
     const matcapTexture = await ensureMatcapTextureLoaded();
-    const screenshotMatcapBackend: ResolvedGraphicsBackend = isViewportWebGpu(gl) ? 'webgpu' : 'webgl';
-    applyMatcapToClonedScene(screenshotScene, matcapTexture, { tint: 1, backend: screenshotMatcapBackend });
+
+    // Track every clone-owned material so we can dispose only the materials we
+    // allocated — never the live viewport's shared `Line2NodeMaterial` /
+    // matcap instances. See `docs/research/screenshot-viewport-shared-material-state-bleed.md`.
+    const cloneOwnedMaterials = new Set<THREE.Material>();
+    for (const material of applyMatcapToClonedScene(screenshotScene, matcapTexture, {
+      tint: 1,
+      backend: screenshotBackend,
+    })) {
+      cloneOwnedMaterials.add(material);
+    }
+    const screenshotResolution = new THREE.Vector2(width, height);
+    for (const material of applyEdgeMaterialsToClonedScene(screenshotScene, {
+      backend: screenshotBackend,
+      resolution: screenshotResolution,
+    })) {
+      cloneOwnedMaterials.add(material);
+    }
 
     screenshotScene.environment = null;
     screenshotScene.environmentIntensity = 0;
@@ -672,7 +689,7 @@ async function captureScreenshots({
       dataUrls.push(screenshotCanvas.toDataURL(config.output.format, config.output.quality));
     }
 
-    disposeClonedSceneMaterials(screenshotScene);
+    disposeCloneOwnedMaterials(cloneOwnedMaterials);
 
     return dataUrls;
   } finally {
