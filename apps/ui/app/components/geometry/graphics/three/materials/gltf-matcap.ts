@@ -102,30 +102,35 @@ export const applyMatcap = async (gltf: GLTF, tint = 1, backend: ResolvedGraphic
 /**
  * Apply matcap materials to a cloned scene for screenshot rendering.
  *
+ * Returns the explicit `Set<Material>` of every matcap material this call
+ * allocated, so {@link disposeCloneOwnedMaterials} can free precisely the
+ * clone-owned materials at teardown without ever touching shared references.
+ *
  * Unlike {@link applyMatcap}, this function does **not** dispose the original
  * materials because `scene.clone()` creates meshes that share material
- * references with the live scene. Disposing them would corrupt the original.
+ * references with the live scene. Disposing them would corrupt the original
+ * via three's per-renderer `RenderObject.onMaterialDispose` listener fan-out
+ * (see `docs/research/screenshot-viewport-shared-material-state-bleed.md`).
  *
  * @param scene - The cloned THREE.Scene to apply matcap materials to.
  * @param matcapTexture - A fully-loaded matcap texture (use `ensureMatcapTextureLoaded()`).
  * @param options - Optional `tint` and `backend`; defaults match `applyMatcap` (`tint` 1, backend `webgl`).
+ * @returns The set of newly-allocated matcap materials owned by this clone pass.
  */
 export function applyMatcapToClonedScene(
   scene: Scene,
   matcapTexture: Texture,
   options?: ApplyMatcapToClonedSceneOptions,
-): void {
+): Set<Material> {
   const tint = options?.tint ?? 1;
   const backend = options?.backend ?? 'webgl';
+  const allocated = new Set<Material>();
 
   scene.traverse((child) => {
-    // Skip fat-line meshes (`LineSegments2`) — WebGL + WebGPU both use `.type === 'LineSegments2'`.
     if ('type' in child && child.type === 'LineSegments2') {
       return;
     }
 
-    // Preserve section-view helpers (stencil groups, cap planes) — their
-    // materials use stencil ops and custom shaders that must not be replaced.
     if (hasSceneTag(child, sceneTag.sectionViewHelper)) {
       return;
     }
@@ -134,7 +139,6 @@ export function applyMatcapToClonedScene(
       const mesh = child as Mesh;
       const meshMatcap = createMeshMatcapReplacement(backend, matcapTexture);
 
-      // Preserve clipping planes so section-view clipping survives matcap replacement
       if (!Array.isArray(mesh.material) && mesh.material.clippingPlanes?.length) {
         meshMatcap.clippingPlanes = mesh.material.clippingPlanes;
       }
@@ -162,24 +166,32 @@ export function applyMatcapToClonedScene(
         meshMatcap.color.multiplyScalar(tint);
       }
 
-      // Do NOT dispose — materials are shared references with the original live scene
       mesh.material = meshMatcap;
+      allocated.add(meshMatcap);
     }
   });
+
+  return allocated;
 }
 
 /**
- * Dispose matcap materials that were applied to a cloned screenshot scene.
+ * Dispose materials whose allocation is explicitly owned by a screenshot/offscreen clone.
  *
- * Traverses the scene and disposes each mesh's material. The shared matcap
- * texture singleton is unaffected — `Material.dispose()` only releases the
- * compiled shader program, not referenced textures.
+ * Iterates the supplied set rather than traversing the scene by `isMesh` —
+ * inheritance-based ownership inference is unsafe because `LineSegments2`
+ * extends `Mesh` and would otherwise pull shared viewport `Line2NodeMaterial`
+ * instances into the dispose chain, firing per-renderer `'dispose'` listeners
+ * across every renderer using that material.
+ *
+ * The shared matcap texture singleton is unaffected — `Material.dispose()`
+ * only releases the compiled shader program, not referenced textures.
+ *
+ * @param materials - The exact set of clone-owned materials returned from
+ *   `applyMatcapToClonedScene` (and any other clone-pass allocator that
+ *   participates in this contract, e.g. `applyEdgeMaterialsToClonedScene`).
  */
-export function disposeClonedSceneMaterials(scene: Scene): void {
-  scene.traverse((child) => {
-    if ('isMesh' in child && child.isMesh) {
-      const mesh = child as Mesh;
-      disposeMaterials(mesh.material);
-    }
-  });
+export function disposeCloneOwnedMaterials(materials: ReadonlySet<Material>): void {
+  for (const material of materials) {
+    material.dispose();
+  }
 }

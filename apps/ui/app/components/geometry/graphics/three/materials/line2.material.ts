@@ -10,9 +10,11 @@ import type { Line2NodeMaterialParameters as ThreeLine2NodeMaterialParameters } 
 import { Line2NodeMaterial as ThreeLine2NodeMaterial } from 'three/webgpu';
 import {
   attribute,
+  cameraFar,
   cameraNear,
   cameraProjectionMatrix,
   dashSize,
+  depth,
   float,
   Fn,
   gapSize,
@@ -27,6 +29,7 @@ import {
   mix,
   modelViewMatrix,
   positionGeometry,
+  positionView,
   screenDPR,
   smoothstep,
   uv,
@@ -36,22 +39,61 @@ import {
   varyingProperty,
   viewport,
   viewportOpaqueMipTexture,
+  viewZToLogarithmicDepth,
+  viewZToPerspectiveDepth,
+  viewZToReversedPerspectiveDepth,
 } from 'three/tsl';
 
 /**
  * Fat-line node material for overlays on the WebGPU viewport (`reversedDepthBuffer: true`).
  *
- * **Divergence**: three.js `Line2NodeMaterial` estimates the camera near plane as
- * `projectionMatrix[3][2] * -0.5 / projectionMatrix[2][2]`, which collapses to `-far/2`
- * under reversed-Z perspective. Long segments with an endpoint behind the camera then
- * get an invalid trim `alpha` and `mix()` flips the line into the opposite hemisphere
- * (viewport axes at `size ≈ 50_000`, typical CAD camera distances).
+ * **Divergence 1 — reversed-Z near trim.** three.js `Line2NodeMaterial` estimates the
+ * camera near plane as `projectionMatrix[3][2] * -0.5 / projectionMatrix[2][2]`, which
+ * collapses to `-far/2` under reversed-Z perspective. Long segments with an endpoint behind
+ * the camera then get an invalid trim `alpha` and `mix()` flips the line into the opposite
+ * hemisphere (viewport axes at `size ≈ 50_000`, typical CAD camera distances). This subclass
+ * uses TSL **`cameraNear`** so the near estimate stays **`-camera.near`** in camera space for
+ * both standard and reversed depth buffers.
  *
- * This subclass uses TSL **`cameraNear`** so the near estimate stays **`-camera.near`** in
- * camera space for both standard and reversed depth buffers.
+ * **Divergence 2 — section-view clipping.** `NodeMaterial.setupHardwareClipping` activates
+ * vertex-stage `gl_ClipDistance` for every WebGPU NodeMaterial whenever the device exposes
+ * the `clip-distances` feature. The hardware-clipping node references `positionView`, which
+ * — in the vertex stage — falls through to **`modelViewMatrix * positionLocal`**. For a
+ * `LineSegmentsGeometry` instance, `positionLocal` is the static unit-quad attribute reused
+ * across every instanced segment via `instanceStart`/`instanceEnd`; the per-vertex clip
+ * distance therefore depends only on the line mesh's local origin (not each segment's actual
+ * world position) and uniformly keeps or culls every segment. With the mesh origin on the
+ * kept side, every segment passes hardware clipping and edge lines bleed onto the
+ * sectioned-off half of the model. WebGL is immune because the upstream `LineMaterial`
+ * `ShaderMaterial` performs an explicit `mvPosition = (position.y < 0.5) ? start : end;`
+ * fixup before `<clipping_planes_vertex>`. We disable hardware clipping so the framework
+ * routes through the **software fragment-stage path** (`ClippingNode.setupDefault` /
+ * `setupAlphaToCoverage`), which reconstructs `positionView` per fragment from
+ * `cameraProjectionMatrixInverse * v_clipSpace` — perspective-correctly interpolated across
+ * the line quad and aligned with the line's actual world position.
+ *
+ * **Divergence 3 — renderer-aware depth encoding.** Tau instantiates three different WebGPU
+ * renderer presets in `apps/ui/app/components/geometry/graphics/three/renderer.ts`:
+ * `viewport` runs with `reversedDepthBuffer: true` (closer = larger clip-z, GTAO benefit);
+ * `screenshot` and `offscreen` run with `logarithmicDepthBuffer: true` (uniform precision
+ * across large CAD models). Surface materials fall through to `NodeMaterial.setupDepth` and
+ * automatically pick `viewZToLogarithmicDepth` under the log-depth path, but a fat-line
+ * material that hardcodes `material.depthNode = viewZToReversedPerspectiveDepth(...)` from
+ * the factory emits reversed `[1..0]` values into a forward-Z log-depth buffer. The depth
+ * comparison breaks: every occluded line fragment produces a smaller depth than the surface
+ * in front of it and leaks through. The same material instance can be consumed by several
+ * renderers in one frame budget (live viewport plus an out-of-band screenshot capture), so
+ * the encoder must be picked per `builder` rather than locked at construction time. We
+ * override `setupDepth(builder)` and dispatch on `builder.renderer.reversedDepthBuffer` /
+ * `builder.renderer.logarithmicDepthBuffer`, mirroring the exact pattern three.js itself
+ * uses in `PointShadowNode` and `NodeMaterial.setupDepth`. The coplanar bias is exposed via
+ * the {@link depthBias} field (default `1.0` = no bias) so the gltf-edges factory can pull
+ * the line forward in view-space without re-implementing the dispatch.
  *
  * @see `docs/policy/webgpu-rendering-pipeline.md`
  * @see `docs/research/webgpu-line2-reversed-z-trim.md`
+ * @see `docs/research/webgpu-fat-line-hardware-clipping-bug.md`
+ * @see `docs/research/webgpu-fat-line-renderer-aware-depth.md`
  */
 export class Line2NodeMaterial extends ThreeLine2NodeMaterial {
   /** @inheritdoc */
@@ -59,8 +101,81 @@ export class Line2NodeMaterial extends ThreeLine2NodeMaterial {
     return 'Line2NodeMaterial';
   }
 
+  /**
+   * Multiplicative bias applied to `positionView.z` inside {@link setupDepth}. `1.0` is the
+   * identity (no bias). Values in `(0, 1)` pull the line forward in view-space (smaller
+   * `|z|` because view-space Z is negative for objects in front of the camera) so the line
+   * wins coplanar Z-fights against the surface it overlays; values `> 1` push the line
+   * backwards. The factory layer in `gltf-edges.ts` owns the chosen value so the bias stays
+   * tunable without re-implementing the renderer-aware dispatch.
+   */
+  public depthBias = 1;
+
   public constructor(parameters?: ThreeLine2NodeMaterialParameters) {
     super(parameters);
+  }
+
+  /**
+   * Forces software fragment-stage clipping (`positionView` reconstructed from `clipSpace`
+   * per fragment) instead of vertex-stage hardware `gl_ClipDistance`. See class JSDoc
+   * "Divergence 2" for the smoking-gun chain. Bulk surface meshes elsewhere in the scene
+   * keep hardware clipping; this override is line-material-local.
+   *
+   * The `builder` parameter mirrors the upstream signature so this stays a true override
+   * even though the body ignores it.
+   */
+  // oxlint-disable-next-line unused-vars(no-unused-vars) -- preserves override parity with NodeMaterial.setupHardwareClipping
+  public override setupHardwareClipping(builder: unknown): void {
+    (this as { hardwareClipping: boolean }).hardwareClipping = false;
+  }
+
+  /**
+   * Renderer-aware depth encoding (Divergence 3). Picks the matching `viewZTo*Depth`
+   * encoder from `builder.renderer` flags so the line emits depth in the same space as
+   * the surrounding surface rasterizer:
+   *
+   * - `reversedDepthBuffer` viewport          → `viewZToReversedPerspectiveDepth`
+   * - `logarithmicDepthBuffer` screenshot path → `viewZToLogarithmicDepth`
+   * - Standard perspective fallback           → `viewZToPerspectiveDepth`
+   *
+   * Orthographic cameras, MRT depth attachments, and call sites that have manually
+   * assigned `material.depthNode` delegate to `super.setupDepth(builder)` so the upstream
+   * decision tree (including the ortho-log branch) stays authoritative.
+   *
+   * The {@link depthBias} multiplier is applied to `positionView.z` before encoding so
+   * coplanar edges win the depth comparison consistently across all three encodings.
+   */
+  public override setupDepth(builder: unknown): void {
+    const { renderer, camera } = builder as {
+      readonly renderer: {
+        readonly reversedDepthBuffer?: boolean;
+        readonly logarithmicDepthBuffer?: boolean;
+        // Three.js's runtime returns `null` from `getMRT()` when no MRT is configured, but the
+        // workspace lint rule (`typescript-eslint(no-restricted-types)`) bans `null` as a type
+        // annotation. The optional-chain reader (`mrt?.has('depth')`) treats null and undefined
+        // identically at runtime, so the typing stays lossless.
+        // eslint-disable-next-line @typescript-eslint/naming-convention -- `getMRT` mirrors three.js's external Renderer API name
+        getMRT?: () => { has(name: string): boolean } | undefined;
+      };
+      readonly camera: { readonly isPerspectiveCamera?: boolean };
+    };
+
+    const mrt = typeof renderer.getMRT === 'function' ? renderer.getMRT() : undefined;
+
+    if (this.depthNode !== null || mrt?.has('depth') === true || camera.isPerspectiveCamera !== true) {
+      super.setupDepth(builder);
+      return;
+    }
+
+    const biasedZ = positionView.z.mul(this.depthBias);
+
+    const depthNode = renderer.reversedDepthBuffer
+      ? viewZToReversedPerspectiveDepth(biasedZ, cameraNear, cameraFar)
+      : renderer.logarithmicDepthBuffer
+        ? viewZToLogarithmicDepth(biasedZ, cameraNear, cameraFar)
+        : viewZToPerspectiveDepth(biasedZ, cameraNear, cameraFar);
+
+    depth.assign(depthNode).toStack();
   }
 
   /** @inheritdoc */

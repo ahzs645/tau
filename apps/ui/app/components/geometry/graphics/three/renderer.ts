@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { WebGPURenderer as ThreeWebGPURenderer } from 'three/webgpu';
 import type { ResolvedGraphicsBackend } from '#constants/editor.constants.js';
+import { reversedDepthTransparentSort } from '#components/geometry/graphics/three/reversed-depth-transparent-sort.js';
 
 /** WebGL renderer instantiated by Tau helpers. */
 export type WebGlRenderer = THREE.WebGLRenderer;
@@ -68,6 +69,15 @@ export async function createRenderer(
 
     const renderer = new ThreeWebGPURenderer(options);
     await initWebGpuIfNeeded(renderer);
+
+    if (useCase === 'viewport') {
+      // Compensates for `reversedDepthBuffer: true` flipping clip-space Z direction:
+      // upstream `reversePainterSortStable` (`node_modules/three/src/renderers/common/RenderList.js`)
+      // assumes "larger clip-z = farther", which is INVERTED under reversed-Z and silently sorts
+      // transparent geometry front-to-back. See docs/research/webgpu-reversed-z-transparent-sort-inversion.md.
+      renderer.setTransparentSort(reversedDepthTransparentSort);
+    }
+
     return renderer;
   }
 

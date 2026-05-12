@@ -2,6 +2,15 @@
 import { describe, expect, it } from 'vitest';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  cameraFar,
+  cameraNear,
+  depth,
+  positionView,
+  viewZToLogarithmicDepth,
+  viewZToPerspectiveDepth,
+  viewZToReversedPerspectiveDepth,
+} from 'three/tsl';
 import { Line2NodeMaterial as ThreeLine2NodeMaterial, NodeMaterial as ThreeNodeMaterial } from 'three/webgpu';
 import { Line2NodeMaterial } from '#components/geometry/graphics/three/materials/line2.material.js';
 import { serialiseStrippedTslGraph } from '#components/geometry/graphics/three/utils/tsl-node-graph-snapshot.js';
@@ -102,3 +111,240 @@ describe('Line2NodeMaterial.setup parent dispatch (regression guard)', () => {
     expect(nodeView.colorNode).toBeDefined();
   });
 });
+
+describe('Line2NodeMaterial.setupHardwareClipping (section-view regression guard)', () => {
+  /**
+   * Smoking-gun regression: `NodeMaterial.setupHardwareClipping` activates vertex-stage
+   * `gl_ClipDistance` whenever the device exposes `clip-distances`, but the hardware path's
+   * `positionView` falls through to `modelViewMatrix * positionLocal` — for a
+   * `LineSegmentsGeometry` that's the static unit-quad attribute reused by every instanced
+   * segment, so the clip distance is constant per draw call and bleeds line edges onto the
+   * sectioned-off half of the model. Forcing `hardwareClipping = false` routes through the
+   * fragment-stage software path that reconstructs `positionView` per fragment from
+   * `clipSpace`, which clips correctly. See the class JSDoc for the full chain.
+   */
+  it('skips the base addToStack(hardwareClipping()) and leaves hardwareClipping = false', () => {
+    const material = new Line2NodeMaterial({
+      color: 0xff_00_ff,
+      linewidth: 1,
+      opacity: 0.6,
+      transparent: true,
+      worldUnits: false,
+    });
+
+    const stackPushes: readonly unknown[] = [];
+    const stubBuilder = {
+      clippingContext: { unionPlanes: [{}, {}] },
+      isAvailable: (capability: string) => capability === 'clipDistance',
+      stack: {
+        addToStack: (node: unknown) => {
+          (stackPushes as unknown[]).push(node);
+        },
+      },
+    };
+
+    material.setupHardwareClipping(stubBuilder);
+
+    expect(stackPushes).toHaveLength(0);
+    expect((material as unknown as { hardwareClipping: boolean }).hardwareClipping).toBe(false);
+  });
+});
+
+/* eslint-disable @typescript-eslint/naming-convention -- mirrors three.js external API names (`renderer.getMRT()`, `node.toJSON()`) inside test stubs and ad-hoc type aliases */
+describe('Line2NodeMaterial.setupDepth (renderer-aware encoding regression guard)', () => {
+  /**
+   * Smoking-gun regression: hardcoding `material.depthNode = viewZToReversedPerspectiveDepth(...)`
+   * at construction time emits reversed-Z `[1..0]` depth values into renderers that don't
+   * use reversed-Z (`offscreen`/`screenshot` WebGPU runs with `logarithmicDepthBuffer: true`,
+   * `reversedDepthBuffer: false`). Surfaces emit log-depth, lines emit reversed-perspective —
+   * the comparison breaks and occluded line fragments leak into the saved PNG. The override
+   * dispatches per `builder.renderer` flags, mirroring three.js's own `PointShadowNode` and
+   * `NodeMaterial.setupDepth` patterns. See class JSDoc "Divergence 3".
+   */
+  type DepthAssignDescriptor = PropertyDescriptor | undefined;
+  type CapturedAssign = { node: unknown };
+
+  function captureDepthAssign(): { restore: () => void; captured: CapturedAssign } {
+    const captured: CapturedAssign = { node: undefined };
+    const fakeChain = { toStack: () => undefined };
+    const originalDescriptor: DepthAssignDescriptor = Object.getOwnPropertyDescriptor(depth, 'assign');
+    Object.defineProperty(depth, 'assign', {
+      configurable: true,
+      enumerable: false,
+      writable: true,
+      value: (node: unknown): { toStack: () => undefined } => {
+        captured.node = node;
+        return fakeChain;
+      },
+    });
+    return {
+      captured,
+      restore: () => {
+        if (originalDescriptor) {
+          Object.defineProperty(depth, 'assign', originalDescriptor);
+        } else {
+          delete (depth as { assign?: unknown }).assign;
+        }
+      },
+    };
+  }
+
+  function fingerprint(node: unknown): string {
+    return serialiseStrippedTslGraph((node as { toJSON: () => unknown }).toJSON());
+  }
+
+  const buildMaterial = (): Line2NodeMaterial =>
+    new Line2NodeMaterial({
+      color: 0xff_00_ff,
+      linewidth: 1,
+      opacity: 0.6,
+      transparent: true,
+      worldUnits: false,
+    });
+
+  it('emits viewZToReversedPerspectiveDepth when renderer.reversedDepthBuffer is true (viewport)', () => {
+    const material = buildMaterial();
+    material.depthBias = 0.999;
+
+    const stubBuilder = {
+      renderer: { reversedDepthBuffer: true, getMRT: () => null },
+      camera: { isPerspectiveCamera: true },
+    };
+
+    const { captured, restore } = captureDepthAssign();
+    try {
+      material.setupDepth(stubBuilder);
+    } finally {
+      restore();
+    }
+
+    expect(captured.node).toBeDefined();
+    const expected = viewZToReversedPerspectiveDepth(positionView.z.mul(material.depthBias), cameraNear, cameraFar);
+    expect(fingerprint(captured.node)).toBe(fingerprint(expected));
+  });
+
+  it('emits viewZToLogarithmicDepth when renderer.logarithmicDepthBuffer is true (screenshot occlusion fix)', () => {
+    const material = buildMaterial();
+    material.depthBias = 0.999;
+
+    const stubBuilder = {
+      renderer: { logarithmicDepthBuffer: true, getMRT: () => null },
+      camera: { isPerspectiveCamera: true },
+    };
+
+    const { captured, restore } = captureDepthAssign();
+    try {
+      material.setupDepth(stubBuilder);
+    } finally {
+      restore();
+    }
+
+    expect(captured.node).toBeDefined();
+    const expected = viewZToLogarithmicDepth(positionView.z.mul(material.depthBias), cameraNear, cameraFar);
+    expect(fingerprint(captured.node)).toBe(fingerprint(expected));
+  });
+
+  it('emits viewZToPerspectiveDepth when neither renderer flag is set', () => {
+    const material = buildMaterial();
+    material.depthBias = 0.999;
+
+    const stubBuilder = {
+      renderer: { getMRT: () => null },
+      camera: { isPerspectiveCamera: true },
+    };
+
+    const { captured, restore } = captureDepthAssign();
+    try {
+      material.setupDepth(stubBuilder);
+    } finally {
+      restore();
+    }
+
+    expect(captured.node).toBeDefined();
+    const expected = viewZToPerspectiveDepth(positionView.z.mul(material.depthBias), cameraNear, cameraFar);
+    expect(fingerprint(captured.node)).toBe(fingerprint(expected));
+  });
+
+  it('honours material.depthNode when a caller has manually overridden it', () => {
+    const material = buildMaterial();
+    const manualOverride = positionView.z.mul(0.5);
+    (material as { depthNode: unknown }).depthNode = manualOverride;
+
+    const stubBuilder = {
+      renderer: { reversedDepthBuffer: true, getMRT: () => null },
+      camera: { isPerspectiveCamera: true },
+    };
+
+    const { captured, restore } = captureDepthAssign();
+    try {
+      material.setupDepth(stubBuilder);
+    } finally {
+      restore();
+    }
+
+    expect(captured.node).toBe(manualOverride);
+  });
+
+  /**
+   * Orthographic cameras and MRT depth attachments are deliberately deferred to
+   * `super.setupDepth(builder)` so the upstream `NodeMaterial.setupDepth` decision tree
+   * (including the ortho-log branch and MRT lookup) stays authoritative for fat lines.
+   * The smoking-gun guard here is the same pattern as the `super.setup` regression test
+   * earlier in this file: prototype-patch the inherited method and count calls.
+   */
+  type SetupDepthShim = { setupDepth: (...args: readonly unknown[]) => unknown };
+
+  it('falls through to NodeMaterial.setupDepth for orthographic cameras', () => {
+    const nodeMaterialPrototypeShim = ThreeNodeMaterial.prototype as unknown as SetupDepthShim;
+    const original = nodeMaterialPrototypeShim.setupDepth;
+    let callCount = 0;
+
+    nodeMaterialPrototypeShim.setupDepth = function patched(): unknown {
+      callCount += 1;
+      return undefined;
+    };
+
+    const material = buildMaterial();
+    const stubBuilder = {
+      renderer: { reversedDepthBuffer: true, getMRT: () => null },
+      camera: { isPerspectiveCamera: false },
+    };
+
+    try {
+      material.setupDepth(stubBuilder);
+    } finally {
+      nodeMaterialPrototypeShim.setupDepth = original;
+    }
+
+    expect(callCount).toBe(1);
+  });
+
+  it('falls through to NodeMaterial.setupDepth when MRT depth attachment is configured', () => {
+    const nodeMaterialPrototypeShim = ThreeNodeMaterial.prototype as unknown as SetupDepthShim;
+    const original = nodeMaterialPrototypeShim.setupDepth;
+    let callCount = 0;
+
+    nodeMaterialPrototypeShim.setupDepth = function patched(): unknown {
+      callCount += 1;
+      return undefined;
+    };
+
+    const material = buildMaterial();
+    const stubBuilder = {
+      renderer: {
+        reversedDepthBuffer: true,
+        getMRT: () => ({ has: (name: string): boolean => name === 'depth' }),
+      },
+      camera: { isPerspectiveCamera: true },
+    };
+
+    try {
+      material.setupDepth(stubBuilder);
+    } finally {
+      nodeMaterialPrototypeShim.setupDepth = original;
+    }
+
+    expect(callCount).toBe(1);
+  });
+});
+/* eslint-enable @typescript-eslint/naming-convention -- restore default naming-convention enforcement after the three.js external-API stub block above */

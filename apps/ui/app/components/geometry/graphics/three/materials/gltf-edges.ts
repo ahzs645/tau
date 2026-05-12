@@ -1,10 +1,9 @@
 import type { GLTF } from 'three/addons/loaders/GLTFLoader.js';
-import type { Group, LineSegments, Object3D, Vector2 } from 'three';
+import type { Group, LineSegments, Material, Object3D, Scene, Vector2 } from 'three';
 import { InterleavedBufferAttribute } from 'three';
 import { LineSegments2, LineSegmentsGeometry, LineMaterial } from 'three/addons';
 import { LineSegments2 as WebGpuFatLineSegments2 } from 'three/addons/lines/webgpu/LineSegments2.js';
 import { Line2NodeMaterial } from '#components/geometry/graphics/three/materials/line2.material.js';
-import { cameraFar, cameraNear, positionView, viewZToReversedPerspectiveDepth } from 'three/tsl';
 import type { ResolvedGraphicsBackend } from '#constants/editor.constants.js';
 
 /**
@@ -20,7 +19,7 @@ const defaultLineWidth = 1;
 const defaultEdgeColor = 0x00_00_00;
 
 /**
- * Depth bias multiplier shared by WebGL (`LineMaterial`) and WebGPU (`Line2NodeMaterial.depthNode`).
+ * Depth bias multiplier shared by WebGL (`LineMaterial`) and WebGPU (`Line2NodeMaterial.depthBias`).
  *
  * **WebGL (logarithmicDepthBuffer)** — biases are appended only in the vertex shader after
  * `<logdepthbuf_vertex>`: `vFragDepth *= pow(depthBiasFactor, fovScale)` on **perspective** cameras
@@ -28,13 +27,12 @@ const defaultEdgeColor = 0x00_00_00;
  * Omitting `<logdepthbuf_fragment>` replacement avoids rewriting `gl_FragDepth` in the fragment
  * shader, which restores MSAA coverage compared to injecting `gl_FragDepth` manually.
  *
- * **WebGPU (`reversedDepthBuffer: true`)** — `depthNode` uses `viewZToReversedPerspectiveDepth(positionView.z.mul(depthBiasFactor), …)`
- * so the emitted depth shares the reversed-Z encoding (near = 1, far = 0) of the surrounding
- * surface rasterizer; that way coplanar edge lines win the depth comparison while occluded
- * fragments still produce a smaller depth value than the surface in front and are correctly
- * culled. Using the non-reversed `viewZToPerspectiveDepth` here would emit `[0,1]` non-reversed
- * values into a reversed-Z buffer and make every line fragment beat any surface, which is the
- * "lines never occluded" smoking gun.
+ * **WebGPU** — forwarded to {@link Line2NodeMaterial.depthBias}. The subclass'
+ * `setupDepth(builder)` override picks the matching `viewZTo*Depth` encoder per renderer
+ * (reversed-Z viewport, log-depth screenshot/offscreen, or standard perspective) so the
+ * emitted depth always shares the surrounding surface rasterizer's encoding. Hardcoding a
+ * single encoder at construction time was the "lines never occluded in screenshots"
+ * smoking gun (see `docs/research/webgpu-fat-line-renderer-aware-depth.md`).
  *
  * **FOV adaptation (WebGL perspective only)**:
  * `fovScale = tan(fov/2)/tan(30°)`; `adjustedBias = pow(depthBiasFactor, fovScale)`.
@@ -45,6 +43,7 @@ const defaultEdgeColor = 0x00_00_00;
  * occluders; stronger bias restores full opaque line coverage against coplanar faces.
  *
  * @see `docs/policy/webgpu-rendering-pipeline.md`
+ * @see `docs/research/webgpu-fat-line-renderer-aware-depth.md`
  */
 const depthBiasFactor = 0.999;
 
@@ -150,16 +149,21 @@ function extractPositions(lineSegments: LineSegments): number[] | undefined {
 }
 
 /**
- * Create a LineMaterial with FOV-adaptive logarithmic depth bias for edge rendering.
+ * WebGL fat-line material paired with `LineSegments2` (`three/addons/lines/LineSegments2`).
  *
  * Injects multiplicative bias on `vFragDepth` in the vertex shader only (after three's
  * `<logdepthbuf_vertex>`), so the engine's `<logdepthbuf_fragment>` chunk (r180+
  * `USE_LOGARITHMIC_DEPTH_BUFFER`) stays authoritative and fragment MSAA stays valid.
  *
- * @param resolution - The viewport resolution for line width calculation
- * @returns A configured LineMaterial with FOV-adaptive depth bias (perspective only)
+ * Exported so the screenshot capability path can allocate fresh materials per capture
+ * — sharing the live viewport's `LineMaterial` across renderer instances is structurally
+ * unsafe (the shared `'dispose'` listeners purge pipeline state on every renderer using
+ * the material). See `docs/research/screenshot-viewport-shared-material-state-bleed.md`.
+ *
+ * @param resolution - The viewport resolution for line width calculation.
+ * @returns A configured LineMaterial with FOV-adaptive depth bias (perspective only).
  */
-function createEdgeLineMaterial(resolution: Vector2): LineMaterial {
+export function createWebGlGltfFatLineMaterial(resolution: Vector2): LineMaterial {
   const material = new LineMaterial({
     color: defaultEdgeColor,
     linewidth: defaultLineWidth,
@@ -239,7 +243,7 @@ function convertToFatLineSegments2(
     return lineSegments2;
   }
 
-  const material = createEdgeLineMaterial(resolution);
+  const material = createWebGlGltfFatLineMaterial(resolution);
 
   const lineSegments2 = new LineSegments2(geometry, material);
 
@@ -309,6 +313,21 @@ export function applyFatLineSegments(gltf: GLTF, resolution: Vector2, backend: R
 /**
  * WebGPU fat-line material paired with {@link LineSegmentsGeometry} via
  * `three/addons/lines/webgpu/LineSegments2`.
+ *
+ * **`alphaToCoverage = false`** — opts the WebGPU material out of upstream
+ * `Line2NodeMaterial`'s default `_useAlphaToCoverage = true` so the screen-space rounded
+ * endcap branch falls through to the deterministic `discard` path. Upstream WebGL
+ * `LineMaterial` already takes that path by default (`USE_ALPHA_TO_COVERAGE` define
+ * absent) and produces the crisp 5-level MSAA coverage Tau ships today; mirroring the
+ * WebGPU side closes the screenshot crispness gap because the WebGPU spec leaves the
+ * alpha→sample-mask conversion vendor-defined (e.g. Qualcomm's documented 4×4
+ * area-dither LUT, gpuweb/gpuweb#4867) which surfaces as visible graininess on
+ * dithered drivers. See `docs/research/webgpu-edge-line-crispness-gap.md`.
+ *
+ * The coplanar bias is forwarded as `material.depthBias`; the renderer-aware encoder
+ * dispatch lives inside {@link Line2NodeMaterial.setupDepth}, so the same material
+ * instance can be rendered correctly by either the reversed-Z viewport renderer or the
+ * log-depth screenshot/offscreen renderer in the same frame budget.
  */
 export function createWebGpuGltfFatLineMaterial(): Line2NodeMaterial {
   const material = new Line2NodeMaterial({
@@ -317,12 +336,76 @@ export function createWebGpuGltfFatLineMaterial(): Line2NodeMaterial {
     worldUnits: false,
   });
 
-  // Perspective viewport only — mirrors WebGL bias intent; ortho follow-up deferred.
-  // `viewZToReversedPerspectiveDepth` matches the WebGPU viewport's `reversedDepthBuffer: true`
-  // encoding, mirroring the canonical pattern in three's own `PointShadowNode` reversed-Z branch.
-  material.depthNode = viewZToReversedPerspectiveDepth(positionView.z.mul(depthBiasFactor), cameraNear, cameraFar);
+  material.alphaToCoverage = false;
+  material.depthBias = depthBiasFactor;
 
   return material;
+}
+
+type ApplyEdgeMaterialsToClonedSceneOptions = Readonly<{
+  backend: ResolvedGraphicsBackend;
+  /** Required for the WebGL `LineMaterial` `resolution` uniform; ignored on WebGPU. */
+  resolution: Vector2;
+}>;
+
+/**
+ * Allocate fresh fat-line materials on every `LineSegments2` in a cloned screenshot scene.
+ *
+ * The screenshot renderer's flag set diverges from the viewport's on `reversedDepthBuffer`,
+ * `logarithmicDepthBuffer`, and the `RenderPipeline`/`PassNode` post-processing chain. A
+ * `Line2NodeMaterial` whose TSL graph is materialised once against the viewport's flags
+ * cannot legally be reused by a renderer with a different sample-count contract — three.js
+ * caches the built node graph on the material instance, so the screenshot renderer would
+ * inherit the viewport's reversed-Z depth encoder, HalfFloat color attachment expectations,
+ * and PassNode-level filtering assumptions.
+ *
+ * Allocating fresh materials here means each renderer compiles its own pipeline against
+ * its own flag set. Tau's `Line2NodeMaterial.setupDepth` then correctly picks the
+ * screenshot renderer's `viewZToLogarithmicDepth` branch instead of the viewport's
+ * `viewZToReversedPerspectiveDepth` one. Combined with `applyMatcapToClonedScene`'s
+ * existing fresh-allocation pattern for surface meshes, this closes the captured-output
+ * graininess gap (Symptom B in
+ * `docs/research/screenshot-viewport-shared-material-state-bleed.md`).
+ *
+ * @returns The set of newly-allocated edge materials owned by this clone pass.
+ */
+export function applyEdgeMaterialsToClonedScene(
+  scene: Scene,
+  options: ApplyEdgeMaterialsToClonedSceneOptions,
+): Set<Material> {
+  const allocated = new Set<Material>();
+
+  scene.traverse((child) => {
+    if (!('type' in child) || child.type !== 'LineSegments2') {
+      return;
+    }
+
+    // Both the WebGL `LineSegments2` (from `three/addons`) and the WebGPU
+    // `LineSegments2` (from `three/addons/lines/webgpu/LineSegments2.js`) set
+    // `.type === 'LineSegments2'`. Their `material` slots accept different
+    // concrete material classes (`LineMaterial` vs `Line2NodeMaterial`), so we
+    // treat both via the structural intersection both materials expose.
+    type FatLineMesh = { material: { color?: { getHex(): number }; linewidth?: number } };
+    const lineSegments = child as unknown as FatLineMesh;
+    const sourceMaterial = lineSegments.material;
+
+    const fresh =
+      options.backend === 'webgpu'
+        ? createWebGpuGltfFatLineMaterial()
+        : createWebGlGltfFatLineMaterial(options.resolution);
+
+    if (sourceMaterial.color && 'color' in fresh) {
+      (fresh as { color: { setHex(hex: number): void } }).color.setHex(sourceMaterial.color.getHex());
+    }
+    if (typeof sourceMaterial.linewidth === 'number') {
+      (fresh as { linewidth: number }).linewidth = sourceMaterial.linewidth;
+    }
+
+    lineSegments.material = fresh as { color?: { getHex(): number }; linewidth?: number };
+    allocated.add(fresh);
+  });
+
+  return allocated;
 }
 
 /**
