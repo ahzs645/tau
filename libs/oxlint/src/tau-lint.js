@@ -25,12 +25,13 @@ import { noBareTimeIdentifierRule } from './rules/no-bare-time-identifier.js';
 import { noAsyncIifeRule } from './rules/no-async-iife.js';
 import { noMonacoCreateModelRule } from './rules/no-monaco-create-model.js';
 import { staticImportMetaUrlRule } from './rules/static-import-meta-url.js';
+import { requireUsingOnDisposableRule } from './rules/require-using-on-disposable.js';
 
 /** @type {Plugin} */
 const plugin = {
   meta: {
     name: 'tau-lint',
-    version: '1.12.0',
+    version: '1.13.0',
   },
   rules: {
     'no-abusive-eslint-disable': noAbusiveEslintDisableRule,
@@ -51,6 +52,7 @@ const plugin = {
     'no-async-iife': noAsyncIifeRule,
     'no-monaco-create-model': noMonacoCreateModelRule,
     'static-import-meta-url': staticImportMetaUrlRule,
+    'require-using-on-disposable': requireUsingOnDisposableRule,
   },
 };
 
