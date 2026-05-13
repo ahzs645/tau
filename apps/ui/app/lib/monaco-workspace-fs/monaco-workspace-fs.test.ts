@@ -28,20 +28,24 @@ describe('MonacoWorkspaceFs', () => {
 
     registry.registerTextDocumentContentProvider({
       scheme: 'tau-test',
-      provideTextDocumentContent(uri: monaco.Uri): Promise<string> {
+      async provideTextDocumentContent(uri: monaco.Uri): Promise<string> {
         contentReads.push(uri.path);
-        return Promise.resolve('from-content');
+        return 'from-content';
       },
     });
 
     registry.registerFileSystemProvider({
       scheme: 'tau-test',
-      readText(uri: monaco.Uri): Promise<string> {
+      async readText(uri: monaco.Uri): Promise<string> {
         fsReads.push(uri.path);
-        return Promise.resolve('from-fs');
+        return 'from-fs';
       },
       onDidChange(): monaco.IDisposable {
-        return { dispose(): void {} };
+        return {
+          dispose(): void {
+            void 0;
+          },
+        };
       },
     });
 
@@ -58,18 +62,22 @@ describe('MonacoWorkspaceFs', () => {
 
     registry.registerTextDocumentContentProvider({
       scheme: 'tau-test',
-      provideTextDocumentContent(): Promise<string> {
-        return Promise.resolve('from-content');
+      async provideTextDocumentContent(): Promise<string> {
+        return 'from-content';
       },
     });
 
     const disposable = registry.registerFileSystemProvider({
       scheme: 'tau-test',
-      readText(): Promise<string> {
-        return Promise.resolve('from-fs');
+      async readText(): Promise<string> {
+        return 'from-fs';
       },
       onDidChange(): monaco.IDisposable {
-        return { dispose(): void {} };
+        return {
+          dispose(): void {
+            void 0;
+          },
+        };
       },
     });
 
@@ -84,27 +92,35 @@ describe('MonacoWorkspaceFs', () => {
     const registry = createMonacoWorkspaceFs(monaco);
     registry.registerFileSystemProvider({
       scheme: 'a',
-      readText(): Promise<string> {
-        return Promise.resolve('');
+      async readText(): Promise<string> {
+        return '';
       },
       onDidChange(): monaco.IDisposable {
-        return { dispose(): void {} };
+        return {
+          dispose(): void {
+            void 0;
+          },
+        };
       },
-      findFiles(_pattern, opts) {
-        const n = opts?.maxResults ?? 10;
+      findFiles(_pattern, options) {
+        const n = options?.maxResults ?? 10;
         return Array.from({ length: n }, (_, i) => monaco.Uri.parse(`a:/f${i}.txt`));
       },
     });
     registry.registerFileSystemProvider({
       scheme: 'b',
-      readText(): Promise<string> {
-        return Promise.resolve('');
+      async readText(): Promise<string> {
+        return '';
       },
       onDidChange(): monaco.IDisposable {
-        return { dispose(): void {} };
+        return {
+          dispose(): void {
+            void 0;
+          },
+        };
       },
-      findFiles(_pattern, opts) {
-        const n = opts?.maxResults ?? 10;
+      findFiles(_pattern, options) {
+        const n = options?.maxResults ?? 10;
         return Array.from({ length: n }, (_, i) => monaco.Uri.parse(`b:/g${i}.txt`));
       },
     });
@@ -125,18 +141,22 @@ describe('MonacoWorkspaceFs', () => {
     let fire!: () => void;
     registry.registerFileSystemProvider({
       scheme: 'chg',
-      readText(): Promise<string> {
-        return Promise.resolve('v1');
+      async readText(): Promise<string> {
+        return 'v1';
       },
       onDidChange(_uri: monaco.Uri, listener: () => void): monaco.IDisposable {
         fire = listener;
-        return { dispose(): void {} };
+        return {
+          dispose(): void {
+            void 0;
+          },
+        };
       },
     });
 
     const uri = monaco.Uri.parse('chg:/doc.txt');
     await registry.openTextDocument(uri);
-    fire!();
+    fire();
     expect(refresh).toHaveBeenCalledWith(uri);
     registry.dispose();
   });

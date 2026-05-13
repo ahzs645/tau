@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MyUIMessage } from '@taucad/chat';
+import { fileUnchangedMarker } from '@taucad/chat/constants';
 import type { ActivityGroup, FoldableRun, StandaloneRun } from '#utils/assistant-message-activity.js';
 import {
   classifyActivityPart,
@@ -847,7 +848,6 @@ describe('groupAssistantParts', () => {
     });
 
     it('should surface a (M cached) suffix alongside the files segment when M of N reads carry fileUnchangedMarker', async () => {
-      const { fileUnchangedMarker } = await import('@taucad/chat/constants');
       const cachedRead = (): Part =>
         ({
           ...readFilePart(),

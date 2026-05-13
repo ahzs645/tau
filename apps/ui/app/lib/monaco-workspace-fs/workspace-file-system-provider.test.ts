@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import * as monaco from 'monaco-editor';
 import type { FileStatEntry } from '@taucad/types';
-import type { FileContentResult } from '@taucad/fs-client/file-content-service';
+import type { FileContentResult, FileContentService } from '@taucad/fs-client/file-content-service';
 import { createWorkspaceFileSystemProvider } from '#lib/monaco-workspace-fs/workspace-file-system-provider.js';
 import { MonacoWorkspaceFileNotFoundError } from '#lib/monaco-workspace-fs/file-not-found-error.js';
 import { drainMonacoPostTestWork } from '#lib/testing/monaco-async-drain.js';
@@ -25,11 +25,11 @@ describe('createWorkspaceFileSystemProvider', () => {
       }
       throw new Error('missing');
     });
-    const peekOutcome = vi.fn(() => ({ kind: 'loading' as const }));
+    const peekOutcome = vi.fn(() => ({ kind: 'loading' }));
     const contentService = {
       resolve,
       peekOutcome,
-    } as unknown as import('@taucad/fs-client/file-content-service').FileContentService;
+    } as unknown as FileContentService;
 
     const provider = createWorkspaceFileSystemProvider({ monaco, contentService });
     const uri = monaco.Uri.file('/src/a.ts');
@@ -46,9 +46,9 @@ describe('createWorkspaceFileSystemProvider', () => {
         if (path === 'readme.md') {
           return textResult('hello');
         }
-        return { kind: 'loading' as const };
+        return { kind: 'loading' };
       },
-    } as unknown as import('@taucad/fs-client/file-content-service').FileContentService;
+    } as unknown as FileContentService;
 
     const provider = createWorkspaceFileSystemProvider({ monaco, contentService });
     const peeked = provider.peekText?.(monaco.Uri.file('/readme.md'));
@@ -59,7 +59,7 @@ describe('createWorkspaceFileSystemProvider', () => {
     const contentService = {
       resolve: vi.fn(),
       peekOutcome: vi.fn(),
-    } as unknown as import('@taucad/fs-client/file-content-service').FileContentService;
+    } as unknown as FileContentService;
     const provider = createWorkspaceFileSystemProvider({ monaco, contentService });
     expect(provider.isReadOnly?.(monaco.Uri.file('/node_modules/foo/index.js'))).toBe(true);
     expect(provider.isReadOnly?.(monaco.Uri.file('/src/main.ts'))).toBe(false);
@@ -67,9 +67,9 @@ describe('createWorkspaceFileSystemProvider', () => {
 
   it('readText throws MonacoWorkspaceFileNotFoundError for non-text outcomes', async () => {
     const contentService = {
-      resolve: vi.fn(async () => ({ kind: 'binary' as const, content: new Uint8Array([1]) })),
+      resolve: vi.fn(async () => ({ kind: 'binary', content: new Uint8Array([1]) })),
       peekOutcome: vi.fn(),
-    } as unknown as import('@taucad/fs-client/file-content-service').FileContentService;
+    } as unknown as FileContentService;
     const provider = createWorkspaceFileSystemProvider({ monaco, contentService });
     const uri = monaco.Uri.file('/blob.bin');
     await expect(provider.readText(uri)).rejects.toBeInstanceOf(MonacoWorkspaceFileNotFoundError);
@@ -85,7 +85,7 @@ describe('createWorkspaceFileSystemProvider', () => {
     const contentService = {
       resolve: vi.fn(),
       peekOutcome: vi.fn(),
-    } as unknown as import('@taucad/fs-client/file-content-service').FileContentService;
+    } as unknown as FileContentService;
     const provider = createWorkspaceFileSystemProvider({
       monaco,
       contentService,
@@ -100,7 +100,7 @@ describe('createWorkspaceFileSystemProvider', () => {
     const contentService = {
       resolve: vi.fn(async () => textResult('export declare const x: string;')),
       peekOutcome: vi.fn(),
-    } as unknown as import('@taucad/fs-client/file-content-service').FileContentService;
+    } as unknown as FileContentService;
     const provider = createWorkspaceFileSystemProvider({
       monaco,
       contentService,
@@ -112,9 +112,9 @@ describe('createWorkspaceFileSystemProvider', () => {
 
   it('readText throws when content service returns orphaned', async () => {
     const contentService = {
-      resolve: vi.fn(async () => ({ kind: 'orphaned' as const })),
+      resolve: vi.fn(async () => ({ kind: 'orphaned' })),
       peekOutcome: vi.fn(),
-    } as unknown as import('@taucad/fs-client/file-content-service').FileContentService;
+    } as unknown as FileContentService;
     const provider = createWorkspaceFileSystemProvider({ monaco, contentService });
     const uri = monaco.Uri.file('/node_modules/missing/index.d.ts');
     await expect(provider.readText(uri)).rejects.toBeInstanceOf(MonacoWorkspaceFileNotFoundError);
@@ -129,7 +129,7 @@ describe('createWorkspaceFileSystemProvider', () => {
     const contentService = {
       resolve: vi.fn(),
       peekOutcome: vi.fn(),
-    } as unknown as import('@taucad/fs-client/file-content-service').FileContentService;
+    } as unknown as FileContentService;
     const provider = createWorkspaceFileSystemProvider({
       monaco,
       contentService,

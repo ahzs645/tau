@@ -21,15 +21,15 @@ export function createExtraLibsFileSystemProvider(editor: typeof monaco): Monaco
   return {
     scheme: 'extraLibs',
 
-    readText(uri: monaco.Uri): Promise<string> {
+    async readText(uri: monaco.Uri): Promise<string> {
       const key = extraLibsLookupKey(uri);
       const ts = editor.typescript.typescriptDefaults.getExtraLibs()[key];
       const js = editor.typescript.javascriptDefaults.getExtraLibs()[key];
       const content = ts?.content ?? js?.content;
       if (content === undefined) {
-        return Promise.reject(new Error(`Extra lib not registered: ${key}`));
+        throw new Error(`Extra lib not registered: ${key}`);
       }
-      return Promise.resolve(content);
+      return content;
     },
 
     peekText(uri: monaco.Uri): string | undefined {
@@ -41,11 +41,19 @@ export function createExtraLibsFileSystemProvider(editor: typeof monaco): Monaco
     },
 
     languageId(uri: monaco.Uri): string | undefined {
-      const path = uri.path;
-      if (path.endsWith('.tsx')) return 'typescriptreact';
-      if (path.endsWith('.ts')) return 'typescript';
-      if (path.endsWith('.jsx')) return 'javascriptreact';
-      if (path.endsWith('.js')) return 'javascript';
+      const { path } = uri;
+      if (path.endsWith('.tsx')) {
+        return 'typescriptreact';
+      }
+      if (path.endsWith('.ts')) {
+        return 'typescript';
+      }
+      if (path.endsWith('.jsx')) {
+        return 'javascriptreact';
+      }
+      if (path.endsWith('.js')) {
+        return 'javascript';
+      }
       return 'typescript';
     },
 

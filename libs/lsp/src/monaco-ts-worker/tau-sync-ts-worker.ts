@@ -5,6 +5,9 @@ import type { LspDiagnostic, LspProbeOutcome } from '#monaco-ts-worker/lsp-diagn
 
 type TsCtorParams = ConstructorParameters<typeof TypeScriptWorker>;
 
+/** @internal */
+export type TauSyncTsWorkerMonacoCtorParams = TsCtorParams;
+
 /**
  * Internal access to the JS-only `_getModel` method on the upstream
  * {@link TypeScriptWorker} so we can distinguish mirror-model hits from
@@ -137,7 +140,8 @@ export class TauSyncTsWorker extends TypeScriptWorker {
 
   /** @remarks Declared for TS {@link ts.LanguageServiceHost} module resolution; not on base class. */
   public directoryExists(directoryName: string): boolean {
-    const base = directoryName.split('/').filter(Boolean).at(-1);
+    const segments = directoryName.split('/').filter((segment) => segment.length > 0);
+    const base = segments.length === 0 ? undefined : segments.at(-1);
     if (base === 'node_modules' || base === '@types') {
       this.diagnostic?.record({
         category: 'directoryExists',

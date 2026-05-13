@@ -34,12 +34,12 @@ describe('createExtraLibsFileSystemProvider', () => {
   it('onDidChange fires when matching extra lib is added', async () => {
     const provider = createExtraLibsFileSystemProvider(monaco);
     const uri = monaco.Uri.file('/node_modules/watch/me.d.ts').with({ scheme: 'extraLibs' });
-    const fn = vi.fn();
-    const sub = provider.onDidChange(uri, fn);
+    const function_ = vi.fn();
+    const sub = provider.onDidChange(uri, function_);
     monaco.typescript.typescriptDefaults.addExtraLib('x', 'file:///node_modules/watch/me.d.ts');
     await vi.waitFor(
       () => {
-        expect(fn).toHaveBeenCalled();
+        expect(function_).toHaveBeenCalled();
       },
       { timeout: 2000 },
     );

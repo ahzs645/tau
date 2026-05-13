@@ -11,31 +11,41 @@ export type TauWorkspaceSymbol = Readonly<{
 
 function mapNavigateToKind(kind: string | undefined): monaco.languages.SymbolKind {
   switch (kind) {
-    case 'class':
+    case 'class': {
       return monaco.languages.SymbolKind.Class;
-    case 'interface':
+    }
+    case 'interface': {
       return monaco.languages.SymbolKind.Interface;
-    case 'enum':
+    }
+    case 'enum': {
       return monaco.languages.SymbolKind.Enum;
-    case 'module':
+    }
+    case 'module': {
       return monaco.languages.SymbolKind.Module;
+    }
     case 'function':
-    case 'local function':
+    case 'local function': {
       return monaco.languages.SymbolKind.Function;
+    }
     case 'method':
-    case 'local method':
+    case 'local method': {
       return monaco.languages.SymbolKind.Method;
-    case 'property':
+    }
+    case 'property': {
       return monaco.languages.SymbolKind.Property;
-    case 'constructor':
+    }
+    case 'constructor': {
       return monaco.languages.SymbolKind.Constructor;
+    }
     case 'var':
     case 'local var':
     case 'let':
-    case 'const':
+    case 'const': {
       return monaco.languages.SymbolKind.Variable;
-    default:
+    }
+    default: {
       return monaco.languages.SymbolKind.Variable;
+    }
   }
 }
 
@@ -78,6 +88,7 @@ export async function searchTauWorkspaceSymbols(
     if (options.token?.isCancellationRequested) {
       return [];
     }
+    // oxlint-disable-next-line no-await-in-loop -- maxFiles budget is applied sequentially across extensions
     const batch = await workspaceFs.findFiles(extension, { maxResults: maxFiles });
     for (const uri of batch) {
       gathered.push(uri);

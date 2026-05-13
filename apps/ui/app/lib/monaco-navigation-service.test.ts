@@ -1,20 +1,21 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import type { AnyActorRef } from 'xstate';
 import * as monaco from 'monaco-editor';
 import { registerMonacoNavigation } from '#lib/monaco-navigation-service.js';
 import { createMonacoWorkspaceFs } from '#lib/monaco-workspace-fs/monaco-workspace-fs.js';
 import { drainMonacoPostTestWork } from '#lib/testing/monaco-async-drain.js';
 
 function createNavDeps(): {
-  editorRef: import('xstate').AnyActorRef;
+  editorRef: AnyActorRef;
   sent: unknown[];
 } {
   const sent: unknown[] = [];
   const editorRef = {
     on: vi.fn(() => ({ unsubscribe: vi.fn() })),
-    send: (ev: unknown) => {
-      sent.push(ev);
+    send: (event: unknown) => {
+      sent.push(event);
     },
-  } as unknown as import('xstate').AnyActorRef;
+  } as unknown as AnyActorRef;
   return { editorRef, sent };
 }
 

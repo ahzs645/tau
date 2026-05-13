@@ -21,8 +21,8 @@ vi.mock('#hooks/use-file-manager.js', () => ({
 }));
 
 const editorMachineSnapshot = {
-  context: { openFiles: [] as { path: string; readOnly?: boolean }[] },
-  status: 'active' as const,
+  context: { openFiles: [] as Array<{ path: string; readOnly?: boolean }> },
+  status: 'active',
   output: undefined,
   error: undefined,
 };

@@ -27,12 +27,12 @@ type CallHierarchyItemLike = Readonly<{
 
 type CallHierarchyIncomingCallLike = Readonly<{
   from: CallHierarchyItemLike;
-  fromSpans: readonly { start: number; length: number }[];
+  fromSpans: ReadonlyArray<{ start: number; length: number }>;
 }>;
 
 type CallHierarchyOutgoingCallLike = Readonly<{
   to: CallHierarchyItemLike;
-  fromSpans: readonly { start: number; length: number }[];
+  fromSpans: ReadonlyArray<{ start: number; length: number }>;
 }>;
 
 function spanToRange(model: monaco.editor.ITextModel, span: { start: number; length: number }): monaco.IRange {
@@ -62,7 +62,7 @@ export async function tauPrepareCallHierarchy(
   if (!raw) {
     return undefined;
   }
-  const items = Array.isArray(raw) ? raw : [raw];
+  const items: readonly CallHierarchyItemLike[] = Array.isArray(raw) ? raw : [raw];
   const out: TauCallHierarchyItem[] = [];
   for (const item of items) {
     const uri = monaco.Uri.parse(item.file);

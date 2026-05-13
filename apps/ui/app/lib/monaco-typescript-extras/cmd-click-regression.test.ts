@@ -29,17 +29,17 @@ describe('JS/TS definition materialisation (workspace FS)', () => {
     const workspaceFs = createMonacoWorkspaceFs(monaco);
     workspaceFs.registerFileSystemProvider({
       scheme: 'file',
-      readText(uri: monaco.Uri): Promise<string> {
-        const rel = uri.path.startsWith('/') ? uri.path.slice(1) : uri.path;
-        const t = files.get(rel);
+      async readText(uri: monaco.Uri): Promise<string> {
+        const workspaceRelativePath = uri.path.startsWith('/') ? uri.path.slice(1) : uri.path;
+        const t = files.get(workspaceRelativePath);
         if (!t) {
-          return Promise.reject(new Error(`missing ${rel}`));
+          throw new Error(`missing ${workspaceRelativePath}`);
         }
-        return Promise.resolve(t);
+        return t;
       },
       peekText(uri: monaco.Uri): string | undefined {
-        const rel = uri.path.startsWith('/') ? uri.path.slice(1) : uri.path;
-        return files.get(rel);
+        const workspaceRelativePath = uri.path.startsWith('/') ? uri.path.slice(1) : uri.path;
+        return files.get(workspaceRelativePath);
       },
       languageId: (uri) => (uri.path.endsWith('.ts') ? 'typescript' : 'javascript'),
       onDidChange: () => ({ dispose: () => undefined }),
@@ -50,8 +50,8 @@ describe('JS/TS definition materialisation (workspace FS)', () => {
     const mainModel = monaco.editor.createModel(mainText, 'typescript', mainUri);
 
     const cubeKey = monaco.Uri.file('/lib/cube.js').toString();
-    const makeCubeIdx = mainText.indexOf('makeCube');
-    const clickPosition = mainModel.getPositionAt(makeCubeIdx);
+    const makeCubeIndex = mainText.indexOf('makeCube');
+    const clickPosition = mainModel.getPositionAt(makeCubeIndex);
     const expectedOffset = mainModel.getOffsetAt(clickPosition);
     const spanStart = cubeJs.indexOf('makeCube');
 

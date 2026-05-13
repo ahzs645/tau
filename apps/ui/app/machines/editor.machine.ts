@@ -333,10 +333,10 @@ export const editorMachine = setup({
 
     finalizeMaterializedOpenFailure: enqueueActions(({ enqueue, event, context }) => {
       const path = context.pendingOpenFile?.path ?? 'unknown';
-      const err =
+      const error =
         'error' in event && event.error instanceof Error ? event.error : new Error('Materialise model failed');
       enqueue.assign({ pendingOpenFile: undefined });
-      enqueue.emit({ type: 'fileOpenFailed', path, error: err });
+      enqueue.emit({ type: 'fileOpenFailed', path, error });
     }),
 
     // ============================================================================

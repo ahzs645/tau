@@ -24,7 +24,7 @@ class MonacoWorkspaceFsImpl implements MonacoWorkspaceFs {
   private readonly contentProviders = new Map<string, MonacoTextDocumentContentProvider>();
   private modelService: WorkspaceFsModelServiceBinding | undefined;
   private readonly modelDisposeListener: Monaco.IDisposable;
-  /** uri key -> change subscription disposables for that model */
+  /** Map from URI string to change subscription disposables registered for that model */
   private readonly changeDisposablesByUriKey = new Map<string, Monaco.IDisposable[]>();
   private disposed = false;
 
@@ -193,7 +193,9 @@ class MonacoWorkspaceFsImpl implements MonacoWorkspaceFs {
       const lines = text.split(/\r\n|\r|\n/);
       return {
         text,
-        dispose(): void {},
+        dispose(): void {
+          void 0;
+        },
         lineLength(lineNumber1Based: number): number {
           const line = lines[lineNumber1Based - 1];
           return line === undefined ? 0 : line.length;
@@ -210,7 +212,9 @@ class MonacoWorkspaceFsImpl implements MonacoWorkspaceFs {
       const lines = text.split(/\r\n|\r|\n/);
       return {
         text,
-        dispose(): void {},
+        dispose(): void {
+          void 0;
+        },
         lineLength(lineNumber1Based: number): number {
           const line = lines[lineNumber1Based - 1];
           return line === undefined ? 0 : line.length;
@@ -221,7 +225,7 @@ class MonacoWorkspaceFsImpl implements MonacoWorkspaceFs {
   }
 
   public async materialiseUrisForWorkspaceEdit(uris: readonly Monaco.Uri[]): Promise<void> {
-    await Promise.all(uris.map((u) => this.openTextDocument(u)));
+    await Promise.all(uris.map(async (u) => this.openTextDocument(u)));
   }
 
   public async findFiles(pattern: string, options?: { maxResults?: number }): Promise<readonly Monaco.Uri[]> {
@@ -235,6 +239,7 @@ class MonacoWorkspaceFsImpl implements MonacoWorkspaceFs {
         break;
       }
       const remaining = max - out.length;
+      // oxlint-disable-next-line no-await-in-loop -- maxResults budget is applied sequentially across providers
       const batch = await Promise.resolve(provider.findFiles(pattern, { maxResults: remaining }));
       out.push(...batch);
       if (out.length >= max) {

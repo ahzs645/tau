@@ -23,7 +23,9 @@ describe('OpenSCAD definition provider (workspaceFs text, no scratch model)', ()
         if (uri.toString() === 'file:///project/parts/lib/foo.scad') {
           return {
             text: 'module foo() {\n}\n',
-            dispose(): void {},
+            dispose(): void {
+              void 0;
+            },
             lineLength(lineNumber1Based: number): number {
               return lineNumber1Based === 1 ? 'module foo() {'.length : 0;
             },
@@ -48,8 +50,8 @@ describe('OpenSCAD definition provider (workspaceFs text, no scratch model)', ()
 
     expect(
       createModelSpy.mock.calls.some((callArguments) => {
-        const uriArg = callArguments[2] as monaco.Uri | undefined;
-        return uriArg !== undefined && uriArg.toString() === 'file:///project/parts/lib/foo.scad';
+        const uriArgument = callArguments[2];
+        return uriArgument?.toString() === 'file:///project/parts/lib/foo.scad';
       }),
     ).toBe(false);
 
@@ -62,7 +64,9 @@ describe('OpenSCAD definition provider (workspaceFs text, no scratch model)', ()
         if (uri.toString() === 'file:///project/inc/bar.scad') {
           return {
             text: 'secret = 42;\n',
-            dispose(): void {},
+            dispose(): void {
+              void 0;
+            },
             lineLength(lineNumber1Based: number): number {
               if (lineNumber1Based === 1) {
                 return 'secret = 42;'.length;

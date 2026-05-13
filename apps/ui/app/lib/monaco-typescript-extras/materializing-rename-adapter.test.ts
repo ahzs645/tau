@@ -25,13 +25,13 @@ describe('MaterializingRenameAdapter', () => {
     const workspaceFs = createMonacoWorkspaceFs(monaco);
     workspaceFs.registerFileSystemProvider({
       scheme: 'file',
-      readText(uri: monaco.Uri): Promise<string> {
+      async readText(uri: monaco.Uri): Promise<string> {
         const p = uri.path.startsWith('/') ? uri.path.slice(1) : uri.path;
         const t = files.get(p);
         if (!t) {
-          return Promise.reject(new Error(`missing ${p}`));
+          throw new Error(`missing ${p}`);
         }
-        return Promise.resolve(t);
+        return t;
       },
       peekText(uri: monaco.Uri): string | undefined {
         const p = uri.path.startsWith('/') ? uri.path.slice(1) : uri.path;

@@ -8,6 +8,7 @@ import { ENV } from '#environment.config.js';
 // browser bundle always reads the real value from `window.ENV.TAU_API_URL` injected
 // by the root loader, and prerender never invokes any auth methods, so the
 // placeholder URL is unreachable at runtime.
+// oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- defensive fallback for prerender/SSR where `TAU_API_URL` can be unset at type level
 const apiBaseURL = ENV.TAU_API_URL ?? 'http://localhost:4000';
 
 export const authClient = createAuthClient({

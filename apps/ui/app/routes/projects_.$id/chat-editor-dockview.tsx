@@ -94,10 +94,7 @@ export const FileEditor = memo(function ({
   const { modelService, markerService } = useMonacoServices();
   const planModeEnabled = useFeature('planMode');
   const openFiles = useSelector(editorRef, (state) => state.context.openFiles);
-  const readOnly =
-    readOnlyFromParams !== undefined
-      ? readOnlyFromParams
-      : (openFiles.find((file) => file.path === filePath)?.readOnly ?? false);
+  const readOnly = readOnlyFromParams ?? openFiles.find((file) => file.path === filePath)?.readOnly ?? false;
 
   // Kernel diagnostics
   const { handleValidate } = useKernelDiagnostics({

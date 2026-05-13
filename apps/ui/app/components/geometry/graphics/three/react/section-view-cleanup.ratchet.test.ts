@@ -60,8 +60,8 @@ describe('Section view stencil / manifold cleanup ratchet', () => {
   it('does not substring-match `clearStencil` / `stencilWrite` identifiers in shaders or materials here', () => {
     /* Full-word style scan: disallow these exact identifiers appearing as tokens. */
     const bannedIdentifiers = ['clearStencil', 'stencilWrite'] as const;
-    const files = listTypeScriptFilesRecursively(graphicsThreeRoot).filter((path) =>
-      path.endsWith('section-view-cleanup.ratchet.test.ts') ? false : true,
+    const files = listTypeScriptFilesRecursively(graphicsThreeRoot).filter(
+      (path) => !path.endsWith('section-view-cleanup.ratchet.test.ts'),
     );
 
     const rxById: Record<(typeof bannedIdentifiers)[number], RegExp> = {

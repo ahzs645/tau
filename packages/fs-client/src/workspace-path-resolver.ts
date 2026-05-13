@@ -28,19 +28,18 @@ export class WorkspacePathEscapeError extends Error {
  * FM worker global OPFS mount for bundled kernel typings (`/node_modules/<pkg>/`).
  * Workspace-relative keys use the same `node_modules/...` prefix as the UI file tree.
  */
-const BUNDLED_TYPES_WORKSPACE_ROOT_SEGMENT = 'node_modules';
+const bundledTypesWorkspaceRootSegment = 'node_modules';
 
 function isWorkspaceRelativeGlobalNodeModules(relativePath: string): boolean {
   return (
-    relativePath === BUNDLED_TYPES_WORKSPACE_ROOT_SEGMENT ||
-    relativePath.startsWith(`${BUNDLED_TYPES_WORKSPACE_ROOT_SEGMENT}/`)
+    relativePath === bundledTypesWorkspaceRootSegment || relativePath.startsWith(`${bundledTypesWorkspaceRootSegment}/`)
   );
 }
 
 function isAbsoluteGlobalNodeModules(absoluteNorm: string): boolean {
   return (
-    absoluteNorm === `/${BUNDLED_TYPES_WORKSPACE_ROOT_SEGMENT}` ||
-    absoluteNorm.startsWith(`/${BUNDLED_TYPES_WORKSPACE_ROOT_SEGMENT}/`)
+    absoluteNorm === `/${bundledTypesWorkspaceRootSegment}` ||
+    absoluteNorm.startsWith(`/${bundledTypesWorkspaceRootSegment}/`)
   );
 }
 
@@ -118,9 +117,7 @@ export class WorkspacePathResolver {
     const rootNorm = normalizePath(this.rootDirectory);
     const absNorm = normalizePath(absolutePath);
     if (isAbsoluteGlobalNodeModules(absNorm)) {
-      return absNorm === `/${BUNDLED_TYPES_WORKSPACE_ROOT_SEGMENT}`
-        ? BUNDLED_TYPES_WORKSPACE_ROOT_SEGMENT
-        : absNorm.slice(1);
+      return absNorm === `/${bundledTypesWorkspaceRootSegment}` ? bundledTypesWorkspaceRootSegment : absNorm.slice(1);
     }
     if (absNorm === rootNorm) {
       return '';

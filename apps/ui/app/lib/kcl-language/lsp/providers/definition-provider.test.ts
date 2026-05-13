@@ -73,7 +73,7 @@ describe('KCL definition provider', () => {
 
   it('returns local symbol location from symbol service', async () => {
     const client = stubClient();
-    const docUri = 'file:///local/main.kcl';
+    const documentUri = 'file:///local/main.kcl';
     const symbolService = {
       isInitialized: true,
       findSymbolByName: vi.fn(
@@ -81,7 +81,7 @@ describe('KCL definition provider', () => {
           minimalSymbol({
             name: 'myVar',
             kind: 'variable',
-            uri: docUri,
+            uri: documentUri,
             lineNumber: 3,
             column: 1,
           }),
@@ -89,7 +89,7 @@ describe('KCL definition provider', () => {
     } as unknown as KclSymbolService;
 
     const provider = createDefinitionProvider(monaco, client, symbolService);
-    const mainUri = monaco.Uri.parse(docUri);
+    const mainUri = monaco.Uri.parse(documentUri);
     const mainModel = monaco.editor.createModel('// head\nmyVar = 1\n', codeLanguages.kcl, mainUri);
     const position = new monaco.Position(2, 2);
     const token = createTestCancellationToken();
@@ -98,7 +98,7 @@ describe('KCL definition provider', () => {
 
     expect(definition).toBeDefined();
     const location = Array.isArray(definition) ? definition[0] : definition;
-    expect(location?.uri.toString()).toBe(docUri);
+    expect(location?.uri.toString()).toBe(documentUri);
     expect(location?.range.startLineNumber).toBe(3);
   });
 });

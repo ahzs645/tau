@@ -27,13 +27,14 @@ import type { FileTreeService } from '@taucad/fs-client/file-tree-service';
 import type { MonacoModelService } from '#lib/monaco-model-service.js';
 import type { MonacoMarkerService } from '#lib/monaco-marker-service.js';
 import type { FileManagerRef, FileManagerApi } from '#machines/file-manager.machine.types.js';
+import type { MonacoWorkspaceFs } from '#lib/monaco-workspace-fs/monaco-workspace-fs.types.js';
 import type { TauLanguageHostInit } from '@taucad/lsp/language-fs-sync-host';
 
 export type ActivationContext = {
   monaco: typeof Monaco;
   modelService: MonacoModelService;
   markerService: MonacoMarkerService;
-  workspaceFs: import('#lib/monaco-workspace-fs/monaco-workspace-fs.types.js').MonacoWorkspaceFs;
+  workspaceFs: MonacoWorkspaceFs;
   fileManager: FileManagerApi;
   fileManagerRef: FileManagerRef;
   treeService: FileTreeService;

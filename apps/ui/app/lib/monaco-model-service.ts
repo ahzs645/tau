@@ -163,9 +163,7 @@ export class MonacoModelService {
         return undefined;
       }
 
-      if (!before) {
-        this.trackModelCreated();
-      }
+      this.trackModelCreated();
 
       if (!this.editorHolds.has(path)) {
         this.backgroundAccessTimes.set(path, Date.now());

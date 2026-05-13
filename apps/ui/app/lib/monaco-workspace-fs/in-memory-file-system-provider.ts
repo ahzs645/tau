@@ -56,12 +56,12 @@ export function createInMemoryFileSystemProvider(
   const provider: InMemoryFileSystemProvider = {
     scheme,
 
-    readText(uri: Monaco.Uri): Promise<string> {
+    async readText(uri: Monaco.Uri): Promise<string> {
       const text = state.files.get(fullKey(uri));
       if (text === undefined) {
-        return Promise.reject(new Error(`inmemory: missing ${fullKey(uri)}`));
+        throw new Error(`inmemory: missing ${fullKey(uri)}`);
       }
-      return Promise.resolve(text);
+      return text;
     },
 
     peekText(uri: Monaco.Uri): string | undefined {
@@ -86,7 +86,7 @@ export function createInMemoryFileSystemProvider(
       set.add(listener);
       return {
         dispose(): void {
-          set!.delete(listener);
+          set.delete(listener);
         },
       };
     },

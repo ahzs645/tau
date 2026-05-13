@@ -508,7 +508,7 @@ describe('ready – deferred model materialisation', () => {
 
     actor.send({
       type: 'registerMaterialiseModel',
-      materialiseModel: () => barrier,
+      materialiseModel: async () => barrier,
     });
 
     actor.send({ type: 'openFile', path: 'src/deferred.ts', source: 'user' });
@@ -517,7 +517,7 @@ describe('ready – deferred model materialisation', () => {
     expect(opened).toHaveLength(0);
     expect(actor.getSnapshot().context.openFiles.some((f) => f.path === 'src/deferred.ts')).toBe(false);
 
-    release!();
+    release();
     await waitFor(actor, () => opened.length > 0);
     expect(opened[0]).toMatchObject({ type: 'fileOpened', path: 'src/deferred.ts' });
     expect(actor.getSnapshot().context.openFiles.some((f) => f.path === 'src/deferred.ts')).toBe(true);
@@ -531,7 +531,9 @@ describe('ready – deferred model materialisation', () => {
 
     actor.send({
       type: 'registerMaterialiseModel',
-      materialiseModel: () => Promise.reject(new Error('boom')),
+      materialiseModel: async () => {
+        throw new Error('boom');
+      },
     });
 
     actor.send({ type: 'openFile', path: 'src/broken.ts', source: 'user' });

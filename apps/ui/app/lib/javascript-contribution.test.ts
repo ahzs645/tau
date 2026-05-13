@@ -16,12 +16,14 @@ const ataInstance = {
   onProjectSessionChange: vi.fn(),
 };
 
+/* eslint-disable @typescript-eslint/naming-convention -- mock mirrors upstream `TypeAcquisitionService` export shape */
 vi.mock('#lib/type-acquisition-service.js', () => ({
-  TypeAcquisitionService: vi.fn().mockImplementation(function MockAta(...args: unknown[]) {
+  TypeAcquisitionService: vi.fn().mockImplementation(function mockAta(...args: unknown[]) {
     ataConstructorCalls(...args);
     return ataInstance;
   }),
 }));
+/* eslint-enable @typescript-eslint/naming-convention -- end type acquisition mock waiver */
 
 function createMockContext(stub: MonacoTestStub): ActivationContext {
   const proxyStub = {

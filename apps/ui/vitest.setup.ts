@@ -30,30 +30,25 @@ const g = globalThis as typeof globalThis & {
 };
 g.MonacoEnvironment ??= {
   getWorkerUrl(): string {
-    const src = 'self.onmessage=function(){};';
-    return `data:application/javascript;charset=utf-8,${encodeURIComponent(src)}`;
+    const source = 'self.onmessage=function(){};';
+    return `data:application/javascript;charset=utf-8,${encodeURIComponent(source)}`;
   },
 };
 
-// jsdom does not define the Web `Worker` global; Monaco still constructs one for TS diagnostics.
-if (typeof globalThis.Worker === 'undefined') {
-  globalThis.Worker = class Worker {
-    // oxlint-disable-next-line no-empty-function -- test stub
-    public constructor(_scriptURL: string | URL, _options?: WorkerOptions) {}
+// Jsdom does not define the Web `Worker` global; Monaco still constructs one for TS diagnostics.
+globalThis.Worker ??= class Worker {
+  public postMessage(_message: unknown): void {}
 
-    public postMessage(_message: unknown): void {}
+  public terminate(): void {}
 
-    public terminate(): void {}
+  public addEventListener(): void {}
 
-    public addEventListener(): void {}
+  public removeEventListener(): void {}
 
-    public removeEventListener(): void {}
-
-    public dispatchEvent(): boolean {
-      return true;
-    }
-  } as unknown as typeof Worker;
-}
+  public dispatchEvent(): boolean {
+    return true;
+  }
+} as unknown as typeof Worker;
 
 // Mock common browser APIs for testing
 Object.defineProperty(globalThis, 'matchMedia', {

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import * as monaco from 'monaco-editor';
+import type { LibFiles } from 'monaco-editor/esm/vs/language/typescript/languageFeatures.js';
 import { MaterializingLibFiles } from '#lib/monaco-typescript-extras/materializing-lib-files.js';
 import { createMonacoWorkspaceFs } from '#lib/monaco-workspace-fs/monaco-workspace-fs.js';
 import { drainMonacoPostTestWork } from '#lib/testing/monaco-async-drain.js';
@@ -25,7 +26,10 @@ describe('MaterializingLibFiles', () => {
     const workerAccessor = vi.fn(async () => ({
       getLibFiles: vi.fn(async () => ({})),
     }));
-    const lib = new MaterializingLibFiles(workerAccessor as never, workspaceFs);
+    const lib = new MaterializingLibFiles(
+      workerAccessor as unknown as ConstructorParameters<typeof LibFiles>[0],
+      workspaceFs,
+    );
     const uri = 'file:///lib/x.js';
     const model = lib.getOrCreateModel(uri);
     expect(model).not.toBeNull();
@@ -45,7 +49,10 @@ describe('MaterializingLibFiles', () => {
     const workerAccessor = vi.fn(async () => ({
       getLibFiles: vi.fn(async () => ({})),
     }));
-    const lib = new MaterializingLibFiles(workerAccessor as never, workspaceFs);
+    const lib = new MaterializingLibFiles(
+      workerAccessor as unknown as ConstructorParameters<typeof LibFiles>[0],
+      workspaceFs,
+    );
     await lib.fetchLibFilesIfNecessary([monaco.Uri.file('/external/unmounted.js')]);
     const passed = materialiseSpy.mock.calls[0]![0] as monaco.Uri[];
     expect(passed[0]!.path).toBe('/external/unmounted.js');

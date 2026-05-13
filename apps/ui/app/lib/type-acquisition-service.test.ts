@@ -313,11 +313,11 @@ describe('TypeAcquisitionService', () => {
       });
 
       const tsDefaults = mockMonaco.monaco.typescript.typescriptDefaults;
-      const pkgCall = tsDefaults.addExtraLib.mock.calls.find(
+      const packageCall = tsDefaults.addExtraLib.mock.calls.find(
         (call) => call[1] === 'file:///node_modules/replicad/package.json',
       );
-      expect(pkgCall).toBeDefined();
-      expect(JSON.parse(pkgCall![0] as string)).toEqual({ name: 'replicad', types: 'index.d.ts' });
+      expect(packageCall).toBeDefined();
+      expect(JSON.parse(packageCall![0] as string)).toEqual({ name: 'replicad', types: 'index.d.ts' });
     });
 
     it('should wrap content in declare module format', () => {

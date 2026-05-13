@@ -28,7 +28,7 @@ declare module 'monaco-editor/esm/vs/language/typescript/languageFeatures.js' {
 
   export class LibFiles {
     public constructor(worker: (...uris: Monaco.Uri[]) => Promise<unknown>);
-    public getOrCreateModel(fileName: string): Monaco.editor.ITextModel | null;
+    public getOrCreateModel(fileName: string): Monaco.editor.ITextModel | undefined;
     public fetchLibFilesIfNecessary(uris: readonly Monaco.Uri[]): Promise<void>;
   }
 

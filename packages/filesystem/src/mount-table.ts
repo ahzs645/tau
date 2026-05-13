@@ -161,6 +161,7 @@ export class MountTable {
   /**
    * All mount entries, longest-prefix-first (same order as internal resolution).
    *
+   * @returns Mount table entries sorted longest-prefix-first.
    * @public
    */
   public listMounts(): readonly MountEntry[] {

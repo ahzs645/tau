@@ -57,28 +57,32 @@ async function readFileBytes(
  * Writes bundled `.d.ts` + minimal `package.json` under `/node_modules/<pkg>/`.
  * Skips writes when existing bytes match (idempotent across reloads).
  *
+ * @param fileService - Workspace file service used for idempotent writes.
+ * @param payload - Kernel typings entries to mirror under `/node_modules`.
  * @public
  */
 export async function populateBundledTypesMount(
   fileService: WorkspaceFileService,
   payload: BundledTypesPayload,
 ): Promise<void> {
-  for (const entry of payload) {
-    const dtsPath = `/node_modules/${entry.packageName}/index.d.ts`;
-    const pkgPath = `/node_modules/${entry.packageName}/package.json`;
-    const source = declarationSource(entry);
-    const expectedDts = new TextEncoder().encode(source);
-    const pkgJson = JSON.stringify({ name: entry.packageName, types: 'index.d.ts' });
-    const expectedPkg = new TextEncoder().encode(pkgJson);
+  await Promise.all(
+    payload.map(async (entry) => {
+      const declarationTypesPath = `/node_modules/${entry.packageName}/index.d.ts`;
+      const packageJsonPath = `/node_modules/${entry.packageName}/package.json`;
+      const source = declarationSource(entry);
+      const expectedDeclarationBytes = new TextEncoder().encode(source);
+      const packageJsonText = JSON.stringify({ name: entry.packageName, types: 'index.d.ts' });
+      const expectedPackageJsonBytes = new TextEncoder().encode(packageJsonText);
 
-    const existingDts = await readFileBytes(fileService, dtsPath);
-    if (existingDts === undefined || !bytesEqual(existingDts, expectedDts)) {
-      await fileService.writeFile(dtsPath, source);
-    }
+      const existingDeclaration = await readFileBytes(fileService, declarationTypesPath);
+      if (existingDeclaration === undefined || !bytesEqual(existingDeclaration, expectedDeclarationBytes)) {
+        await fileService.writeFile(declarationTypesPath, source);
+      }
 
-    const existingPkg = await readFileBytes(fileService, pkgPath);
-    if (existingPkg === undefined || !bytesEqual(existingPkg, expectedPkg)) {
-      await fileService.writeFile(pkgPath, pkgJson);
-    }
-  }
+      const existingPackageJson = await readFileBytes(fileService, packageJsonPath);
+      if (existingPackageJson === undefined || !bytesEqual(existingPackageJson, expectedPackageJsonBytes)) {
+        await fileService.writeFile(packageJsonPath, packageJsonText);
+      }
+    }),
+  );
 }

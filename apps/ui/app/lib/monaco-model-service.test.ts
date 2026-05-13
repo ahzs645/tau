@@ -159,7 +159,7 @@ function createMockContentService(): MockContentService {
     }),
     resolve: vi.fn(async (): Promise<FileContentResult> => textResult('')),
     peek: vi.fn(() => undefined),
-    peekOutcome: vi.fn(() => ({ kind: 'loading' as const })),
+    peekOutcome: vi.fn(() => ({ kind: 'loading' })),
   };
   return mock;
 }
@@ -201,7 +201,7 @@ describe('MonacoModelService', () => {
       service.applyContentChange(event);
     });
     workspaceFs.bindModelService({
-      refreshContent: (uri) => service.refreshContent(uri),
+      refreshContent: async (uri) => service.refreshContent(uri),
     });
   });
 

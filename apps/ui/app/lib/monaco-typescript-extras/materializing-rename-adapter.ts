@@ -27,6 +27,7 @@ export class MaterializingRenameAdapter extends RenameAdapter {
   }
 
   /** @inheritdoc */
+  // oxlint-disable-next-line max-params -- mirrors upstream `RenameAdapter.provideRenameEdits` arity
   public override async provideRenameEdits(
     model: monaco.editor.ITextModel,
     position: monaco.Position,

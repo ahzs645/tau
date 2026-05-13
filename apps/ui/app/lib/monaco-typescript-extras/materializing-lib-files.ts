@@ -17,7 +17,7 @@ export class MaterializingLibFiles extends LibFiles {
   }
 
   /** @inheritdoc */
-  public override getOrCreateModel(fileName: string): monaco.editor.ITextModel | null {
+  public override getOrCreateModel(fileName: string): monaco.editor.ITextModel | undefined {
     const upstream = super.getOrCreateModel(fileName);
     if (upstream) {
       debugCmdClick('MaterializingLibFiles.getOrCreateModel:upstream-hit', { fileName });

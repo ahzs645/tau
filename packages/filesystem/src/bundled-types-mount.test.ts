@@ -38,9 +38,9 @@ describe('populateBundledTypesMount', () => {
     const dts = await service.readFile('/node_modules/replicad/index.d.ts');
     expect(typeof dts === 'string' ? dts : decoder.decode(dts)).toBe('export declare const x: 1;');
 
-    const pkg = await service.readFile('/node_modules/replicad/package.json');
-    const pkgText = typeof pkg === 'string' ? pkg : decoder.decode(pkg);
-    expect(JSON.parse(pkgText)).toEqual({ name: 'replicad', types: 'index.d.ts' });
+    const packageJsonRead = await service.readFile('/node_modules/replicad/package.json');
+    const packageJsonText = typeof packageJsonRead === 'string' ? packageJsonRead : decoder.decode(packageJsonRead);
+    expect(JSON.parse(packageJsonText)).toEqual({ name: 'replicad', types: 'index.d.ts' });
   });
 
   it('wraps content when prewrapped is false', async () => {

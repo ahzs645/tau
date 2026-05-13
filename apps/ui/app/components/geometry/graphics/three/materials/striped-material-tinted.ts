@@ -1,11 +1,14 @@
-import * as THREE from 'three';
+import type * as THREE from 'three';
 import type { ResolvedGraphicsBackend } from '#constants/editor.constants.js';
 import { createStripedMaterialForBackend } from '#components/geometry/graphics/three/materials/striped-material.js';
 
 /** Keyed `(backend, tint, frequency, width)` material cache for BVH contour fills (R8c). */
-const MATERIAL_CACHE_CAPACITY = 64;
+const materialCacheCapacity = 64;
 
-/** @internal Test-only: disposes all cached materials. */
+/**
+ * @internal
+ * @remarks Test-only: disposes all cached materials.
+ */
 export function disposeTintedStripedMaterialCache(): void {
   for (const material of materialCache.values()) {
     material.dispose();
@@ -35,16 +38,14 @@ export type TintedStripedMaterialParameters = Readonly<{
 
 function cacheMaterialKey(
   backend: ResolvedGraphicsBackend,
-  tintColor: number,
-  stripeFrequency: number,
-  stripeWidth: number,
+  parameters: Pick<TintedStripedMaterialParameters, 'tintColor' | 'stripeFrequency' | 'stripeWidth'>,
 ): string {
-  return `${backend}:${tintColor}:${stripeFrequency}:${stripeWidth}`;
+  return `${backend}:${parameters.tintColor}:${parameters.stripeFrequency}:${parameters.stripeWidth}`;
 }
 
 /** Evicts the least-recently-used tinted material when cache is at capacity. */
 function evictStaleMaterialIfNeeded(forNewKey: string): void {
-  if (materialCache.size < MATERIAL_CACHE_CAPACITY || materialCache.has(forNewKey)) {
+  if (materialCache.size < materialCacheCapacity || materialCache.has(forNewKey)) {
     return;
   }
 
@@ -79,7 +80,7 @@ export function createTintedStripedMaterial(
   backend: ResolvedGraphicsBackend,
   parameters: TintedStripedMaterialParameters,
 ): THREE.Material {
-  const key = cacheMaterialKey(backend, parameters.tintColor, parameters.stripeFrequency, parameters.stripeWidth);
+  const key = cacheMaterialKey(backend, parameters);
 
   const cached = materialCache.get(key);
   if (cached !== undefined) {
