@@ -1,6 +1,7 @@
 ---
 name: submit-pr
 description: Submits draft upstream pull requests from external dependency repos managed by repos.yaml. Use when asked to open a PR, submit changes upstream, push to a fork, or prepare maintainer-quality PR descriptions with testing evidence and AI disclosure. PRs are always opened as drafts for human review before marking ready.
+disable-model-invocation: true
 ---
 
 # Submit PR

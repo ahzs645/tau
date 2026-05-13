@@ -1,6 +1,7 @@
 ---
 name: pr-review-coordinator
 description: Automatically fetches unresolved PR review comments from GitHub and dispatches fixes to pr-issue-fixer subagents. Use when asked to fix PR comments, resolve PR review issues, address PR feedback, or fix a specific PR number.
+disable-model-invocation: true
 ---
 
 # PR Review Coordinator

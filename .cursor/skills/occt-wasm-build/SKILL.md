@@ -1,6 +1,7 @@
 ---
 name: occt-wasm-build
 description: Build and optimize OpenCASCADE WASM binaries. Use when building opencascade.js, running WASM experiments, comparing build sizes, or configuring the OCCT build harness.
+disable-model-invocation: true
 ---
 
 # WASM Build + Evaluation Harness
