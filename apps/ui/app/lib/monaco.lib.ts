@@ -69,6 +69,21 @@ export const configureMonaco = async (): Promise<void> => {
 
   isConfigured = true;
 
+  // Prime Geist Mono before Monaco's first DomCharWidthReader pass.
+  //
+  // Monaco caches char-width measurements as "trusted" on the first read
+  // (see node_modules/monaco-editor/.../fontMeasurements.js readFontInfo).
+  // With `font-display: swap`, a cold load measures the SF Mono fallback
+  // and never re-measures, so block decorations (selectionHighlight,
+  // wordHighlight) drift left as columns grow once Geist Mono swaps in.
+  // Awaiting `document.fonts.load(...)` before measurement guarantees the
+  // first reading uses Geist Mono advances. `.catch` keeps offline users
+  // working with fallback metrics (no worse than today).
+  // Sizes mirror code-editor.client.tsx (14 desktop, 16 mobile).
+  await Promise.all([document.fonts.load("14px 'Geist Mono'"), document.fonts.load("16px 'Geist Mono'")]).catch(
+    () => undefined,
+  );
+
   globalThis.self.MonacoEnvironment = {
     getWorker(_, label) {
       if (label === 'json' || label === 'jsonc') {
@@ -113,6 +128,14 @@ export const configureMonaco = async (): Promise<void> => {
 
   loader.config({
     monaco,
+  });
+
+  // Remeasure on every subsequent web-font load. Even after priming Geist
+  // Mono above, additional weights/styles or HMR re-injection can change
+  // the cached advances; `monaco.editor.remeasureFonts()` clears
+  // FontMeasurementsImpl._cache and triggers per-editor re-render.
+  document.fonts.addEventListener('loadingdone', () => {
+    monaco.editor.remeasureFonts();
   });
 
   // Core Editor features, like auto-completion.

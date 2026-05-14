@@ -72,6 +72,15 @@ describe('configureMonaco', () => {
 
     // eslint-disable-next-line @typescript-eslint/naming-convention -- Monaco global
     vi.stubGlobal('self', { MonacoEnvironment: undefined });
+    // Jsdom omits the FontFaceSet API; stub the surface configureMonaco touches
+    // (Geist Mono prime + remeasure-on-loadingdone listener).
+    Object.defineProperty(document, 'fonts', {
+      configurable: true,
+      value: {
+        load: vi.fn(async () => []),
+        addEventListener: vi.fn(),
+      },
+    });
 
     await configureMonaco();
 
