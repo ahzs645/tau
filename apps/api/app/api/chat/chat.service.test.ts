@@ -6,6 +6,7 @@ import { ChatService } from '#api/chat/chat.service.js';
 import { ModelService } from '#api/models/model.service.js';
 import { ToolService } from '#api/tools/tool.service.js';
 import { CheckpointerService } from '#api/chat/checkpointer.service.js';
+import { StoreService } from '#api/chat/store.service.js';
 import { CompactionService } from '#api/chat/compaction.service.js';
 import { TauRpcBackendFactory } from '#api/chat/tau-rpc-backend.js';
 import { ChatRpcService } from '#api/chat/chat-rpc.service.js';
@@ -45,6 +46,11 @@ describe('ChatService', () => {
     getCheckpointer: vi.fn(() => mockCheckpointer),
   };
 
+  const mockStore = { id: 'mock-store' };
+  const mockStoreService = {
+    getStore: vi.fn(() => mockStore),
+  };
+
   const mockModelService = {
     buildModel: vi.fn(() => ({ model: 'mock-model' })),
     getContextWindow: vi.fn(() => 200_000),
@@ -70,6 +76,7 @@ describe('ChatService', () => {
       providers: [
         ChatService,
         { provide: CheckpointerService, useValue: mockCheckpointerService },
+        { provide: StoreService, useValue: mockStoreService },
         { provide: ModelService, useValue: mockModelService },
         { provide: ToolService, useValue: mockToolService },
         { provide: MetricsService, useValue: new MetricsService() },

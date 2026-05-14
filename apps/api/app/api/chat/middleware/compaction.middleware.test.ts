@@ -261,7 +261,7 @@ describe('createCompactionMiddleware', () => {
     expect(compactionService.compact).toHaveBeenCalled();
   });
 
-  it('should return handler result after compaction (stream continues)', async () => {
+  it('should return handler result unchanged after compaction (stream continues)', async () => {
     const middleware = createMiddlewareInstance();
     const { wrapModelCall } = middleware;
     if (!wrapModelCall) {
@@ -303,12 +303,10 @@ describe('createCompactionMiddleware', () => {
 
     expect(compactionService.compact).toHaveBeenCalled();
     expect(handler).toHaveBeenCalledTimes(1);
-    // After compaction the response is wrapped in a Command that resets
-    // `_recentReads` atomically with the AIMessage append (see the
-    // dedicated reset describe block below). The original handler result
-    // becomes the first messages entry inside the Command.update payload.
-    const command = result as unknown as { update: { messages: unknown[] } };
-    expect(command.update.messages).toEqual([streamResult]);
+    // Compaction is now a transparent pass-through: the handler's result is
+    // returned verbatim and the dedup reset is a side-effect on the auxiliary
+    // store (asserted in the dedicated describe block below).
+    expect(result).toBe(streamResult);
   });
 
   it('should emit writer data part on compaction', async () => {
@@ -1139,16 +1137,15 @@ describe('stripExcessMedia', () => {
 });
 
 /**
- * The dedup pointers persisted in `_recentReads` reference `tool_call_id`s
- * on prior `ToolMessage`s. When compaction (or emergency truncation)
- * summarises away the message tail those `tool_call_id`s vanish, so
- * dangling pointers must be cleared atomically with the AIMessage append.
- * The middleware wraps its post-handler response in a {@link Command} that
- * carries `_recentReads: { __resetRecentReads: true }` whenever eviction
- * fired; the `_recentReads` reducer in `recent-reads-state.ts` clears
- * every entry on that signal.
+ * Dedup pointers persisted in the LangGraph auxiliary store reference
+ * `tool_call_id`s on prior `ToolMessage`s. When compaction (or emergency
+ * truncation) summarises away the message tail, those `tool_call_id`s
+ * vanish, so the dedup namespace for the chat must be cleared as a
+ * side effect. The middleware delegates to `clearReadDedupForChat`, which
+ * dispatches to the Redis `clearChat` shortcut when available and falls
+ * back to `search` + parallel `delete` on `InMemoryStore`.
  */
-describe('createCompactionMiddleware — _recentReads reset on eviction', () => {
+describe('createCompactionMiddleware — read-dedup clear on eviction', () => {
   let compactionService: ReturnType<typeof mock<CompactionService>>;
   let rpcBackendFactory: ReturnType<typeof mock<TauRpcBackendFactory>>;
   let mockBackend: ReturnType<typeof mock<TauRpcBackend>>;
@@ -1186,13 +1183,11 @@ describe('createCompactionMiddleware — _recentReads reset on eviction', () => 
     ];
   };
 
-  const expectResetSignal = (response: unknown, expectedAi: AIMessage) => {
-    const command = response as { update?: { messages?: BaseMessage[]; _recentReads?: unknown } };
-    expect(command.update?._recentReads).toEqual({ __resetRecentReads: true });
-    expect(command.update?.messages).toEqual([expectedAi]);
-  };
+  const buildStoreStub = () => ({
+    clearChat: vi.fn().mockResolvedValue(0),
+  });
 
-  it('returns a Command resetting _recentReads after a successful Morph compaction', async () => {
+  it('clears the dedup namespace after a successful Morph compaction', async () => {
     const middleware = createCompactionMiddleware(compactionService, rpcBackendFactory, chatRpcService);
     const { wrapModelCall } = middleware;
     if (!wrapModelCall) {
@@ -1211,22 +1206,24 @@ describe('createCompactionMiddleware — _recentReads reset on eviction', () => 
 
     const aiResponse = new AIMessage('post-compaction reply');
     const handler = vi.fn().mockResolvedValue(aiResponse);
+    const store = buildStoreStub();
 
     const result = await wrapModelCall(
       {
         messages: buildLongMessages(),
         tools: [],
         systemMessage: '',
-        runtime: { context: buildContext(), writer },
+        runtime: { context: buildContext(), writer, store },
       } as unknown as Parameters<typeof wrapModelCall>[0],
       handler,
     );
 
     expect(compactionService.compact).toHaveBeenCalled();
-    expectResetSignal(result, aiResponse);
+    expect(store.clearChat).toHaveBeenCalledWith('chat-recent-reads');
+    expect(result).toBe(aiResponse);
   });
 
-  it('returns the bare AIMessage (no Command wrap) when compaction does not fire', async () => {
+  it('does not touch the dedup namespace when compaction does not fire', async () => {
     mockModelService.getContextWindow.mockReturnValue(200_000);
     const middleware = createCompactionMiddleware(compactionService, rpcBackendFactory, chatRpcService);
     const { wrapModelCall } = middleware;
@@ -1236,22 +1233,24 @@ describe('createCompactionMiddleware — _recentReads reset on eviction', () => 
 
     const aiResponse = new AIMessage('untouched reply');
     const handler = vi.fn().mockResolvedValue(aiResponse);
+    const store = buildStoreStub();
 
     const result = await wrapModelCall(
       {
         messages: [new HumanMessage('short'), new AIMessage('reply')],
         tools: [],
         systemMessage: '',
-        runtime: { context: buildContext(), writer },
+        runtime: { context: buildContext(), writer, store },
       } as unknown as Parameters<typeof wrapModelCall>[0],
       handler,
     );
 
     expect(compactionService.compact).not.toHaveBeenCalled();
+    expect(store.clearChat).not.toHaveBeenCalled();
     expect(result).toBe(aiResponse);
   });
 
-  it('returns the bare AIMessage when Morph compaction throws (truncated-args fallback path)', async () => {
+  it('does not touch the dedup namespace when Morph compaction throws (truncated-args fallback path)', async () => {
     const middleware = createCompactionMiddleware(compactionService, rpcBackendFactory, chatRpcService);
     const { wrapModelCall } = middleware;
     if (!wrapModelCall) {
@@ -1262,22 +1261,24 @@ describe('createCompactionMiddleware — _recentReads reset on eviction', () => 
 
     const aiResponse = new AIMessage('fallback reply');
     const handler = vi.fn().mockResolvedValue(aiResponse);
+    const store = buildStoreStub();
 
     const result = await wrapModelCall(
       {
         messages: buildLongMessages(),
         tools: [],
         systemMessage: '',
-        runtime: { context: buildContext(), writer },
+        runtime: { context: buildContext(), writer, store },
       } as unknown as Parameters<typeof wrapModelCall>[0],
       handler,
     );
 
     expect(compactionService.compact).toHaveBeenCalled();
+    expect(store.clearChat).not.toHaveBeenCalled();
     expect(result).toBe(aiResponse);
   });
 
-  it('returns a Command resetting _recentReads after emergency re-compaction on ContextOverflowError', async () => {
+  it('clears the dedup namespace after emergency re-compaction on ContextOverflowError', async () => {
     const middleware = createCompactionMiddleware(compactionService, rpcBackendFactory, chatRpcService);
     const { wrapModelCall } = middleware;
     if (!wrapModelCall) {
@@ -1299,6 +1300,42 @@ describe('createCompactionMiddleware — _recentReads reset on eviction', () => 
       .fn()
       .mockRejectedValueOnce(new ContextOverflowError('overflow'))
       .mockResolvedValueOnce(aiResponse);
+    const store = buildStoreStub();
+
+    const result = await wrapModelCall(
+      {
+        messages: buildLongMessages(),
+        tools: [],
+        systemMessage: '',
+        runtime: { context: buildContext(), writer, store },
+      } as unknown as Parameters<typeof wrapModelCall>[0],
+      handler,
+    );
+
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(store.clearChat).toHaveBeenCalledWith('chat-recent-reads');
+    expect(result).toBe(aiResponse);
+  });
+
+  it('no-ops gracefully when no store is wired (defensive)', async () => {
+    const middleware = createCompactionMiddleware(compactionService, rpcBackendFactory, chatRpcService);
+    const { wrapModelCall } = middleware;
+    if (!wrapModelCall) {
+      throw new Error('wrapModelCall not defined');
+    }
+
+    compactionService.compact.mockResolvedValue({
+      compactedMessages: [new HumanMessage('[Compacted history]')],
+      stats: {
+        tokensBeforeCompaction: 2000,
+        tokensAfterCompaction: 50,
+        compressionRatio: 0.025,
+        messagesEvicted: 2,
+      },
+    });
+
+    const aiResponse = new AIMessage('store-less reply');
+    const handler = vi.fn().mockResolvedValue(aiResponse);
 
     const result = await wrapModelCall(
       {
@@ -1310,7 +1347,6 @@ describe('createCompactionMiddleware — _recentReads reset on eviction', () => 
       handler,
     );
 
-    expect(handler).toHaveBeenCalledTimes(2);
-    expectResetSignal(result, aiResponse);
+    expect(result).toBe(aiResponse);
   });
 });

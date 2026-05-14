@@ -37,10 +37,10 @@ import { createInterruptRecoveryMiddleware } from '#api/chat/middleware/interrup
 import { createCompactionMiddleware } from '#api/chat/middleware/compaction.middleware.js';
 import { createToolOffloadingMiddleware } from '#api/chat/middleware/tool-offloading.middleware.js';
 import { createToolResultBudgetMiddleware } from '#api/chat/middleware/tool-result-budget.middleware.js';
-import { createReadDedupStateMiddleware } from '#api/chat/state/recent-reads-state.js';
 import { createTranscriptMiddleware } from '#api/chat/middleware/transcript.middleware.js';
 import { createContextUsageMiddleware } from '#api/chat/middleware/context-usage.middleware.js';
 import { CheckpointerService } from '#api/chat/checkpointer.service.js';
+import { StoreService } from '#api/chat/store.service.js';
 import { CompactionService } from '#api/chat/compaction.service.js';
 import { TauRpcBackendFactory } from '#api/chat/tau-rpc-backend.js';
 import { ChatRpcService } from '#api/chat/chat-rpc.service.js';
@@ -53,6 +53,7 @@ export class ChatService {
     private readonly modelService: ModelService,
     private readonly toolService: ToolService,
     private readonly checkpointerService: CheckpointerService,
+    private readonly storeService: StoreService,
     private readonly metricsService: MetricsService,
     private readonly compactionService: CompactionService,
     private readonly rpcBackendFactory: TauRpcBackendFactory,
@@ -77,6 +78,7 @@ export class ChatService {
     const { tools } = this.toolService.getTools(choice, kernel);
 
     const checkpointer = this.checkpointerService.getCheckpointer();
+    const store = this.storeService.getStore();
 
     const { model } = this.modelService.buildModel(modelId);
 
@@ -148,11 +150,8 @@ export class ChatService {
       tools: allTools,
       systemPrompt,
       checkpointer,
+      store,
       middleware: [
-        // --- State channels (registered early so the agent graph picks up
-        //     stateSchema contributions before any hook touches state) ---
-        createReadDedupStateMiddleware(),
-
         // --- Metrics and error handling ---
         createToolMetricsMiddleware(this.metricsService),
         toolErrorHandlerMiddleware,

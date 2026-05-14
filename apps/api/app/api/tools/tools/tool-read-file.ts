@@ -1,14 +1,13 @@
 import type { ToolRuntime } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
-import { ToolMessage } from '@langchain/core/messages';
-import { Command } from '@langchain/langgraph';
+import type { BaseStore } from '@langchain/langgraph';
 import { readFileInputSchema, rpcClientErrorCode } from '@taucad/chat';
 import { assertRpcSuccess } from '@taucad/chat/utils';
 import type { ChatTool, ReadFileInput, ReadFileOutput } from '@taucad/chat';
 import { rpcName, toolName, fileUnchangedMarker } from '@taucad/chat/constants';
 import type { ChatRpcConfigurable } from '#api/tools/tool.types.js';
-import type { RecentReadsState } from '#api/chat/state/recent-reads-state.js';
-import { buildReadFingerprint } from '#api/chat/state/recent-reads-state.js';
+import { buildReadFingerprint } from '#api/tools/tools/read-file-fingerprint.js';
+import { recentReadsRootNamespace } from '#api/chat/recent-reads-namespace.js';
 
 /**
  * `cat -n` gutter for LLM display only (mirrors claude-code's FileReadTool).
@@ -34,19 +33,28 @@ Use this tool when you need to:
   schema: readFileInputSchema,
 } as const;
 
+type DedupValue = { priorToolCallId: string; modifiedAt: string };
+
 /**
- * The tool function returns `Command` (a `DirectToolOutput`) so the dedup
- * pointer for `read_file` can be persisted to the LangGraph checkpoint
- * atomically with the emitted `ToolMessage`. The `ChatTool` annotation
- * keeps downstream consumers (`tool.service.ts` typing, UI message
- * shape) unaware of that internal detail; the cast is the single seam.
+ * Returns a plain {@link ReadFileOutput} so LangGraph's `ToolNode` auto-wraps
+ * it into a `ToolMessage` with the correct stream semantics — no `Command`
+ * indirection, no manual `ToolMessage` construction. The dedup pointer is
+ * persisted to the LangGraph auxiliary store
+ * (see {@link import('#api/chat/redis-read-dedup-store.js').RedisReadDedupStore})
+ * as a side effect, keyed by `(recent_reads, chatId, fingerprint)`.
+ *
+ * LangChain core's `ToolRuntime.store` is typed as `BaseStore<string, unknown>`
+ * (the legacy KV interface), while LangGraph's checkpoint+store layer threads
+ * its own `BaseStore` (namespaced) onto the runtime — the single cast at the
+ * call site bridges the two type ecosystems without leaking the mismatch into
+ * the dedup helpers.
  */
 export const readFileTool: ChatTool<
   typeof readFileInputSchema,
   ReadFileInput,
   ReadFileOutput,
   typeof toolName.readFile
-> = tool(async (args, runtime: ToolRuntime<RecentReadsState>) => {
+> = tool(async (args, runtime: ToolRuntime) => {
   const { chatRpcService, thread_id: chatId } = runtime.configurable as ChatRpcConfigurable;
   const { toolCallId } = runtime;
 
@@ -69,68 +77,38 @@ export const readFileTool: ChatTool<
     },
   });
 
+  const store = (runtime.store ?? undefined) as BaseStore | undefined;
+  const namespace = [...recentReadsRootNamespace, chatId];
   const fingerprint = buildReadFingerprint({
     targetFile: args.targetFile,
     offset: args.offset,
     limit: args.limit,
   });
-  const prior = result.modifiedAt ? runtime.state._recentReads[fingerprint] : undefined;
 
-  if (prior && result.modifiedAt && prior.modifiedAt === result.modifiedAt) {
-    const hitOutput: ReadFileOutput = {
-      content: fileUnchangedMarker.build(prior.priorToolCallId),
-      totalLines: result.totalLines,
-      modifiedAt: result.modifiedAt,
-    };
-
-    return new Command({
-      update: {
-        messages: [
-          new ToolMessage({
-            content: JSON.stringify(hitOutput),
-            // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
-            tool_call_id: toolCallId,
-            name: toolName.readFile,
-            status: 'success',
-          }),
-        ],
-      },
-    });
+  if (store && result.modifiedAt) {
+    const prior = await store.get(namespace, fingerprint);
+    if (prior && (prior.value as DedupValue).modifiedAt === result.modifiedAt) {
+      return {
+        content: fileUnchangedMarker.build((prior.value as DedupValue).priorToolCallId),
+        totalLines: result.totalLines,
+        modifiedAt: result.modifiedAt,
+      };
+    }
   }
 
   const displayStartLine = result.startLine ?? args.offset ?? 1;
-  const missOutput: ReadFileOutput = {
+  const output: ReadFileOutput = {
     content: formatReadFileOutputForDisplay(result.content, displayStartLine),
     totalLines: result.totalLines,
     ...(result.modifiedAt !== undefined && { modifiedAt: result.modifiedAt }),
   };
 
-  const messageUpdate = [
-    new ToolMessage({
-      content: JSON.stringify(missOutput),
-      // eslint-disable-next-line @typescript-eslint/naming-convention -- LangChain API uses snake_case
-      tool_call_id: toolCallId,
-      name: toolName.readFile,
-      status: 'success',
-    }),
-  ];
-
-  if (!result.modifiedAt) {
-    return new Command({
-      update: {
-        messages: messageUpdate,
-      },
-    });
+  if (store && result.modifiedAt) {
+    const next: DedupValue = { priorToolCallId: toolCallId, modifiedAt: result.modifiedAt };
+    await store.put(namespace, fingerprint, next);
   }
 
-  return new Command({
-    update: {
-      messages: messageUpdate,
-      _recentReads: {
-        [fingerprint]: { priorToolCallId: toolCallId, modifiedAt: result.modifiedAt },
-      },
-    },
-  });
+  return output;
 }, readFileToolDefinition) as unknown as ChatTool<
   typeof readFileInputSchema,
   ReadFileInput,

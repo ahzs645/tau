@@ -3,9 +3,9 @@ import type { AgentMiddleware } from 'langchain';
 import { AIMessage, ToolMessage, HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { ContextOverflowError } from '@langchain/core/errors';
-import { Command } from '@langchain/langgraph';
+import type { BaseStore } from '@langchain/langgraph';
 import { z } from 'zod';
-import type { RecentReadsResetSignal } from '#api/chat/state/recent-reads-state.js';
+import { clearReadDedupForChat } from '#api/chat/clear-recent-reads.js';
 import { idPrefix } from '@taucad/types/constants';
 import { generatePrefixedId } from '@taucad/utils/id';
 import { CompactionService } from '#api/chat/compaction.service.js';
@@ -263,6 +263,7 @@ export const createCompactionMiddleware = (
     async wrapModelCall(request, handler) {
       const { messages } = request;
       const { context, writer } = request.runtime;
+      const { store } = request.runtime as { store?: BaseStore };
       const { chatId, modelId, modelService } = context;
 
       const maxInputTokens = modelService.getContextWindow(modelId) ?? FALLBACK_CONTEXT_WINDOW;
@@ -271,11 +272,9 @@ export const createCompactionMiddleware = (
 
       let processedMessages = messages;
       // Tracks whether the current model call summarised the message tail.
-      // When true, the post-handler return wraps the AIMessage in a Command
-      // that also resets `_recentReads` so dedup pointers referencing
-      // now-summarised ToolMessages cannot be re-used by the next read_file
-      // call. The reset is atomic with the AIMessage append, eliminating any
-      // window where stale pointers could be observed.
+      // When true, dedup pointers in the auxiliary store referencing
+      // now-evicted ToolMessages are cleared as a side effect so the next
+      // read_file call cannot route to a stale fileUnchangedMarker.
       let compactionHappened = false;
 
       if (estimatedTokens > triggerThreshold && messages.length > 2) {
@@ -377,7 +376,10 @@ export const createCompactionMiddleware = (
           ...request,
           messages: processedMessages,
         });
-        return wrapWithRecentReadsReset(response, compactionHappened);
+        if (compactionHappened) {
+          await clearReadDedupForChat(store, chatId);
+        }
+        return response;
       } catch (error) {
         // Tier 3: Emergency re-compaction on ContextOverflowError
         if (error instanceof ContextOverflowError) {
@@ -393,37 +395,12 @@ export const createCompactionMiddleware = (
             ...request,
             messages: emergencyMessages,
           });
-          return wrapWithRecentReadsReset(emergencyResponse, true);
+          await clearReadDedupForChat(store, chatId);
+          return emergencyResponse;
         }
 
         throw error;
       }
-    },
-  });
-};
-
-/**
- * Wraps the post-handler response in a {@link Command} that resets
- * `_recentReads` to an empty record when compaction or emergency truncation
- * evicted the message tail. The wrapper is a no-op when no eviction
- * occurred so the normal AIMessage append path stays unchanged.
- *
- * Reset rationale: dedup pointers in the `_recentReads` channel reference
- * `tool_call_id`s on prior `ToolMessage`s. Eviction removes those messages
- * from state, so any pointer to them becomes dangling and must not be
- * re-used to short-circuit a fresh `read_file` call. Atomic reset via the
- * same checkpoint write keeps state consistent across instances.
- */
-const recentReadsResetSignal: RecentReadsResetSignal = { __resetRecentReads: true };
-
-const wrapWithRecentReadsReset = (response: AIMessage, evicted: boolean): AIMessage | Command => {
-  if (!evicted) {
-    return response;
-  }
-  return new Command({
-    update: {
-      messages: [response],
-      _recentReads: recentReadsResetSignal,
     },
   });
 };
