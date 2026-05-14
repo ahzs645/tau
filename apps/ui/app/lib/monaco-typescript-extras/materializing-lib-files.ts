@@ -30,7 +30,7 @@ export class MaterializingLibFiles extends LibFiles {
       scheme: uri.scheme,
       hasPeekedModel: peeked !== null,
     });
-    return peeked;
+    return peeked ?? undefined;
   }
 
   /** @inheritdoc */
