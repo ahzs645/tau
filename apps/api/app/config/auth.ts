@@ -1,7 +1,8 @@
 import { betterAuth } from 'better-auth';
 import type { BetterAuthOptions } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
-import { apiKey, magicLink } from 'better-auth/plugins';
+import { apiKey } from '@better-auth/api-key';
+import { magicLink } from 'better-auth/plugins';
 import postgres from 'postgres';
 import { drizzle } from 'drizzle-orm/postgres-js';
 

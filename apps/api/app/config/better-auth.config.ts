@@ -1,6 +1,7 @@
 import type { BetterAuthOptions, LogLevel as BetterAuthLogLevel, ModelNames } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
-import { apiKey, magicLink } from 'better-auth/plugins';
+import { apiKey } from '@better-auth/api-key';
+import { magicLink } from 'better-auth/plugins';
 import type { ConfigService } from '@nestjs/config';
 import type { LogLevel } from '@nestjs/common';
 import { Logger } from '@nestjs/common';
@@ -123,9 +124,6 @@ export function getBetterAuthConfig(options: BetterAuthConfigOptions): BetterAut
       },
       async afterEmailVerification(user) {
         logger.log(`User ${user.email} has been verified`);
-      },
-      async onEmailVerification(user) {
-        logger.log(`Email verification requested for ${user.email}`);
       },
     },
 

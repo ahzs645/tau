@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router';
-import { useAuthenticate } from '@daveyplate/better-auth-ui';
+import { useSession } from '@better-auth-ui/react';
+import { authClient } from '#lib/auth-client.js';
 import type { KernelProvider } from '@taucad/runtime';
 import type { FileSystemBackend } from '@taucad/types';
 import { kernelConfigurations } from '@taucad/types/constants';
@@ -80,7 +81,8 @@ function KernelDetailsContent({ kernelId }: { readonly kernelId: KernelProvider 
 function useProjectCreation() {
   const navigate = useNavigate();
   const [isCreating, setIsCreating] = useState(false);
-  const { user } = useAuthenticate({ enabled: false });
+  const { data: sessionData } = useSession(authClient);
+  const user = sessionData?.user;
   const projectManager = useProjectManager();
 
   const createProject = useCallback(

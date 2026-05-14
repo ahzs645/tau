@@ -1,5 +1,6 @@
 import { createAuthClient } from 'better-auth/react';
-import { apiKeyClient, magicLinkClient, usernameClient } from 'better-auth/client/plugins';
+import { apiKeyClient } from '@better-auth/api-key/client';
+import { magicLinkClient, usernameClient } from 'better-auth/client/plugins';
 import { ENV } from '#environment.config.js';
 
 // Tolerate `TAU_API_URL` missing during the React Router prerender pass: that build

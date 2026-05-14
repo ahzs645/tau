@@ -1,6 +1,6 @@
 import { lazy } from 'react';
-import { AuthView } from '@daveyplate/better-auth-ui';
-import { Link, useLocation } from 'react-router';
+import { Link, useParams } from 'react-router';
+import { Auth } from '#components/auth/auth.js';
 import { TauWordmark } from '#components/icons/tau-wordmark.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import type { Handle } from '#types/matches.types.js';
@@ -16,7 +16,7 @@ export const handle: Handle = {
 };
 
 export default function AuthPage(): React.JSX.Element {
-  const { pathname } = useLocation();
+  const { '*': segment } = useParams();
   return (
     <div className='grid min-h-svh lg:grid-cols-2'>
       <div className='flex flex-col gap-4 p-6 md:p-10'>
@@ -31,11 +31,7 @@ export default function AuthPage(): React.JSX.Element {
           </Tooltip>
         </div>
         <div className='flex flex-1 items-center justify-center'>
-          <AuthView
-            pathname={pathname}
-            className='w-full max-w-md'
-            classNames={{ form: { secondaryButton: 'bg-neutral/20 text-foreground hover:bg-neutral/30' } }}
-          />
+          <Auth path={segment} className='w-full max-w-md' />
         </div>
       </div>
       <div className='relative hidden lg:block'>
