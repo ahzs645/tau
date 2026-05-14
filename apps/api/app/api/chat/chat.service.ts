@@ -112,7 +112,7 @@ export class ChatService {
     //   → cache_control: { type: 'ephemeral', scope: 'global' } (Anthropic only)
     // Block 2 (workspace): Skills + memory, injected by clientContextMiddleware
     //   → cache_control: { type: 'ephemeral' }
-    // Block 3 (dynamic): Per-request content (model info, git status, transcript path)
+    // Block 3 (dynamic): Per-request content (model info, transcript path)
     //   → No cache_control
     // Last message: Incremental conversation caching via promptCachingMiddleware
     //   → cache_control: { type: 'ephemeral' }
@@ -121,13 +121,11 @@ export class ChatService {
     // ==========================================================================
     const contextWindow = this.modelService.getContextWindow(modelId);
     const knowledgeCutoff = this.modelService.getKnowledgeCutoff(modelId);
-    const gitStatus = contextPayload?.gitStatus;
     const { static: staticPrompt, dynamic: dynamicPrompt } = await getCadSystemPrompt(kernel, mode, testingEnabled, {
       chatId,
       modelId,
       contextWindow,
       knowledgeCutoff,
-      gitStatus,
       // Per-section telemetry — record byte size of every non-empty section
       // so Grafana can show which sections dominate the static prefix and
       // which dynamic sections invalidate the cache the most.

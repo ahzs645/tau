@@ -156,50 +156,6 @@ describe('getCadSystemPrompt', () => {
   });
 
   // ===================================================================
-  // Git status injection
-  // ===================================================================
-
-  describe('git status injection', () => {
-    it('should include git status in dynamic section when provided', async () => {
-      const result = await getCadSystemPrompt('openscad', 'agent', true, {
-        chatId: 'test',
-        gitStatus: 'M src/main.scad\nA src/lib/component.scad',
-      });
-      expect(result.dynamic).toContain('<git_status>');
-      expect(result.dynamic).toContain('M src/main.scad');
-    });
-
-    it('should truncate git status at 2000 chars', async () => {
-      const longStatus = 'M '.padEnd(2500, 'x');
-      const result = await getCadSystemPrompt('openscad', 'agent', true, {
-        chatId: 'test',
-        gitStatus: longStatus,
-      });
-      const gitStatusSection = /<git_status>([\S\s]*?)<\/git_status>/.exec(result.dynamic)?.[1] ?? '';
-      expect(gitStatusSection.length).toBeLessThanOrEqual(2200);
-      expect(result.dynamic).toContain('Truncated');
-    });
-
-    it('should show git-aware fallback text when truncated', async () => {
-      const longStatus = 'M '.padEnd(2500, 'x');
-      const result = await getCadSystemPrompt('openscad', 'agent', true, {
-        chatId: 'test',
-        gitStatus: longStatus,
-      });
-      expect(result.dynamic).toContain('git status');
-      expect(result.dynamic).not.toContain('list_directory');
-    });
-
-    it('should NOT include git status in static section', async () => {
-      const result = await getCadSystemPrompt('openscad', 'agent', true, {
-        chatId: 'test',
-        gitStatus: 'M unique-file.scad',
-      });
-      expect(result.static).not.toContain('unique-file.scad');
-    });
-  });
-
-  // ===================================================================
   // Anti-vague-reference instruction
   // ===================================================================
 
@@ -231,7 +187,6 @@ describe('getCadSystemPrompt', () => {
       modelId: 'test-model',
       contextWindow: 200_000,
       knowledgeCutoff: '2025-08',
-      gitStatus: 'M main.scad',
     } as const;
 
     it('should contain all expected static sections', async () => {
@@ -279,8 +234,6 @@ describe('getCadSystemPrompt', () => {
       expect(result.dynamic).toContain('.tau/transcripts/golden-test.jsonl');
       expect(result.dynamic).toContain('<environment>');
       expect(result.dynamic).toContain('knowledge cutoff: 2025-08');
-      expect(result.dynamic).toContain('<git_status>');
-      expect(result.dynamic).toContain('M main.scad');
     });
 
     it('should place dynamic sections in correct order', async () => {
@@ -288,10 +241,8 @@ describe('getCadSystemPrompt', () => {
 
       const transcriptIndex = result.dynamic.indexOf('.tau/transcripts/');
       const envIndex = result.dynamic.indexOf('<environment>');
-      const gitIndex = result.dynamic.indexOf('<git_status>');
 
       expect(transcriptIndex).toBeLessThan(envIndex);
-      expect(envIndex).toBeLessThan(gitIndex);
     });
 
     it('should not have triple+ blank lines in output', async () => {
@@ -1082,16 +1033,16 @@ describe('getCadSystemPrompt', () => {
         onSectionResolved,
         chatId: 'chat-r23',
         modelId: 'm-r23',
-        gitStatus: 'M file.ts',
+        contextWindow: 200_000,
       });
 
       const calls = onSectionResolved.mock.calls.map(([resolved]) => resolved as { name: string; cacheBreak: boolean });
       const role = calls.find((c) => c.name === 'role');
-      const gitStatus = calls.find((c) => c.name === 'git_status');
+      const environment = calls.find((c) => c.name === 'environment');
       const transcriptPath = calls.find((c) => c.name === 'transcript_path');
 
       expect(role?.cacheBreak).toBe(false);
-      expect(gitStatus?.cacheBreak).toBe(true);
+      expect(environment?.cacheBreak).toBe(true);
       expect(transcriptPath?.cacheBreak).toBe(true);
     });
 

@@ -340,10 +340,18 @@ describe.skipIf(providerEnvVariable === undefined || requiresEnv(providerEnvVari
         `Expected < 10k input tokens per fired pattern, observed ${tokensPerPattern}`,
       ).toBeLessThan(10_000);
 
-      // CS5: persisted nudges must NOT bust the cache prefix on the very next
-      // turn. We assert the post-nudge turn's cache_read_input_tokens is at
-      // least 80% of the pre-nudge median, demonstrating that injecting the
-      // <system-reminder> via state.messages keeps the prefix cache-warm.
+      // CS5: persisted SAFEGUARD nudges (agent-safeguards.middleware.ts AP1
+      // identical_error) must NOT bust the cache prefix on the very next turn.
+      // Note: this is independent of the token-usage reminder gate (R1, see
+      // token-usage-context.middleware.ts and
+      // docs/research/gemini-prompt-cache-busting.md): the token-usage
+      // reminder is suppressed below 70% of the context window so this test's
+      // small fixtures do not exercise it; the assertion below is solely
+      // about whether the safeguard's <system-reminder> persists across turns
+      // without breaking the cacheable prefix. We assert the post-nudge
+      // turn's cache_read_input_tokens is at least 80% of the pre-nudge
+      // median, demonstrating that injecting the safeguard nudge via
+      // state.messages keeps the prefix cache-warm.
       const cacheReadByTurn = usageData.map((u) => Number(u['cacheReadTokens']) || 0);
       if (cacheReadByTurn.length >= 4 && safeguardLines.length > 0) {
         const preNudge = cacheReadByTurn.slice(0, -1);

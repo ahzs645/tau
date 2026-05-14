@@ -31,10 +31,6 @@ import { getKernelConfig } from '#api/chat/prompts/kernel-prompt-configs/kernel.
 import { createSectionRegistry } from '#api/chat/prompts/prompt-section-registry.js';
 import type { ResolvedSection } from '#api/chat/prompts/prompt-section-registry.js';
 
-/** Maximum character length for git status before truncation. */
-// eslint-disable-next-line @typescript-eslint/naming-convention -- Domain constant
-const GIT_STATUS_MAX_LENGTH = 2000;
-
 /**
  * Return type for the structured system prompt, split into globally-cacheable
  * static content and per-request dynamic content.
@@ -86,7 +82,6 @@ export async function getCadSystemPrompt(
     modelId?: string;
     contextWindow?: number;
     knowledgeCutoff?: string;
-    gitStatus?: string;
     /**
      * Per-section telemetry hook. Invoked once per non-empty section as
      * the registry assembles the final prompt, with the section name, cache
@@ -400,21 +395,6 @@ Tool results are stored as metadata only (name + content length, not full output
       return `<environment>
 Model: ${options.modelId}${modelMeta ? ` (${modelMeta})` : ''}
 </environment>`;
-    },
-  });
-
-  registry.register({
-    name: 'git_status',
-    cacheBreak: true,
-    compute: () => {
-      if (!options.gitStatus) {
-        return '';
-      }
-      const truncated = options.gitStatus.length > GIT_STATUS_MAX_LENGTH;
-      const statusText = truncated ? options.gitStatus.slice(0, GIT_STATUS_MAX_LENGTH) : options.gitStatus;
-      return `<git_status>
-${statusText}${truncated ? '\nTruncated. Run shell with `git status` for more detail.' : ''}
-</git_status>`;
     },
   });
 
