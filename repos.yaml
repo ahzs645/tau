@@ -29,6 +29,7 @@ groups:
       - occt-import-js
       - skia
       - opencv
+      - build123d
   slicers:
     description: 3D printer slicer applications
     repos:
@@ -50,6 +51,7 @@ groups:
       - novu
       - atopile
       - props
+      - pi
   3d:
     description: 3D rendering and visualization
     repos:
@@ -500,3 +502,9 @@ repos:
   opencv:
     upstream: opencv/opencv
     description: OpenCV — modules/js Python codegen → embind, largest C++ codebase with auto-gen JS bindings
+  pi:
+    upstream: earendil-works/pi
+    description: Pi agent harness — coding agent CLI, unified LLM API, TUI/web UI
+  build123d:
+    upstream: gumyr/build123d
+    description: A python CAD programming library
