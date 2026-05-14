@@ -12,6 +12,11 @@ capped at 200 chars and 12 bullets per section. The existing entries below
 were harvested verbatim from `AGENTS.md` during the one-time context
 cleanup; they may exceed the 200-char cap.
 
+## Learned User Preferences
+
+- Reminder/instruction injections defer until ~70% context-window utilization to preserve provider prompt-cache hits (R1 of `docs/research/gemini-prompt-cache-busting.md`).
+- `gitStatus` is omitted entirely from prompt context until git is wired into projects — placeholder/empty `gitStatus` values still bust prompt caches across providers.
+
 ## Learned Workspace Facts
 
 - Socket.IO RPC uses `emitWithAck` pattern (replaced manual `pendingRequests` Map); prod uses `RedisIoAdapter` with `@socket.io/redis-streams-adapter` for horizontal scaling and CSR; dev uses standalone Socket.IO server on `PORT+1` via `DevWebSocketService` without Redis adapter; auth via `server.use()` middleware in gateway `afterInit`; health probes at `/health/live|ready|startup` via `@nestjs/terminus` with custom `RedisHealthIndicator` and `DatabaseHealthIndicator`
