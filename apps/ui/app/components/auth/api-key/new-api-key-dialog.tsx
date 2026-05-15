@@ -13,7 +13,7 @@ import {
   AlertDialogMedia,
   AlertDialogTitle,
 } from '#components/ui/alert-dialog.js';
-import { InputGroup, InputGroupButton, InputGroupInput } from '#components/ui/input-group.js';
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from '#components/ui/input-group.js';
 import { Label } from '#components/ui/label.js';
 import { apiKeyPlugin } from '#utils/api-key-plugin.js';
 
@@ -65,9 +65,15 @@ export function NewApiKeyDialog({ open, onOpenChange, name, secretKey }: NewApiK
           <InputGroup>
             <InputGroupInput id='new-api-key-secret' value={secretKey ?? ''} readOnly className='font-mono text-xs' />
 
-            <InputGroupButton size='icon-xs' aria-label={localization.settings.copyToClipboard} onClick={copySecretKey}>
-              {copied ? <Check /> : <Copy />}
-            </InputGroupButton>
+            <InputGroupAddon align='inline-end'>
+              <InputGroupButton
+                size='icon-xs'
+                aria-label={localization.settings.copyToClipboard}
+                onClick={copySecretKey}
+              >
+                {copied ? <Check /> : <Copy />}
+              </InputGroupButton>
+            </InputGroupAddon>
           </InputGroup>
         </div>
 

@@ -1,5 +1,4 @@
-import { useAuth, useSession, useSetActiveSession } from '@better-auth-ui/react';
-import type { MultiSessionAuthClient } from '@better-auth-ui/react';
+import { useAuth, useSession } from '@better-auth-ui/react';
 import { ChevronsUpDown, LogIn, LogOut, Settings, UserPlus2 } from 'lucide-react';
 import { isValidElement } from 'react';
 import type { ComponentType, ReactElement, ReactNode } from 'react';
@@ -94,7 +93,6 @@ export function UserButton({
 }: UserButtonProps) {
   const { authClient, basePaths, viewPaths, localization, plugins, Link } = useAuth();
 
-  const { isPending: settingActiveSession } = useSetActiveSession(authClient as MultiSessionAuthClient);
   const { data: session, isPending: sessionPending } = useSession(authClient);
 
   const userLinks = links?.flatMap((link, index) => {
@@ -120,8 +118,8 @@ export function UserButton({
           <UserAvatar />
         ) : (
           <Button variant={variant} className={cn('py-2.5 h-auto font-normal', className)} size='lg'>
-            {(session ?? sessionPending) || settingActiveSession ? (
-              <UserView isPending={Boolean(settingActiveSession)} />
+            {(session ?? sessionPending) ? (
+              <UserView />
             ) : (
               <>
                 <UserAvatar />

@@ -24,6 +24,8 @@ export function LinkedAccounts({ className }: LinkedAccountsProps) {
   const { data: accounts, isPending } = useListAccounts(authClient);
 
   const linkedAccounts = accounts?.filter((account) => account.providerId !== 'credential');
+  const linkedProviderIds = new Set(linkedAccounts?.map((account) => account.providerId) ?? []);
+  const unlinkedSocialProviders = socialProviders?.filter((provider) => !linkedProviderIds.has(provider)) ?? [];
 
   const allRows = [
     ...(linkedAccounts?.map((account) => ({
@@ -31,11 +33,11 @@ export function LinkedAccounts({ className }: LinkedAccountsProps) {
       account,
       provider: account.providerId,
     })) ?? []),
-    ...(socialProviders?.map((provider) => ({
+    ...unlinkedSocialProviders.map((provider) => ({
       key: provider,
       account: undefined,
       provider,
-    })) ?? []),
+    })),
   ];
 
   return (
