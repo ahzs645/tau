@@ -106,8 +106,23 @@ describe('AxesHelper', () => {
     const harness = await mountAxes('webgpu');
 
     expect(dreiLineSpy).not.toHaveBeenCalled();
-    expect(line2WebGpuSpy).toHaveBeenCalledTimes(3);
+    // Each axis owns two persistent `Line2WebGpu` meshes (positive + negative half) that
+    // share a single material. Three axes × two halves = six Line2 constructor calls,
+    // each receiving the same per-axis Tau `Line2NodeMaterial` instance — the architectural
+    // shape that lets hover transitions toggle visibility without rebuilding pipelines.
+    expect(line2WebGpuSpy).toHaveBeenCalledTimes(6);
     expect(line2WebGpuSpy.mock.calls.every(([, material]) => material instanceof Line2NodeMaterial)).toBe(true);
+
+    // The two meshes per axis MUST share one material so a single uniform write
+    // (`material.linewidth`) covers both halves. We collect the material reference
+    // out of the spy and confirm it appears in exactly two consecutive calls.
+    const materialCounts = new Map<Line2NodeMaterial, number>();
+    for (const [, material] of line2WebGpuSpy.mock.calls) {
+      const typedMaterial = material as Line2NodeMaterial;
+      materialCounts.set(typedMaterial, (materialCounts.get(typedMaterial) ?? 0) + 1);
+    }
+    expect(materialCounts.size).toBe(3);
+    expect([...materialCounts.values()].every((count) => count === 2)).toBe(true);
 
     harness.unmountScene();
   });

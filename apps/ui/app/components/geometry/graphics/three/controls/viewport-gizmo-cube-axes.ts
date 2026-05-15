@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { Line2, LineGeometry, LineMaterial } from 'three/addons';
 import { Line2 as Line2WebGpu } from 'three/addons/lines/webgpu/Line2.js';
-import { Line2NodeMaterial } from 'three/webgpu';
 import type { ResolvedGraphicsBackend } from '#constants/editor.constants.js';
+import { Line2NodeMaterial } from '#components/geometry/graphics/three/materials/line2.material.js';
 import { gizmoBaseDistance } from '#components/geometry/graphics/three/utils/math.utils.js';
 
 export type ViewportGizmoCubeAxesProps = {
@@ -86,6 +86,7 @@ export const createViewportGizmoCubeAxes = ({
         linewidth: lineWidth,
         opacity: lineOpacity,
         resolution: new THREE.Vector2(rendererSize, rendererSize),
+        transparent: true,
       });
       axes.add(new Line2(geometry, material));
     }

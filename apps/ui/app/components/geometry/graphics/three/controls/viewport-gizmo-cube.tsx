@@ -6,6 +6,7 @@ import { useEffect, useCallback, useRef } from 'react';
 import * as THREE from 'three';
 import type { OrbitControls } from 'three/addons';
 import type { ReactNode } from 'react';
+import type { Object3D, Camera } from 'three';
 import { useColor } from '#hooks/use-color.js';
 import { Theme, useTheme } from '#hooks/use-theme.js';
 import { createViewportGizmoCubeAxes } from '#components/geometry/graphics/three/controls/viewport-gizmo-cube-axes.js';
@@ -143,28 +144,57 @@ export function ViewportGizmoCube({
     gizmo.addEventListener('hoverchange', handleChange);
 
     gizmo.scale.multiplyScalar(0.7);
-    gizmo.add(
-      createViewportGizmoCubeAxes({
-        axesSize: 2.1,
-        rendererSize: size,
-        xAxisColor: 'red',
-        yAxisColor: 'green',
-        // oxlint-disable-next-line tau-lint/no-hardcoded-color -- Three.js axis color
-        zAxisColor: 'rgb(37, 78, 136)',
-        xLabelColor: 'red',
-        yLabelColor: 'green',
-        // oxlint-disable-next-line tau-lint/no-hardcoded-color -- Three.js axis color
-        zLabelColor: 'rgb(37, 78, 136)',
-        lineWidth: 2,
-        renderingBackend: graphicsBackendThree,
-      }),
-    );
+    const gizmoAxes = createViewportGizmoCubeAxes({
+      axesSize: 2.1,
+      rendererSize: size,
+      xAxisColor: 'red',
+      yAxisColor: 'green',
+      // oxlint-disable-next-line tau-lint/no-hardcoded-color -- Three.js axis color
+      zAxisColor: 'rgb(37, 78, 136)',
+      xLabelColor: 'red',
+      yLabelColor: 'green',
+      // oxlint-disable-next-line tau-lint/no-hardcoded-color -- Three.js axis color
+      zLabelColor: 'rgb(37, 78, 136)',
+      lineWidth: 2,
+      renderingBackend: graphicsBackendThree,
+    });
+    gizmo.add(gizmoAxes);
 
     gizmo.attachControls(controls);
+
+    // Pipeline pre-warm (Policy Rule 13): when the WebGPU backend is active the gizmo
+    // axes use Tau's `Line2NodeMaterial`, so the first `gizmo.render()` call would
+    // otherwise pay the `createRenderPipelineAsync` latency and skip frames until the
+    // pipeline resolves. `WebGPURenderer.compileAsync(scene, camera)` warms the pipeline
+    // off the critical path. Same warmup contract as `AxesWebGpuFatLine` and
+    // `post-processing-webgpu.tsx`.
+    const warmupCancellation = { cancelled: false };
+    const renderer = gl as unknown as {
+      compileAsync?: (scene: Object3D, camera: Camera) => Promise<unknown>;
+    };
+    const warmupCompile = renderer.compileAsync;
+    if (graphicsBackendThree === 'webgpu' && typeof warmupCompile === 'function') {
+      // async-iife: bootstrap — effects cannot be async; the cancellation flag ensures a
+      // teardown before resolution is a no-op.
+      void (async () => {
+        try {
+          await warmupCompile.call(renderer, gizmoAxes, camera);
+        } catch (error) {
+          console.error('ViewportGizmoCube pipeline warm-up failed', error);
+          return;
+        }
+        if (warmupCancellation.cancelled) {
+          return;
+        }
+        invalidate();
+      })();
+    }
 
     invalidate();
 
     return () => {
+      warmupCancellation.cancelled = true;
+
       const existing = gizmoRef.current;
       gizmoRef.current = undefined;
 
