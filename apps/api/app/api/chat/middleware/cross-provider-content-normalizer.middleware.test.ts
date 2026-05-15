@@ -116,4 +116,125 @@ describe('createCrossProviderContentNormalizerMiddleware', () => {
     expect((request.messages[0] as AIMessage).content).toEqual([{ type: 'reasoning', reasoning: 'a' }]);
     expect((request.messages[1] as AIMessage).content).toEqual([{ type: 'reasoning', reasoning: 'b' }]);
   });
+
+  /* eslint-disable @typescript-eslint/naming-convention -- LangChain/OpenAI native content blocks use snake_case (image_url, input_image) throughout these test fixtures */
+  describe('OpenAI ToolMessage content rewriting', () => {
+    const screenshotDataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA';
+
+    it('rewrites text + image_url (object form) to input_text + input_image for openai target', async () => {
+      const middleware = createCrossProviderContentNormalizerMiddleware('openai');
+      const tool = new ToolMessage({
+        content: [
+          { type: 'text', text: 'Inspector prompt' },
+          { type: 'image_url', image_url: { url: screenshotDataUrl } },
+        ],
+        tool_call_id: 'call_screenshot',
+        name: 'screenshot',
+      });
+
+      await invokeWrapModelCall(middleware, { messages: [tool] }, handler);
+
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
+      const out = request.messages[0] as ToolMessage;
+      expect(out.content).toEqual([
+        { type: 'input_text', text: 'Inspector prompt' },
+        { type: 'input_image', image_url: screenshotDataUrl, detail: 'auto' },
+      ]);
+      expect(out.tool_call_id).toBe('call_screenshot');
+      expect(out.name).toBe('screenshot');
+    });
+
+    it('rewrites image_url string form to input_image for openai target', async () => {
+      const middleware = createCrossProviderContentNormalizerMiddleware('openai');
+      const tool = new ToolMessage({
+        content: [{ type: 'image_url', image_url: screenshotDataUrl }],
+        tool_call_id: 'call_screenshot_str',
+        name: 'screenshot',
+      });
+
+      await invokeWrapModelCall(middleware, { messages: [tool] }, handler);
+
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
+      const out = request.messages[0] as ToolMessage;
+      expect(out.content).toEqual([{ type: 'input_image', image_url: screenshotDataUrl, detail: 'auto' }]);
+    });
+
+    it('produces a homogeneous input_* array (every block must be input_text|input_image|input_file)', async () => {
+      const middleware = createCrossProviderContentNormalizerMiddleware('openai');
+      const tool = new ToolMessage({
+        content: [
+          { type: 'text', text: 'one' },
+          { type: 'image_url', image_url: { url: screenshotDataUrl } },
+          { type: 'text', text: 'two' },
+        ],
+        tool_call_id: 'call_mixed',
+      });
+
+      await invokeWrapModelCall(middleware, { messages: [tool] }, handler);
+
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
+      const out = request.messages[0] as ToolMessage;
+      const blocks = out.content as Array<{ type: string }>;
+      const allInput = blocks.every(
+        (b) => b.type === 'input_text' || b.type === 'input_image' || b.type === 'input_file',
+      );
+      expect(allInput).toBe(true);
+      expect(blocks.find((b) => b.type === 'text')).toBeUndefined();
+      expect(blocks.find((b) => b.type === 'image_url')).toBeUndefined();
+    });
+
+    it('passes through already-native input_image / input_text blocks unchanged', async () => {
+      const middleware = createCrossProviderContentNormalizerMiddleware('openai');
+      const native = [
+        { type: 'input_text', text: 'already native' },
+        { type: 'input_image', image_url: screenshotDataUrl, detail: 'high' },
+      ];
+      const tool = new ToolMessage({
+        content: native,
+        tool_call_id: 'call_native',
+      });
+
+      await invokeWrapModelCall(middleware, { messages: [tool] }, handler);
+
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
+      expect(request.messages[0]).toBe(tool);
+    });
+
+    it('leaves string tool content untouched for openai target', async () => {
+      const middleware = createCrossProviderContentNormalizerMiddleware('openai');
+      const tool = new ToolMessage({
+        content: '{"foo":"bar"}',
+        tool_call_id: 'call_string',
+        name: 'read_file',
+      });
+
+      await invokeWrapModelCall(middleware, { messages: [tool] }, handler);
+
+      const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
+      expect(request.messages[0]).toBe(tool);
+    });
+
+    it.each(['anthropic', 'vertexai', 'cerebras', 'together', 'ollama'] as const)(
+      'leaves screenshot-shaped ToolMessage byte-identical for %s target (cache-stability guard)',
+      async (provider) => {
+        const middleware = createCrossProviderContentNormalizerMiddleware(provider);
+        const original = [
+          { type: 'text', text: 'Inspector prompt' },
+          { type: 'image_url', image_url: { url: screenshotDataUrl } },
+        ];
+        const tool = new ToolMessage({
+          content: original,
+          tool_call_id: 'call_screenshot',
+          name: 'screenshot',
+        });
+
+        await invokeWrapModelCall(middleware, { messages: [tool] }, handler);
+
+        const [request] = handler.mock.calls[0] as [{ messages: BaseMessage[] }];
+        expect(request.messages[0]).toBe(tool);
+        expect((request.messages[0] as ToolMessage).content).toBe(original);
+      },
+    );
+  });
+  /* eslint-enable @typescript-eslint/naming-convention -- end of LangChain/OpenAI native shape fixtures */
 });
