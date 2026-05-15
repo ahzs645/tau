@@ -258,6 +258,7 @@ This creates a bidirectional link: the policy explains _why_, the lint rule enfo
 | JSDoc Policy § Public exports                 | `tau-lint/require-public-export-jsdoc` | warn               |
 | Lint Policy § Disable descriptions            | `tau-lint/require-disable-description` | error              |
 | TypeScript Policy § No `as const` on literals | `tau-lint/no-literal-const-assertion`  | error              |
+| WebGPU Shader & Pipeline Policy § Rule 1      | `tau-lint/no-scene-override-material`  | error              |
 
 ## Checklist
 
