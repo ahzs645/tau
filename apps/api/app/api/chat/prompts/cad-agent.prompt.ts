@@ -23,6 +23,8 @@
 // EVAL(production-grade-role): pending benchmark — rewrites <role> to communicate audience (architects/engineers/product designers handing output to manufacturing) and the production-grade quality bar (dimensionally faithful, fully detailed, manufacturable as-is; not a hobbyist sketch; model visible features that would exist on the real part). Closes the deferred R11/F9 "<complex_task> override" from docs/research/system-prompt-audit.md by baking the quality bar into the persistent identity (universal reframe) rather than a conditional section. Addresses Finding 6 of docs/research/complex-task-agent-gap-analysis.md ("Anti-Gold-Plating Rules Conflict with Engineering Detail"). Validates closer feature-count and proportion fidelity on detail-demanding reference-image prompts (rocket engine, mechanical assemblies) on tool-use,smoke benchmarks.
 // EVAL(constraints-code-scope): pending benchmark — rescopes <constraints> bullet 1 anti-gold-plating from "no features beyond what was asked" to "code-level over-engineering only", explicitly carving out geometric/engineering detail as part of the implicit CAD deliverable. Resolves the gold-plating-vs-detail conflict (Finding 6 of docs/research/complex-task-agent-gap-analysis.md) without introducing a conditional <complex_task> override. Validates no regression on anti-gold-plating code-level benchmarks (no defensive validation, no unused abstractions) and measurable lift on detail-demanding geometry prompts.
 // EVAL(node-modules-bullet-drop): pending benchmark — drops the `node_modules/` canonical-location bullet from <tool_usage_policy>. The bullet was steering agents into node_modules reads at task start instead of consulting the cached per-kernel <canonical_example>, <code_standards>, and tool descriptions already in the prompt prefix — wasting tokens, latency, and prompt-cache hits on type-noise the model didn't need. Aligns with `docs/policy/context-engineering-policy.md` Part 6 Dynamic Context Discovery (Cursor 2026): let agents discover FS contents on demand, do not statically prime them to a specific subtree. Validates a measurable drop in `read_file`/`grep` calls targeting `node_modules/**` per task on tool-use,smoke benchmarks with no regression on tool-selection accuracy.
+// EVAL(geometry-fidelity-global): pending benchmark — new global <geometry_fidelity> static section (between <safety> and <canonical_example>) codifies analytical-curve-over-polyline-sampling, construction-strategy economy (revolve/loft/sweep), boolean ordering, fillet ordering, and a for-loop self-detection heuristic. Closes the helical-gear smoking gun (involuteSamples=9 polyline tooth construction, GPT-5.5, May 2026) per docs/research/code-cad-topology-best-practices.md F1, F3-F5, F9. Validates on tool-use,smoke + curve-heavy fixtures (gear, NACA airfoil, Archimedean spiral, Rao bell).
+// EVAL(topology-hints-per-kernel): pending benchmark — new per-kernel <topology_hints> static section sourced from KernelConfig.topologyHints (slotted after <code_standards>), mapping the global geometry-fidelity principle to each kernel's actual primitive vocabulary (Replicad: drawSplineCurve/drawArc; OCCT: Geom2dAPI_PointsToBSpline/GC_MakeArcOfCircle; KCL: tangentialArc/bezierCurve; Manifold/JSCAD: segment-count heuristic; OpenSCAD: $fa/$fs adaptive tessellation). Resolves the B-rep-vs-mesh kernel divide per docs/research/code-cad-topology-best-practices.md Kernel Capability Matrix.
 
 import type { KernelProvider } from '@taucad/runtime';
 import { toolName } from '@taucad/chat/constants';
@@ -243,6 +245,14 @@ ${config.codeStandards}
   });
 
   registry.register({
+    name: 'topology_hints',
+    cacheBreak: false,
+    compute: () => `<topology_hints>
+${config.topologyHints}
+</topology_hints>`,
+  });
+
+  registry.register({
     name: 'error_handling',
     cacheBreak: false,
     compute: () => `<error_handling>
@@ -250,6 +260,8 @@ On errors: analyze root cause, fix incrementally, preserve working geometry.${te
 If an approach fails, diagnose why before switching tactics — read the error, check your assumptions, try a focused fix. Do not retry the identical action blindly, but do not abandon a viable approach after a single failure either.
 
 ${config.languageName} patterns: ${config.commonErrorPatterns}
+
+Fillet failures: the root cause is almost always (a) a polyline kink upstream from sampled curve construction (see \`<geometry_fidelity>\`) or (b) a fillet radius larger than local material thickness — rarely a kernel bug. Largest fillets first, part-vs-part shared boundary last.
 
 <system_reminder_contract>
 Messages wrapped in \`<system-reminder>...</system-reminder>\` are NOT user input. They are system-generated nudges injected when an automated safeguard detects that you are stuck in a loop (identical errors, identical calls, repeated edits, ping-pong patterns, empty-result polling, or no forward progress).
@@ -281,6 +293,22 @@ When you see a \`<system-reminder>\`, you MUST:
 - Before exporting and overwriting a previously-committed artifact path, surface the change to the user.
 - Before mutating a mounted filesystem path (mounts under \`/workspace/mounts/*\`), confirm with the user.
 </safety>`,
+  });
+
+  registry.register({
+    name: 'geometry_fidelity',
+    cacheBreak: false,
+    compute: () => `<geometry_fidelity>
+Choose the smallest topology that captures the user's intent. Topology is the deliverable: faces, edges, and vertices are not free, and over-construction costs build time, boolean robustness, fillet stability, and export fidelity.
+
+- **Curves with a closed form** (involutes, ellipses, helices, NACA sections, Rao bells, cycloids, parametric spirals): sample the form once into control points and emit a single analytical primitive — see \`<topology_hints>\` for your kernel's vocabulary. Never emit a \`for\`-loop that pushes points into an array to build a curve that has a known mathematical form.
+- **Engineering profiles**: arcs and lines chained together — emit each segment as its own analytical edge, never as a sampled polyline.
+- **Bodies of revolution, smooth transitions, periodic features**: prefer one \`revolve\`, one \`loft\`, or one \`sweep\` over a stack of primitives unioned together.
+- **Booleans**: bottom-up additive, top-down subtractive. Fewer, larger booleans are always cheaper than more, smaller ones. Extend cutting tools by a small epsilon past the boundary so coincident faces never cause a zero-area artefact.
+- **Fillets**: largest, most stable features first; part-vs-part shared boundary last.
+
+Self-check before emitting code: if you see a \`for\`-loop pushing points into an array to construct a curve, ask whether the curve has a closed form. If it does, switch to the analytical primitive for your kernel and let the kernel's tessellator handle export fidelity at render time.
+</geometry_fidelity>`,
   });
 
   registry.register({

@@ -16,7 +16,12 @@ export const jscadConfig: KernelConfig = {
 ${jscadModelingTypes}
 </jscad_api>`,
 
-  commonErrorPatterns: 'incorrect import paths, invalid dimensions, failed boolean operations, malformed vector arrays',
+  commonErrorPatterns:
+    'incorrect import paths, invalid dimensions, failed boolean operations, malformed vector arrays, segments proliferation, polygon-from-points loops where circle/extrudeRotate exists',
+
+  topologyHints: `- No analytical curves — all geometry is mesh. Choose segment count, not curve form.
+- \`primitives.circle({ segments })\`, \`primitives.cylinder({ segments })\`, \`extrusions.extrudeRotate({ segments })\` — segments ≈ \`max(16, π · diameter / 0.3)\` for visible parts.
+- Prefer \`extrudeRotate\` or \`extrudeLinear\` over hand-built polygon-from-points loops when the profile has a regular form.`,
 
   fileLayoutMode: 'full-nesting',
   canonicalExample,

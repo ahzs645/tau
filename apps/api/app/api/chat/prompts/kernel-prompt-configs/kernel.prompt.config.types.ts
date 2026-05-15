@@ -48,6 +48,18 @@ export type KernelConfig = {
   canonicalExample: string;
 
   /**
+   * Per-kernel topology & geometric-fidelity hints. Sourced into a
+   * `<topology_hints>` static section that sits next to `<code_standards>`
+   * and maps the global `<geometry_fidelity>` principle to this kernel's
+   * actual primitive vocabulary (analytical curve names on B-rep kernels;
+   * segment-count heuristics on mesh kernels). Keep ≤ 8 lines per kernel.
+   *
+   * See {@link docs/research/code-cad-topology-best-practices.md} F1/F2 for
+   * the B-rep-vs-mesh divide this field exists to resolve.
+   */
+  topologyHints: string;
+
+  /**
    * Single-line snippet demonstrating the minimal top-level construct that
    * makes a file render standalone (e.g. a default `main` export, an OpenSCAD
    * top-level invocation, a KCL `extrude` pipeline). Consumed by the
