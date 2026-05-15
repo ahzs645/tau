@@ -1521,6 +1521,20 @@ export declare const makeAx2: (center: Point, dir: Point, xDir?: Point) => gp_Ax
 
 export declare const makeAx3: (center: Point, dir: Point, xDir?: Point) => gp_Ax3;
 
+/**
+ * Builds a rectangular box of the given lengths.
+ *
+ * The box is centred on the origin in X and Y (spanning `[-x/2, +x/2]` and
+ * `[-y/2, +y/2]`) and corner-based in Z (spanning `[0, +z]`). Translate by
+ * `[0, 0, -z/2]` to centre the box fully, or use {@link makeBox} when you
+ * want explicit two-corner control.
+ *
+ * @example
+ * const slab = makeBaseBox(30, 50, 10);
+ * // slab spans x: [-15, 15], y: [-25, 25], z: [0, 10]
+ *
+ * @category Solids
+ */
 export declare const makeBaseBox: (xLength: number, yLength: number, zLength: number) => Shape3D;
 
 export declare const makeBezierCurve: (points: Point[]) => Edge;
@@ -1552,7 +1566,7 @@ export declare const makeEllipse: (majorRadius: number, minorRadius: number, cen
 export declare const makeEllipseArc: (majorRadius: number, minorRadius: number, startAngle: number, endAngle: number, center?: Point, normal?: Point, xDir?: Point) => Edge;
 
 /**
- * Creates an ellipsoid with the given lengths of the axes.
+ * Creates an ellipsoid with the given lengths of the axes, centred on the origin.
  *
  * @category Solids
  */
@@ -1593,7 +1607,7 @@ export declare function makeProjectedEdges(shape: AnyShape, camera: ProjectionCa
 export declare function makeSolid(facesOrShells: Array<Face | Shell>): Solid;
 
 /**
- * Creates a sphere with the given radius.
+ * Creates a sphere with the given radius, centred on the origin.
  *
  * @category Solids
  */
