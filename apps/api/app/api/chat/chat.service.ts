@@ -27,7 +27,7 @@ import { projectNameGenerationSystemPrompt } from '#api/chat/prompts/cad-name.pr
 import { commitMessageGenerationSystemPrompt } from '#api/chat/prompts/git-commit.prompt.js';
 import { getCadSystemPrompt } from '#api/chat/prompts/cad-agent.prompt.js';
 import { toolResultTrimmerMiddleware } from '#api/chat/middleware/tool-result-trimmer.middleware.js';
-import { promptCachingMiddleware } from '#api/chat/middleware/prompt-caching.middleware.js';
+import { createPromptCachingMiddleware } from '#api/chat/middleware/prompt-caching.middleware.js';
 import { messageContentSanitizerMiddleware } from '#api/chat/middleware/message-content-sanitizer.middleware.js';
 import { createCrossProviderContentNormalizerMiddleware } from '#api/chat/middleware/cross-provider-content-normalizer.middleware.js';
 import { latexDelimiterMiddleware } from '#api/chat/middleware/latex-delimiter.middleware.js';
@@ -197,7 +197,7 @@ export class ChatService {
         latexDelimiterMiddleware,
 
         // --- Prompt caching (must follow compaction) ---
-        promptCachingMiddleware,
+        createPromptCachingMiddleware(providerId),
 
         // --- Logging and observability ---
         messageLoggingMiddleware,
