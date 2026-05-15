@@ -96,6 +96,7 @@
     "tau-lint/no-bare-time-identifier": "error",
     "tau-lint/no-async-iife": "error",
     "tau-lint/no-monaco-create-model": "error",
+    "tau-lint/no-scene-override-material": "error",
     "unicorn/no-accessor-recursion": "error",
     "unicorn/no-anonymous-default-export": "error",
     "unicorn/no-array-callback-reference": "error",
