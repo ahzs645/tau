@@ -224,6 +224,83 @@ describe('drawScreenshotOverlay', () => {
     });
     expect(context.scale).toHaveBeenCalledWith(2, 2);
   });
+
+  it('forces chip draw-state defaults even when caller pre-poisoned the context', async () => {
+    // Regression: `createCompositeImage`'s tile-label block historically
+    // leaked `textAlign='center'` into the bare context, then called
+    // `drawScreenshotOverlay`, which inherited the alignment and painted
+    // chip text on top of the icon. The helper now owns its own state.
+    const context = createSpyCanvasContext();
+    context.textAlign = 'center';
+    context.textBaseline = 'alphabetic';
+    context.direction = 'rtl';
+    context.globalAlpha = 0.3;
+    context.globalCompositeOperation = 'multiply';
+    context.filter = 'blur(2px)';
+
+    // Capture the helper's draw-state at the moment text is painted —
+    // restore() runs after, so we can't inspect post-call.
+    const observed: Partial<DrawStateSnapshot> = {};
+    context.fillText = vi.fn(() => {
+      observed.textAlign = context.textAlign;
+      observed.textBaseline = context.textBaseline;
+      observed.direction = context.direction;
+      observed.globalAlpha = context.globalAlpha;
+      observed.globalCompositeOperation = context.globalCompositeOperation;
+      observed.filter = context.filter;
+      observed.fillStyle = context.fillStyle;
+      observed.font = context.font;
+    });
+
+    await drawScreenshotOverlay(context, {
+      canvasWidth: 800,
+      canvasHeight: 600,
+      pixelRatio: 1,
+      overlay: { filePath: 'main.ts', iconKey: 'typescript' },
+    });
+
+    expect(observed.textAlign).toBe('left');
+    expect(observed.textBaseline).toBe('middle');
+    expect(observed.direction).toBe('ltr');
+    expect(observed.globalAlpha).toBe(1);
+    expect(observed.globalCompositeOperation).toBe('source-over');
+    expect(observed.filter).toBe('none');
+    expect(observed.fillStyle).not.toBe('');
+    expect(observed.font).toContain('Geist Sans');
+  });
+
+  it('restores caller draw-state after drawing (save/restore symmetry)', async () => {
+    // Locks in the second half of the state-ownership contract: the helper
+    // does NOT leak any of its writes back to the caller. Uses the spy's
+    // snapshot-capable save/restore to actually round-trip state.
+    const context = createSpyCanvasContext();
+    context.textAlign = 'center';
+    context.textBaseline = 'alphabetic';
+    context.fillStyle = '#000000';
+    context.strokeStyle = '#abcdef';
+    context.font = 'bold 18px Arial';
+    context.globalAlpha = 0.5;
+    context.globalCompositeOperation = 'multiply';
+    context.filter = 'sepia(1)';
+    context.direction = 'rtl';
+
+    await drawScreenshotOverlay(context, {
+      canvasWidth: 800,
+      canvasHeight: 600,
+      pixelRatio: 1,
+      overlay: { filePath: 'main.ts', iconKey: 'typescript' },
+    });
+
+    expect(context.textAlign).toBe('center');
+    expect(context.textBaseline).toBe('alphabetic');
+    expect(context.fillStyle).toBe('#000000');
+    expect(context.strokeStyle).toBe('#abcdef');
+    expect(context.font).toBe('bold 18px Arial');
+    expect(context.globalAlpha).toBe(0.5);
+    expect(context.globalCompositeOperation).toBe('multiply');
+    expect(context.filter).toBe('sepia(1)');
+    expect(context.direction).toBe('rtl');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -279,10 +356,19 @@ function restoreDocumentFonts(): void {
   originalDocumentFonts = undefined;
 }
 
-type SpyContext = {
+type DrawStateSnapshot = {
   font: string;
   fillStyle: string;
+  strokeStyle: string;
+  textAlign: string;
   textBaseline: string;
+  direction: string;
+  globalAlpha: number;
+  globalCompositeOperation: string;
+  filter: string;
+};
+
+type SpyContext = DrawStateSnapshot & {
   measureText: ReturnType<typeof vi.fn>;
   fillRect: ReturnType<typeof vi.fn>;
   fillText: ReturnType<typeof vi.fn>;
@@ -296,11 +382,24 @@ type SpyContext = {
   roundRect: ReturnType<typeof vi.fn>;
 };
 
+/**
+ * Spy context whose `save`/`restore` actually snapshot and roll back every
+ * draw-state property. Lets tests assert (a) what the helper writes inside
+ * its save/restore block (via observers like a `fillText` interceptor) and
+ * (b) that caller state is restored verbatim afterwards (symmetry test).
+ */
 function createSpyCanvasContext(): SpyContext & CanvasRenderingContext2D {
-  const context = {
+  const stack: DrawStateSnapshot[] = [];
+  const context: SpyContext = {
     font: '',
     fillStyle: '',
-    textBaseline: '',
+    strokeStyle: '',
+    textAlign: 'start',
+    textBaseline: 'alphabetic',
+    direction: 'ltr',
+    globalAlpha: 1,
+    globalCompositeOperation: 'source-over',
+    filter: 'none',
     measureText: vi.fn((text: string) => ({ width: text.length * 8 })),
     fillRect: vi.fn(),
     fillText: vi.fn(),
@@ -313,5 +412,24 @@ function createSpyCanvasContext(): SpyContext & CanvasRenderingContext2D {
     rect: vi.fn(),
     roundRect: vi.fn(),
   };
+  context.save = vi.fn(() => {
+    stack.push({
+      font: context.font,
+      fillStyle: context.fillStyle,
+      strokeStyle: context.strokeStyle,
+      textAlign: context.textAlign,
+      textBaseline: context.textBaseline,
+      direction: context.direction,
+      globalAlpha: context.globalAlpha,
+      globalCompositeOperation: context.globalCompositeOperation,
+      filter: context.filter,
+    });
+  });
+  context.restore = vi.fn(() => {
+    const snap = stack.pop();
+    if (snap) {
+      Object.assign(context, snap);
+    }
+  });
   return context as unknown as SpyContext & CanvasRenderingContext2D;
 }

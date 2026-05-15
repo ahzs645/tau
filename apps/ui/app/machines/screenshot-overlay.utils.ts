@@ -11,6 +11,13 @@ import type { ScreenshotOverlay } from '@taucad/types';
  * command palette, agent RPC, composite multi-angle) produce a visually
  * identical chip without per-call-site stamping.
  *
+ * State-ownership contract: {@link drawScreenshotOverlay} owns every
+ * draw-state property it touches inside its `save`/`restore` block. Callers
+ * do NOT need to clean up before invoking, and the helper does NOT leak any
+ * state after returning. This is the architectural defence against the
+ * `CanvasRenderingContext2D` global-mutable-state foot-gun — see the
+ * `composite path leak` regression for prior art.
+ *
  * See `docs/research/screenshot-overlay-watermark-architecture.md` for the
  * design rationale (Findings 4–10) and visual spec (Finding 9).
  */
@@ -292,11 +299,25 @@ export async function drawScreenshotOverlay(
   context.save();
   try {
     context.scale(pixelRatio, pixelRatio);
+
+    // Helper owns its draw state — explicit resets so chip rendering is
+    // immune to caller-side state poison. See state-ownership contract in
+    // the file header. Historical regression: `createCompositeImage`'s
+    // tile-label block leaked `textAlign='center'` here, painting chip
+    // text on top of the icon.
     context.font = chipFont;
+    context.fillStyle = chipFillStyle;
+    context.strokeStyle = chipFillStyle;
+    context.textAlign = 'left';
+    context.textBaseline = 'middle';
+    context.direction = 'ltr';
+    context.globalAlpha = 1;
+    context.globalCompositeOperation = 'source-over';
+    context.filter = 'none';
+
     const layout = computeChipLayout(context, { cssWidth, filePath: overlay.filePath });
 
     // Background pill
-    context.fillStyle = chipFillStyle;
     context.beginPath();
     if (typeof context.roundRect === 'function') {
       context.roundRect(layout.chipX, layout.chipY, layout.chipWidth, layout.chipHeight, chipCornerRadius);
@@ -318,11 +339,11 @@ export async function drawScreenshotOverlay(
       );
     }
 
-    // Text — set font again because `getIconImage` may yield to other
-    // overlay calls that mutate context.font (defensive; cheap).
+    // Text — re-assert font + fillStyle because the awaited `getIconImage`
+    // may yield to a sibling overlay draw that mutates this same context
+    // (defensive; cheap).
     context.font = chipFont;
     context.fillStyle = chipTextStyle;
-    context.textBaseline = 'middle';
     context.fillText(
       layout.displayedText,
       layout.chipX + chipPaddingX + chipIconSize + chipIconGap,

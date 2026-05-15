@@ -191,66 +191,81 @@ async function createCompositeImage(
   canvas.width = columns * imageWidth + (columns + 1) * effectivePadding;
   canvas.height = rows * (imageHeight + effectiveLabelHeight) + (rows + 1) * effectivePadding;
 
-  // Optimize canvas for performance
+  // Image-smoothing is intentionally function-scoped (no save/restore) — it
+  // applies to every `drawImage` in this composite, including the 16 px icon
+  // stamped by `drawScreenshotOverlay` further down, which benefits from the
+  // same smoothing. Every other state mutation below is wrapped in
+  // `save`/`restore` so blocks don't leak into each other.
   context.imageSmoothingEnabled = true;
   context.imageSmoothingQuality = 'low';
 
-  // Set background color (only if not transparent)
   const isTransparent = backgroundColor === 'transparent';
   if (!isTransparent) {
-    context.fillStyle = backgroundColor;
-    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.save();
+    try {
+      context.fillStyle = backgroundColor;
+      context.fillRect(0, 0, canvas.width, canvas.height);
+    } finally {
+      context.restore();
+    }
   }
 
-  // Set text properties (responsive font size)
-  if (showLabels) {
-    const fontSize = Math.max(12, Math.round(imageHeight * 0.06));
-    context.fillStyle = '#000000';
-    context.font = `bold ${fontSize}px Arial`;
-    context.textAlign = 'center';
-  }
-
-  // Draw images and labels in optimal grid layout
+  // Pass 1 — images. `drawImage` is stateless w.r.t. fill/stroke/text
+  // properties, so no save/restore wrapper needed.
   for (const [index, item] of images.entries()) {
     const col = index % columns;
     const row = Math.floor(index / columns);
-
     const x = effectivePadding + col * (imageWidth + effectivePadding);
     const y = effectivePadding + row * (imageHeight + effectiveLabelHeight + effectivePadding);
-
-    // Draw the scaled image
     context.drawImage(item.image, x, y, imageWidth, imageHeight);
+  }
 
-    // Draw the label below the image
-    if (showLabels) {
-      const labelX = x + imageWidth / 2;
-      const labelY = y + imageHeight + effectiveLabelHeight - 5;
-      context.fillText(item.label.toUpperCase(), labelX, labelY);
+  // Pass 2 — tile labels. State is scoped via save/restore so the divider
+  // stroke and overlay chip below see a clean context (chip needs
+  // textAlign='left' to render icon-then-text correctly).
+  if (showLabels) {
+    context.save();
+    try {
+      const fontSize = Math.max(12, Math.round(imageHeight * 0.06));
+      context.fillStyle = '#000000';
+      context.font = `bold ${fontSize}px Arial`;
+      context.textAlign = 'center';
+      context.textBaseline = 'alphabetic';
+      for (const [index, item] of images.entries()) {
+        const col = index % columns;
+        const row = Math.floor(index / columns);
+        const x = effectivePadding + col * (imageWidth + effectivePadding);
+        const y = effectivePadding + row * (imageHeight + effectiveLabelHeight + effectivePadding);
+        const labelX = x + imageWidth / 2;
+        const labelY = y + imageHeight + effectiveLabelHeight - 5;
+        context.fillText(item.label.toUpperCase(), labelX, labelY);
+      }
+    } finally {
+      context.restore();
     }
   }
 
-  // Draw divider lines based solely on showDividers setting
   if (dividerColor !== 'transparent') {
-    context.strokeStyle = dividerColor;
-    context.lineWidth = dividerWidth;
-
-    context.beginPath();
-    // Vertical dividers (between columns)
-    for (let col = 1; col < columns; col++) {
-      const dividerX = effectivePadding + col * (imageWidth + effectivePadding) - effectivePadding / 2;
-      context.moveTo(dividerX, effectivePadding);
-      context.lineTo(dividerX, canvas.height - effectivePadding);
+    context.save();
+    try {
+      context.strokeStyle = dividerColor;
+      context.lineWidth = dividerWidth;
+      context.beginPath();
+      for (let col = 1; col < columns; col++) {
+        const dividerX = effectivePadding + col * (imageWidth + effectivePadding) - effectivePadding / 2;
+        context.moveTo(dividerX, effectivePadding);
+        context.lineTo(dividerX, canvas.height - effectivePadding);
+      }
+      for (let row = 1; row < rows; row++) {
+        const dividerY =
+          effectivePadding + row * (imageHeight + effectiveLabelHeight + effectivePadding) - effectivePadding / 2;
+        context.moveTo(effectivePadding, dividerY);
+        context.lineTo(canvas.width - effectivePadding, dividerY);
+      }
+      context.stroke();
+    } finally {
+      context.restore();
     }
-
-    // Horizontal dividers (between rows)
-    for (let row = 1; row < rows; row++) {
-      const dividerY =
-        effectivePadding + row * (imageHeight + effectiveLabelHeight + effectivePadding) - effectivePadding / 2;
-      context.moveTo(effectivePadding, dividerY);
-      context.lineTo(canvas.width - effectivePadding, dividerY);
-    }
-
-    context.stroke();
   }
 
   if (overlay) {
