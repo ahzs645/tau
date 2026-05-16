@@ -47,7 +47,7 @@ export function ChatHistorySelector({
   const { status: connectionStatus, error: connectionError } = useChatRpcStatus();
   const isDisconnected = connectionStatus === 'disconnected' || connectionStatus === 'error';
 
-  const isBuildLoading = useSelector(projectRef, (state) => state.context.isLoading);
+  const isProjectLoading = useSelector(projectRef, (state) => state.context.isLoading);
   const activeChatId = useSelector(editorRef, (state) => state.context.focusedChatId) ?? '';
 
   // Derive activeChat and groupedChats from chats
@@ -94,7 +94,7 @@ export function ChatHistorySelector({
   const previousActiveChatIdRef = useRef<string | undefined>(undefined);
   if (
     activeChat &&
-    !isBuildLoading &&
+    !isProjectLoading &&
     !isChatsLoading &&
     activeChat.name === 'New chat' &&
     activeChat.messages[0] &&

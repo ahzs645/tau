@@ -202,14 +202,14 @@ export async function requestHandlePermission(handle: FileSystemDirectoryHandle)
   return result === 'granted';
 }
 
-// ============ Build Filesystem Configs ============
+// ============ Project Filesystem Configs ============
 
 /**
  * Store the filesystem backend configuration for a project.
  * This records which backend a project's files are stored in, so the correct
  * backend is used when loading the project in the future.
  */
-export async function setBuildFileSystemConfig(projectId: string, backend: FileSystemBackend): Promise<void> {
+export async function setProjectFileSystemConfig(projectId: string, backend: FileSystemBackend): Promise<void> {
   const config: ProjectFileSystemConfig = { projectId, backend };
   return withDb(
     async (db) =>

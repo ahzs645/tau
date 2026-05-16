@@ -13,7 +13,11 @@ import { messageRole, messageStatus } from '@taucad/chat/constants';
 import { projectManagerMachine } from '#hooks/project-manager.machine.js';
 import type { ObjectStoreWorker, InitialEditorState } from '#hooks/object-store.worker.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
-import { setBuildFileSystemConfig, getStoredDirectoryHandle, checkHandlePermission } from '#filesystem/handle-store.js';
+import {
+  setProjectFileSystemConfig,
+  getStoredDirectoryHandle,
+  checkHandlePermission,
+} from '#filesystem/handle-store.js';
 import { createInitialProject } from '#constants/project.constants.js';
 import { useCookie } from '#hooks/use-cookie.js';
 import { cookieName } from '#constants/cookie.constants.js';
@@ -152,11 +156,11 @@ export function ProjectManagerProvider({ children }: { readonly children: ReactN
   const getReadiedWorker = useCallback(async (): Promise<Remote<ObjectStoreWorker>> => {
     const snapshot = await waitFor(actorRef, (state) => state.matches('ready') || state.matches('error'));
     if (snapshot.matches('error')) {
-      throw new Error('Build manager worker failed to initialize');
+      throw new Error('Projct manager worker failed to initialize');
     }
 
     if (!snapshot.context.wrappedWorker) {
-      throw new Error('Build manager worker not initialized');
+      throw new Error('Projct manager worker not initialized');
     }
 
     return snapshot.context.wrappedWorker;
@@ -172,7 +176,7 @@ export function ProjectManagerProvider({ children }: { readonly children: ReactN
       let kernel: KernelProvider | undefined;
 
       if ('kernel' in options) {
-        // CreateBuildFromKernel: Generate from kernel template
+        // CreateProjectFromKernel: Generate from kernel template
         kernel = options.kernel;
         const mainFileName = getMainFile(options.kernel);
         const emptyCode = getEmptyCode(options.kernel);
@@ -184,7 +188,7 @@ export function ProjectManagerProvider({ children }: { readonly children: ReactN
         projectData = result.projectData;
         files = result.files;
       } else {
-        // CreateBuildFromData: Use provided project data and files
+        // CreateProjectFromData: Use provided project data and files
         projectData = options.project;
         files = options.files;
       }
@@ -252,7 +256,7 @@ export function ProjectManagerProvider({ children }: { readonly children: ReactN
         }
       }
 
-      await setBuildFileSystemConfig(project.id, resolvedBackend);
+      await setProjectFileSystemConfig(project.id, resolvedBackend);
 
       const projectPrefix = `/projects/${project.id}`;
       await fileManager.mount(projectPrefix, resolvedBackend, { preservePath: true });

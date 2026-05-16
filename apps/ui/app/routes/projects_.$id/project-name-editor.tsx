@@ -79,7 +79,7 @@ export function ProjectNameEditor(): React.JSX.Element {
   // Render display content based on state
   const renderDisplayContent = (value: string): React.ReactNode => {
     if (isProjectError) {
-      return 'Build not found';
+      return 'Project not found';
     }
 
     if (value === '') {
@@ -107,7 +107,7 @@ export function ProjectNameEditor(): React.JSX.Element {
           }}
         />
       </TooltipTrigger>
-      <TooltipContent>{isProjectError ? 'Build not found' : 'Edit name'}</TooltipContent>
+      <TooltipContent>{isProjectError ? 'Project not found' : 'Edit name'}</TooltipContent>
     </Tooltip>
   );
 }

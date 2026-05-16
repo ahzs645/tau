@@ -23,12 +23,13 @@ vi.mock('#hooks/use-file-manager.js', () => ({
   }),
 }));
 
-const mockSetBuildFileSystemConfig = vi.fn<(projectId: string, backend: string) => Promise<void>>();
+const mockSetProjectFileSystemConfig = vi.fn<(projectId: string, backend: string) => Promise<void>>();
 const mockGetStoredDirectoryHandle = vi.fn<() => Promise<undefined>>();
 const mockCheckHandlePermission = vi.fn<() => Promise<string>>();
 
 vi.mock('#filesystem/handle-store.js', () => ({
-  setBuildFileSystemConfig: async (...args: unknown[]) => mockSetBuildFileSystemConfig(...(args as [string, string])),
+  setProjectFileSystemConfig: async (...args: unknown[]) =>
+    mockSetProjectFileSystemConfig(...(args as [string, string])),
   getStoredDirectoryHandle: async () => mockGetStoredDirectoryHandle(),
   checkHandlePermission: async () => mockCheckHandlePermission(),
 }));
@@ -159,7 +160,7 @@ describe('useProjectManager', () => {
     mockWriteFiles.mockResolvedValue(undefined);
     mockMount.mockResolvedValue(undefined);
     mockUnmount.mockReturnValue(undefined);
-    mockSetBuildFileSystemConfig.mockResolvedValue(undefined);
+    mockSetProjectFileSystemConfig.mockResolvedValue(undefined);
     mockGetStoredDirectoryHandle.mockResolvedValue(undefined);
   });
 
@@ -237,7 +238,7 @@ describe('useProjectManager', () => {
       expect(mockMount).toHaveBeenCalledOnce();
     });
 
-    it('should still call setBuildFileSystemConfig with resolvedBackend', async () => {
+    it('should still call setProjectFileSystemConfig with resolvedBackend', async () => {
       const { result } = renderHook(() => useProjectManager(), { wrapper: createWrapper() });
 
       await act(async () => {
@@ -248,7 +249,7 @@ describe('useProjectManager', () => {
         });
       });
 
-      expect(mockSetBuildFileSystemConfig).toHaveBeenCalledWith(fakeProject.id, 'opfs');
+      expect(mockSetProjectFileSystemConfig).toHaveBeenCalledWith(fakeProject.id, 'opfs');
     });
 
     it('should mount with default indexeddb when no backend specified', async () => {
@@ -280,7 +281,7 @@ describe('useProjectManager', () => {
         });
       });
 
-      expect(mockSetBuildFileSystemConfig).toHaveBeenCalledWith(fakeProject.id, 'indexeddb');
+      expect(mockSetProjectFileSystemConfig).toHaveBeenCalledWith(fakeProject.id, 'indexeddb');
       expect(mockMount).toHaveBeenCalledWith(`/projects/${fakeProject.id}`, 'indexeddb', { preservePath: true });
     });
 
