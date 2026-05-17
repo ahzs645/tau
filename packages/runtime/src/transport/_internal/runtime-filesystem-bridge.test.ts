@@ -24,7 +24,7 @@ function makeFs(files?: Record<string, string>): RuntimeFileSystemBase {
   if (handle.kind !== 'inline') {
     throw new Error('fromMemoryFS() must return the inline-kind handle.');
   }
-  return handle.fs;
+  return handle.create();
 }
 
 /** Wrap WHATWG/Web-compatible `MessagePort`s for `@taucad/rpc` (parity with prod call sites). */
