@@ -1,26 +1,40 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 /* eslint-disable @typescript-eslint/naming-convention -- mocks mirror three.js RenderPipeline / WebGPU API spellings */
 import { render } from '@testing-library/react';
+import { act } from 'react';
 
 const hoistedMocks = vi.hoisted(() => {
-  const depthTextureNodeStub = Symbol('depthTextureNode');
-  const aoRChannelStub = Symbol('aoRChannel');
+  const depthSampleStub = { kind: 'depthSample' };
+  const composedColorStub = { kind: 'composedColor' };
+  const aoMultiplierStub = { kind: 'aoMultiplier' };
 
-  const prePassOutputTextureStub = {
-    type: 0,
+  const depthTextureNodeStub = {
+    kind: 'depthTextureNode',
+    sample: vi.fn(() => depthSampleStub),
+  };
+  const colorTextureNodeStub = {
+    kind: 'colorTextureNode',
+    mul: vi.fn(() => composedColorStub),
+  };
+  const normalTextureNodeStub = {
+    kind: 'normalTextureNode',
+    sample: vi.fn(() => ({ kind: 'normalTextureSample' })),
+  };
+  const aoTextureNodeStub = {
+    kind: 'aoTextureNode',
+    sample: vi.fn(() => ({ r: { kind: 'aoR' } })),
   };
 
+  const scenePassNormalTextureStub: { type: number } = { type: 0 };
+
   const glRenderSpy = vi.fn();
-  const sceneStub: Record<string, unknown> = {};
-  const cameraStub: Record<string, unknown> = {};
+  const sceneStub: Record<string, unknown> = { isScene: true };
+  const cameraStub: Record<string, unknown> = { isCamera: true };
+  const invalidateSpy = vi.fn();
 
   const gpuGl = {
     isWebGPURenderer: true,
     render: glRenderSpy,
-  };
-
-  const prePassTextureNodeStub = {
-    sample: vi.fn(() => Symbol('prePassColourSample')),
   };
 
   let priorityOneFrameCallback: ((_state: Record<string, unknown>, delta: number) => void) | undefined;
@@ -35,15 +49,16 @@ const hoistedMocks = vi.hoisted(() => {
     readonly gl: Record<string, unknown>;
     readonly scene: Record<string, unknown>;
     readonly camera: Record<string, unknown>;
+    readonly invalidate: () => void;
   } {
     return {
       gl: gpuGl,
       scene: sceneStub,
       camera: cameraStub,
+      invalidate: invalidateSpy,
     };
   }
 
-  /** `vi.fn` so suites can swap `gl` implementation (WebGPU vs WebGL stubs) safely. */
   const useThreeMock = vi.fn(createDefaultThreeState);
 
   const useFrameMock = (
@@ -58,58 +73,102 @@ const hoistedMocks = vi.hoisted(() => {
   const postDisposeSpy = vi.fn();
   const aoDisposeSpy = vi.fn();
 
-  const aoSampleImplementation = vi.fn(() => ({
-    r: aoRChannelStub,
-  }));
-
   const aoImplementation = vi.fn(() => ({
     radius: { value: 0 },
     thickness: { value: 0 },
     samples: { value: 0 },
     distanceFallOff: { value: 0 },
     resolutionScale: 0,
-    useTemporalFiltering: false,
-    getTextureNode: vi.fn(() => ({
-      sample: aoSampleImplementation,
-    })),
+    useTemporalFiltering: true,
+    getTextureNode: vi.fn(() => aoTextureNodeStub),
     dispose: aoDisposeSpy,
   }));
 
-  const pipelineInstances: Array<{ outputNode?: unknown }> = [];
+  /**
+   * Tracks every order-sensitive call we want to assert across the pipeline construction sequence.
+   * The composite-quad depth wire must happen *after* `RenderPipeline` construction but before the
+   * `compileAsync` warmup resolves and `pipelineRef` publishes.
+   */
+  const callOrder: string[] = [];
 
-  const unsignedByteTypeStub = 1009;
+  let compileResolve: (() => void) | undefined;
+  const compileAsyncSpy = vi.fn(
+    async (): Promise<void> =>
+      new Promise<void>((resolve) => {
+        compileResolve = (): void => {
+          callOrder.push('compileAsync.resolve');
+          resolve();
+        };
+      }),
+  );
 
-  /** Pre-pass: opaque normals (depth comes from `getTextureNode('depth')`). */
-  const prePassStub = {
-    transparent: true,
-    name: '',
-    setMRT: vi.fn(),
-    getTexture: vi.fn(() => prePassOutputTextureStub),
-    getTextureNode: vi.fn((channel?: string): unknown => {
+  const scenePassStub: {
+    setMRT: ReturnType<typeof vi.fn>;
+    getTexture: ReturnType<typeof vi.fn>;
+    getTextureNode: ReturnType<typeof vi.fn>;
+    compileAsync: typeof compileAsyncSpy;
+  } = {
+    setMRT: vi.fn(() => {
+      callOrder.push('scenePass.setMRT');
+    }),
+    getTexture: vi.fn((channel: string) => {
+      callOrder.push(`scenePass.getTexture(${channel})`);
+      if (channel === 'normal') {
+        return scenePassNormalTextureStub;
+      }
+      return { type: 0 };
+    }),
+    getTextureNode: vi.fn((channel: string) => {
+      callOrder.push(`scenePass.getTextureNode(${channel})`);
       if (channel === 'depth') {
         return depthTextureNodeStub;
       }
-
-      return prePassTextureNodeStub;
+      if (channel === 'output') {
+        return colorTextureNodeStub;
+      }
+      if (channel === 'normal') {
+        return normalTextureNodeStub;
+      }
+      return { kind: 'unknownChannel' };
     }),
+    compileAsync: compileAsyncSpy,
   };
 
-  const scenePassStub = {
-    contextNode: undefined as unknown,
-  };
-
-  const passImplementation = vi.fn((): Record<string, unknown> => {
-    return passImplementation.mock.calls.length === 1 ? prePassStub : scenePassStub;
+  const passImplementation = vi.fn((): typeof scenePassStub => {
+    callOrder.push('pass()');
+    return scenePassStub;
   });
 
-  const mrtImplementation = vi.fn();
+  const mrtImplementation = vi.fn(() => {
+    callOrder.push('mrt()');
+    return { kind: 'mrt' };
+  });
+
+  const pipelineInstances: Array<{
+    outputNode?: unknown;
+  }> = [];
+
+  const unsignedByteTypeStub = 1009;
+
+  const resolveCompile = (): void => {
+    if (compileResolve === undefined) {
+      throw new Error('compileAsync was not invoked yet');
+    }
+    compileResolve();
+  };
 
   return {
     aoDisposeSpy,
     aoImplementation,
-    aoRChannelStub,
-    aoSampleImplementation,
+    aoTextureNodeStub,
     cameraStub,
+    invalidateSpy,
+    callOrder,
+    colorTextureNodeStub,
+    composedColorStub,
+    aoMultiplierStub,
+    compileAsyncSpy,
+    depthSampleStub,
     depthTextureNodeStub,
     getPriorityOneCallback,
     glRenderSpy,
@@ -120,13 +179,16 @@ const hoistedMocks = vi.hoisted(() => {
       render: vi.fn(),
     },
     mrtImplementation,
+    normalTextureNodeStub,
     passImplementation,
     pipelineInstances,
     postDisposeSpy,
-    prePassOutputTextureStub,
-    prePassStub,
-    prePassTextureNodeStub,
+    resolveCompile,
+    resetCompileResolver: (): void => {
+      compileResolve = undefined;
+    },
     resetPriorityOneCallback,
+    scenePassNormalTextureStub,
     scenePassStub,
     sceneStub,
     unsignedByteTypeStub,
@@ -135,24 +197,26 @@ const hoistedMocks = vi.hoisted(() => {
   };
 });
 
-const builtinAOContextSpy = vi.fn((argument: unknown) => ({ kind: 'aoContext', argument }));
 const colorToDirectionSpy = vi.fn((node: unknown) => ({ kind: 'colorToDirection', node }));
 const directionToColorSpy = vi.fn((node: unknown) => ({ kind: 'directionToColor', node }));
 const sampleSpy = vi.fn((mapper: (uv: unknown) => unknown) => ({ kind: 'sample', mapper }));
+const vec3Spy = vi.fn((argument: unknown) => ({ kind: 'vec3', argument }));
+const vec4Spy = vi.fn((...arguments_: unknown[]) => ({ kind: 'vec4', arguments: arguments_ }));
 const screenUVStub = Symbol('screenUV');
-
 const normalViewStub = Symbol('normalView');
+const outputStub = Symbol('output');
 
 vi.mock('three/tsl', () => ({
-  builtinAOContext: builtinAOContextSpy,
   colorToDirection: colorToDirectionSpy,
   directionToColor: directionToColorSpy,
   mrt: hoistedMocks.mrtImplementation,
   normalView: normalViewStub,
-  output: Symbol('output'),
+  output: outputStub,
   pass: hoistedMocks.passImplementation,
   sample: sampleSpy,
   screenUV: screenUVStub,
+  vec3: vec3Spy,
+  vec4: vec4Spy,
 }));
 
 vi.mock('three/addons/tsl/display/GTAONode.js', () => ({
@@ -168,10 +232,12 @@ vi.mock('three/webgpu', () => {
 
     public constructor(renderer: { render: (...parameters: unknown[]) => void }) {
       this.renderer = renderer;
+      hoistedMocks.callOrder.push('RenderPipeline.construct');
       hoistedMocks.pipelineInstances.push(this);
     }
 
     public render(): void {
+      hoistedMocks.callOrder.push('RenderPipeline.render');
       this.renderer.render(hoistedMocks.sceneStub, hoistedMocks.cameraStub);
     }
 
@@ -203,144 +269,171 @@ vi.mock('@react-three/fiber', async (importOriginal) => {
   };
 });
 
-describe('PostProcessingWebGPU', () => {
+async function mountPostProcessing(): Promise<{
+  unmount: () => void;
+}> {
+  const { PostProcessingWebGPU } = await import('#components/geometry/graphics/three/post-processing-webgpu.js');
+  const { unmount } = render(<PostProcessingWebGPU />);
+  return { unmount };
+}
+
+describe('PostProcessingWebGPU (single MRT scenePass + compose-AO + compileAsync warmup)', () => {
   beforeEach(() => {
     hoistedMocks.resetPriorityOneCallback();
+    hoistedMocks.resetCompileResolver();
     hoistedMocks.glRenderSpy.mockClear();
     hoistedMocks.postDisposeSpy.mockClear();
     hoistedMocks.aoDisposeSpy.mockClear();
+    hoistedMocks.invalidateSpy.mockClear();
+    hoistedMocks.callOrder.length = 0;
 
     hoistedMocks.pipelineInstances.length = 0;
 
-    hoistedMocks.prePassStub.transparent = true;
-    hoistedMocks.scenePassStub.contextNode = undefined;
+    hoistedMocks.scenePassNormalTextureStub.type = 0;
+    hoistedMocks.scenePassStub.setMRT.mockClear();
+    hoistedMocks.scenePassStub.getTexture.mockClear();
+    hoistedMocks.scenePassStub.getTextureNode.mockClear();
+    hoistedMocks.scenePassStub.compileAsync.mockClear();
     hoistedMocks.passImplementation.mockClear();
-    hoistedMocks.prePassStub.setMRT.mockClear();
-    hoistedMocks.prePassStub.getTexture.mockClear();
-    hoistedMocks.prePassStub.getTextureNode.mockClear();
-    hoistedMocks.prePassTextureNodeStub.sample.mockClear();
+    hoistedMocks.normalTextureNodeStub.sample.mockClear();
+    hoistedMocks.aoTextureNodeStub.sample.mockClear();
 
-    builtinAOContextSpy.mockClear();
     colorToDirectionSpy.mockClear();
     directionToColorSpy.mockClear();
-    hoistedMocks.mrtImplementation.mockClear();
     sampleSpy.mockClear();
+    vec3Spy.mockClear();
+    vec4Spy.mockClear();
+    hoistedMocks.mrtImplementation.mockClear();
     hoistedMocks.aoImplementation.mockClear();
-    hoistedMocks.aoSampleImplementation.mockClear();
 
-    hoistedMocks.prePassOutputTextureStub.type = 0;
+    hoistedMocks.colorTextureNodeStub.mul.mockClear();
+    hoistedMocks.depthTextureNodeStub.sample.mockClear();
 
     hoistedMocks.useThreeMock.mockImplementation(hoistedMocks.createDefaultThreeState);
   });
 
-  it('pre-pass renders opaquely with MRT normals only (directionToColor, no velocity)', async () => {
-    const { PostProcessingWebGPU } = await import('#components/geometry/graphics/three/post-processing-webgpu.js');
+  it('rasterises the scene exactly once (single pass call) producing color + normal MRT outputs', async () => {
+    await mountPostProcessing();
 
-    render(<PostProcessingWebGPU />);
+    expect(hoistedMocks.passImplementation).toHaveBeenCalledTimes(1);
+    expect(hoistedMocks.passImplementation).toHaveBeenCalledWith(hoistedMocks.sceneStub, hoistedMocks.cameraStub);
 
-    expect(hoistedMocks.passImplementation).toHaveBeenCalled();
-    expect(hoistedMocks.prePassStub.transparent).toBe(false);
-
+    expect(hoistedMocks.scenePassStub.setMRT).toHaveBeenCalledTimes(1);
     expect(hoistedMocks.mrtImplementation).toHaveBeenCalledWith({
-      output: { kind: 'directionToColor', node: normalViewStub },
+      output: outputStub,
+      normal: { kind: 'directionToColor', node: normalViewStub },
     });
-
     expect(directionToColorSpy).toHaveBeenCalledWith(normalViewStub);
   });
 
-  it('sets pre-pass output texture to UnsignedByteType for packed normals', async () => {
-    const { PostProcessingWebGPU } = await import('#components/geometry/graphics/three/post-processing-webgpu.js');
+  it('packs the normal MRT attachment as UnsignedByteType for compact UNORM8 storage', async () => {
+    await mountPostProcessing();
 
-    render(<PostProcessingWebGPU />);
-
-    expect(hoistedMocks.prePassStub.getTexture).toHaveBeenCalledWith('output');
-    expect(hoistedMocks.prePassOutputTextureStub.type).toBe(hoistedMocks.unsignedByteTypeStub);
+    expect(hoistedMocks.scenePassStub.getTexture).toHaveBeenCalledWith('normal');
+    expect(hoistedMocks.scenePassNormalTextureStub.type).toBe(hoistedMocks.unsignedByteTypeStub);
   });
 
-  it('configures GTAO at half-resolution with temporal filtering from pre-pass depth + sampled normals', async () => {
-    const { PostProcessingWebGPU } = await import('#components/geometry/graphics/three/post-processing-webgpu.js');
+  it('decodes the normal MRT via sample()+colorToDirection and feeds GTAO with scenePass depth', async () => {
+    await mountPostProcessing();
 
-    render(<PostProcessingWebGPU />);
+    expect(sampleSpy).toHaveBeenCalledTimes(1);
+    const sampleResult = sampleSpy.mock.results.at(0)?.value as unknown;
 
-    const aoInstanceUnknown = hoistedMocks.aoImplementation.mock.results.at(0)?.value as
-      | {
-          readonly resolutionScale: number;
-          readonly useTemporalFiltering: boolean;
-        }
-      | undefined;
-
-    expect(aoInstanceUnknown).toBeTruthy();
-    expect(aoInstanceUnknown!.resolutionScale).toBe(0.5);
-    expect(aoInstanceUnknown!.useTemporalFiltering).toBe(true);
-
+    expect(hoistedMocks.aoImplementation).toHaveBeenCalledTimes(1);
     expect(hoistedMocks.aoImplementation).toHaveBeenCalledWith(
       hoistedMocks.depthTextureNodeStub,
-      sampleSpy.mock.results.at(0)?.value,
+      sampleResult,
       hoistedMocks.cameraStub,
     );
 
-    expect(sampleSpy).toHaveBeenCalled();
-    const firstSampleCall = sampleSpy.mock.calls[0];
-    expect(firstSampleCall).toBeDefined();
-    const [mapperUnknown] = firstSampleCall!;
-    expect(mapperUnknown).toEqual(expect.any(Function));
-    const invokeMapper = mapperUnknown as (token: symbol) => void;
-    invokeMapper(Symbol('uv'));
+    const [mapperUnknown] = sampleSpy.mock.calls[0]!;
+    const invokeMapper = mapperUnknown as (uv: unknown) => void;
+    const uvToken = Symbol('uv');
+    invokeMapper(uvToken);
 
-    expect(hoistedMocks.prePassTextureNodeStub.sample).toHaveBeenCalled();
-    expect(colorToDirectionSpy).toHaveBeenCalled();
+    expect(hoistedMocks.normalTextureNodeStub.sample).toHaveBeenCalledWith(uvToken);
+    expect(colorToDirectionSpy).toHaveBeenCalledTimes(1);
   });
 
-  it('inject AO into the lit scene pass via builtinAOContext sampled at screen UV', async () => {
-    const { PostProcessingWebGPU } = await import('#components/geometry/graphics/three/post-processing-webgpu.js');
+  it('configures GTAO at half-resolution with temporal filtering OFF and 8 samples (audit D3+D4)', async () => {
+    await mountPostProcessing();
 
-    render(<PostProcessingWebGPU />);
+    const aoInstance = hoistedMocks.aoImplementation.mock.results.at(0)?.value as
+      | {
+          readonly resolutionScale: number;
+          readonly useTemporalFiltering: boolean;
+          readonly samples: { value: number };
+        }
+      | undefined;
 
-    expect(hoistedMocks.aoSampleImplementation).toHaveBeenCalledWith(screenUVStub);
-    expect(builtinAOContextSpy).toHaveBeenCalledWith(hoistedMocks.aoRChannelStub);
-    expect(hoistedMocks.scenePassStub.contextNode).toEqual({
-      kind: 'aoContext',
-      argument: hoistedMocks.aoRChannelStub,
-    });
+    expect(aoInstance).toBeTruthy();
+    expect(aoInstance!.resolutionScale).toBe(0.5);
+    expect(aoInstance!.useTemporalFiltering).toBe(false);
+    expect(aoInstance!.samples.value).toBe(8);
   });
 
-  it('sets RenderPipeline.outputNode to the lit scenePass (no temporal AA — MSAA handles AA)', async () => {
-    const { PostProcessingWebGPU } = await import('#components/geometry/graphics/three/post-processing-webgpu.js');
+  it('composes AO multiplicatively with beauty color (compose-AO, NOT builtinAOContext)', async () => {
+    await mountPostProcessing();
 
-    render(<PostProcessingWebGPU />);
+    expect(hoistedMocks.aoTextureNodeStub.sample).toHaveBeenCalledWith(screenUVStub);
+    expect(vec3Spy).toHaveBeenCalledWith({ kind: 'aoR' });
+    expect(vec4Spy).toHaveBeenCalledWith(vec3Spy.mock.results.at(0)?.value, 1);
+    expect(hoistedMocks.colorTextureNodeStub.mul).toHaveBeenCalledWith(vec4Spy.mock.results.at(0)?.value);
 
     const pipeline = hoistedMocks.pipelineInstances.at(0);
     expect(pipeline).toBeTruthy();
-    expect(pipeline!.outputNode).toBe(hoistedMocks.scenePassStub);
+    expect(pipeline!.outputNode).toBe(hoistedMocks.composedColorStub);
   });
 
-  it('invokes RenderPipeline.render once per priority-1 frame without reassigning gl.render', async () => {
-    const renderDescriptor = Object.getOwnPropertyDescriptor(hoistedMocks.gpuGl, 'render');
-    const originalRenderFunction = hoistedMocks.gpuGl.render;
+  it('does not wire any composite-quad depthNode (canvas depth bridging owned by SceneOverlay)', async () => {
+    // Audit C2 was reverted: in three.js r184 `_quadMesh.material.depthNode` does not route to the canvas
+    // swap-chain depth attachment that priority-2 `gl.render` calls read. Canvas-depth bridging is owned by
+    // SceneOverlay's traverse + clone-swap depth pre-pass. See
+    // docs/research/webgpu-composite-quad-depth-write-non-functional.md.
+    await mountPostProcessing();
 
-    const { PostProcessingWebGPU } = await import('#components/geometry/graphics/three/post-processing-webgpu.js');
+    expect(hoistedMocks.depthTextureNodeStub.sample).not.toHaveBeenCalled();
+  });
 
-    render(<PostProcessingWebGPU />);
+  it('warms the scene pipeline via compileAsync before publishing the priority-1 render handle', async () => {
+    await mountPostProcessing();
 
-    expect(Object.getOwnPropertyDescriptor(hoistedMocks.gpuGl, 'render')).toEqual(renderDescriptor);
-    expect(hoistedMocks.gpuGl.render).toBe(originalRenderFunction);
+    expect(hoistedMocks.scenePassStub.compileAsync).toHaveBeenCalledTimes(1);
+    expect(hoistedMocks.scenePassStub.compileAsync).toHaveBeenCalledWith(hoistedMocks.gpuGl);
 
-    const frameCallback = hoistedMocks.getPriorityOneCallback();
-    expect(frameCallback).toBeTypeOf('function');
+    const frameCallbackPre = hoistedMocks.getPriorityOneCallback();
+    expect(frameCallbackPre).toBeTypeOf('function');
+    frameCallbackPre!({}, 0);
+    expect(hoistedMocks.glRenderSpy).not.toHaveBeenCalled();
 
-    hoistedMocks.glRenderSpy.mockClear();
-    frameCallback!({}, 0);
+    await act(async () => {
+      hoistedMocks.resolveCompile();
+      await Promise.resolve();
+    });
+
+    expect(hoistedMocks.invalidateSpy).toHaveBeenCalledTimes(1);
+
+    const frameCallbackPost = hoistedMocks.getPriorityOneCallback();
+    frameCallbackPost!({}, 0);
     expect(hoistedMocks.glRenderSpy).toHaveBeenCalledOnce();
+  });
 
-    hoistedMocks.glRenderSpy.mockClear();
-    frameCallback!({}, 0);
-    expect(hoistedMocks.glRenderSpy).toHaveBeenCalledOnce();
+  it('teardown before compileAsync resolves leaves pipelineRef unpublished (no render after unmount)', async () => {
+    const { unmount } = await mountPostProcessing();
+
+    unmount();
+
+    await act(async () => {
+      hoistedMocks.resolveCompile();
+      await Promise.resolve();
+    });
+
+    expect(hoistedMocks.invalidateSpy).not.toHaveBeenCalled();
+    expect(hoistedMocks.glRenderSpy).not.toHaveBeenCalled();
   });
 
   it('disposes RenderPipeline + GTAONode on unmount', async () => {
-    const { PostProcessingWebGPU } = await import('#components/geometry/graphics/three/post-processing-webgpu.js');
-
-    const { unmount } = render(<PostProcessingWebGPU />);
+    const { unmount } = await mountPostProcessing();
 
     expect(hoistedMocks.postDisposeSpy).not.toHaveBeenCalled();
     expect(hoistedMocks.aoDisposeSpy).not.toHaveBeenCalled();
@@ -356,14 +449,24 @@ describe('PostProcessingWebGPU', () => {
       gl: hoistedMocks.gpuGlFallback,
       scene: hoistedMocks.sceneStub,
       camera: hoistedMocks.cameraStub,
+      invalidate: hoistedMocks.invalidateSpy,
     }));
 
-    const { PostProcessingWebGPU } = await import('#components/geometry/graphics/three/post-processing-webgpu.js');
-
-    render(<PostProcessingWebGPU />);
+    await mountPostProcessing();
 
     expect(hoistedMocks.passImplementation).not.toHaveBeenCalled();
     expect(hoistedMocks.aoImplementation).not.toHaveBeenCalled();
+  });
+
+  it('constructs the pipeline exactly once after setting up scenePass + AO (order invariant)', async () => {
+    await mountPostProcessing();
+
+    const passIndex = hoistedMocks.callOrder.indexOf('pass()');
+    const constructIndex = hoistedMocks.callOrder.indexOf('RenderPipeline.construct');
+
+    expect(passIndex).toBeGreaterThan(-1);
+    expect(constructIndex).toBeGreaterThan(passIndex);
+    expect(hoistedMocks.pipelineInstances).toHaveLength(1);
   });
 });
 
