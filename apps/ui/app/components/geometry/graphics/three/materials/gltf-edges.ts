@@ -48,76 +48,127 @@ const defaultEdgeColor = 0x00_00_00;
 const depthBiasFactor = 0.999;
 
 /**
- * Extract positions from indexed geometry with InterleavedBufferAttribute.
+ * Module-level singleton uniform shared by every WebGL `LineMaterial` instance produced by
+ * {@link createWebGlGltfFatLineMaterial}. Lifting the uniform out of per-call allocation
+ * (combined with {@link webGlEdgeProgramCacheKey} below) lets three's `WebGLPrograms`
+ * deduplicate the compiled GLSL across viewport + screenshot renderers and across every
+ * `LineSegments2` mesh in a loaded scene — the structural perf win from
+ * `docs/research/gltf-edges-fat-line-performance.md` R7.
+ *
+ * Mutating `sharedDepthBiasUniform.value` at runtime updates every material that references it.
+ * The middleware-side merge already guarantees one `LineSegments2` per backend per scene, so
+ * this fan-out is normally a one-element fan-out — but the shared uniform also covers the
+ * screenshot-clone path (`applyEdgeMaterialsToClonedScene`) which allocates fresh materials
+ * per capture.
+ */
+const sharedDepthBiasUniform = { value: depthBiasFactor };
+
+/**
+ * Stable cache key returned from `LineMaterial.customProgramCacheKey()`. The shader source
+ * is identical across every consumer of {@link createWebGlGltfFatLineMaterial}, so a constant
+ * key collapses three's program cache to one compiled program instead of one-per-instance.
+ *
+ * Versioned (`v1`) so a future shader patch can intentionally invalidate every cached program
+ * by bumping the suffix.
+ */
+const webGlEdgeProgramCacheKey = 'tau-gltf-edge-logdepth-bias-v1';
+
+/**
+ * Disable raycast on edge meshes. Pointer events traverse the scene every move; the default
+ * `LineSegments2.raycast` runs a per-segment screen-space intersection (~150 lines of math)
+ * even when nothing in the codebase picks edges. See R5 in
+ * `docs/research/gltf-edges-fat-line-performance.md`.
+ */
+const disableRaycast = (): void => undefined;
+
+/**
+ * Extract positions from indexed geometry with InterleavedBufferAttribute, baking each
+ * referenced vertex into a pre-allocated `Float32Array`. Drops the historical `?? 0`
+ * fallback — for in-range indexed reads against a valid `InterleavedBufferAttribute`,
+ * `array[v]` is always defined and the fallback only obscured genuine corruption.
+ *
+ * @param positionAttribute - Interleaved POSITION attribute (vec3 with arbitrary stride/offset).
+ * @param indices - Vertex index buffer for the source geometry.
+ * @returns Flat `[x1, y1, z1, x2, ...]` typed-array of the referenced vertices.
  */
 function extractFromInterleavedIndexed(
   positionAttribute: InterleavedBufferAttribute,
-  indices: Iterable<number>,
-): number[] {
-  const interleavedBuffer = positionAttribute.data;
-  const { stride } = interleavedBuffer;
+  indices: Uint32Array | Uint16Array,
+): Float32Array {
+  const { stride } = positionAttribute.data;
   const { offset } = positionAttribute;
-  const { array } = interleavedBuffer;
-  const positions: number[] = [];
-
-  for (const index of indices) {
-    const vertexIndex = index * stride + offset;
-    const x = array[vertexIndex] ?? 0;
-    const y = array[vertexIndex + 1] ?? 0;
-    const z = array[vertexIndex + 2] ?? 0;
-    positions.push(x, y, z);
+  const { array } = positionAttribute.data;
+  const out = new Float32Array(indices.length * 3);
+  let writeOffset = 0;
+  // In-range typed-array reads return `number | undefined` under `noUncheckedIndexedAccess`;
+  // the `!` short-circuits widening without re-introducing the `?? 0` fallback (R3 removed
+  // it because silent zero substitution masked genuine vertex corruption).
+  for (const indexValue of indices) {
+    const base = indexValue * stride + offset;
+    out[writeOffset] = array[base]!;
+    out[writeOffset + 1] = array[base + 1]!;
+    out[writeOffset + 2] = array[base + 2]!;
+    writeOffset += 3;
   }
-
-  return positions;
+  return out;
 }
 
 /**
  * Extract positions from non-indexed geometry with InterleavedBufferAttribute.
+ *
+ * @param positionAttribute - Interleaved POSITION attribute (vec3 with arbitrary stride/offset).
+ * @returns Flat `[x1, y1, z1, x2, ...]` typed-array of the referenced vertices.
  */
-function extractFromInterleavedNonIndexed(positionAttribute: InterleavedBufferAttribute): number[] {
-  const interleavedBuffer = positionAttribute.data;
-  const { stride } = interleavedBuffer;
+function extractFromInterleavedNonIndexed(positionAttribute: InterleavedBufferAttribute): Float32Array {
+  const { stride } = positionAttribute.data;
   const { offset } = positionAttribute;
-  const { array } = interleavedBuffer;
+  const { array } = positionAttribute.data;
   const { count } = positionAttribute;
-  const positions: number[] = [];
-
-  for (let i = 0; i < count; i++) {
-    const vertexIndex = i * stride + offset;
-    const x = array[vertexIndex] ?? 0;
-    const y = array[vertexIndex + 1] ?? 0;
-    const z = array[vertexIndex + 2] ?? 0;
-    positions.push(x, y, z);
+  const out = new Float32Array(count * 3);
+  let writeOffset = 0;
+  for (let vertex = 0; vertex < count; vertex++) {
+    const base = vertex * stride + offset;
+    out[writeOffset] = array[base]!;
+    out[writeOffset + 1] = array[base + 1]!;
+    out[writeOffset + 2] = array[base + 2]!;
+    writeOffset += 3;
   }
-
-  return positions;
+  return out;
 }
 
 /**
  * Extract positions from indexed geometry with regular BufferAttribute.
+ *
+ * @param array - Tightly-packed `[x, y, z, x, y, z, ...]` POSITION storage.
+ * @param indices - Vertex index buffer for the source geometry.
+ * @returns Flat `[x1, y1, z1, x2, ...]` typed-array of the referenced vertices.
  */
-function extractFromRegularIndexed(array: Float32Array, indices: Iterable<number>): number[] {
-  const positions: number[] = [];
-
-  for (const index of indices) {
-    const vertexIndex = index * 3;
-    const x = array[vertexIndex] ?? 0;
-    const y = array[vertexIndex + 1] ?? 0;
-    const z = array[vertexIndex + 2] ?? 0;
-    positions.push(x, y, z);
+function extractFromRegularIndexed(array: Float32Array, indices: Uint32Array | Uint16Array): Float32Array {
+  const out = new Float32Array(indices.length * 3);
+  let writeOffset = 0;
+  for (const indexValue of indices) {
+    const base = indexValue * 3;
+    out[writeOffset] = array[base]!;
+    out[writeOffset + 1] = array[base + 1]!;
+    out[writeOffset + 2] = array[base + 2]!;
+    writeOffset += 3;
   }
-
-  return positions;
+  return out;
 }
 
 /**
  * Extract positions from a LineSegments geometry, handling both regular and interleaved buffers.
- * Expands indexed geometry to non-indexed positions as required by LineSegmentsGeometry.
+ * Returns a freshly-allocated `Float32Array` ready to be passed to `LineSegmentsGeometry.setPositions`
+ * (which itself wraps the array in an `InstancedInterleavedBuffer` without re-copying).
+ *
+ * Pre-allocates the exact final length and uses indexed loops to avoid the historical
+ * `number[]`-then-spread allocation cliff documented in `docs/research/gltf-edges-fat-line-performance.md`
+ * Finding 3.
  *
  * @param lineSegments - The LineSegments object to extract positions from
- * @returns Array of position values [x1, y1, z1, x2, y2, z2, ...] or undefined if extraction fails
+ * @returns Float32Array of position values [x1, y1, z1, x2, y2, z2, ...] or undefined if extraction fails
  */
-function extractPositions(lineSegments: LineSegments): number[] | undefined {
+function extractPositions(lineSegments: LineSegments): Float32Array | undefined {
   const { geometry } = lineSegments;
   const positionAttribute = geometry.attributes['position'];
 
@@ -127,25 +178,25 @@ function extractPositions(lineSegments: LineSegments): number[] | undefined {
   }
 
   const indexAttribute = geometry.index;
+  const indices = indexAttribute?.array as Uint32Array | Uint16Array | undefined;
 
-  // Handle InterleavedBufferAttribute (GLTFLoader optimization)
   if (positionAttribute instanceof InterleavedBufferAttribute) {
-    if (indexAttribute) {
-      return extractFromInterleavedIndexed(positionAttribute, indexAttribute.array);
+    if (indices) {
+      return extractFromInterleavedIndexed(positionAttribute, indices);
     }
-
     return extractFromInterleavedNonIndexed(positionAttribute);
   }
 
-  // Regular BufferAttribute
   const array = positionAttribute.array as Float32Array;
 
-  if (indexAttribute) {
-    return extractFromRegularIndexed(array, indexAttribute.array);
+  if (indices) {
+    return extractFromRegularIndexed(array, indices);
   }
 
-  // Non-indexed regular buffer - copy directly
-  return [...array];
+  // Non-indexed regular buffer — clone into a fresh Float32Array so downstream mutation
+  // can never alias the GLTF loader's internal buffer. `new Float32Array(array)` copies
+  // typed-array → typed-array in one allocation (no number[] roundtrip).
+  return new Float32Array(array);
 }
 
 /**
@@ -160,6 +211,13 @@ function extractPositions(lineSegments: LineSegments): number[] | undefined {
  * unsafe (the shared `'dispose'` listeners purge pipeline state on every renderer using
  * the material). See `docs/research/screenshot-viewport-shared-material-state-bleed.md`.
  *
+ * Performance shape (R7): the `depthBias` uniform is the module-level
+ * {@link sharedDepthBiasUniform} singleton and `customProgramCacheKey` returns the stable
+ * {@link webGlEdgeProgramCacheKey} string, so three's `WebGLPrograms` deduplicates the
+ * compiled GLSL program across every consumer in the same renderer. The previous shape
+ * minted one program-cache slot per `LineMaterial` instance because three's default
+ * `customProgramCacheKey` derived from the material identity rather than the shader text.
+ *
  * @param resolution - The viewport resolution for line width calculation.
  * @returns A configured LineMaterial with FOV-adaptive depth bias (perspective only).
  */
@@ -167,15 +225,12 @@ export function createWebGlGltfFatLineMaterial(resolution: Vector2): LineMateria
   const material = new LineMaterial({
     color: defaultEdgeColor,
     linewidth: defaultLineWidth,
-    worldUnits: false, // Screen-space pixels
+    worldUnits: false,
     resolution: resolution.clone(),
-    // Keep depth test enabled for proper occlusion
   });
 
-  const depthBiasUniform = { value: depthBiasFactor };
-
   material.onBeforeCompile = (shader) => {
-    shader.uniforms['depthBias'] = depthBiasUniform;
+    shader.uniforms['depthBias'] = sharedDepthBiasUniform;
 
     shader.vertexShader = shader.vertexShader.replace(
       '#include <logdepthbuf_pars_vertex>',
@@ -196,118 +251,16 @@ export function createWebGlGltfFatLineMaterial(resolution: Vector2): LineMateria
     );
   };
 
-  // Store reference to uniform for runtime updates
-  // To adjust: material.userData['depthBiasUniform'].value = 0.995;
-  material.userData['depthBiasUniform'] = depthBiasUniform;
+  // Stable cache key so three's WebGLPrograms collapses identical-shader materials into a
+  // single compiled program. Without this override the program cache treats each
+  // `onBeforeCompile`-bearing material as a distinct program (`docs/research/gltf-edges-fat-line-performance.md`
+  // Finding 7).
+  material.customProgramCacheKey = () => webGlEdgeProgramCacheKey;
+
+  // Public alias preserved for callers that bumped the bias at runtime via userData.
+  material.userData['depthBiasUniform'] = sharedDepthBiasUniform;
 
   return material;
-}
-
-/**
- * Convert a LineSegments object to fat line segments for the active Three.js backend.
- *
- * @param lineSegments - The LineSegments object to convert
- * @param resolution - The viewport resolution for line width calculation
- * @param backend - WebGL retains custom log-depth tuned LineMaterial; WebGPU uses {@link Line2NodeMaterial}.
- */
-function convertToFatLineSegments2(
-  lineSegments: LineSegments,
-  resolution: Vector2,
-  backend: ResolvedGraphicsBackend,
-): Object3D | undefined {
-  const positions = extractPositions(lineSegments);
-
-  if (!positions || positions.length === 0) {
-    console.warn('[FatLines] Failed to extract positions from LineSegments');
-    return undefined;
-  }
-
-  const geometry = new LineSegmentsGeometry();
-  geometry.setPositions(positions);
-
-  if (backend === 'webgpu') {
-    const material = createWebGpuGltfFatLineMaterial();
-
-    const lineSegments2 = new WebGpuFatLineSegments2(geometry, material);
-
-    lineSegments2.position.copy(lineSegments.position);
-    lineSegments2.rotation.copy(lineSegments.rotation);
-    lineSegments2.scale.copy(lineSegments.scale);
-    lineSegments2.quaternion.copy(lineSegments.quaternion);
-
-    lineSegments2.name = lineSegments.name;
-    lineSegments2.userData = { ...lineSegments.userData };
-
-    lineSegments2.renderOrder = 1;
-
-    return lineSegments2;
-  }
-
-  const material = createWebGlGltfFatLineMaterial(resolution);
-
-  const lineSegments2 = new LineSegments2(geometry, material);
-
-  lineSegments2.position.copy(lineSegments.position);
-  lineSegments2.rotation.copy(lineSegments.rotation);
-  lineSegments2.scale.copy(lineSegments.scale);
-  lineSegments2.quaternion.copy(lineSegments.quaternion);
-
-  lineSegments2.name = lineSegments.name;
-  lineSegments2.userData = { ...lineSegments.userData };
-
-  lineSegments2.renderOrder = 1;
-
-  return lineSegments2;
-}
-
-/**
- * Apply fat line segments to a GLTF scene by converting LineSegments to LineSegments2.
- *
- * This function traverses the GLTF scene, finds all LineSegments objects (created by
- * the edge detection middleware), and converts them to LineSegments2 for fat line
- * rendering with constant screen-space width.
- *
- * @param gltf - The GLTF scene to process
- * @param resolution - The viewport resolution for line width calculation
- * @param backend - Active rendering backend for the host viewer
- */
-export function applyFatLineSegments(gltf: GLTF, resolution: Vector2, backend: ResolvedGraphicsBackend): void {
-  // Collect LineSegments for replacement (avoid modifying during traversal)
-  const replacements: Array<{
-    parent: Group;
-    oldChild: LineSegments;
-    newChild: Object3D;
-  }> = [];
-
-  gltf.scene.traverse((object) => {
-    if (object.type === 'LineSegments') {
-      const lineSegments = object as LineSegments;
-      const parent = lineSegments.parent as Group | undefined;
-
-      if (parent) {
-        const lineSegments2 = convertToFatLineSegments2(lineSegments, resolution, backend);
-        if (lineSegments2) {
-          replacements.push({ parent, oldChild: lineSegments, newChild: lineSegments2 });
-        }
-      }
-    }
-  });
-
-  // Perform replacements
-  for (const { parent, oldChild, newChild } of replacements) {
-    parent.remove(oldChild);
-    parent.add(newChild);
-
-    // Dispose old geometry and material
-    oldChild.geometry.dispose();
-    if (Array.isArray(oldChild.material)) {
-      for (const material of oldChild.material) {
-        material.dispose();
-      }
-    } else {
-      oldChild.material.dispose();
-    }
-  }
 }
 
 /**
@@ -342,6 +295,111 @@ export function createWebGpuGltfFatLineMaterial(): Line2NodeMaterial {
   return material;
 }
 
+/**
+ * Wrap a single source `LineSegments` (the kernel-side merged edges primitive) into one
+ * `LineSegments2` for the active backend, sharing a pre-built material so multiple sources
+ * — when the middleware skips merging — still produce a single pipeline.
+ */
+function wrapAsFatLineSegments(
+  lineSegments: LineSegments,
+  material: Line2NodeMaterial | LineMaterial,
+  backend: ResolvedGraphicsBackend,
+): Object3D | undefined {
+  const positions = extractPositions(lineSegments);
+
+  if (!positions || positions.length === 0) {
+    console.warn('[FatLines] Failed to extract positions from LineSegments');
+    return undefined;
+  }
+
+  const geometry = new LineSegmentsGeometry();
+  geometry.setPositions(positions);
+
+  // The backend-specific mesh classes accept different material types at the type level
+  // (`Line2NodeMaterial` vs `LineMaterial`) but both satisfy each other's runtime contract.
+  // Cast at the constructor call site so the assignment is local rather than function-wide.
+  const fatLine =
+    backend === 'webgpu'
+      ? new WebGpuFatLineSegments2(geometry, material as Line2NodeMaterial)
+      : new LineSegments2(geometry, material as LineMaterial);
+
+  fatLine.position.copy(lineSegments.position);
+  fatLine.rotation.copy(lineSegments.rotation);
+  fatLine.scale.copy(lineSegments.scale);
+  fatLine.quaternion.copy(lineSegments.quaternion);
+
+  fatLine.name = lineSegments.name;
+  fatLine.userData = { ...lineSegments.userData };
+
+  // R5: edge meshes are render-only overlays; skip the expensive per-segment screen-space
+  // raycast that R3F's pointermove handler would otherwise invoke on every mouse move.
+  fatLine.raycast = disableRaycast;
+
+  // R8: do not pin `renderOrder = 1`. The explicit `depthBias` on both backends already
+  // wins the coplanar comparison; sorting edges into a separate bucket only loses cache
+  // locality against the surfaces they overlay.
+
+  return fatLine;
+}
+
+/**
+ * Apply fat line segments to a GLTF scene by converting each `LineSegments` to a single
+ * shared-material `LineSegments2`.
+ *
+ * The kernel-side `gltfEdgeDetectionMiddleware` (via `mergeGltfLineSegments`) consolidates
+ * every LINES primitive into a single `tau-merged-edges` mesh before the bytes leave the
+ * runtime, so under normal operation this function finds exactly one source `LineSegments`
+ * and produces exactly one `LineSegments2` + one shared material + one render pipeline.
+ *
+ * The implementation remains tolerant of multiple source `LineSegments` (test fixtures or
+ * future kernels that bypass the merge): all sources share a single allocated material so
+ * the R1 perf win (one pipeline) holds even when R2 (one draw call) does not.
+ *
+ * @param gltf - The GLTF scene to process
+ * @param resolution - The viewport resolution for line width calculation
+ * @param backend - Active rendering backend for the host viewer
+ */
+export function applyFatLineSegments(gltf: GLTF, resolution: Vector2, backend: ResolvedGraphicsBackend): void {
+  const sources: Array<{ parent: Group; lineSegments: LineSegments }> = [];
+
+  gltf.scene.traverse((object) => {
+    if (object.type === 'LineSegments') {
+      const lineSegments = object as LineSegments;
+      const parent = lineSegments.parent as Group | undefined;
+      if (parent) {
+        sources.push({ parent, lineSegments });
+      }
+    }
+  });
+
+  if (sources.length === 0) {
+    return;
+  }
+
+  // Single material instance shared across every wrapped fat line — the R1 perf win.
+  const sharedMaterial: Line2NodeMaterial | LineMaterial =
+    backend === 'webgpu' ? createWebGpuGltfFatLineMaterial() : createWebGlGltfFatLineMaterial(resolution);
+
+  for (const { parent, lineSegments } of sources) {
+    const fatLine = wrapAsFatLineSegments(lineSegments, sharedMaterial, backend);
+    if (!fatLine) {
+      continue;
+    }
+
+    parent.remove(lineSegments);
+    parent.add(fatLine);
+
+    lineSegments.geometry.dispose();
+    if (Array.isArray(lineSegments.material)) {
+      for (const material of lineSegments.material) {
+        material.dispose();
+      }
+    } else {
+      lineSegments.material.dispose();
+    }
+  }
+}
+
 type ApplyEdgeMaterialsToClonedSceneOptions = Readonly<{
   backend: ResolvedGraphicsBackend;
   /** Required for the WebGL `LineMaterial` `resolution` uniform; ignored on WebGPU. */
@@ -366,6 +424,10 @@ type ApplyEdgeMaterialsToClonedSceneOptions = Readonly<{
  * existing fresh-allocation pattern for surface meshes, this closes the captured-output
  * graininess gap (Symptom B in
  * `docs/research/screenshot-viewport-shared-material-state-bleed.md`).
+ *
+ * Since the kernel-side merge collapses every LINES primitive into a single `LineSegments2`
+ * per scene, this function now typically allocates exactly one material per capture (rather
+ * than one-per-source-primitive as it did before the merge landed).
  *
  * @returns The set of newly-allocated edge materials owned by this clone pass.
  */

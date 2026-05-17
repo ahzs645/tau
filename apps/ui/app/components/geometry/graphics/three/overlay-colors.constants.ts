@@ -2,16 +2,22 @@
  * Single tuning source for 3D viewport overlay tints (infinite grid + axes helper).
  *
  * Values are calibrated to render visibly across **both** WebGL (gamma-space canvas blend)
- * and WebGPU (linear-space framebuffer blend, sRGB-encoded at composite). A residual
- * ~10-15 sRGB/channel divergence is accepted as a known limitation: eliminating it would
- * require routing the overlay scene through a shared post-processing render target so the
- * canvas composite happens in the same color space on both backends. See the
- * `Color & Blending Parity` section in `docs/policy/graphics-backend-policy.md`.
+ * and WebGPU. Per-surface blend math now differs:
+ *
+ * - **Axes** (transparent `Line2NodeMaterial`) blend in **gamma space** on both backends —
+ *   WebGPU routes through the in-shader `sRGBTransferOETF`/`sRGBTransferEOTF` wrap
+ *   (graphics-backend-policy `CB-4`) so saturated axis tints reach perceptual parity with
+ *   WebGL's sRGB-encoded framebuffer blend.
+ * - **Grid** (`infinite-grid-material.node.ts`) still blends in **linear space** on WebGPU
+ *   and **gamma space** on WebGL — the residual ~10-15 sRGB/channel divergence captured
+ *   by `CB-3` applies to grid lines specifically. Eliminating it requires routing the
+ *   overlay scene through a shared post-processing render target (deferred).
  *
  * **Tuning rules** (do not break without policy review):
  * 1. Tune visually against `/e2e/graphics-backend` with both backends side-by-side.
  * 2. Never re-pin to a known-broken backend baseline (e.g. pre-`<colorspace_fragment>`
- *    WebGL output). Pinning to a bug freezes the bug into the design contract.
+ *    WebGL output, or the pre-`CB-4` WebGPU linear-blend over-saturation). Pinning to a
+ *    bug freezes the bug into the design contract.
  * 3. Both backends must remain visibly above the threshold of perception in light AND
  *    dark mode — the prior `0xA6_A6_A6` light-mode value rendered nearly invisibly under
  *    WebGPU's linear blend.
@@ -56,13 +62,21 @@ export const axesHelperColors = {
 /**
  * Default opacity for {@link AxesHelper} axis lines.
  *
- * Both backends must honor this via `transparent: true` on the underlying material. The
- * drei `<Line>` WebGL path previously omitted the flag, causing `material.transparent` to
- * default to `false`; `THREE.WebGLRenderer` then skipped `gl.BLEND` and wrote the opaque
- * source color straight to the framebuffer, so opacity was silently dropped. WebGPU's
- * `Line2NodeMaterial` always set `transparent: true`, so it correctly blended at alpha 0.6
- * — and the dark axis tints muted into the background, reading as "darker" against the
- * full-saturation WebGL output. Setting `transparent: true` on the WebGL `<Line>` aligns
- * both backends on the same blended look.
+ * Both backends must honor this via `transparent: true` on the underlying material:
+ *
+ * - **WebGL** — `Line` (drei) / `LineMaterial` (gizmo cube) must set `transparent: true`
+ *   so `THREE.WebGLRenderer` enables `gl.BLEND` and the sRGB framebuffer carries the
+ *   gamma-space blend. Skipping the flag silently drops `opacity` and writes the opaque
+ *   source color straight to the framebuffer (CB-1).
+ * - **WebGPU** — Tau's `Line2NodeMaterial` (see
+ *   `apps/ui/app/components/geometry/graphics/three/materials/line2.material.ts`) sets
+ *   `transparent: true` explicitly and performs the alpha mix in **sRGB space** inside the
+ *   shader (CB-4 in-shader OETF/EOTF wrap), reaching perceptual parity with the WebGL
+ *   gamma-space framebuffer blend even for fully saturated axis tints against dark
+ *   backgrounds (the prior linear-space blend produced visibly over-saturated lines).
+ *
+ * Routing every viewport line through Tau's `Line2NodeMaterial` (not the stock
+ * `three/webgpu` class) is what closes the seam — both the scene `AxesHelper` and the
+ * gizmo cube axes import it from the same module.
  */
 export const axesHelperOpacity = 0.6;

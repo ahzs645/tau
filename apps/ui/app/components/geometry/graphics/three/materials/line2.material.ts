@@ -31,18 +31,56 @@ import {
   positionGeometry,
   positionView,
   screenDPR,
+  screenUV,
   smoothstep,
+  sRGBTransferEOTF,
+  sRGBTransferOETF,
   uv,
   vec2,
   vec3,
   vec4,
   varyingProperty,
   viewport,
-  viewportOpaqueMipTexture,
+  viewportTexture,
   viewZToLogarithmicDepth,
   viewZToPerspectiveDepth,
   viewZToReversedPerspectiveDepth,
 } from 'three/tsl';
+
+/**
+ * Tau-owned non-mip viewport texture singleton for the CB-4 gamma-space blend below
+ * (Divergence 4). Mirrors the structure of three.js's stock
+ * `viewportOpaqueMipTexture` (`node_modules/three/src/nodes/display/ViewportTextureNode.js`
+ * line 242) but swaps the underlying `viewportMipTexture()` (`generateMipmaps: true`) for
+ * `viewportTexture()` (`generateMipmaps: false`).
+ *
+ * The CB-4 blend samples at level 0 (no explicit `level` argument), so the entire mip
+ * pyramid that the upstream singleton regenerates every frame is pure waste — each
+ * `WebGPUBackend.copyFramebufferToTexture` call performs a pass split and a `Load`
+ * restart around the mid-frame `generateMipmaps`, then runs ~10 blit passes at 1080p to
+ * fill levels we never read. A non-mip singleton skips the entire chain for identical
+ * sampled colour at level 0. See `docs/research/webgpu-axes-hover-pipeline-stall.md`
+ * (Performance section) for the measurement.
+ *
+ * The singleton wrapper is essential: every `Line2NodeMaterial` instance — three scene
+ * axes × two halves each (six meshes), plus gizmo cube axes, plus any future fat-line
+ * consumer — shares a single framebuffer copy per render rather than each allocating
+ * its own. Calling `.sample(uv, level)` on the singleton produces a derived sample node
+ * for each call site without duplicating the underlying framebuffer texture.
+ */
+// oxlint-disable-next-line @typescript-eslint/no-unsafe-call -- nodeProxy factory returns a loosely-typed Node singleton
+const tauOpaqueViewportTextureSingleton = viewportTexture();
+
+/**
+ * Public sample factory that mirrors the upstream `viewportOpaqueMipTexture(uv, level)`
+ * signature so call sites and tests reference the Tau singleton identically.
+ *
+ * Defaults `uv` to `screenUV` (matching the upstream default) and `level` to `null`
+ * (the only level the CB-4 blend ever samples).
+ */
+export const tauOpaqueViewportTexture = (uv: typeof screenUV = screenUV, level: unknown = null): unknown =>
+  // oxlint-disable-next-line @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access -- TSL `.sample(uv, level)` returns a loosely-typed Node
+  (tauOpaqueViewportTextureSingleton as { sample: (uv: unknown, level: unknown) => unknown }).sample(uv, level);
 
 /**
  * Fat-line node material for overlays on the WebGPU viewport (`reversedDepthBuffer: true`).
@@ -90,10 +128,34 @@ import {
  * the {@link depthBias} field (default `1.0` = no bias) so the gltf-edges factory can pull
  * the line forward in view-space without re-implementing the dispatch.
  *
+ * **Divergence 4 — gamma-space alpha blend for backend parity.** The transparent-branch
+ * `outputNode` below performs an explicit manual composition against the Tau-owned
+ * non-mip viewport singleton {@link tauOpaqueViewportTexture} rather than letting the
+ * standard GPU blender mix on the WebGPU `LinearSRGBColorSpace` `frameBufferTarget`.
+ * Doing that mix on linear-float texels (WebGPU's `rgba16f` `frameBufferTarget`, see
+ * `graphics-backend-policy.md` S6/S7) produces visibly over-saturated overlay colors
+ * compared to WebGL, which blends in gamma space (either on the sRGB-encoded canvas
+ * drawing buffer or via browser CSS composite of the alpha channel). For saturated
+ * overlay tints at `α = 0.6` over a dark CAD background the per-channel divergence is
+ * >40 sRGB units — substantially larger than the ~10-15 unit residual that the policy's
+ * CB-3 entry quotes. We close the seam for line materials by transferring both operands
+ * into sRGB space via `sRGBTransferOETF`, mixing, and converting the result back to
+ * working color space with `sRGBTransferEOTF` before assigning `outputNode.rgb`. The
+ * grid material still blends in linear space and remains the only overlay surface on
+ * the deferred CB-3 path until a similar treatment lands there.
+ *
+ * The viewport sample uses {@link tauOpaqueViewportTexture} (a non-mip singleton over
+ * `viewportTexture()`) rather than upstream `viewportOpaqueMipTexture` because the
+ * blend samples at level 0 and the mip pyramid is pure waste — see the singleton
+ * definition above and `docs/research/webgpu-axes-hover-pipeline-stall.md` for the
+ * perf measurement.
+ *
  * @see `docs/policy/webgpu-rendering-pipeline.md`
+ * @see `docs/policy/graphics-backend-policy.md` (CB-3 / S7)
  * @see `docs/research/webgpu-line2-reversed-z-trim.md`
  * @see `docs/research/webgpu-fat-line-hardware-clipping-bug.md`
  * @see `docs/research/webgpu-fat-line-renderer-aware-depth.md`
+ * @see `docs/research/webgpu-axes-srgb-blend-parity.md`
  */
 export class Line2NodeMaterial extends ThreeLine2NodeMaterial {
   /** @inheritdoc */
@@ -418,10 +480,18 @@ export class Line2NodeMaterial extends ThreeLine2NodeMaterial {
     if (self.transparent) {
       const opacityNode = self.opacityNode ? float(self.opacityNode) : materialOpacity;
 
-      self.outputNode = vec4(
-        self.colorNode.rgb.mul(opacityNode).add(viewportOpaqueMipTexture().rgb.mul(opacityNode.oneMinus())),
-        self.colorNode.a,
-      );
+      // Divergence 4: perform the line-vs-background alpha mix in sRGB (gamma) space
+      // so saturated overlay tints match WebGL's gamma-space framebuffer blend instead
+      // of the raw linear-RGB blend that the WebGPU `frameBufferTarget` (rgba16f,
+      // `LinearSRGBColorSpace`) would otherwise produce. Source for the viewport is the
+      // Tau-owned non-mip singleton (see `tauOpaqueViewportTexture` above) — the mip
+      // chain that upstream `viewportOpaqueMipTexture` generates every frame is never
+      // read by this blend.
+      const colorSrgb = sRGBTransferOETF(self.colorNode.rgb);
+      const viewportSrgb = sRGBTransferOETF(tauOpaqueViewportTexture().rgb);
+      const blendedSrgb = colorSrgb.mul(opacityNode).add(viewportSrgb.mul(opacityNode.oneMinus()));
+
+      self.outputNode = vec4(sRGBTransferEOTF(blendedSrgb), self.colorNode.a);
     }
 
     // Skip `ThreeLine2NodeMaterial.setup` (which would rebuild `vertexNode`/`colorNode`/`outputNode`
