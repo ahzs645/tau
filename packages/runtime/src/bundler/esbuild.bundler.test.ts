@@ -53,6 +53,7 @@ type CapturedResolveHandler = (args: OnResolveArguments) => Promise<unknown>;
 type CapturedHandlers = {
   httpUrlOnLoad: CapturedHandler;
   mainOnResolve: CapturedResolveHandler;
+  vfsOnLoad: CapturedHandler;
 };
 
 /**
@@ -62,6 +63,7 @@ type CapturedHandlers = {
 function capturePluginHandlers(filesystem: MockFileSystem): CapturedHandlers {
   let httpUrlOnLoad: CapturedHandler | undefined;
   let mainOnResolve: CapturedResolveHandler | undefined;
+  let vfsOnLoad: CapturedHandler | undefined;
 
   const mockBuild = {
     onResolve: vi
@@ -74,6 +76,8 @@ function capturePluginHandlers(filesystem: MockFileSystem): CapturedHandlers {
     onLoad: vi.fn().mockImplementation((options: { namespace?: string }, callback: CapturedHandler) => {
       if (options.namespace === esbuildNamespace.httpUrl) {
         httpUrlOnLoad = callback;
+      } else if (options.namespace === esbuildNamespace.vfs) {
+        vfsOnLoad = callback;
       }
     }),
     onStart: vi.fn(),
@@ -103,7 +107,11 @@ function capturePluginHandlers(filesystem: MockFileSystem): CapturedHandlers {
     throw new Error('main onResolve handler was not registered');
   }
 
-  return { httpUrlOnLoad, mainOnResolve };
+  if (!vfsOnLoad) {
+    throw new Error('vfs onLoad handler was not registered');
+  }
+
+  return { httpUrlOnLoad, mainOnResolve, vfsOnLoad };
 }
 
 // =============================================================================
@@ -754,3 +762,222 @@ describe('ESBuild Bundler – unresolved path tracking', () => {
     });
   });
 });
+
+// =============================================================================
+// Query Suffix + Import Attribute Handling
+// =============================================================================
+
+describe('ESBuild Bundler – query suffix + import attribute handling', () => {
+  let filesystem: MockFileSystem;
+  let mainOnResolve: CapturedResolveHandler;
+  let vfsOnLoad: CapturedHandler;
+
+  beforeEach(() => {
+    filesystem = createMockFileSystem();
+    const handlers = capturePluginHandlers(filesystem);
+    mainOnResolve = handlers.mainOnResolve;
+    vfsOnLoad = handlers.vfsOnLoad;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // ===========================================================================
+  // onResolve: query suffix is round-tripped through OnResolveResult.suffix
+  // ===========================================================================
+
+  describe('onResolve query-suffix round-trip', () => {
+    it.each([
+      ['?raw', './lib/cube.step?raw', 'lib/cube.step'],
+      ['?text', './lib/cube.step?text', 'lib/cube.step'],
+      ['?binary', './lib/data.bin?binary', 'lib/data.bin'],
+      ['?base64', './lib/data.bin?base64', 'lib/data.bin'],
+      ['?dataurl', './lib/icon.png?dataurl', 'lib/icon.png'],
+      ['?file', './lib/big.bin?file', 'lib/big.bin'],
+    ])(
+      'should strip %s and round-trip it via OnResolveResult.suffix',
+      async (expectedSuffix, importPath, expectedPath) => {
+        filesystem.mocks.exists.mockResolvedValue(true);
+
+        const result = (await mainOnResolve({
+          path: importPath,
+          importer: 'main.ts',
+          namespace: esbuildNamespace.vfs,
+          kind: 'import-statement',
+          resolveDir: '/project',
+          suffix: '',
+          pluginData: undefined,
+          with: {},
+        })) as { path: string; namespace: string; suffix: string };
+
+        expect(result.path).toBe(expectedPath);
+        expect(result.namespace).toBe(esbuildNamespace.vfs);
+        expect(result.suffix).toBe(expectedSuffix);
+      },
+    );
+
+    it('should leave imports without a recognised query untouched (no suffix field)', async () => {
+      filesystem.mocks.exists.mockImplementation(async (path: string) => path === '/project/lib/utils.ts');
+
+      const result = (await mainOnResolve({
+        path: './lib/utils.ts',
+        importer: 'main.ts',
+        namespace: esbuildNamespace.vfs,
+        kind: 'import-statement',
+        resolveDir: '/project',
+        suffix: '',
+        pluginData: undefined,
+        with: {},
+      })) as { path: string; namespace: string; suffix?: string };
+
+      expect(result.path).toBe('lib/utils.ts');
+      expect(result.namespace).toBe(esbuildNamespace.vfs);
+      expect(result.suffix).toBeUndefined();
+    });
+
+    it('should leave unrecognised query strings untouched so unrelated suffixes flow through unchanged', async () => {
+      filesystem.mocks.exists.mockResolvedValue(false);
+
+      const result = (await mainOnResolve({
+        path: './lib/foo.bin?weird',
+        importer: 'main.ts',
+        namespace: esbuildNamespace.vfs,
+        kind: 'import-statement',
+        resolveDir: '/project',
+        suffix: '',
+        pluginData: undefined,
+        with: {},
+      })) as { path: string; namespace: string; suffix?: string };
+
+      expect(result.suffix).toBeUndefined();
+      expect(result.path).toContain('foo.bin?weird');
+    });
+  });
+
+  // ===========================================================================
+  // onLoad: Vite-style query suffix dispatches to esbuild's built-in loaders
+  // ===========================================================================
+
+  describe('onLoad query-suffix dispatch', () => {
+    it.each([
+      ['?raw', 'text'],
+      ['?text', 'text'],
+      ['?binary', 'binary'],
+      ['?base64', 'base64'],
+      ['?dataurl', 'dataurl'],
+      ['?file', 'file'],
+    ])('should map %s to esbuild loader %s and pass raw bytes through', async (suffix, expectedLoader) => {
+      const bytes = new TextEncoder().encode('ISO-10303-21;\n');
+      filesystem.mocks.readFile.mockResolvedValue(bytes);
+
+      const result = (await vfsOnLoad({
+        path: 'lib/cube.step',
+        namespace: esbuildNamespace.vfs,
+        suffix,
+        pluginData: undefined,
+        with: {},
+      })) as { contents: Uint8Array<ArrayBuffer>; loader: string };
+
+      expect(result.loader).toBe(expectedLoader);
+      expect(result.contents).toBeInstanceOf(Uint8Array);
+      expect(result.contents).toEqual(bytes);
+      // Confirms we read raw bytes (no 'utf8' arg) so esbuild's loader handles decoding.
+      const readArgs = filesystem.mocks.readFile.mock.calls[0]!;
+      expect(readArgs[0]).toBe('/project/lib/cube.step');
+      expect(readArgs[1]).toBeUndefined();
+    });
+
+    it('should fall through to the default loader when no suffix or attribute is present', async () => {
+      filesystem.mocks.readFile.mockResolvedValue('export const x = 1;');
+
+      const result = (await vfsOnLoad({
+        path: 'lib/utils.ts',
+        namespace: esbuildNamespace.vfs,
+        suffix: '',
+        pluginData: undefined,
+        with: {},
+      })) as { contents: string; loader: string };
+
+      expect(result.loader).toBe('ts');
+      expect(typeof result.contents).toBe('string');
+      expect(filesystem.mocks.readFile).toHaveBeenCalledWith('/project/lib/utils.ts', 'utf8');
+    });
+  });
+
+  // ===========================================================================
+  // onLoad: TC39 import attributes (`with { type: 'text' | 'bytes' }`)
+  // ===========================================================================
+
+  describe('onLoad TC39 import-attribute dispatch', () => {
+    it.each([
+      ['text', 'text'],
+      ['bytes', 'binary'],
+    ])('should map with { type: %s } to esbuild loader %s', async (attributeType, expectedLoader) => {
+      const bytes = new TextEncoder().encode('ISO-10303-21;\n');
+      filesystem.mocks.readFile.mockResolvedValue(bytes);
+
+      const result = (await vfsOnLoad({
+        path: 'lib/cube.step',
+        namespace: esbuildNamespace.vfs,
+        suffix: '',
+        pluginData: undefined,
+        with: { type: attributeType },
+      })) as { contents: Uint8Array<ArrayBuffer>; loader: string };
+
+      expect(result.loader).toBe(expectedLoader);
+      expect(result.contents).toBeInstanceOf(Uint8Array);
+      expect(result.contents).toEqual(bytes);
+    });
+
+    it('should ignore unsupported with { type } values and use the default loader', async () => {
+      filesystem.mocks.readFile.mockResolvedValue('{"x":1}');
+
+      const result = (await vfsOnLoad({
+        path: 'data/config.json',
+        namespace: esbuildNamespace.vfs,
+        suffix: '',
+        pluginData: undefined,
+        with: { type: 'json' },
+      })) as { contents: string; loader: string };
+
+      expect(result.loader).toBe('json');
+      expect(filesystem.mocks.readFile).toHaveBeenCalledWith('/project/data/config.json', 'utf8');
+    });
+  });
+});
+
+// =============================================================================
+// extractProjectDependencies — query/fragment stripping
+// =============================================================================
+
+/* eslint-disable @typescript-eslint/naming-convention -- Metafile keys use esbuild's namespace:path format */
+
+describe('extractProjectDependencies — query/fragment stripping', () => {
+  it('should collapse `?raw`-suffixed metafile keys onto their underlying file path', () => {
+    const metafile: Metafile = {
+      inputs: {
+        'vfs:main.ts': { bytes: 100, imports: [], format: undefined },
+        'vfs:lib/cube.step?raw': { bytes: 4675, imports: [], format: undefined },
+      },
+      outputs: {},
+    };
+
+    const result = extractProjectDependencies(metafile, '/projects/project');
+    expect(result).toEqual(['/projects/project/main.ts', '/projects/project/lib/cube.step']);
+  });
+
+  it('should collapse `#fragment` metafile keys onto their underlying file path', () => {
+    const metafile: Metafile = {
+      inputs: {
+        'vfs:lib/cube.step#fragment': { bytes: 4675, imports: [], format: undefined },
+      },
+      outputs: {},
+    };
+
+    const result = extractProjectDependencies(metafile, '/projects/project');
+    expect(result).toEqual(['/projects/project/lib/cube.step']);
+  });
+});
+
+/* eslint-enable @typescript-eslint/naming-convention -- re-enable after metafile fixture blocks */

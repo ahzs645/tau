@@ -12,7 +12,7 @@
  */
 
 import * as esbuild from 'esbuild-wasm';
-import type { Plugin, BuildOptions, Message, Metafile } from 'esbuild-wasm';
+import type { Plugin, BuildOptions, Loader, Message, Metafile } from 'esbuild-wasm';
 import { isBareSpecifier, parsePackageSpecifier, getCdnCachePath, resolveRelativePath } from '@taucad/utils/import';
 import { base64ToString } from 'uint8array-extras';
 import type { KernelIssue } from '#types/runtime.types.js';
@@ -185,6 +185,97 @@ async function resolveFileExtension(filesystem: KernelFileSystem, path: string):
 
   // Return original path if no extension found
   return path;
+}
+
+/**
+ * Vite-style query-suffix vocabulary mapped to esbuild's built-in loaders.
+ *
+ * `?raw` and `?text` decode bytes as UTF-8 with BOM stripping (esbuild `text` loader).
+ * `?binary` exports a `Uint8Array` via base64-decoded runtime initialisation.
+ * `?base64`/`?dataurl`/`?file` defer entirely to esbuild's named loaders so the asset
+ * pipeline (default-export wrapping, MIME guessing, copy-emission) is identical to a
+ * native esbuild build configured with the same loader for that file extension.
+ *
+ * Adding a new suffix is a one-line entry — no new namespace or onResolve hook needed.
+ */
+/* eslint-disable @typescript-eslint/naming-convention -- Vite query-suffix vocabulary uses literal `?suffix` keys for direct lookup */
+const querySuffixToLoader: Record<string, Loader> = {
+  '?raw': 'text',
+  '?text': 'text',
+  '?binary': 'binary',
+  '?base64': 'base64',
+  '?dataurl': 'dataurl',
+  '?file': 'file',
+};
+/* eslint-enable @typescript-eslint/naming-convention -- end of literal-suffix map */
+
+/** Single regex powering the suffix detection — must align with `querySuffixToLoader` keys. */
+const querySuffixRegex = /\?(base64|binary|dataurl|file|raw|text)$/;
+
+/**
+ * TC39 import-attribute `type` values that map to esbuild loaders.
+ *
+ * `with { type: 'text' }` is the JavaScript [import-text proposal](https://github.com/tc39/proposal-import-text).
+ * `with { type: 'bytes' }` is the JavaScript [import-bytes proposal](https://github.com/tc39/proposal-import-bytes).
+ *
+ * These work alongside Vite-style query suffixes; whichever is present wins.
+ */
+const importAttributeTypeToLoader: Record<string, Loader> = {
+  text: 'text',
+  bytes: 'binary',
+};
+
+/**
+ * Pick a loader override from an esbuild `args.suffix` (Vite-style) or `args.with.type` (TC39).
+ *
+ * Returns `undefined` when neither dispatcher matches — callers fall through to the
+ * default file-extension-based loader selection.
+ *
+ * @param suffix - the `args.suffix` field from `OnLoadArgs`
+ * @param withType - the `args.with.type` field from `OnLoadArgs`
+ * @returns esbuild loader override, or undefined when no suffix/attribute applies
+ */
+function resolveAssetLoader(suffix: string, withType: string | undefined): Loader | undefined {
+  if (suffix && querySuffixToLoader[suffix]) {
+    return querySuffixToLoader[suffix];
+  }
+
+  if (withType && importAttributeTypeToLoader[withType]) {
+    return importAttributeTypeToLoader[withType];
+  }
+
+  return undefined;
+}
+
+/**
+ * Strip a recognised Vite-style query suffix from an import path.
+ *
+ * Returns the cleaned path and the matched suffix (including the leading `?`)
+ * so callers can pass it to esbuild's `OnResolveResult.suffix`. Paths without
+ * a recognised suffix are returned untouched with an empty suffix.
+ *
+ * @param importPath - raw import specifier as it appears in source code
+ * @returns split `{ cleanPath, suffix }` where `suffix` is `''` when no match
+ */
+function splitQuerySuffix(importPath: string): { cleanPath: string; suffix: string } {
+  const match = querySuffixRegex.exec(importPath);
+  if (!match) {
+    return { cleanPath: importPath, suffix: '' };
+  }
+
+  return { cleanPath: importPath.slice(0, -match[0].length), suffix: match[0] };
+}
+
+/**
+ * Strip a `?query` or `#fragment` from a project-relative path so that suffix-bearing
+ * metafile keys collapse onto the underlying filesystem path used for watching.
+ *
+ * @param relativePath - project-relative path possibly carrying a query/fragment
+ * @returns the path with everything from the first `?` or `#` removed
+ */
+function stripPathQuery(relativePath: string): string {
+  const queryStart = relativePath.search(/[#?]/);
+  return queryStart === -1 ? relativePath : relativePath.slice(0, queryStart);
 }
 
 /**
@@ -476,18 +567,29 @@ export function createVfsPlugin(options: VfsPluginOptions): Plugin {
           };
         }
 
-        try {
-          const resolvedPath = resolveRelativePath(args.path, importerAbsolute);
-          const withExtension = await resolveFileExtension(filesystem, resolvedPath);
+        // Vite-style query suffixes (`?raw`/`?text`/`?binary`/`?base64`/`?dataurl`/`?file`).
+        // Strip the suffix so the file lookup hits, then round-trip it through esbuild's
+        // idiomatic `OnResolveResult.suffix` so `(namespace, path, suffix)` module identity
+        // works automatically and the loader dispatches in `onLoad` via `args.suffix`.
+        const { cleanPath, suffix } = splitQuerySuffix(args.path);
 
-          if (unresolvedPaths && withExtension === resolvedPath && !/\.[jt]sx?$/.test(resolvedPath)) {
+        try {
+          const resolvedPath = resolveRelativePath(cleanPath, importerAbsolute);
+          // Suffixed imports always carry the full filename — skip extension probing.
+          const withExtension = suffix ? resolvedPath : await resolveFileExtension(filesystem, resolvedPath);
+
+          if (unresolvedPaths && withExtension === resolvedPath && !suffix && !/\.[jt]sx?$/.test(resolvedPath)) {
             const extensionVariants = ['.ts', '.tsx', '.js', '.jsx'];
             for (const extension of extensionVariants) {
               unresolvedPaths.add(resolvedPath + extension);
             }
           }
 
-          return { path: toRelative(withExtension), namespace: esbuildNamespace.vfs };
+          return {
+            path: toRelative(withExtension),
+            namespace: esbuildNamespace.vfs,
+            ...(suffix ? { suffix } : {}),
+          };
         } catch (error) {
           return {
             errors: [
@@ -604,16 +706,43 @@ export function createVfsPlugin(options: VfsPluginOptions): Plugin {
       // onLoad: vfs namespace (project files + CDN cache)
       // -----------------------------------------------------------------
       build.onLoad({ filter: /.*/, namespace: esbuildNamespace.vfs }, async (args) => {
-        try {
-          // Reconstruct absolute path for filesystem I/O
-          const absolutePath = toAbsolute(args.path);
+        const absolutePath = toAbsolute(args.path);
+        const isNodeModules = absolutePath.includes('/node_modules/');
+        const resolveDirectory = absolutePath.slice(0, absolutePath.lastIndexOf('/'));
 
+        // Vite-style query suffixes (`?raw`/`?text`/...) and TC39 `with { type }` import
+        // attributes both route through esbuild's built-in loaders. Read raw bytes and let
+        // the chosen loader handle UTF-8 decoding (with BOM strip), base64 emission, or
+        // pass-through binary so we don't reinvent any of that downstream.
+        const overrideLoader = resolveAssetLoader(args.suffix, args.with['type']);
+
+        if (overrideLoader) {
+          try {
+            const bytes = await filesystem.readFile(absolutePath);
+            if (!isNodeModules) {
+              accessedProjectFiles?.add(absolutePath);
+            }
+            return { contents: bytes, loader: overrideLoader, resolveDir: resolveDirectory };
+          } catch (error) {
+            if (unresolvedPaths && !isNodeModules) {
+              unresolvedPaths.add(absolutePath);
+            }
+            return {
+              errors: [
+                {
+                  text: `Failed to load '${args.path}': ${error instanceof Error ? error.message : String(error)}`,
+                },
+              ],
+            };
+          }
+        }
+
+        try {
           let content = await filesystem.readFile(absolutePath, 'utf8');
           const loader = getLoader(args.path);
 
           // Track project files accessed during the build so that even on
           // build failure the caller knows which files were touched.
-          const isNodeModules = absolutePath.includes('/node_modules/');
           if (!isNodeModules) {
             accessedProjectFiles?.add(absolutePath);
           }
@@ -629,12 +758,11 @@ export function createVfsPlugin(options: VfsPluginOptions): Plugin {
           return {
             contents: content,
             loader,
-            resolveDir: absolutePath.slice(0, absolutePath.lastIndexOf('/')),
+            resolveDir: resolveDirectory,
           };
         } catch (error) {
-          const failedAbsolutePath = toAbsolute(args.path);
-          if (unresolvedPaths && !failedAbsolutePath.includes('/node_modules/')) {
-            unresolvedPaths.add(failedAbsolutePath);
+          if (unresolvedPaths && !isNodeModules) {
+            unresolvedPaths.add(absolutePath);
           }
 
           return {
@@ -866,7 +994,10 @@ const module = { exports };
         continue;
       }
 
-      const relativePath = inputKey.slice(vfsNamespacePrefix.length);
+      // Collapse Vite-style query suffixes / hashes onto the underlying path so the
+      // watch set tracks `lib/cube.step?raw` as `lib/cube.step` regardless of how
+      // esbuild folds the suffix into the metafile key.
+      const relativePath = stripPathQuery(inputKey.slice(vfsNamespacePrefix.length));
 
       // Exclude CDN/node_modules paths (they start with '/')
       if (relativePath.startsWith('/')) {
@@ -972,16 +1103,33 @@ export function createDetectionPlugin({ filesystem, projectPath }: DetectionPlug
 
         const importerAbsolute = toAbsolute(args.importer || relativeEntryPath);
 
+        // Mirror the production resolver: strip Vite-style query suffixes so the
+        // import-detection pass walks the underlying file (no bare specifiers can
+        // hide inside an asset). The TC39 `with { type }` path is automatically
+        // covered because the import path itself stays unchanged.
+        const { cleanPath, suffix } = splitQuerySuffix(args.path);
+
         try {
-          const resolvedPath = resolveRelativePath(args.path, importerAbsolute);
-          const withExtension = await resolveFileExtension(filesystem, resolvedPath);
-          return { path: toRelative(withExtension), namespace: esbuildNamespace.vfs };
+          const resolvedPath = resolveRelativePath(cleanPath, importerAbsolute);
+          const withExtension = suffix ? resolvedPath : await resolveFileExtension(filesystem, resolvedPath);
+          return {
+            path: toRelative(withExtension),
+            namespace: esbuildNamespace.vfs,
+            ...(suffix ? { suffix } : {}),
+          };
         } catch {
           return { external: true };
         }
       });
 
       build.onLoad({ filter: /.*/, namespace: esbuildNamespace.vfs }, async (args) => {
+        // Detection pass should never feed binary asset content into esbuild's parser.
+        // Suffixed/attributed imports point at non-source files (text, binary, base64,
+        // dataurl, file) which cannot contain bare specifiers, so we stub them out.
+        if (resolveAssetLoader(args.suffix, args.with['type'])) {
+          return { contents: '', loader: 'js' };
+        }
+
         try {
           const absolutePath = toAbsolute(args.path);
           const content = await filesystem.readFile(absolutePath, 'utf8');
@@ -1025,7 +1173,8 @@ export function extractProjectDependencies(metafile: Metafile | undefined, proje
       continue;
     }
 
-    const relativePath = inputKey.slice(vfsNamespacePrefix.length);
+    // Strip query/fragment so `vfs:lib/cube.step?raw` collapses onto its filesystem path.
+    const relativePath = stripPathQuery(inputKey.slice(vfsNamespacePrefix.length));
 
     if (relativePath.startsWith('/')) {
       continue;
