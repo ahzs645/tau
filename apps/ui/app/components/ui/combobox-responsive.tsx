@@ -21,12 +21,16 @@ type GroupedItems<T> = {
   items: T[];
 };
 
-type ComboBoxResponsiveProperties<T> = Omit<React.HTMLAttributes<HTMLDivElement>, 'defaultValue' | 'onSelect'> & {
+type ComboBoxResponsiveProperties<T> = Omit<
+  React.HTMLAttributes<HTMLDivElement>,
+  'defaultValue' | 'onSelect' | 'value'
+> & {
   readonly groupedItems: Array<GroupedItems<T>>;
   readonly renderLabel: (item: T, selectedItem: T | undefined) => ReactNode;
   readonly children: ReactNode;
   readonly getValue: (item: T) => string;
-  readonly defaultValue: T | undefined;
+  /** Controlled selection (`selectedItem` in `renderLabel` + checkmark alignment). Mirrors parent source of truth — no internal snapshot stalemate. */
+  readonly value?: T | undefined;
   readonly onSelect?: (value: string) => void;
   readonly onClose?: () => void;
   /**
@@ -68,7 +72,7 @@ export function ComboBoxResponsive<T>({
   renderLabel,
   children,
   getValue,
-  defaultValue,
+  value,
   onSelect,
   onClose,
   className,
@@ -94,20 +98,18 @@ export function ComboBoxResponsive<T>({
 }: ComboBoxResponsiveProperties<T>): React.JSX.Element {
   const [open, setOpen] = React.useState(false);
   const isMobile = useIsMobile();
-  const [selectedItem, setSelectedItem] = React.useState<T | undefined>(defaultValue);
   const selectionMadeReference = React.useRef(false);
 
   const handleSelect = (item: T) => {
-    const value = getValue(item);
-    const shouldClose = shouldCloseOnSelect?.(value) ?? true;
+    const resolved = getValue(item);
+    const shouldClose = shouldCloseOnSelect?.(resolved) ?? true;
 
-    setSelectedItem(item);
     if (shouldClose) {
       selectionMadeReference.current = true;
       setOpen(false);
     }
 
-    onSelect?.(value);
+    onSelect?.(resolved);
   };
 
   const handleOpenChange = (isOpen: boolean) => {
@@ -146,8 +148,8 @@ export function ComboBoxResponsive<T>({
           <>
             <ItemList
               groupedItems={groupedItems}
-              setSelectedItem={handleSelect}
-              selectedItem={selectedItem}
+              onPick={handleSelect}
+              selectedItem={value}
               renderLabel={renderLabel}
               getValue={getValue}
               searchPlaceHolder={searchPlaceHolder}
@@ -179,8 +181,8 @@ export function ComboBoxResponsive<T>({
         <>
           <ItemList
             groupedItems={groupedItems}
-            setSelectedItem={handleSelect}
-            selectedItem={selectedItem}
+            onPick={handleSelect}
+            selectedItem={value}
             renderLabel={renderLabel}
             getValue={getValue}
             searchPlaceHolder={searchPlaceHolder}
@@ -203,7 +205,7 @@ export function ComboBoxResponsive<T>({
 
 function ItemList<T>({
   groupedItems,
-  setSelectedItem,
+  onPick,
   selectedItem,
   renderLabel,
   getValue,
@@ -219,7 +221,7 @@ function ItemList<T>({
   onLoadMore,
 }: {
   readonly groupedItems: Array<GroupedItems<T>>;
-  readonly setSelectedItem: (item: T) => void;
+  readonly onPick: (item: T) => void;
   readonly selectedItem: T | undefined;
   readonly renderLabel: (item: T, selectedItem: T | undefined) => ReactNode;
   readonly getValue: (item: T) => string;
@@ -309,14 +311,14 @@ function ItemList<T>({
           className={cn(labelClassName)}
           disabled={isDisabled?.(item)}
           onSelect={() => {
-            setSelectedItem(item);
+            onPick(item);
           }}
         >
           {renderLabel(item, selectedItem)}
         </CommandItem>
       );
     },
-    [filteredItems, labelAsChild, labelClassName, isDisabled, renderLabel, selectedItem, setSelectedItem],
+    [filteredItems, labelAsChild, labelClassName, isDisabled, renderLabel, selectedItem, onPick],
   );
 
   if (withVirtualization) {
@@ -374,7 +376,7 @@ function ItemList<T>({
                   className={cn(labelClassName)}
                   disabled={isDisabled?.(item)}
                   onSelect={() => {
-                    setSelectedItem(item);
+                    onPick(item);
                   }}
                 >
                   {renderLabel(item, selectedItem)}

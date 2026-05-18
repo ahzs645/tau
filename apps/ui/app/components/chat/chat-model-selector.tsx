@@ -60,6 +60,11 @@ export const ChatModelSelector = memo(function ({
     return availableModels;
   }, [allModels, availableModels, selectedModel.id]);
 
+  const comboboxSelectedModel = useMemo(
+    () => visibleModels.find((entry) => entry.id === selectedModel.id),
+    [visibleModels, selectedModel.id],
+  );
+
   const providerModelsMap = new Map<string, Model[]>();
   for (const model of visibleModels) {
     if (!providerModelsMap.has(model.provider.name)) {
@@ -138,7 +143,7 @@ export const ChatModelSelector = memo(function ({
       )}
       getValue={(item) => item.id}
       placeholder='Select a model'
-      defaultValue={selectedModel.model}
+      value={comboboxSelectedModel}
       isNested={isNested}
       onSelect={handleSelectModel}
       onClose={onClose}

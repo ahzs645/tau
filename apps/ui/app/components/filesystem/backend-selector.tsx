@@ -89,7 +89,7 @@ export function BackendSelector({
   return (
     <ComboBoxResponsive
       groupedItems={[{ name: 'Storage Backends', items: filteredOptions }]}
-      defaultValue={currentOption}
+      value={currentOption}
       getValue={(item) => item.value}
       renderLabel={(item, selectedItem) => (
         <span className='flex w-full items-center justify-between gap-4'>

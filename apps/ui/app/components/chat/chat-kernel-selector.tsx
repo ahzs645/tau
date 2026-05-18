@@ -112,7 +112,7 @@ export const ChatKernelSelector = memo(function ({
       )}
       getValue={(item) => item.id}
       placeholder='Select a kernel'
-      defaultValue={selectedKernel}
+      value={selectedKernel}
       isNested={isNested}
       onSelect={handleSelectKernel}
       onClose={onClose}

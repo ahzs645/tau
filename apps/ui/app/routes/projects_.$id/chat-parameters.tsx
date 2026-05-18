@@ -354,7 +354,7 @@ function ParameterGroupSelector({
         groupedItems={groupedItems}
         renderLabel={renderLabel}
         getValue={getItemValue}
-        defaultValue={selectedItem}
+        value={selectedItem}
         placeholder='Select a parameter group'
         searchPlaceHolder='Search groups...'
         title='Parameter Groups'

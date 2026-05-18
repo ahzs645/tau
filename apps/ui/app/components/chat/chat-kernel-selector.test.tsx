@@ -33,15 +33,15 @@ vi.mock('#hooks/use-kernel.js', () => ({
   },
 }));
 
-const capturedComboBox: { onSelect?: (id: string) => void; defaultValue?: unknown } = {};
+const capturedComboBox: { onSelect?: (id: string) => void; value?: unknown } = {};
 vi.mock('#components/ui/combobox-responsive.js', () => ({
   ComboBoxResponsive: (properties: {
     readonly onSelect?: (id: string) => void;
-    readonly defaultValue?: unknown;
+    readonly value?: unknown;
     readonly children?: React.ReactNode;
   }): React.JSX.Element => {
     capturedComboBox.onSelect = properties.onSelect;
-    capturedComboBox.defaultValue = properties.defaultValue;
+    capturedComboBox.value = properties.value;
     return <div data-testid='combobox'>{properties.children}</div>;
   },
 }));
@@ -65,20 +65,20 @@ describe('ChatKernelSelector — chat-scoped read + dual-write', () => {
     vi.clearAllMocks();
     chatKernelState.current = stubKernel;
     capturedComboBox.onSelect = undefined;
-    capturedComboBox.defaultValue = undefined;
+    capturedComboBox.value = undefined;
   });
 
   it('renders the selected kernel from useActiveChatKernel (not useKernel)', () => {
     renderSelector();
     expect(useActiveChatKernelMock).toHaveBeenCalled();
-    expect(capturedComboBox.defaultValue).toBe(stubKernel);
+    expect(capturedComboBox.value).toBe(stubKernel);
   });
 
   it('reflects the chat-local active kernel when it diverges from the cookie default', () => {
     const chatLocal = kernelConfigurations.find((k) => k.id === 'jscad')!;
     chatKernelState.current = chatLocal;
     renderSelector();
-    expect(capturedComboBox.defaultValue).toBe(chatLocal);
+    expect(capturedComboBox.value).toBe(chatLocal);
   });
 
   it('routes the picked kernel id through setActiveKernel (dual-write to chat + cookie)', () => {

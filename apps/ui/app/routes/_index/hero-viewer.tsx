@@ -213,7 +213,7 @@ export function HeroViewer(): React.JSX.Element {
                             items: exportFormatOptions,
                           },
                         ]}
-                        defaultValue={activeFormat}
+                        value={activeFormat}
                         getValue={(item) => item.format}
                         renderLabel={(item, selected) => (
                           <span className='flex w-full items-center justify-between'>

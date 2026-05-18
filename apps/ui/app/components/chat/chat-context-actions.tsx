@@ -577,7 +577,6 @@ ${error.stack ? `\n\`\`\`\n${error.stack}\n\`\`\`` : ''}`;
         groupedItems={groupedContextItems}
         renderLabel={renderContextItemLabel}
         getValue={getContextItemValue}
-        defaultValue={undefined}
         isDisabled={isContextItemDisabled}
         popoverProperties={{
           align: 'start',

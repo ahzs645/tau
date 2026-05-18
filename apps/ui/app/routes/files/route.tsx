@@ -190,7 +190,6 @@ function FileActions({
   return (
     <ComboBoxResponsive
       groupedItems={[{ name: 'Actions', items: fileActions }]}
-      defaultValue={undefined}
       getValue={(item) => item.value}
       renderLabel={(item) => (
         <div
@@ -248,7 +247,6 @@ function FolderActions({
   return (
     <ComboBoxResponsive
       groupedItems={[{ name: 'Actions', items: folderActions }]}
-      defaultValue={undefined}
       getValue={(item) => item.value}
       renderLabel={(item) => (
         <div

@@ -47,6 +47,13 @@ const modelCatalogue: Model[] = [
     provider: { id: 'openai', name: 'OpenAI' },
     details: { family: 'gpt' },
   } as unknown as Model,
+  {
+    id: 'chat-local-model',
+    name: 'Chat Local Model',
+    description: '',
+    provider: { id: 'openai', name: 'OpenAI' },
+    details: { family: 'gpt' },
+  } as unknown as Model,
 ];
 
 // The selector must NOT read selectedModel/setSelectedModelId from
@@ -74,15 +81,15 @@ vi.mock('#hooks/use-models.js', () => ({
 
 // Capture the props passed to ComboBoxResponsive so we can drive its
 // onSelect callback in tests without rendering a real popover.
-const capturedComboBox: { onSelect?: (id: string) => void; defaultValue?: unknown } = {};
+const capturedComboBox: { onSelect?: (id: string) => void; value?: unknown } = {};
 vi.mock('#components/ui/combobox-responsive.js', () => ({
   ComboBoxResponsive: (properties: {
     readonly onSelect?: (id: string) => void;
-    readonly defaultValue?: unknown;
+    readonly value?: unknown;
     readonly children?: React.ReactNode;
   }): React.JSX.Element => {
     capturedComboBox.onSelect = properties.onSelect;
-    capturedComboBox.defaultValue = properties.defaultValue;
+    capturedComboBox.value = properties.value;
     return <div data-testid='combobox'>{properties.children}</div>;
   },
 }));
@@ -116,13 +123,13 @@ describe('ChatModelSelector — chat-scoped read + dual-write', () => {
     vi.clearAllMocks();
     chatModelState.current = stubModel;
     capturedComboBox.onSelect = undefined;
-    capturedComboBox.defaultValue = undefined;
+    capturedComboBox.value = undefined;
   });
 
   it('renders the selected model from useActiveChatModel (not useModels)', () => {
     renderSelector();
     expect(useActiveChatModelMock).toHaveBeenCalled();
-    expect(capturedComboBox.defaultValue).toBe(stubModel.model);
+    expect((capturedComboBox.value as Model | undefined)?.id).toBe('cookie-model');
   });
 
   it('reflects the chat-local active model when it diverges from the cookie default', () => {
@@ -136,7 +143,7 @@ describe('ChatModelSelector — chat-scoped read + dual-write', () => {
     chatModelState.current = chatLocal;
 
     renderSelector();
-    expect(capturedComboBox.defaultValue).toBe(chatLocal.model);
+    expect((capturedComboBox.value as Model | undefined)?.id).toBe('chat-local-model');
   });
 
   it('routes the picked model id through setActiveModel (dual-write to chat + cookie)', () => {
