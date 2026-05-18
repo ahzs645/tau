@@ -60,13 +60,13 @@ vi.mock('#components/ui/sonner.js', () => ({
 
 const { useChatTextareaLogic } = await import('#components/chat/chat-textarea-types.js');
 
-describe('useChatTextareaLogic — chat-scoped model wiring', () => {
+describe('useChatTextareaLogic — onSubmit surface', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockActiveModel = stableModel;
   });
 
-  it('should expose the chat-scoped model on selectedModel', () => {
+  it('should expose the chat-scoped model on selectedModel (UI display)', () => {
     const { result } = renderHook(() =>
       useChatTextareaLogic({
         ref: undefined,
@@ -77,8 +77,8 @@ describe('useChatTextareaLogic — chat-scoped model wiring', () => {
     expect(result.current.selectedModel.id).toBe('chat-scoped-model');
   });
 
-  it('should stamp the chat-scoped model id onto onSubmit when handleSubmit fires', async () => {
-    const onSubmit = vi.fn(async () => undefined);
+  it('should invoke onSubmit with ONLY content and imageUrls when handleSubmit fires (no model / no metadata)', async () => {
+    const onSubmit = vi.fn<(payload: { content: string; imageUrls: string[] }) => Promise<void>>(async () => undefined);
     const { result } = renderHook(() => useChatTextareaLogic({ ref: undefined, onSubmit }));
 
     await act(async () => {
@@ -86,16 +86,12 @@ describe('useChatTextareaLogic — chat-scoped model wiring', () => {
     });
 
     expect(onSubmit).toHaveBeenCalledOnce();
-    expect(onSubmit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        content: 'hello world',
-        model: 'chat-scoped-model',
-      }),
-    );
+    const submittedPayload = onSubmit.mock.calls[0]?.[0];
+    expect(submittedPayload).toEqual({ content: 'hello world', imageUrls: [] });
   });
 
-  it('should follow the chat-scoped model when it changes between submits (no cookie bleed)', async () => {
-    const onSubmit = vi.fn(async () => undefined);
+  it('should never thread model or metadata to onSubmit even when the chat-scoped model changes between submits', async () => {
+    const onSubmit = vi.fn<(payload: { content: string; imageUrls: string[] }) => Promise<void>>(async () => undefined);
     const { result, rerender } = renderHook(() => useChatTextareaLogic({ ref: undefined, onSubmit }));
 
     await act(async () => {
@@ -109,7 +105,12 @@ describe('useChatTextareaLogic — chat-scoped model wiring', () => {
       await result.current.handleSubmit();
     });
 
-    expect(onSubmit).toHaveBeenNthCalledWith(2, expect.objectContaining({ model: 'next-chat-scoped-model' }));
+    for (const call of onSubmit.mock.calls) {
+      const submittedPayload = call[0] as Record<string, unknown>;
+      expect(submittedPayload).not.toHaveProperty('model');
+      expect(submittedPayload).not.toHaveProperty('metadata');
+      expect(Object.keys(submittedPayload).sort()).toEqual(['content', 'imageUrls']);
+    }
   });
 });
 

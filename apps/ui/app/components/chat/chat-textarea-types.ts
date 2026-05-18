@@ -9,6 +9,24 @@ import { toast } from '#components/ui/sonner.js';
 import { useKeybinding } from '#hooks/use-keyboard.js';
 
 /**
+ * Payload the chat textarea hands to its host's `onSubmit` callback.
+ *
+ * Deliberately narrow: the textarea owns text + dropped images, and nothing
+ * else. Model / kernel / mode / toolChoice / snapshot / contextPayload /
+ * testingEnabled all live on the per-request `agent` block and are composed
+ * inside the chat-client layer (see `useCadChatClient`). Threading them here
+ * was the smoking gun behind the "submit drops kernel / testingEnabled" bug
+ * surface — every host site was responsible for re-stamping the same set of
+ * metadata fields, which sprawled and went stale.
+ *
+ * @public
+ */
+export type ChatTextareaSubmitPayload = {
+  readonly content: string;
+  readonly imageUrls: string[];
+};
+
+/**
  * Kind of drag currently hovering over the chat textarea.
  *
  * - `'image'` — OS image files or other unrecognised drag (default behavior)
@@ -122,17 +140,7 @@ export type ChatTextareaHandle = {
 
 export type ChatTextareaProperties = {
   readonly ref?: React.Ref<ChatTextareaHandle>;
-  readonly onSubmit: ({
-    content,
-    model,
-    metadata,
-    imageUrls,
-  }: {
-    content: string;
-    model: string;
-    metadata?: { toolChoice?: ToolSelection; mode?: 'agent' | 'plan' };
-    imageUrls?: string[];
-  }) => Promise<void>;
+  readonly onSubmit: (payload: ChatTextareaSubmitPayload) => Promise<void>;
   readonly onEscapePressed?: () => void;
   readonly onBlur?: () => void;
   readonly enableAutoFocus?: boolean;
@@ -246,7 +254,6 @@ export function useChatTextareaLogic({
   const selectedToolChoice = useChatSelector((state) =>
     mode === 'main' ? (state.draftToolChoice as ToolSelection) : 'auto',
   );
-  const selectedMode = useChatSelector((state) => (mode === 'main' ? (state.draftMode as 'agent' | 'plan') : 'agent'));
 
   const {
     stop,
@@ -302,12 +309,6 @@ export function useChatTextareaLogic({
   isSubmittingRef.current = isSubmitting;
   const onSubmitRef = useRef(onSubmit);
   onSubmitRef.current = onSubmit;
-  const selectedModelRef = useRef(selectedModel);
-  selectedModelRef.current = selectedModel;
-  const selectedToolChoiceRef = useRef(selectedToolChoice);
-  selectedToolChoiceRef.current = selectedToolChoice;
-  const selectedModeRef = useRef(selectedMode);
-  selectedModeRef.current = selectedMode;
 
   const handleSubmit = useCallback(async (): Promise<void> => {
     if ((inputTextRef.current.trim().length === 0 && imagesRef.current.length === 0) || isSubmittingRef.current) {
@@ -318,11 +319,6 @@ export function useChatTextareaLogic({
     try {
       await onSubmitRef.current({
         content: inputTextRef.current,
-        model: selectedModelRef.current.id,
-        metadata: {
-          toolChoice: selectedToolChoiceRef.current,
-          mode: selectedModeRef.current,
-        },
         imageUrls: imagesRef.current,
       });
     } finally {

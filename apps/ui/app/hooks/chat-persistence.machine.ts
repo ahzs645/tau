@@ -42,12 +42,34 @@ export type ChatPersistenceMachineInput = {
  *   this into AI SDK's private `Chat.makeRequest({ trigger: 'submit-message' })`
  *   so `chat.messages` stays untouched.
  */
+/**
+ * Per-request body the chat-client composes from `useCadAgentConfig` and
+ * forwards through the persistence machine to the chat-session-store
+ * `dispatchRequest` listener. The listener merges this object into the
+ * `chat.sendMessage` / `chat.regenerate` call so the wire body always carries
+ * an `agent` block — never the cookie-bleed-prone per-message metadata path.
+ *
+ * Optional because the legacy hydration-driven `regenerate` (auto-fired on
+ * pending-tail load) still runs before the chat-client mounts; the
+ * `regenerateTail` chat-client verb is what eventually replaces that
+ * untyped path (see t17).
+ *
+ * @public
+ */
+export type ChatRequestBody = Readonly<Record<string, unknown>>;
+
 export type ChatRequest =
-  | { kind: 'send'; message: MyUIMessage }
-  | { kind: 'regenerate' }
-  | { kind: 'edit'; messageId: string; content: string; model: string; imageUrls?: string[] }
-  | { kind: 'retry'; messageId: string; modelId?: string }
-  | { kind: 'continue' };
+  | { kind: 'send'; message: MyUIMessage; body?: ChatRequestBody }
+  | { kind: 'regenerate'; body?: ChatRequestBody }
+  | {
+      kind: 'edit';
+      messageId: string;
+      content: string;
+      imageUrls?: string[];
+      body?: ChatRequestBody;
+    }
+  | { kind: 'retry'; messageId: string; body?: ChatRequestBody }
+  | { kind: 'continue'; body?: ChatRequestBody };
 
 /**
  * Why the in-flight chat request ended, forwarded to `finalizeInterruptedToolParts`

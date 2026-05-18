@@ -28,13 +28,20 @@ import { defaultProjectName } from '#constants/project-names.js';
 
 /**
  * Shared options for initial chat configuration.
+ *
+ * Note: the initial-message metadata block intentionally only carries
+ * `status: pending`. Per-request configuration (kernel / model / mode /
+ * toolChoice / testingEnabled / snapshot / contextPayload) is composed by
+ * the chat-client at regenerate time — the hydration-driven auto-regen on
+ * pending-tail (see `chat-session-store#loadChatActor`) flows through the
+ * persistence machine, and the resulting `agent` payload is supplied by
+ * `useCadChatClient` from the chat row's `activeModel` / `activeKernel`
+ * seeds (and the current cookie defaults).
  */
 type CreateProjectChatOptions = {
-  /** If provided, add to chat (triggers AI response) */
+  /** If provided, add to chat (triggers AI response via hydration auto-regen) */
   initialMessage?: {
     content: string;
-    model: string;
-    metadata?: Record<string, unknown>;
     imageUrls?: string[];
   };
   /** Chat name (defaults to 'Initial design' with message, 'Initial chat' without) */
@@ -45,9 +52,9 @@ type CreateProjectChatOptions = {
   backend?: FileSystemBackend;
   /**
    * Seed `Chat.activeModel` so the chat owns its model choice independent
-   * of the cookie default. Defaults to `initialMessage.model` when an
-   * initial message is provided, otherwise undefined (chat-scoped resolver
-   * falls back to the cookie).
+   * of the cookie default. Required when `initialMessage` is supplied so the
+   * pending-tail auto-regen runs with the caller's intended model rather
+   * than whatever the cookie happens to hold at hydration time.
    */
   activeModel?: string;
   /**
@@ -193,16 +200,19 @@ export function ProjectManagerProvider({ children }: { readonly children: ReactN
         files = options.files;
       }
 
-      // Create chat messages for atomic call
+      // Seed only the pending-status flag on the initial user message. The
+      // per-request `agent` payload (kernel / model / mode / toolChoice /
+      // testingEnabled / snapshot / contextPayload) is composed by the
+      // chat-client at regenerate time — the hydration auto-regen on
+      // pending-tail dispatches through `useCadChatClient.regenerateTail()`
+      // which sources the agent from the chat row's seeded active values
+      // plus the current cookie defaults.
       const chatMessages = options.initialMessage
         ? [
             createMessage({
               content: options.initialMessage.content,
               role: messageRole.user,
               metadata: {
-                ...options.initialMessage.metadata,
-                kernel,
-                model: options.initialMessage.model,
                 status: messageStatus.pending,
               },
               imageUrls: options.initialMessage.imageUrls,
@@ -214,11 +224,9 @@ export function ProjectManagerProvider({ children }: { readonly children: ReactN
 
       // Seed the chat row with chat-scoped active model + kernel so a
       // cookie change in another tab does not mutate the active selection
-      // for this freshly-created chat. Falls back to the per-message model
-      // (when an initialMessage is supplied) and the kernel chosen by the
-      // creation flow. Callers may override via `options.activeModel` /
-      // `options.activeKernel` when seeding from a non-default source.
-      const seededActiveModel = options.activeModel ?? options.initialMessage?.model;
+      // for this freshly-created chat. Defaults to the kernel chosen by
+      // the creation flow when not explicitly supplied.
+      const seededActiveModel = options.activeModel;
       const seededActiveKernel = options.activeKernel ?? kernel;
 
       // Single atomic call to create project + chat + Editor state

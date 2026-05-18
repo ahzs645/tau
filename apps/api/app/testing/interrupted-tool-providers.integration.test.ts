@@ -3,7 +3,7 @@ import { createTestApp } from '#testing/create-test-app.js';
 import type { TestApp } from '#testing/create-test-app.js';
 import { collectStreamChunks } from '#testing/stream-consumer.js';
 import { expectChunkTypesInclude, expectNoErrors } from '#testing/stream-assertions.js';
-import { requiresEnv } from '#testing/skip-helpers.js';
+import { buildCadAgent, requiresEnv } from '#testing/skip-helpers.js';
 
 /**
  * Real-LLM integration coverage for interrupted tool calls with partial input.
@@ -85,6 +85,7 @@ describe.skipIf(requiresEnv('ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GOOGLE_VERTE
           metadata: { model, kernel: 'replicad' },
         },
       ],
+      agent: buildCadAgent(model, 'replicad'),
     });
 
     const assertProviderTolerated = async (model: string) => {

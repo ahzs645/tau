@@ -29,25 +29,22 @@
  * by `useChatRpcConnection`).
  */
 
-import { Chat } from '@ai-sdk/react';
-import { DefaultChatTransport } from 'ai';
+import type { Chat } from '@ai-sdk/react';
 import type { ChatStatus } from 'ai';
 import { createActor } from 'xstate';
 import type { ActorRefFrom } from 'xstate';
 import type { Chat as ChatEntity, MyUIMessage } from '@taucad/chat';
 import { isToolPart } from '@taucad/chat';
-import { generatePrefixedId } from '@taucad/utils/id';
-import { idPrefix } from '@taucad/types/constants';
 import { fromSafeAsync } from '#lib/xstate.lib.js';
 import { chatPersistenceMachine } from '#hooks/chat-persistence.machine.js';
 import type { ChatRequest } from '#hooks/chat-persistence.machine.js';
 import { draftMachine } from '#hooks/draft.machine.js';
 import { resizeImageActor } from '#hooks/resize-image.actor.js';
 import { inspect } from '#machines/inspector.js';
-import { ENV } from '#environment.config.js';
 import { clearLedger } from '#services/rpc-ledger.js';
 import { parseErrorForPersistence } from '#utils/error.utils.js';
 import { extractMimeTypeFromDataUrl, finalizeInterruptedToolParts } from '#utils/chat.utils.js';
+import { createChatInstance } from '#chat-clients/_internal/shared-chat-transport.js';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -88,15 +85,13 @@ export type ChatSession = {
 // ---------------------------------------------------------------------------
 
 /**
- * Single shared transport. Constructed once at module load so N concurrent
- * sessions share one fetch factory.
+ * Rebuilds the user message currently being edited. Resets only the
+ * user-facing fields — text/image parts, `createdAt`, and `status` — and
+ * spreads the original message's metadata through untouched. Per-turn
+ * agent config travels via `body.agent` on the wire (composed by the
+ * chat-client from `useCadAgentConfig`), never via per-message metadata.
  */
-const sharedChatTransport = new DefaultChatTransport({
-  api: `${ENV.TAU_API_URL}/v1/chat`,
-  credentials: 'include',
-});
-
-function buildEditedMessage(request: Extract<ChatRequest, { kind: 'edit' }>): MyUIMessage {
+function buildEditedMessage(original: MyUIMessage, request: Extract<ChatRequest, { kind: 'edit' }>): MyUIMessage {
   return {
     id: request.messageId,
     role: 'user',
@@ -112,13 +107,19 @@ function buildEditedMessage(request: Extract<ChatRequest, { kind: 'edit' }>): My
       ) ?? []),
     ],
     metadata: {
+      ...original.metadata,
       createdAt: Date.now(),
       status: 'pending',
-      model: request.model,
     },
   };
 }
 
+/**
+ * Slices the message tail so a subsequent `chat.regenerate(...)` re-runs
+ * the assistant turn after the retried message. Model overrides (e.g. "Try
+ * with a different model") travel via `request.body.agent.model` composed
+ * by `useCadChatClient.retry`, not by mutating persisted metadata.
+ */
 function buildRetryMessages(
   messages: MyUIMessage[],
   request: Extract<ChatRequest, { kind: 'retry' }>,
@@ -127,20 +128,6 @@ function buildRetryMessages(
   if (messageIndex === -1) {
     return undefined;
   }
-
-  const sliceIndex = Math.max(messageIndex - 1, 0);
-  const previousMessage = messages[sliceIndex];
-
-  if (previousMessage && request.modelId) {
-    return [
-      ...messages.slice(0, sliceIndex),
-      {
-        ...previousMessage,
-        metadata: { ...previousMessage.metadata, model: request.modelId },
-      },
-    ];
-  }
-
   return messages.slice(0, messageIndex);
 }
 
@@ -185,6 +172,15 @@ type InternalSession = ChatSession & {
   refcount: number;
   status: ChatStatus;
   usage: UsageSnapshot | undefined;
+  /**
+   * Latest per-request body the active profile-scoped chat client has
+   * computed for this chat. Populated via {@link ChatSessionStore.setLatestAgentBody}
+   * from `useCadChatClient` on every render. The `dispatchRequest` listener
+   * falls back to this body when a request enters the persistence machine
+   * without an explicit `body` (currently the only such path is the
+   * hydration auto-regenerate on pending-tail in `loadChatActor`).
+   */
+  latestAgentBody: Readonly<Record<string, unknown>> | undefined;
   /** Cleanups for the per-chat subscriptions wired up at session creation. */
   dispose: () => void;
 };
@@ -301,6 +297,26 @@ export class ChatSessionStore {
     return this.#addPerChatListener(this.#usageListeners, chatId, listener);
   }
 
+  /**
+   * Publish the latest per-request body the active profile-scoped chat
+   * client (`useCadChatClient` today, future name/commit clients tomorrow)
+   * has composed for this chat. The `dispatchRequest` listener inside
+   * `#createSession` falls back to this when a request hits the persistence
+   * machine without an explicit `body` (the only such path today is the
+   * hydration-driven auto-regenerate on a pending-tail user message — see
+   * `loadChatActor` in `#createSession`).
+   *
+   * Stored as a snapshot, not subscribed to, because the listener only
+   * needs a single read at dispatch time.
+   */
+  public setLatestAgentBody(chatId: string, body: Readonly<Record<string, unknown>> | undefined): void {
+    const session = this.#sessions.get(chatId);
+    if (!session) {
+      return;
+    }
+    session.latestAgentBody = body;
+  }
+
   // -------------------------------------------------------------------------
   // Internals
   // -------------------------------------------------------------------------
@@ -391,10 +407,8 @@ export class ChatSessionStore {
       },
     );
 
-    const chat = new Chat<MyUIMessage>({
-      id: chatId,
-      transport: sharedChatTransport,
-      generateId: () => generatePrefixedId(idPrefix.message),
+    const chat = createChatInstance({
+      chatId,
       onFinish({ messages, isAbort, isError, isDisconnect }) {
         persistenceActorRef.send({ type: 'requestFinished', messages, isAbort, isError, isDisconnect });
       },
@@ -441,14 +455,30 @@ export class ChatSessionStore {
     // `chat.sendMessage(B)` call when it fires on the next tick.
     const dispatchSubscription = persistenceActorRef.on('dispatchRequest', ({ request }) => {
       queueMicrotask(() => {
+        // The chat-client always supplies `request.body` when it dispatches
+        // (submit / retry / regenerateTail / stop). The hydration auto-regen
+        // on pending-tail (see `loadChatActor`) is the one path that fires
+        // a request through the persistence machine *before* the chat-client
+        // has had a chance to attach a body — fall back to the latest body
+        // the chat-client published via `setLatestAgentBody` so the API
+        // still receives a complete `agent` payload on first turn.
+        const requestBody = request.body ?? session.latestAgentBody;
         switch (request.kind) {
           case 'send': {
-            void chat.sendMessage(request.message);
+            if (requestBody) {
+              void chat.sendMessage(request.message, { body: requestBody });
+            } else {
+              void chat.sendMessage(request.message);
+            }
             return;
           }
 
           case 'regenerate': {
-            void chat.regenerate();
+            if (requestBody) {
+              void chat.regenerate({ body: requestBody });
+            } else {
+              void chat.regenerate();
+            }
             return;
           }
 
@@ -457,8 +487,13 @@ export class ChatSessionStore {
             if (messageIndex === -1) {
               return;
             }
-            chat.messages = [...chat.messages.slice(0, messageIndex), buildEditedMessage(request)];
-            void chat.regenerate();
+            const originalMessage = chat.messages[messageIndex]!;
+            chat.messages = [...chat.messages.slice(0, messageIndex), buildEditedMessage(originalMessage, request)];
+            if (requestBody) {
+              void chat.regenerate({ body: requestBody });
+            } else {
+              void chat.regenerate();
+            }
             return;
           }
 
@@ -468,7 +503,11 @@ export class ChatSessionStore {
               return;
             }
             chat.messages = next;
-            void chat.regenerate();
+            if (requestBody) {
+              void chat.regenerate({ body: requestBody });
+            } else {
+              void chat.regenerate();
+            }
             return;
           }
 
@@ -603,6 +642,7 @@ export class ChatSessionStore {
       refcount: 1,
       status: chat.status,
       usage: undefined,
+      latestAgentBody: undefined,
       dispose: () => {
         dispatchSubscription.unsubscribe();
         stopSubscription.unsubscribe();

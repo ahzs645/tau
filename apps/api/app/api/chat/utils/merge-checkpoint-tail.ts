@@ -47,10 +47,10 @@ export type MergeCheckpointTailInput = {
  * recorded {@link ToolMessage} results for matching `tool_call_id`s, splice
  * `output-available` tool parts from the checkpoint before `toBaseMessages`.
  *
- * Scans for the most recent assistant message in the request — the chat API
- * contract requires the trailing message to be a user turn (enforced by
- * `createChatSchema`), so the assistant whose stale tool parts need splicing
- * sits just before that trailing user message.
+ * Scans for the most recent assistant message in the request — chat conversations
+ * always end with a user turn (the turn that drives the current request), so the
+ * assistant whose stale tool parts need splicing sits just before that trailing
+ * user message.
  */
 export function mergeCheckpointTail(input: MergeCheckpointTailInput): MyUIMessage[] {
   const { requestMessages, checkpointMessages } = input;

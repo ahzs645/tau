@@ -6,7 +6,7 @@ import { collectStreamChunks, collectFinalMessage } from '#testing/stream-consum
 import { expectNoErrors, expectHasTextContent, expectToolCallSucceeded } from '#testing/stream-assertions.js';
 import { createTestApp } from '#testing/create-test-app.js';
 import type { TestApp } from '#testing/create-test-app.js';
-import { requiresEnv } from '#testing/skip-helpers.js';
+import { buildCadAgent, requiresEnv } from '#testing/skip-helpers.js';
 
 /**
  * Live regression for the OpenAI tool-result image fix.
@@ -213,6 +213,7 @@ describe.skipIf(requiresEnv('OPENAI_API_KEY'))('OpenAI screenshot vision (live)'
             metadata: { model: modelId, kernel: 'replicad' },
           },
         ],
+        agent: buildCadAgent(modelId, 'replicad'),
       }),
     });
 

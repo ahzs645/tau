@@ -13,7 +13,7 @@ import { ModelService } from '#api/models/model.service.js';
 import { FileEditService } from '#api/file-edit/file-edit.service.js';
 import { GeometryAnalysisService } from '#api/analysis/geometry-analysis.service.js';
 import { AuthGuard } from '#auth/auth.guard.js';
-import { CreateChatDto, lastUserMessageMetadataSchema } from '#api/chat/chat.dto.js';
+import { CreateChatDto } from '#api/chat/chat.dto.js';
 import { sendSimpleModelStream } from '#api/chat/utils/simple-model-stream.js';
 import { injectSnapshotContext } from '#api/chat/utils/inject-snapshot-context.js';
 import { createStaticToolTransform } from '#api/chat/utils/static-tool-transform.js';
@@ -68,34 +68,33 @@ export class ChatController {
   public async createChat(@Body() body: CreateChatDto, @Res() response: FastifyReply): Promise<void> {
     this.logger.debug(`Creating chat: ${body.id}`);
 
-    const { modelId, kernel, snapshot, contextPayload, mode, tools } = this.extractRequestConfig(body);
+    switch (body.agent.profile) {
+      case 'project_name': {
+        const modelMessages = await convertToModelMessages(body.messages);
+        const result = this.chatService.getBuildNameGenerator(modelMessages);
+        return sendSimpleModelStream(response, result);
+      }
+      case 'commit_name': {
+        const modelMessages = await convertToModelMessages(body.messages);
+        const result = this.chatService.getCommitMessageGenerator(modelMessages);
+        return sendSimpleModelStream(response, result);
+      }
+      case 'cad': {
+        const { agent } = body;
+        const langchainMessages = await this.prepareMessages(body.id, body.messages, agent.snapshot);
 
-    // Handle simple model streams (name generator, commit generator).
-    // These use AI SDK's streamText, so they need ModelMessage[] from convertToModelMessages.
-    if (modelId === 'name-generator') {
-      const modelMessages = await convertToModelMessages(body.messages);
-      const result = this.chatService.getBuildNameGenerator(modelMessages);
-      return sendSimpleModelStream(response, result);
+        return this.streamAgentResponse({
+          chatId: body.id,
+          messages: langchainMessages,
+          modelId: agent.model,
+          kernel: agent.kernel,
+          mode: agent.mode,
+          tools: { choice: agent.toolChoice, testingEnabled: agent.testingEnabled },
+          contextPayload: agent.contextPayload,
+          response,
+        });
+      }
     }
-
-    if (modelId === 'commit-name-generator') {
-      const modelMessages = await convertToModelMessages(body.messages);
-      const result = this.chatService.getCommitMessageGenerator(modelMessages);
-      return sendSimpleModelStream(response, result);
-    }
-
-    const langchainMessages = await this.prepareMessages(body.id, body.messages, snapshot);
-
-    return this.streamAgentResponse({
-      chatId: body.id,
-      messages: langchainMessages,
-      modelId,
-      kernel,
-      mode,
-      tools,
-      contextPayload,
-      response,
-    });
   }
 
   /**
@@ -230,41 +229,6 @@ export class ChatController {
     } finally {
       this.metricsService.sseActiveConnections.add(-1);
     }
-  }
-
-  /**
-   * Pure mapper from the validated chat request body to the controller's
-   * `ChatRequestConfig`. Presence and shape of every required field on the
-   * last user message's metadata are enforced by `createChatSchema`'s
-   * `superRefine` (see {@link CreateChatDto}); this method never falls back
-   * silently and never throws on invalid input — invalid bodies are rejected
-   * at the Fastify body-parse boundary before this method runs.
-   *
-   * We re-parse the last message's metadata through
-   * {@link lastUserMessageMetadataSchema} to narrow the controller-side type
-   * from the permissive {@link import('@taucad/chat').MyMetadata} (every
-   * field optional, for historical messages) to the strict required-fields
-   * shape the agent stack consumes. This is a cheap structural parse on a
-   * tiny object and keeps the invariant locally enforced without `!`
-   * assertions sprinkled through the mapper.
-   */
-  private extractRequestConfig(body: CreateChatDto): ChatRequestConfig {
-    const lastMessage = body.messages.at(-1);
-    if (!lastMessage) {
-      throw new Error('Unreachable: createChatSchema enforces .nonempty() on messages');
-    }
-    const metadata = lastUserMessageMetadataSchema.parse(lastMessage.metadata);
-    return {
-      modelId: metadata.model,
-      kernel: metadata.kernel,
-      snapshot: metadata.snapshot,
-      contextPayload: metadata.contextPayload,
-      mode: metadata.mode,
-      tools: {
-        choice: metadata.toolChoice,
-        testingEnabled: metadata.testingEnabled,
-      },
-    };
   }
 
   /**

@@ -3,7 +3,7 @@ import { createTestApp } from '#testing/create-test-app.js';
 import type { TestApp } from '#testing/create-test-app.js';
 import { collectStreamChunks, collectFinalMessage } from '#testing/stream-consumer.js';
 import { expectChunkTypesInclude, expectNoErrors } from '#testing/stream-assertions.js';
-import { requiresEnv } from '#testing/skip-helpers.js';
+import { buildCadAgent, requiresEnv } from '#testing/skip-helpers.js';
 
 /**
  * Every `**Sub-title**`-style Markdown heading chunk in streamed reasoning text must begin
@@ -83,6 +83,7 @@ describe.skipIf(requiresEnv('ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GOOGLE_VERTE
           metadata: { model: models.second, kernel: 'replicad' },
         },
       ],
+      agent: buildCadAgent(models.second, 'replicad'),
     });
 
     it('accepts Anthropic-shaped thinking history then Gemini follow-up', async () => {
@@ -151,6 +152,7 @@ describe.skipIf(requiresEnv('ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GOOGLE_VERTE
               metadata: { model: 'openai-gpt-5.5', kernel: 'replicad' },
             },
           ],
+          agent: buildCadAgent('openai-gpt-5.5', 'replicad'),
         }),
       });
 

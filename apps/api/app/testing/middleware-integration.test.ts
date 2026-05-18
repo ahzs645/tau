@@ -11,7 +11,7 @@ import {
 } from '#testing/stream-assertions.js';
 import { createTestApp } from '#testing/create-test-app.js';
 import type { TestApp } from '#testing/create-test-app.js';
-import { providerEnvForModelId, requiresEnv } from '#testing/skip-helpers.js';
+import { buildCadAgent, providerEnvForModelId, requiresEnv } from '#testing/skip-helpers.js';
 
 const modelId = process.env['TEST_MODEL_ID'] ?? 'anthropic-claude-sonnet-4.6';
 
@@ -52,6 +52,7 @@ describe.skipIf(providerEnvVariable === undefined || requiresEnv(providerEnvVari
               metadata: { model: modelId, kernel: 'replicad' },
             },
           ],
+          agent: buildCadAgent(modelId, 'replicad'),
         }),
       });
 
@@ -112,6 +113,7 @@ describe.skipIf(providerEnvVariable === undefined || requiresEnv(providerEnvVari
               metadata: { model: modelId, kernel: 'replicad' },
             },
           ],
+          agent: buildCadAgent(modelId, 'replicad'),
         }),
       });
 
@@ -162,7 +164,7 @@ describe.skipIf(providerEnvVariable === undefined || requiresEnv(providerEnvVari
       const response = await fetch(`${testApp.baseUrl}/v1/chat`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ id: threadId, messages }),
+        body: JSON.stringify({ id: threadId, messages, agent: buildCadAgent(modelId, 'replicad') }),
       });
 
       expect(response.ok, `HTTP ${response.status}: ${response.statusText}`).toBe(true);
@@ -210,6 +212,7 @@ describe.skipIf(providerEnvVariable === undefined || requiresEnv(providerEnvVari
               metadata: { model: modelId, kernel: 'replicad' },
             },
           ],
+          agent: buildCadAgent(modelId, 'replicad'),
         }),
       });
 
@@ -298,6 +301,7 @@ describe.skipIf(providerEnvVariable === undefined || requiresEnv(providerEnvVari
               metadata: { model: modelId, kernel: 'openscad' },
             },
           ],
+          agent: buildCadAgent(modelId, 'openscad'),
         }),
       });
 

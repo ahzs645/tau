@@ -3,6 +3,7 @@
 /* eslint-disable @typescript-eslint/explicit-member-accessibility -- mock class constructors omit the `public` keyword to mirror the AI SDK's published shape. */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Chat as ChatEntity, MyUIMessage } from '@taucad/chat';
+import { chatTurnRequestSchema } from '@taucad/chat/schemas';
 import { clearLedger, recordRpcOutcome } from '#services/rpc-ledger.js';
 
 // ---------------------------------------------------------------------------
@@ -539,7 +540,7 @@ describe('ChatSessionStore', () => {
         {
           id: 'm_as_ms',
           role: 'assistant',
-          metadata: { model: 'test-model', createdAt: 1 },
+          metadata: { createdAt: 1 },
           parts: [
             {
               type: 'tool-create_file',
@@ -601,7 +602,7 @@ describe('ChatSessionStore', () => {
           {
             id: 'm_as_ls',
             role: 'assistant',
-            metadata: { model: 'test-model', createdAt: 2 },
+            metadata: { createdAt: 2 },
             parts: [
               {
                 type: 'tool-create_file',
@@ -693,6 +694,95 @@ describe('ChatSessionStore', () => {
 
       expect(deps.getChat).toHaveBeenCalledWith('chat_a');
     });
+
+    /**
+     * Phase D / t20 regression coverage.
+     *
+     * A persisted chat with a pending-tail user message that carries legacy
+     * `metadata.kernel`/`metadata.model`/`metadata.testingEnabled` still
+     * exists for any chat row written before the blueprint cut. Hydration
+     * MUST NOT read that metadata onto the wire body — the auto-regenerate
+     * must use whatever `useCadChatClient` published into
+     * `setLatestAgentBody`, and the resulting body must parse cleanly
+     * through the shared `chatTurnRequestSchema`. Without this guard, a
+     * homepage-seeded chat reloaded after the schema cut would 400 on the
+     * first turn because the persisted metadata path is no longer
+     * read-through.
+     */
+    it('hydration auto-regenerate on a legacy pending-tail uses latestAgentBody (NOT persisted message metadata) and produces a wire body that parses through chatTurnRequestSchema', async () => {
+      const store = new ChatSessionStore();
+      const deps = createStubDeps();
+      store.setDependencies(deps);
+
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- minimal MyUIMessage shape for test
+      const legacyPendingUserMessage: MyUIMessage = {
+        id: 'msg_legacy_pending',
+        role: 'user',
+        parts: [{ type: 'text', text: 'pre-blueprint prompt' }],
+        metadata: {
+          // Legacy fields previously stamped onto the persisted user message
+          // by `createMessage({ metadata: { kernel, model, mode, ... } })`.
+          // None of these should reach the wire body in the new architecture.
+          createdAt: 1_700_000_000_000,
+          status: 'pending',
+          model: 'legacy-stale-model',
+          kernel: 'replicad',
+          mode: 'agent',
+          toolChoice: 'auto',
+          testingEnabled: false,
+        },
+      } as MyUIMessage;
+
+      const legacyChat: ChatEntity = {
+        id: 'chat_legacy_hydration',
+        resourceId: 'resource_legacy',
+        name: 'Legacy chat',
+        messages: [legacyPendingUserMessage],
+        createdAt: 1_700_000_000_000,
+        updatedAt: 1_700_000_000_000,
+      };
+      deps.getChat.mockResolvedValue(legacyChat);
+
+      // Publish the *current* agent body before acquiring — mirrors what
+      // `useCadChatClient`'s mount effect does for the active chat.
+      const liveBody = {
+        agent: {
+          profile: 'cad',
+          model: 'openai-gpt-5.5',
+          kernel: 'replicad',
+          mode: 'agent',
+          toolChoice: 'auto',
+          testingEnabled: true,
+        },
+      };
+      store.acquire('chat_legacy_hydration');
+      store.setLatestAgentBody('chat_legacy_hydration', liveBody);
+
+      // Allow hydration → auto-regenerate dispatch → microtask deferral to drain.
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const fake = harness.created.find((entry) => entry.id === 'chat_legacy_hydration')!;
+      expect(fake.regenerate).toHaveBeenCalledTimes(1);
+      const dispatchedOptions = fake.regenerate.mock.calls[0]![0] as { body?: Record<string, unknown> } | undefined;
+      expect(dispatchedOptions?.body).toBe(liveBody);
+
+      const wireBody = {
+        id: 'chat_legacy_hydration',
+        messages: legacyChat.messages,
+        ...dispatchedOptions?.body,
+      };
+      const parsed = chatTurnRequestSchema.parse(wireBody);
+      expect(parsed.agent).toMatchObject({
+        profile: 'cad',
+        // Live agent values survive — never the legacy persisted metadata.
+        model: 'openai-gpt-5.5',
+        testingEnabled: true,
+      });
+
+      store.release('chat_legacy_hydration');
+    });
   });
 
   // ===========================================================================
@@ -729,6 +819,130 @@ describe('ChatSessionStore', () => {
       expect(fake.messages).toBe(beforeRef);
       expect(fake.regenerate).not.toHaveBeenCalled();
       expect(fake.sendMessage).not.toHaveBeenCalled();
+    });
+  });
+
+  // ===========================================================================
+  // Edit-resubmit dispatch
+  //
+  // The API reads agent config (model/kernel/mode/toolChoice/testingEnabled)
+  // from the top-level `agent` block on the wire body (built inside the
+  // chat-client from `useCadAgentConfig`), NOT from per-message metadata.
+  // `buildEditedMessage` therefore only resets the user-facing fields
+  // (text/image parts, createdAt, status) and forwards `request.body` to
+  // `chat.regenerate` so model selection travels via `body.agent`.
+  // ===========================================================================
+  describe('edit-resubmit dispatch', () => {
+    it('rebuilds the edited message with refreshed createdAt/status and forwards `request.body` to chat.regenerate', async () => {
+      const store = createStore();
+      const session = store.acquire('chat_edit_kernel');
+      const fake = harness.created.find((entry) => entry.id === 'chat_edit_kernel')!;
+
+      const originalMessage: MyUIMessage = {
+        id: 'msg_original',
+        role: 'user',
+        parts: [{ type: 'text', text: 'original prompt' }],
+        metadata: { createdAt: 100, status: 'error' },
+      };
+      fake.messages = [originalMessage];
+
+      const overrideBody = { agent: { profile: 'cad', model: 'new-model', kernel: 'replicad' } };
+      session.persistenceActorRef.send({
+        type: 'startRequest',
+        request: {
+          kind: 'edit',
+          messageId: 'msg_original',
+          content: 'edited prompt',
+          body: overrideBody,
+        },
+      });
+
+      await Promise.resolve();
+
+      expect(fake.regenerate).toHaveBeenCalledTimes(1);
+      expect(fake.regenerate).toHaveBeenCalledWith({ body: overrideBody });
+      const rebuilt = fake.messages.at(-1)!;
+      expect(rebuilt.id).toBe('msg_original');
+      expect(rebuilt.role).toBe('user');
+      const text = rebuilt.parts.find((part): part is { type: 'text'; text: string } => part.type === 'text');
+      expect(text?.text).toBe('edited prompt');
+      expect(rebuilt.metadata?.status).toBe('pending');
+      expect(typeof rebuilt.metadata?.createdAt).toBe('number');
+    });
+  });
+
+  // ===========================================================================
+  // Retry rebuild
+  //
+  // The retry helper slices the assistant tail and forwards `request.body`
+  // to `chat.regenerate`; model selection travels via `body.agent.model`
+  // (composed by the chat-client), never via metadata patching.
+  // ===========================================================================
+  describe('retry rebuild', () => {
+    it('slices the assistant tail and forwards `request.body` to chat.regenerate', async () => {
+      const store = createStore();
+      const session = store.acquire('chat_retry_metadata');
+      const fake = harness.created.find((entry) => entry.id === 'chat_retry_metadata')!;
+
+      const userMessage: MyUIMessage = {
+        id: 'msg_user_retry',
+        role: 'user',
+        parts: [{ type: 'text', text: 'do thing' }],
+        metadata: { createdAt: 1, status: 'success' },
+      };
+      const assistantMessage: MyUIMessage = {
+        id: 'msg_assistant_retry',
+        role: 'assistant',
+        parts: [{ type: 'text', text: 'partial reply', state: 'done' }],
+        metadata: { createdAt: 2, status: 'success' },
+      };
+      fake.messages = [userMessage, assistantMessage];
+
+      const overrideBody = { agent: { profile: 'cad', model: 'new-model', kernel: 'replicad' } };
+      session.persistenceActorRef.send({
+        type: 'startRequest',
+        request: {
+          kind: 'retry',
+          messageId: 'msg_assistant_retry',
+          body: overrideBody,
+        },
+      });
+
+      await Promise.resolve();
+
+      expect(fake.regenerate).toHaveBeenCalledTimes(1);
+      expect(fake.regenerate).toHaveBeenCalledWith({ body: overrideBody });
+      // The assistant turn was sliced off; the previous user message is
+      // unchanged (no metadata patching — model selection lives in
+      // `body.agent.model`).
+      expect(fake.messages).toHaveLength(1);
+      expect(fake.messages[0]!.id).toBe('msg_user_retry');
+    });
+  });
+
+  // ===========================================================================
+  // Hydration auto-regenerate (R10/t17)
+  //
+  // The legacy pending-tail hydration regenerate now flows through the same
+  // `dispatchRequest` listener; without an explicit `request.body` it falls
+  // back to `session.latestAgentBody` published by `useCadChatClient` so the
+  // very first turn of a homepage-seeded chat still carries an `agent` block.
+  // ===========================================================================
+  describe('hydration auto-regenerate (R10/t17)', () => {
+    it('falls back to latestAgentBody when no explicit body is supplied on regenerate', async () => {
+      const store = createStore();
+      const session = store.acquire('chat_hydration_regen');
+      const fake = harness.created.find((entry) => entry.id === 'chat_hydration_regen')!;
+
+      const latestBody = { agent: { profile: 'cad', model: 'cad-default', kernel: 'replicad' } };
+      store.setLatestAgentBody('chat_hydration_regen', latestBody);
+
+      session.persistenceActorRef.send({ type: 'startRequest', request: { kind: 'regenerate' } });
+
+      await Promise.resolve();
+
+      expect(fake.regenerate).toHaveBeenCalledTimes(1);
+      expect(fake.regenerate).toHaveBeenCalledWith({ body: latestBody });
     });
   });
 
@@ -902,7 +1116,7 @@ describe('ChatSessionStore', () => {
           {
             id: 'm_as',
             role: 'assistant',
-            metadata: { model: 'test-model', createdAt: 2 },
+            metadata: { createdAt: 2 },
             parts: [
               {
                 type: 'tool-create_file',

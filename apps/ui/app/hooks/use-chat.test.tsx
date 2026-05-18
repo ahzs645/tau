@@ -242,13 +242,16 @@ describe('chat session lifecycle wiring (via ChatSessionStore)', () => {
   // are translated faithfully by the store-side dispatch listeners.
   // ===========================================================================
 
-  it('routes a `send` request through to chat.sendMessage', () => {
+  it('routes a `send` request through to chat.sendMessage', async () => {
     const { result } = renderProvider();
     const message = makeUserMessage('msg_1', 'hello');
 
     act(() => {
       result.current.actions.sendMessage(message);
     });
+    // `dispatchRequest` defers the AI SDK call onto a microtask to dodge
+    // the preempt-clobber bug (see chat-session-store.ts docstring).
+    await Promise.resolve();
 
     const fake = getFake(defaultTestChatId);
     expect(fake.sendMessage).toHaveBeenCalledTimes(1);
@@ -257,42 +260,42 @@ describe('chat session lifecycle wiring (via ChatSessionStore)', () => {
     expect(fake.stop).not.toHaveBeenCalled();
   });
 
-  it('routes a `regenerate` request through to chat.regenerate', () => {
+  it('routes a `regenerate` request through to chat.regenerate', async () => {
     const { result } = renderProvider();
 
     act(() => {
       result.current.actions.regenerate();
     });
+    await Promise.resolve();
 
     const fake = getFake(defaultTestChatId);
     expect(fake.regenerate).toHaveBeenCalledTimes(1);
     expect(fake.sendMessage).not.toHaveBeenCalled();
   });
 
-  it('routes a `continueChat` request through to chat.makeRequest({ trigger: "submit-message" })', () => {
+  it('routes a `continueChat` request through to chat.makeRequest({ trigger: "submit-message" })', async () => {
     const { result } = renderProvider();
 
     act(() => {
       result.current.actions.continueChat();
     });
+    await Promise.resolve();
 
     const fake = getFake(defaultTestChatId);
     expect(fake.makeRequest).toHaveBeenCalledTimes(1);
     expect(fake.makeRequest).toHaveBeenCalledWith({ trigger: 'submit-message' });
-    // Critical: the partial-assistant-preserving recovery path MUST NOT
-    // touch regenerate (which slices the trailing assistant) or sendMessage
-    // (which appends a new user turn).
     expect(fake.regenerate).not.toHaveBeenCalled();
     expect(fake.sendMessage).not.toHaveBeenCalled();
   });
 
-  it('routes a `stop` request through to chat.stop', () => {
+  it('routes a `stop` request through to chat.stop', async () => {
     const { result } = renderProvider();
 
     // Need an in-flight request so stopRequest is accepted by the lifecycle.
     act(() => {
       result.current.actions.regenerate();
     });
+    await Promise.resolve();
 
     act(() => {
       result.current.actions.stop();
@@ -302,36 +305,37 @@ describe('chat session lifecycle wiring (via ChatSessionStore)', () => {
     expect(fake.stop).toHaveBeenCalledTimes(1);
   });
 
-  it('replaces the message tail and regenerates on edit', () => {
+  it('replaces the message tail and regenerates on edit', async () => {
     const original = makeUserMessage('msg_1', 'first try');
     const { result } = renderProvider();
     const fake = getFake(defaultTestChatId);
     fake.messages = [original];
 
     act(() => {
-      result.current.actions.editMessage('msg_1', 'second try', 'gpt-test');
+      result.current.actions.editMessage('msg_1', 'second try');
     });
+    await Promise.resolve();
 
     expect(fake.messages).toHaveLength(1);
     expect(fake.messages[0]!.id).toBe('msg_1');
     expect(fake.messages[0]!.parts[0]).toMatchObject({ type: 'text', text: 'second try' });
-    expect(fake.messages[0]!.metadata?.model).toBe('gpt-test');
     expect(fake.regenerate).toHaveBeenCalledTimes(1);
   });
 
-  it('skips edit dispatch when the target message is no longer present', () => {
+  it('skips edit dispatch when the target message is no longer present', async () => {
     const { result } = renderProvider();
 
     act(() => {
-      result.current.actions.editMessage('msg_missing', 'edit', 'gpt-test');
+      result.current.actions.editMessage('msg_missing', 'edit');
     });
+    await Promise.resolve();
 
     const fake = getFake(defaultTestChatId);
     expect(fake.regenerate).not.toHaveBeenCalled();
     expect(result.current.context.persistenceActorRef!.getSnapshot().matches({ requestLifecycle: 'idle' })).toBe(true);
   });
 
-  it('rolls back to the previous user turn on retry, applying a model override', () => {
+  it('rolls back to the previous user turn on retry', async () => {
     const userMessage = makeUserMessage('msg_user', 'do thing');
     const assistantMessage = makeAssistantMessage('msg_assistant', 'reply');
     const { result } = renderProvider();
@@ -339,16 +343,13 @@ describe('chat session lifecycle wiring (via ChatSessionStore)', () => {
     fake.messages = [userMessage, assistantMessage];
 
     act(() => {
-      result.current.actions.retryMessage('msg_assistant', 'new-model');
+      result.current.actions.retryMessage('msg_assistant');
     });
+    await Promise.resolve();
 
     expect(fake.messages).toHaveLength(1);
     expect(fake.messages[0]!.id).toBe('msg_user');
-    expect(fake.messages[0]!.metadata?.model).toBe('new-model');
     expect(fake.regenerate).toHaveBeenCalledTimes(1);
-    // Regression guard for R1: per-message Try Again must NEVER bleed into
-    // the resumable-stream `continue` path (which would skip the message
-    // tail rollback and fail to re-issue the user turn).
     expect(fake.makeRequest).not.toHaveBeenCalled();
   });
 
@@ -395,6 +396,7 @@ describe('chat session lifecycle wiring (via ChatSessionStore)', () => {
       });
 
       expect(persistenceActorRef.getSnapshot().context.persistedError).toBeUndefined();
+      await Promise.resolve();
       expect(getFake('chat_abc').sendMessage).toHaveBeenCalledTimes(1);
     });
 
@@ -418,10 +420,11 @@ describe('chat session lifecycle wiring (via ChatSessionStore)', () => {
       });
 
       act(() => {
-        result.current.actions.editMessage('msg_1', 'edited', 'gpt-test');
+        result.current.actions.editMessage('msg_1', 'edited');
       });
 
       expect(persistenceActorRef.getSnapshot().context.persistedError).toBeUndefined();
+      await Promise.resolve();
       expect(getFake('chat_abc').regenerate).toHaveBeenCalledTimes(1);
     });
 
@@ -450,6 +453,7 @@ describe('chat session lifecycle wiring (via ChatSessionStore)', () => {
       });
 
       expect(persistenceActorRef.getSnapshot().context.persistedError).toBeUndefined();
+      await Promise.resolve();
       expect(getFake('chat_abc').regenerate).toHaveBeenCalledTimes(1);
     });
   });
@@ -460,7 +464,7 @@ describe('chat session lifecycle wiring (via ChatSessionStore)', () => {
   // isAbort, transparently dispatch the queued request.
   // ===========================================================================
 
-  it('queues a second request, stops the first, then dispatches on abort', () => {
+  it('queues a second request, stops the first, then dispatches on abort', async () => {
     const { result } = renderProvider();
     const first = makeUserMessage('msg_first', 'one');
     const second = makeUserMessage('msg_second', 'two');
@@ -468,6 +472,7 @@ describe('chat session lifecycle wiring (via ChatSessionStore)', () => {
     act(() => {
       result.current.actions.sendMessage(first);
     });
+    await Promise.resolve();
 
     act(() => {
       result.current.actions.sendMessage(second);
@@ -483,6 +488,7 @@ describe('chat session lifecycle wiring (via ChatSessionStore)', () => {
     act(() => {
       fake.onFinish({ messages: [first], isAbort: true, isError: false, isDisconnect: false });
     });
+    await Promise.resolve();
 
     expect(fake.sendMessage).toHaveBeenCalledTimes(2);
     expect(fake.sendMessage).toHaveBeenLastCalledWith(second);

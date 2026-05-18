@@ -35,6 +35,7 @@ import { Loader } from '#components/ui/loader.js';
 import type { Handle } from '#types/matches.types.js';
 import { useProjectManager } from '#hooks/use-project-manager.js';
 import { useKernel } from '#hooks/use-kernel.js';
+import { useActiveChatModel } from '#hooks/use-active-chat-model.js';
 import { cacheTag, cdnBackedSsrRouteHeaders } from '#lib/react-router.lib.js';
 const homepageChatResourceId = 'homepage_main_chat_resource';
 const homepageChatId = 'chat_homepage_main';
@@ -173,16 +174,17 @@ function HomepageChatInput({
 }): React.JSX.Element {
   const navigate = useNavigate();
   const projectManager = useProjectManager();
+  const { modelId } = useActiveChatModel();
   const { clearDraft } = useChatActions();
   const { draftActorRef } = useChatContext();
 
   const onSubmit: ChatTextareaProperties['onSubmit'] = useCallback(
-    async ({ content, model, metadata, imageUrls }) => {
+    async ({ content, imageUrls }) => {
       try {
         const createProject = await projectManager.createProject({
           kernel,
-          initialMessage: { content, model, metadata, imageUrls },
-          // Set initial panel state: chat open
+          activeModel: modelId,
+          initialMessage: { content, imageUrls },
           editorState: { panelState: { openPanels: { chat: true } } },
         });
 
@@ -194,7 +196,7 @@ function HomepageChatInput({
         toast.error('Failed to create project');
       }
     },
-    [clearDraft, draftActorRef, kernel, navigate, projectManager],
+    [clearDraft, draftActorRef, kernel, modelId, navigate, projectManager],
   );
 
   return (

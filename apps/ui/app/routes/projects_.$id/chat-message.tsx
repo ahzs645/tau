@@ -3,6 +3,7 @@ import { memo, useCallback, useMemo, useState } from 'react';
 import { messageRole } from '@taucad/chat/constants';
 import type { MyMessagePart, UsageData } from '@taucad/chat';
 import { useChatActions, useChatSelector } from '#hooks/use-chat.js';
+import { useCadChatClient } from '#chat-clients/use-cad-chat-client.js';
 import type { CombinedChatState } from '#hooks/use-chat.js';
 import { serializeMessage } from '#utils/chat.utils.js';
 import { parseInlineReferences } from '#utils/at-reference.utils.js';
@@ -435,7 +436,8 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
 
     return usageDataParts;
   });
-  const { editMessage, retryMessage, startEditingMessage, exitEditMode, stop } = useChatActions();
+  const { startEditingMessage, exitEditMode, stop } = useChatActions();
+  const cadChat = useCadChatClient();
   const chatStatus = useChatSelector((state) => state.status);
   const lastUserMessageId = useChatSelector(selectLastUserMessageId);
   const formattedCancelKeyCombination = formatKeyCombination(cancelChatStreamKeyCombination);
@@ -559,7 +561,11 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
             mode='edit'
             className='rounded-sm'
             onSubmit={async (event) => {
-              editMessage(messageId, event.content, event.model, event.metadata, event.imageUrls);
+              // R10/t17: edit-message routes through the cad chat-client so
+              // the wire body's `agent` block is composed from the live
+              // `useCadAgentConfig` snapshot — no model/metadata stamping
+              // on the persisted user row.
+              cadChat.edit(messageId, { text: event.content, imageUrls: event.imageUrls });
               exitEditMode();
               setIsEditing(false);
             }}
@@ -650,7 +656,7 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
                     popoverProperties={{ side: 'right', align: 'start' }}
                     className='h-fit w-full'
                     onSelect={(modelId) => {
-                      retryMessage(messageId, modelId);
+                      cadChat.retry(messageId, modelId);
                     }}
                   >
                     {({ selectedModel }) => (
@@ -671,7 +677,7 @@ export const ChatMessage = memo(function ({ messageId }: ChatMessageProperties):
                   <DropdownMenuItem
                     className='flex justify-between'
                     onClick={() => {
-                      retryMessage(messageId);
+                      cadChat.retry(messageId);
                     }}
                   >
                     <p>Try again</p>

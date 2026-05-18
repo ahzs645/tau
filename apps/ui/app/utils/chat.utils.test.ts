@@ -585,7 +585,7 @@ describe('finalizeInterruptedToolParts', () => {
               input: { targetFile: 'z.scad', content: '//' },
             },
           ],
-          metadata: { model: 'm', createdAt: 2 },
+          metadata: { createdAt: 2 },
         },
       ];
 
@@ -623,7 +623,7 @@ describe('finalizeInterruptedToolParts', () => {
             input: { targetFile: 'z.scad', content: '//' },
           },
         ],
-        metadata: { model: 'm', createdAt: 2 },
+        metadata: { createdAt: 2 },
       },
     ];
 
@@ -653,7 +653,7 @@ describe('finalizeInterruptedToolParts', () => {
             input: { targetFile: 'z.scad', content: '//' },
           },
         ],
-        metadata: { model: 'm', createdAt: 2 },
+        metadata: { createdAt: 2 },
       },
     ];
 
@@ -681,7 +681,7 @@ describe('finalizeInterruptedToolParts', () => {
             input: { targetFile: 'z.scad', content: '//' },
           },
         ],
-        metadata: { model: 'm', createdAt: 2 },
+        metadata: { createdAt: 2 },
       },
     ];
 

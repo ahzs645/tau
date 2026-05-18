@@ -66,10 +66,10 @@ export class ChatService {
     modelId: string;
     kernel: KernelProvider;
     /**
-     * Required. The controller resolves `mode` from validated request
-     * metadata (see `chat.dto.ts` `lastUserMessageMetadataSchema`); we do
-     * not silently default at this layer because that masks API contract
-     * drift one layer downstream.
+     * Required. The controller resolves `mode` from the validated
+     * top-level `agent` block (see `chat.dto.ts` `chatTurnRequestSchema`);
+     * we do not silently default at this layer because that masks API
+     * contract drift one layer downstream.
      */
     mode: ChatMode;
     tools: {

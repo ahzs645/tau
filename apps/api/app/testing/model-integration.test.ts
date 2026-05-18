@@ -22,7 +22,7 @@ import {
 } from '#testing/stream-assertions.js';
 import { createTestApp } from '#testing/create-test-app.js';
 import type { TestApp } from '#testing/create-test-app.js';
-import { providerEnvForModelId, requiresEnv } from '#testing/skip-helpers.js';
+import { buildCadAgent, providerEnvForModelId, requiresEnv } from '#testing/skip-helpers.js';
 
 const modelId = process.env['TEST_MODEL_ID'] ?? 'anthropic-claude-sonnet-4.6';
 
@@ -66,6 +66,7 @@ describe.skipIf(providerEnvVariable === undefined || requiresEnv(providerEnvVari
               },
             },
           ],
+          agent: buildCadAgent(modelId, 'replicad'),
         }),
       });
 
@@ -104,6 +105,7 @@ describe.skipIf(providerEnvVariable === undefined || requiresEnv(providerEnvVari
               },
             },
           ],
+          agent: buildCadAgent(modelId, 'replicad'),
         }),
       });
 
@@ -142,6 +144,7 @@ describe.skipIf(providerEnvVariable === undefined || requiresEnv(providerEnvVari
               },
             },
           ],
+          agent: buildCadAgent(modelId, 'replicad'),
         }),
       });
 
@@ -196,6 +199,7 @@ describe.skipIf(providerEnvVariable === undefined || requiresEnv(providerEnvVari
               },
             },
           ],
+          agent: buildCadAgent(modelId, 'replicad'),
         }),
       });
 
@@ -252,6 +256,7 @@ describe.skipIf(providerEnvVariable === undefined || requiresEnv(providerEnvVari
               },
             },
           ],
+          agent: buildCadAgent(modelId, 'replicad'),
         }),
       });
 
@@ -297,6 +302,7 @@ describe.skipIf(providerEnvVariable === undefined || requiresEnv(providerEnvVari
               },
             },
           ],
+          agent: buildCadAgent(modelId, 'replicad'),
         }),
       });
 
@@ -358,6 +364,7 @@ describe.skipIf(providerEnvVariable === undefined || requiresEnv(providerEnvVari
               },
             },
           ],
+          agent: buildCadAgent(modelId, 'replicad'),
         }),
       });
 
@@ -395,6 +402,7 @@ describe.skipIf(providerEnvVariable === undefined || requiresEnv(providerEnvVari
               },
             },
           ],
+          agent: buildCadAgent(modelId, 'replicad'),
         }),
       });
 
@@ -447,6 +455,7 @@ describe.skipIf(providerEnvVariable === undefined || requiresEnv(providerEnvVari
               },
             },
           ],
+          agent: buildCadAgent(modelId, 'replicad'),
         }),
       });
 

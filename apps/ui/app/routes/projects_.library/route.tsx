@@ -171,16 +171,14 @@ export default function PersonalCadProjects(): React.JSX.Element {
   );
 
   const onSubmit: ChatTextareaProperties['onSubmit'] = useCallback(
-    async ({ content, model, metadata, imageUrls }) => {
+    async ({ content, imageUrls }) => {
       try {
         const createdProject = await projectManager.createProject({
           kernel,
-          initialMessage: { content, model, metadata, imageUrls },
-          // Set initial panel state: chat open
+          initialMessage: { content, imageUrls },
           editorState: { panelState: { openPanels: { chat: true } } },
         });
 
-        // Navigate immediately - the project page will handle the streaming
         await navigate(`/projects/${createdProject.id}`);
       } catch {
         toast.error('Failed to create project');

@@ -6,7 +6,7 @@ import { toolName } from '@taucad/chat/constants';
 import { mergeCheckpointTail } from '#api/chat/utils/merge-checkpoint-tail.js';
 
 describe('mergeCheckpointTail', () => {
-  // Request shape mirrors the wire contract enforced by `createChatSchema`:
+  // Request shape mirrors the wire contract enforced by `chatTurnRequestSchema`:
   // an optional historical user turn (kicking off the conversation), the
   // assistant turn whose stale tool parts the splice repairs, and the
   // trailing user turn that drives the current request.
@@ -14,14 +14,14 @@ describe('mergeCheckpointTail', () => {
     id: 'm_user_history',
     role: 'user',
     parts: [{ type: 'text', text: 'go' }],
-    metadata: { model: 'gpt-5', createdAt: 1 },
+    metadata: { createdAt: 1 },
   };
 
   const trailingUserTurn: MyUIMessage = {
     id: 'm_user_trailing',
     role: 'user',
     parts: [{ type: 'text', text: 'continue' }],
-    metadata: { model: 'gpt-5', createdAt: 3 },
+    metadata: { createdAt: 3 },
   };
 
   it('returns a copy when checkpoint has no tool messages', () => {
@@ -36,7 +36,7 @@ describe('mergeCheckpointTail', () => {
           input: { targetFile: 'a.scad', content: 'x' },
         },
       ],
-      metadata: { model: 'gpt-5', createdAt: 2 },
+      metadata: { createdAt: 2 },
     };
     const requestMessages = [historicalUserTurn, assistant, trailingUserTurn];
     const next = mergeCheckpointTail({ requestMessages, checkpointMessages: [] });
@@ -62,7 +62,7 @@ describe('mergeCheckpointTail', () => {
           input: { targetFile: 'b.scad', content: 'sphere();' },
         },
       ],
-      metadata: { model: 'gpt-5', createdAt: 2 },
+      metadata: { createdAt: 2 },
     };
 
     const toolA = new ToolMessage({
@@ -114,7 +114,7 @@ describe('mergeCheckpointTail', () => {
           input: { targetFile: 'y.scad', content: '//' },
         },
       ],
-      metadata: { model: 'gpt-5', createdAt: 2 },
+      metadata: { createdAt: 2 },
     };
 
     const toolReady = new ToolMessage({

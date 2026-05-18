@@ -357,8 +357,8 @@ export function useChatRetrySnapshot(chatId?: string): ChatRetrySnapshot {
 // ---------------------------------------------------------------------------
 
 export type ChatActions = {
-  sendMessage: (message: SendMessageInput) => void;
-  regenerate: () => void;
+  sendMessage: (message: SendMessageInput, options?: { body?: Readonly<Record<string, unknown>> }) => void;
+  regenerate: (options?: { body?: Readonly<Record<string, unknown>> }) => void;
   /**
    * Resume an interrupted stream WITHOUT re-running the trailing user
    * message or slicing any assistant parts that already landed. Use this
@@ -397,9 +397,12 @@ export type ChatActions = {
   addEditDraftImage: (image: string) => void;
   removeEditDraftImage: (index: number) => void;
   clearMessageEdit: (messageId: string) => void;
-  // oxlint-disable-next-line max-params -- callback signature shared across chat components; refactoring would require updating many call sites
-  editMessage: (messageId: string, content: string, model: string, metadata?: unknown, imageUrls?: string[]) => void;
-  retryMessage: (messageId: string, modelId?: string) => void;
+  editMessage: (
+    messageId: string,
+    content: string,
+    options?: { imageUrls?: string[]; body?: Readonly<Record<string, unknown>> },
+  ) => void;
+  retryMessage: (messageId: string, options?: { body?: Readonly<Record<string, unknown>> }) => void;
   /**
    * Patch the chat-scoped active model id. The persistence machine writes
    * `Chat.activeModel` so a reload preserves this choice independent of
@@ -436,7 +439,7 @@ export function useChatActions(chatId?: string): ChatActions {
     const resolveSession = (): ChatSession | undefined => (activeChatId ? store.get(activeChatId) : undefined);
 
     return {
-      sendMessage(message: SendMessageInput) {
+      sendMessage(message: SendMessageInput, options) {
         draftActorRef.send({ type: 'clearDraft' });
         const session = resolveSession();
         if (!session) {
@@ -446,16 +449,19 @@ export function useChatActions(chatId?: string): ChatActions {
         session.persistenceActorRef.send({
           type: 'startRequest',
           // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- AI SDK sendMessage union narrows to MyUIMessage at all call sites
-          request: { kind: 'send', message: message as MyUIMessage },
+          request: { kind: 'send', message: message as MyUIMessage, body: options?.body },
         });
       },
-      regenerate() {
+      regenerate(options) {
         const session = resolveSession();
         if (!session) {
           warnNoInstance('regenerate', activeChatId);
           return;
         }
-        session.persistenceActorRef.send({ type: 'startRequest', request: { kind: 'regenerate' } });
+        session.persistenceActorRef.send({
+          type: 'startRequest',
+          request: { kind: 'regenerate', body: options?.body },
+        });
       },
       continueChat() {
         const session = resolveSession();
@@ -523,26 +529,23 @@ export function useChatActions(chatId?: string): ChatActions {
         draftActorRef.send({ type: 'clearMessageEdit', messageId });
       },
 
-      // oxlint-disable-next-line max-params -- matches the callback signature used across chat components
-      editMessage(messageId: string, content: string, model: string, _metadata?: unknown, imageUrls?: string[]) {
+      editMessage(messageId: string, content: string, options?) {
         draftActorRef.send({ type: 'clearMessageEdit', messageId });
         const session = resolveSession();
         if (!session) {
           warnNoInstance('editMessage', activeChatId);
           return;
         }
-        // Validate before transitioning so requestLifecycle stays clean if
-        // the message has gone (e.g. raced with a concurrent setMessages).
         if (!session.chat.messages.some((m) => m.id === messageId)) {
           return;
         }
         session.persistenceActorRef.send({
           type: 'startRequest',
-          request: { kind: 'edit', messageId, content, model, imageUrls },
+          request: { kind: 'edit', messageId, content, imageUrls: options?.imageUrls, body: options?.body },
         });
       },
 
-      retryMessage(messageId: string, modelId?: string) {
+      retryMessage(messageId: string, options?) {
         const session = resolveSession();
         if (!session) {
           warnNoInstance('retryMessage', activeChatId);
@@ -553,7 +556,7 @@ export function useChatActions(chatId?: string): ChatActions {
         }
         session.persistenceActorRef.send({
           type: 'startRequest',
-          request: { kind: 'retry', messageId, modelId },
+          request: { kind: 'retry', messageId, body: options?.body },
         });
       },
 

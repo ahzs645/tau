@@ -5,7 +5,7 @@ import { collectStreamChunks, collectFinalMessage } from '#testing/stream-consum
 import { extractUsageData, expectNoErrors } from '#testing/stream-assertions.js';
 import { createTestApp } from '#testing/create-test-app.js';
 import type { TestApp } from '#testing/create-test-app.js';
-import { requiresEnv } from '#testing/skip-helpers.js';
+import { buildCadAgent, requiresEnv } from '#testing/skip-helpers.js';
 
 // =============================================================================
 // Live Vertex Gemini regression test for prompt-cache stability.
@@ -137,7 +137,7 @@ describe.skipIf(requiresEnv('GOOGLE_VERTEX_AI_CREDENTIALS'))('Gemini implicit ca
       const response = await fetch(`${testApp.baseUrl}/v1/chat`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ id: threadId, messages: conversation }),
+        body: JSON.stringify({ id: threadId, messages: conversation, agent: buildCadAgent(modelId, 'replicad') }),
       });
 
       expect(response.ok, `Turn ${index + 1}: HTTP ${response.status} ${response.statusText}`).toBe(true);

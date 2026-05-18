@@ -49,6 +49,27 @@ vi.mock('#hooks/use-chat.js', () => ({
   },
 }));
 
+vi.mock('#chat-clients/use-cad-chat-client.js', () => ({
+  useCadChatClient: () => ({
+    submit: vi.fn(),
+    edit: vi.fn(),
+    retry: vi.fn(),
+    regenerateTail: vi.fn(),
+    stop: vi.fn(),
+    messages: [],
+    status: 'ready',
+    error: undefined,
+    agent: {
+      profile: 'cad',
+      model: 'openai-gpt-5.5',
+      kernel: 'replicad',
+      mode: 'agent',
+      toolChoice: 'auto',
+      testingEnabled: true,
+    },
+  }),
+}));
+
 vi.mock('#routes/projects_.$id/chat-message-planning.js', () => ({
   ChatMessagePlanning({ messageId, className }: { readonly messageId: string; readonly className?: string }) {
     return (

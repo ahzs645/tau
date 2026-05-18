@@ -285,24 +285,21 @@ describe('useProjectManager', () => {
       expect(mockMount).toHaveBeenCalledWith(`/projects/${fakeProject.id}`, 'indexeddb', { preservePath: true });
     });
 
-    it('should seed activeModel and activeKernel on the new chat from the kernel template + initial message', async () => {
+    it('should seed activeKernel from the kernel template and leave activeModel unset when not supplied', async () => {
       const { result } = renderHook(() => useProjectManager(), { wrapper: createWrapper() });
 
       await act(async () => {
         await result.current.createProject({
           kernel: 'openscad',
           projectName: 'Seeded',
-          initialMessage: {
-            content: 'hello',
-            model: 'anthropic/claude-sonnet-4-5',
-          },
+          initialMessage: { content: 'hello' },
         });
       });
 
       const callArgs = mockCreateProjectWithResources.mock.calls.at(-1)?.[0] as
         | { chat: { activeModel?: string; activeKernel?: string } }
         | undefined;
-      expect(callArgs?.chat.activeModel).toBe('anthropic/claude-sonnet-4-5');
+      expect(callArgs?.chat.activeModel).toBeUndefined();
       expect(callArgs?.chat.activeKernel).toBe('openscad');
     });
 
@@ -330,10 +327,7 @@ describe('useProjectManager', () => {
           kernel: 'openscad',
           activeModel: 'override-model',
           activeKernel: 'manifold',
-          initialMessage: {
-            content: 'hello',
-            model: 'derived-model',
-          },
+          initialMessage: { content: 'hello' },
         });
       });
 
@@ -342,6 +336,36 @@ describe('useProjectManager', () => {
         | undefined;
       expect(callArgs?.chat.activeModel).toBe('override-model');
       expect(callArgs?.chat.activeKernel).toBe('manifold');
+    });
+
+    // Wire-format invariant for the chat-metadata-first-class-architecture
+    // refactor: the pending-user-message seeded onto a brand-new chat must
+    // carry only `status: pending`. The per-request `agent` payload (kernel,
+    // model, mode, toolChoice, testingEnabled, snapshot, contextPayload)
+    // is composed by the chat-client at regenerate time, not stamped onto
+    // the seed message. Regression coverage for the previous failure mode
+    // where the seed message stamped kernel/model and the seed mode drifted
+    // from the chat row's activeKernel.
+    it('should seed the initial pending user message with only status: pending', async () => {
+      const { result } = renderHook(() => useProjectManager(), { wrapper: createWrapper() });
+
+      await act(async () => {
+        await result.current.createProject({
+          kernel: 'openscad',
+          initialMessage: { content: 'first turn' },
+        });
+      });
+
+      const callArgs = mockCreateProjectWithResources.mock.calls.at(-1)?.[0] as
+        | { chat: { messages: Array<{ metadata?: Record<string, unknown> }> } }
+        | undefined;
+      const seedMetadata = callArgs?.chat.messages[0]?.metadata;
+      expect(seedMetadata?.['status']).toBe('pending');
+      expect(seedMetadata?.['kernel']).toBeUndefined();
+      expect(seedMetadata?.['model']).toBeUndefined();
+      expect(seedMetadata?.['mode']).toBeUndefined();
+      expect(seedMetadata?.['toolChoice']).toBeUndefined();
+      expect(seedMetadata?.['testingEnabled']).toBeUndefined();
     });
 
     it('should write files with correct project paths', async () => {
