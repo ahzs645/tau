@@ -1,7 +1,7 @@
 import type { GraphicsBackendPreference, ResolvedGraphicsBackend } from '#constants/editor.constants.js';
 
 /** Query-param override for e2e and manual testing (whole-tab). */
-const graphicsBackendQueryValues = ['auto', 'webgl', 'webgpu'] as const;
+const graphicsBackendQueryValues = ['webgl', 'webgpu'] as const;
 
 /**
  * Probe WebGPU adapter availability without creating a GPUDevice.
@@ -50,21 +50,18 @@ export function offscreenWebGpuCanvasContextAvailable(): boolean {
 /**
  * Resolve persisted preference + runtime capability into `webgl` or `webgpu`.
  *
- * - `auto` prefers WebGPU when an adapter exists (plan Phase 6); falls back otherwise.
+ * `webgpu` falls back to `webgl` when no adapter is available so the renderer
+ * always has a valid backend to mount against.
  */
 export function resolveGraphicsBackendPreference(
   preference: GraphicsBackendPreference,
   gpuAvailable: boolean,
 ): ResolvedGraphicsBackend {
-  if (preference === 'webgl') {
-    return 'webgl';
-  }
-
   if (preference === 'webgpu') {
     return gpuAvailable ? 'webgpu' : 'webgl';
   }
 
-  return gpuAvailable ? 'webgpu' : 'webgl';
+  return 'webgl';
 }
 
 /**

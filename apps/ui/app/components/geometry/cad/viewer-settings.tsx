@@ -32,6 +32,7 @@ import { axesColors } from '#constants/color.constants.js';
 import type { EnvironmentPreset, GraphicsBackendPreference } from '#constants/editor.constants.js';
 import { useGraphics, useGraphicsSelector } from '#hooks/use-graphics.js';
 import { useCad, useCadSelector } from '#hooks/use-cad.js';
+import { BetaBadge } from '#components/release-badge.js';
 
 // Up direction options
 type UpDirection = 'x' | 'y' | 'z';
@@ -84,21 +85,18 @@ const graphicsBackendOptions: Array<{
   id: GraphicsBackendPreference;
   label: string;
   description: string;
+  isBeta?: boolean;
 }> = [
-  {
-    id: 'auto',
-    label: 'Auto',
-    description: 'Use WebGPU when available; otherwise WebGL.',
-  },
   {
     id: 'webgl',
     label: 'WebGL',
-    description: 'Legacy path; widest browser support.',
+    description: 'Stable default; widest browser support.',
   },
   {
     id: 'webgpu',
     label: 'WebGPU',
     description: 'Faster when supported; falls back automatically if unavailable.',
+    isBeta: true,
   },
 ];
 
@@ -135,7 +133,6 @@ export function ViewerSettings({ className, overflowControls }: ViewerSettingsPr
   const environmentPreset = useGraphicsSelector((state) => state.context.environmentPreset);
   const graphicsBackendPreference = useGraphicsSelector((state) => state.context.graphicsBackendPreference);
   const webGpuAvailable = useGraphicsSelector((state) => state.context.webGpuAvailable);
-  const resolvedGraphicsBackend = useGraphicsSelector((state) => state.context.resolvedGraphicsBackend);
   const upDirection = useGraphicsSelector((state) => state.context.upDirection);
   const is2dGeometry = useGraphicsSelector((state) =>
     state.context.geometries.some((geometry) => geometry.format === 'svg'),
@@ -213,7 +210,7 @@ export function ViewerSettings({ className, overflowControls }: ViewerSettingsPr
 
   const handleGraphicsBackendChange = useCallback(
     (value: string): void => {
-      if (value !== 'auto' && value !== 'webgl' && value !== 'webgpu') {
+      if (value !== 'webgl' && value !== 'webgpu') {
         return;
       }
 
@@ -251,16 +248,10 @@ export function ViewerSettings({ className, overflowControls }: ViewerSettingsPr
   );
   const getGraphicsBackendLabel = useCallback(
     (option: (typeof graphicsBackendOptions)[number]): string => {
-      let suffix = '';
-      if (option.id === 'auto') {
-        suffix = resolvedGraphicsBackend === 'webgpu' ? ' (WebGPU)' : ' (WebGL)';
-      } else if (option.id === 'webgpu' && !webGpuAvailable) {
-        suffix = ' — falls back to WebGL';
-      }
-
+      const suffix = option.id === 'webgpu' && !webGpuAvailable ? ' — falls back to WebGL' : '';
       return `${option.label}${suffix}`;
     },
-    [resolvedGraphicsBackend, webGpuAvailable],
+    [webGpuAvailable],
   );
 
   const getEnvironmentPresetOptionValue = useCallback((option: EnvironmentPresetOption): string => option.id, []);
@@ -406,7 +397,10 @@ export function ViewerSettings({ className, overflowControls }: ViewerSettingsPr
             renderOption={(option, isSelected) => (
               <span className='flex w-full items-center justify-between gap-2'>
                 <span className='flex min-w-0 flex-1 flex-col'>
-                  <span>{option.label}</span>
+                  <span className='flex items-center gap-1.5'>
+                    {option.label}
+                    {option.isBeta ? <BetaBadge /> : null}
+                  </span>
                   <span className='text-xs leading-snug whitespace-normal text-muted-foreground'>
                     {option.description}
                   </span>
@@ -418,7 +412,7 @@ export function ViewerSettings({ className, overflowControls }: ViewerSettingsPr
             shouldCloseOnSelect={() => false}
             infoTooltip={
               <InfoTooltip>
-                Beta: WebGPU uses the experimental three.js renderer. Use WebGL if you hit compatibility issues.
+                WebGPU uses the experimental three.js renderer. Use WebGL if you hit compatibility issues.
               </InfoTooltip>
             }
             onValueChange={handleGraphicsBackendChange}

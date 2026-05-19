@@ -57,6 +57,13 @@ type BackendSelectorProps = {
   readonly isLoading?: boolean;
   /** Whether to hide internal-only backends like memory. Defaults to false. */
   readonly isInternalHidden?: boolean;
+  /**
+   * Optional badge appended to the selected-backend label inside the
+   * trigger button. Used by `/projects/new` to surface the bound
+   * workspace name when `webaccess` is selected ("File System ·
+   * MyFolder"). Keep it short — the trigger has limited width.
+   */
+  readonly badge?: React.ReactNode;
 };
 
 /**
@@ -70,6 +77,7 @@ export function BackendSelector({
   onSelect,
   isLoading = false,
   isInternalHidden = false,
+  badge,
 }: BackendSelectorProps): React.JSX.Element {
   const filteredOptions = useMemo(
     () =>
@@ -110,10 +118,11 @@ export function BackendSelector({
       isSearchEnabled={false}
       onSelect={onSelect}
     >
-      <Button variant='outline' size='sm' className='w-[160px] justify-between' disabled={isLoading}>
-        <span className='flex items-center gap-2'>
+      <Button variant='outline' size='sm' className='w-[220px] justify-between' disabled={isLoading}>
+        <span className='flex min-w-0 items-center gap-2'>
           {isLoading ? <Loader className='size-3.5' /> : <currentOption.icon className='size-3.5' />}
           <span className='truncate'>{currentOption.label}</span>
+          {badge ? <span className='truncate text-xs text-muted-foreground'>· {badge}</span> : undefined}
         </span>
         <ChevronDown className='size-4 shrink-0 opacity-50' />
       </Button>

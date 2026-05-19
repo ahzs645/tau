@@ -1146,7 +1146,7 @@ export const graphicsMachine = setup({
   ],
 
   context: ({ input }) => {
-    const preference = input.graphicsBackendPreference ?? 'auto';
+    const preference = input.graphicsBackendPreference ?? 'webgl';
 
     return {
       // Grid state

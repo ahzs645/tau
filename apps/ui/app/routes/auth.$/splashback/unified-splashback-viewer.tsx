@@ -755,11 +755,11 @@ export function UnifiedSplashbackViewer({
   }, []);
 
   const splashMachineResolved = useMemo((): ResolvedGraphicsBackend => {
-    return resolveGraphicsBackendPreference('auto', splashGpuAvailable);
+    return resolveGraphicsBackendPreference('webgpu', splashGpuAvailable);
   }, [splashGpuAvailable]);
 
   const splashGraphicsBackend = useMemo((): ResolvedGraphicsBackend => {
-    return mergeGraphicsBackendWithQueryOverride(splashMachineResolved, 'auto', splashGpuAvailable);
+    return mergeGraphicsBackendWithQueryOverride(splashMachineResolved, 'webgpu', splashGpuAvailable);
   }, [splashGpuAvailable, splashMachineResolved]);
 
   const splashGl = useMemo(() => createTauR3fGlProp(splashGraphicsBackend), [splashGraphicsBackend]);
