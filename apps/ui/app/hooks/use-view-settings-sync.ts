@@ -82,7 +82,7 @@ export function useViewSettingsSync({
       graphicsBackend: graphicsBackendPreference,
       pinnedMeasurements,
       renderTimeout,
-      schemaVersion: 3,
+      schemaVersion: 4,
     };
 
     // Skip the very first emission to avoid overwriting restored state

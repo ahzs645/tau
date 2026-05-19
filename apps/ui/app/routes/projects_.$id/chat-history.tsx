@@ -9,7 +9,7 @@ import { ScrollDownButton } from '#routes/projects_.$id/scroll-down-button.js';
 import { ChatError } from '#routes/projects_.$id/chat-error.js';
 import type { ChatTextareaProperties, ChatTextareaHandle } from '#components/chat/chat-textarea-types.js';
 import { ChatTextarea } from '#components/chat/chat-textarea.js';
-import { useChatSelector } from '#hooks/use-chat.js';
+import { useChatContext, useChatSelector } from '#hooks/use-chat.js';
 import { useCadChatClient } from '#chat-clients/use-cad-chat-client.js';
 import { ChatHistorySelector } from '#routes/projects_.$id/chat-history-selector.js';
 import { ChatHistoryStatus } from '#routes/projects_.$id/chat-history-status.js';
@@ -141,6 +141,7 @@ export const ChatHistory = memo(function (props: {
   const { treeService } = useFileManager();
   const { projectId } = useProject();
   const { chats } = useChats(projectId);
+  const { persistenceActorRef } = useChatContext();
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const chatTextareaRef = useRef<ChatTextareaHandle>(null);
   const toggleChatHistory = useCallback(() => {
@@ -155,6 +156,26 @@ export const ChatHistory = memo(function (props: {
       chatTextareaRef.current?.focus();
     });
   }, []);
+
+  // Empty-cancel: the persistence machine has lifted the cancelled user
+  // message back into the composer draft (via the store's
+  // `restoreCancelledDraft` listener), so refocus the composer in the next
+  // animation frame. The frame deferral mirrors `handleNewChat` above and
+  // lets Tiptap/HTMLTextArea finish reflowing for the restored draft text
+  // before the cursor lands.
+  useEffect(() => {
+    if (!persistenceActorRef) {
+      return;
+    }
+    const subscription = persistenceActorRef.on('restoreCancelledDraft', () => {
+      requestAnimationFrame(() => {
+        chatTextareaRef.current?.focus();
+      });
+    });
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [persistenceActorRef]);
 
   // The CAD chat-client composes the per-request `agent` payload (kernel,
   // model, mode, toolChoice, testingEnabled, snapshot, contextPayload) from

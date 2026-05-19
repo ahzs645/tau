@@ -456,12 +456,21 @@ export class ChatSessionStore {
     const dispatchSubscription = persistenceActorRef.on('dispatchRequest', ({ request }) => {
       queueMicrotask(() => {
         // The chat-client always supplies `request.body` when it dispatches
-        // (submit / retry / regenerateTail / stop). The hydration auto-regen
-        // on pending-tail (see `loadChatActor`) is the one path that fires
-        // a request through the persistence machine *before* the chat-client
-        // has had a chance to attach a body — fall back to the latest body
-        // the chat-client published via `setLatestAgentBody` so the API
-        // still receives a complete `agent` payload on first turn.
+        // a verb it originated (submit / retry / regenerateTail / stop). Two
+        // request kinds are *bodyless* by construction:
+        //
+        //   - Hydration auto-regen on a pending-tail (see `loadChatActor`),
+        //     which fires before any client has attached a body.
+        //   - `continue` (manual Retry on a transient-network banner via
+        //     `continueChat`, and the persistence machine's transparent
+        //     auto-retry in `retrying`), which resumes the in-flight stream
+        //     and has no producer that owns the per-turn agent payload.
+        //
+        // Every wire call must still carry the Tau wire shape's top-level
+        // `agent` block (see `chatTurnRequestSchema`), so we fall back to the
+        // latest body the chat-client published via `setLatestAgentBody`. This
+        // keeps the `agent` invariant true for every transport call, not just
+        // the verbs that originated with an explicit body.
         const requestBody = request.body ?? session.latestAgentBody;
         switch (request.kind) {
           case 'send': {
@@ -520,10 +529,17 @@ export class ChatSessionStore {
           // minus the message mutation step. Pinned to ai@6.0.x; the contract
           // test in chat-session-store.contract.test.ts fails loudly the moment
           // AI SDK renames or removes this method.
+          //
+          // `body` MUST be forwarded here so the resumed POST still carries the
+          // top-level `agent` block required by `chatTurnRequestSchema`. Without
+          // it the API rejects the retry with `agent: expected object, received
+          // undefined` and the user sees a fresh "Processing Error" banner the
+          // moment they click Retry on a network drop.
           case 'continue': {
             type ChatMakeRequestShim = {
               makeRequest: (args: {
                 trigger: 'submit-message' | 'resume-stream' | 'regenerate-message';
+                body?: Readonly<Record<string, unknown>>;
               }) => Promise<void>;
             };
             // `makeRequest` is declared `private` in AI SDK's source so a direct
@@ -533,7 +549,11 @@ export class ChatSessionStore {
             // runtime so this assertion can never silently rot.
             // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- typed shim over AI SDK's private method, guarded by chat-session-store.contract.test.ts
             const chatShim = chat as unknown as ChatMakeRequestShim;
-            void chatShim.makeRequest({ trigger: 'submit-message' });
+            if (requestBody) {
+              void chatShim.makeRequest({ trigger: 'submit-message', body: requestBody });
+            } else {
+              void chatShim.makeRequest({ trigger: 'submit-message' });
+            }
           }
         }
       });
@@ -567,6 +587,34 @@ export class ChatSessionStore {
       chat.messages = sanitized;
       persistenceActorRef.send({ type: 'queuePersist', messages: sanitized });
     });
+
+    // Empty-cancel companion to `applyStoppedRequest`: the persistence
+    // machine has already computed both the truncated transcript and the
+    // user message to lift back into the composer (see
+    // `buildRestoreCancelledDraftEmit` in chat-persistence.machine.ts), so
+    // this listener does zero message-shape work. The flow is:
+    //
+    //  1. Replace `chat.messages` with the truncated tail (drops the
+    //     cancelled user message AND any zero-part assistant placeholder
+    //     AI SDK appended on stream-open).
+    //  2. Hand the original user message to the draft machine via the
+    //     existing `loadDraftFromMessage` event — `inputSaving` debounces
+    //     the IndexedDB write through `persistDraftActor`. Overwrites any
+    //     stale draft (in practice empty because `sendMessage` clears it).
+    //  3. Queue a persist of the truncated transcript so the next reload
+    //     does not auto-regenerate a now-missing turn.
+    //
+    // `chat-history.tsx` subscribes to the same emit independently to
+    // refocus the composer in the next animation frame.
+    const restoreSubscription = persistenceActorRef.on(
+      'restoreCancelledDraft',
+      ({ userMessage, truncatedMessages }) => {
+        resetMilestonePersistTracking();
+        chat.messages = truncatedMessages;
+        draftActorRef.send({ type: 'loadDraftFromMessage', draft: userMessage });
+        persistenceActorRef.send({ type: 'queuePersist', messages: truncatedMessages });
+      },
+    );
 
     const resumedSubscription = persistenceActorRef.on('applyResumedRequest', ({ messages, cause }) => {
       resetMilestonePersistTracking();
@@ -648,6 +696,7 @@ export class ChatSessionStore {
         stopSubscription.unsubscribe();
         finishedSubscription.unsubscribe();
         stoppedSubscription.unsubscribe();
+        restoreSubscription.unsubscribe();
         resumedSubscription.unsubscribe();
         unregisterMessages();
         unregisterStatus();

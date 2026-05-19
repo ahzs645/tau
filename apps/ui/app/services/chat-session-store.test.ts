@@ -670,6 +670,145 @@ describe('ChatSessionStore', () => {
     });
   });
 
+  describe('empty-cancel draft restore', () => {
+    it('lifts the cancelled user message back into the draft, truncates chat.messages, and persists the trimmed transcript', async () => {
+      vi.useFakeTimers();
+      try {
+        const chatId = 'chat_restore_empty_cancel';
+        const store = new ChatSessionStore();
+        const deps = createStubDeps();
+        store.setDependencies(deps);
+
+        const session = store.acquire(chatId);
+        await vi.runOnlyPendingTimersAsync();
+        deps.patchChat.mockClear();
+
+        const fake = harness.created.at(-1)!;
+        const priorUser: MyUIMessage = {
+          id: 'msg_user_prior',
+          role: 'user',
+          parts: [{ type: 'text', text: 'prior turn' }],
+          metadata: { createdAt: 0, status: 'pending' },
+        };
+        const priorAssistant: MyUIMessage = {
+          id: 'msg_assistant_prior',
+          role: 'assistant',
+          parts: [{ type: 'text', text: 'prior reply' }],
+          metadata: { createdAt: 1, status: 'pending' },
+        };
+        const cancelledUser: MyUIMessage = {
+          id: 'msg_user_cancelled',
+          role: 'user',
+          parts: [
+            { type: 'text', text: 'help me iterate on this' },
+            { type: 'file', url: 'data:image/png;base64,AAA', mediaType: 'image/png' },
+          ],
+          metadata: { createdAt: 2, status: 'pending' },
+        };
+        const emptyAssistantPlaceholder: MyUIMessage = {
+          id: 'msg_assistant_empty',
+          role: 'assistant',
+          parts: [],
+          metadata: { createdAt: 3, status: 'pending' },
+        };
+        fake.messages = [priorUser, priorAssistant, cancelledUser, emptyAssistantPlaceholder];
+
+        session.persistenceActorRef.send({
+          type: 'startRequest',
+          request: { kind: 'send', message: cancelledUser },
+        });
+        session.persistenceActorRef.send({ type: 'stopRequest' });
+        session.persistenceActorRef.send({
+          type: 'requestFinished',
+          messages: [...fake.messages],
+          isAbort: true,
+          isError: false,
+          isDisconnect: false,
+        });
+
+        // The trailing user message + empty assistant placeholder both come off
+        // chat.messages; only the older turn remains.
+        expect(fake.messages).toEqual([priorUser, priorAssistant]);
+
+        const draftSnapshot = session.draftActorRef.getSnapshot();
+        expect(draftSnapshot.context.draftText).toBe('help me iterate on this');
+        expect(draftSnapshot.context.draftImages).toEqual(['data:image/png;base64,AAA']);
+
+        // Flush the debounced persist of the truncated transcript.
+        await vi.advanceTimersByTimeAsync(100);
+        await vi.runOnlyPendingTimersAsync();
+
+        const messagesPersistCalls = deps.patchChat.mock.calls.filter(([, key]) => key === 'messages');
+        expect(messagesPersistCalls.length).toBeGreaterThanOrEqual(1);
+        expect(messagesPersistCalls.at(-1)?.[2]).toEqual([priorUser, priorAssistant]);
+
+        store.release(chatId);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not restore the draft when an assistant message has already streamed content (cancel-after-stream keeps applyStoppedRequest behaviour)', async () => {
+      vi.useFakeTimers();
+      try {
+        const chatId = 'chat_restore_after_stream';
+        const store = new ChatSessionStore();
+        const deps = createStubDeps();
+        store.setDependencies(deps);
+
+        const session = store.acquire(chatId);
+        await vi.runOnlyPendingTimersAsync();
+        deps.patchChat.mockClear();
+
+        const fake = harness.created.at(-1)!;
+        const userMessage: MyUIMessage = {
+          id: 'msg_user_partial',
+          role: 'user',
+          parts: [{ type: 'text', text: 'should stay in transcript' }],
+          metadata: { createdAt: 0, status: 'pending' },
+        };
+        const assistantWithContent: MyUIMessage = {
+          id: 'msg_assistant_partial',
+          role: 'assistant',
+          parts: [{ type: 'text', text: 'partial token' }],
+          metadata: { createdAt: 1, status: 'pending' },
+        };
+        fake.messages = [userMessage, assistantWithContent];
+
+        session.persistenceActorRef.send({
+          type: 'startRequest',
+          request: { kind: 'send', message: userMessage },
+        });
+        session.persistenceActorRef.send({ type: 'stopRequest' });
+        session.persistenceActorRef.send({
+          type: 'requestFinished',
+          messages: [...fake.messages],
+          isAbort: true,
+          isError: false,
+          isDisconnect: false,
+        });
+
+        // `chat.messages` is preserved (both turns still on screen); the prior
+        // `applyStoppedRequest` path runs and finalises the partial assistant.
+        expect(fake.messages).toHaveLength(2);
+        expect(fake.messages[0]?.id).toBe('msg_user_partial');
+        expect(fake.messages[1]?.id).toBe('msg_assistant_partial');
+
+        // Draft must remain untouched.
+        const draftSnapshot = session.draftActorRef.getSnapshot();
+        expect(draftSnapshot.context.draftText).toBe('');
+        expect(draftSnapshot.context.draftImages).toEqual([]);
+
+        await vi.advanceTimersByTimeAsync(100);
+        await vi.runOnlyPendingTimersAsync();
+
+        store.release(chatId);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
   describe('hydration on acquire', () => {
     it('calls deps.getChat on first acquire so hydration kicks off', async () => {
       const store = new ChatSessionStore();
@@ -819,6 +958,31 @@ describe('ChatSessionStore', () => {
       expect(fake.messages).toBe(beforeRef);
       expect(fake.regenerate).not.toHaveBeenCalled();
       expect(fake.sendMessage).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Regression: when the user clicks the "Retry" button on the
+     * `ChatErrorServiceUnavailable` banner (or the persistence machine's
+     * transparent auto-retry fires), the resumed POST must still carry the
+     * top-level `agent` block required by `chatTurnRequestSchema`. Before the
+     * fix the `continue` dispatch called `makeRequest({ trigger: 'submit-message' })`
+     * with no body, the AI SDK transport produced `{ id, messages, trigger }`,
+     * and the API rejected it with `agent: expected object, received undefined`.
+     */
+    it('forwards latestAgentBody as `body` on `continue` so the resumed POST carries the agent block', async () => {
+      const store = createStore();
+      const session = store.acquire('chat_resume_agent');
+      const fake = harness.created.find((entry) => entry.id === 'chat_resume_agent')!;
+
+      const latestBody = { agent: { profile: 'cad', model: 'cad-default', kernel: 'replicad' } };
+      store.setLatestAgentBody('chat_resume_agent', latestBody);
+
+      session.persistenceActorRef.send({ type: 'startRequest', request: { kind: 'continue' } });
+
+      await Promise.resolve();
+
+      expect(fake.makeRequest).toHaveBeenCalledTimes(1);
+      expect(fake.makeRequest).toHaveBeenCalledWith({ trigger: 'submit-message', body: latestBody });
     });
   });
 
