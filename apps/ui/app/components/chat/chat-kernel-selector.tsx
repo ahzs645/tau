@@ -7,7 +7,7 @@ import { kernelConfigurations } from '@taucad/types/constants';
 import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
 import { SvgIcon } from '#components/icons/svg-icon.js';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '#components/ui/hover-card.js';
-import { useActiveChatKernel } from '#hooks/use-active-chat-kernel.js';
+import { useChatComposer } from '#hooks/active-chat-provider.js';
 
 function formatKernelDimensions(dimensions: KernelConfiguration['dimensions']): string {
   return dimensions.map((d) => `${d}D`).join(' & ');
@@ -48,11 +48,13 @@ export const ChatKernelSelector = memo(function ({
   isNested,
   ...properties
 }: ChatKernelSelectorProps): React.JSX.Element {
-  // Read AND write through the chat-scoped resolver so a kernel switch
-  // inside chat A patches `Chat.activeKernel` for A *and* updates the
-  // cookie default for future new chats. The selector no longer touches
-  // `useKernel` directly.
-  const { kernel: selectedKernel, setActiveKernel } = useActiveChatKernel();
+  // Read AND write through the unified composer context. The active
+  // provider's strategy (composer-cookie vs session dual-write) decides
+  // whether the patch hits the chat row, the cookie, or both. The selector
+  // never touches `useKernel` directly.
+  const {
+    kernel: { kernel: selectedKernel, setActiveKernel },
+  } = useChatComposer();
 
   const handleSelectKernel = useCallback(
     (item: string) => {

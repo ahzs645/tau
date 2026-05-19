@@ -1,4 +1,4 @@
-import { assign, assertEvent, setup, enqueueActions, emit } from 'xstate';
+import { assign, assertEvent, setup, enqueueActions, emit, raise } from 'xstate';
 import type { ActorRefFrom } from 'xstate';
 import { fromSafeAsync } from '#lib/xstate.lib.js';
 import type { PartialDeep } from 'type-fest';
@@ -62,6 +62,12 @@ export type EditorStateContext = {
   error: Error | undefined;
   /** Flag indicating changes occurred during a write operation that need persisting */
   hasPendingChanges: boolean;
+  /**
+   * Last error from `ensureFocusedChatActor`. Surfaced to the route gate so
+   * a `<FocusedChatErrorPanel>` can render a retry CTA. Cleared whenever
+   * the actor is re-invoked.
+   */
+  focusedChatError: Error | undefined;
   /** Optional: awaited before new tabs emit `fileOpened` (Monaco model materialisation). */
   materialiseModel?: (path: string) => Promise<void>;
   /** In-flight deferred open (only set while materialising). */
@@ -110,7 +116,13 @@ type EditorStateEvent =
   | { type: 'removeViewSettings'; viewId: string }
   // Flush pending state immediately (bypasses debounce, used on tab close)
   | { type: 'flushNow' }
-  | { type: 'editorStateRetrieved'; state: EditorState | undefined };
+  | { type: 'editorStateRetrieved'; state: EditorState | undefined }
+  // Emitted by `ensureFocusedChatActor` when the focused-chat invariant
+  // has been re-established.
+  | { type: 'focusedChatEnsured'; focusedChatId: string }
+  // User-initiated retry from `<FocusedChatErrorPanel>` after
+  // `ensureFocusedChatActor` rejected.
+  | { type: 'retryEnsureFocusedChat' };
 
 /**
  * Editor state Machine Emitted Events
@@ -152,6 +164,28 @@ const materialiseOpenFileActor = fromSafeAsync<void, { path: string; materialise
 );
 
 /**
+ * Establishes the "focused chat is valid" invariant. Validates the
+ * candidate against the project's live chat list and emits a
+ * `focusedChatEnsured` event with:
+ *  - the candidate if it points to an extant chat,
+ *  - the most-recently-updated chat, otherwise,
+ *  - a freshly created chat id (zero-chats project), otherwise.
+ *
+ * Provided by `use-project.tsx` so the editor machine stays free of
+ * IndexedDB/worker coupling. The emit-then-complete contract (vs
+ * returning a plain payload) is required because `fromSafeAsync` is
+ * built on `fromEventObservable`, which forwards `next()` values to
+ * the parent as events — values without a `type` discriminator crash
+ * XState's `isErrorActorEvent` macrostep.
+ */
+const ensureFocusedChatActor = fromSafeAsync<
+  { type: 'focusedChatEnsured'; focusedChatId: string },
+  { projectId: string; candidateFocusedChatId: string | undefined }
+>(async () => {
+  throw new Error('Not implemented. Please supply via provide.');
+});
+
+/**
  * Editor State Machine
  *
  * Manages transient Editor state per-build:
@@ -177,6 +211,7 @@ export const editorMachine = setup({
     loadEditorStateActor,
     saveEditorStateActor,
     materialiseOpenFileActor,
+    ensureFocusedChatActor,
   },
   actions: {
     // ============================================================================
@@ -225,6 +260,11 @@ export const editorMachine = setup({
       enqueue.assign({
         openFiles: loadedState?.openFiles ?? [],
         activeFilePath: loadedState?.activeFilePath,
+        // `focusedChatId` is hydrated from `loadedState` here as the
+        // *candidate* — the subsequent `loading.ensuringFocusedChat`
+        // substate validates it against the live chat list and reassigns
+        // (or auto-creates) so the value on entry to `ready` is always
+        // an extant chat id.
         focusedChatId: loadedState?.focusedChatId,
         panelState: mergedPanelState,
         editorLayout,
@@ -524,6 +564,43 @@ export const editorMachine = setup({
       return { focusedChatId: event.chatId };
     }),
 
+    /**
+     * Assign the validated/created focused chat id emitted by
+     * `ensureFocusedChatActor` via the `focusedChatEnsured` event to
+     * context and clear any pre-existing `focusedChatError`. Pairs with
+     * `raiseSetFocusedChatId` so the `storing` region picks up the
+     * change through the canonical event channel (single write path,
+     * debounced).
+     */
+    assignEnsuredFocusedChat: assign(({ event }) => {
+      assertEvent(event, 'focusedChatEnsured');
+      return {
+        focusedChatId: event.focusedChatId,
+        focusedChatError: undefined,
+      };
+    }),
+
+    /**
+     * Re-emit the assigned focused chat id as a `setFocusedChatId` event
+     * so the `storing` region's existing handler (line 760+) debounces a
+     * write. Keeping persistence on a single canonical path avoids the
+     * dual-write race that an out-of-band save would introduce.
+     */
+    raiseSetFocusedChatId: raise(({ context }): { type: 'setFocusedChatId'; chatId: string | undefined } => ({
+      type: 'setFocusedChatId',
+      chatId: context.focusedChatId,
+    })),
+
+    assignFocusedChatError: assign(({ event }) => {
+      // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- xstate's done.invoke.* error event has an `error` payload not modelled in the union
+      const { error } = event as unknown as { error: unknown };
+      return {
+        focusedChatError: error instanceof Error ? error : new Error('ensureFocusedChatActor failed'),
+      };
+    }),
+
+    clearFocusedChatError: assign({ focusedChatError: undefined }),
+
     // ============================================================================
     // Panel operations
     // ============================================================================
@@ -607,6 +684,9 @@ export const editorMachine = setup({
 
       return !context.openFiles.some((f) => f.path === event.path);
     },
+    focusedChatIdIsUndefined({ context }) {
+      return context.focusedChatId === undefined;
+    },
   },
   delays: {
     storeDebounce: 500,
@@ -626,6 +706,7 @@ export const editorMachine = setup({
       isLoading: false,
       error: undefined,
       hasPendingChanges: false,
+      focusedChatError: undefined,
       materialiseModel: undefined,
       pendingOpenFile: undefined,
     };
@@ -646,25 +727,58 @@ export const editorMachine = setup({
     },
     loading: {
       entry: 'clearError',
-      invoke: {
-        src: 'loadEditorStateActor',
-        input: ({ context }) => ({ projectId: context.projectId }),
-        onDone: {
-          target: 'ready',
-        },
-        onError: {
-          target: 'ready',
-          actions: ['clearLoading', 'emitEditorStateLoadedEmpty'],
-        },
-      },
+      initial: 'hydrating',
       on: {
-        editorStateRetrieved: {
-          actions: 'setLoadedState',
-        },
         reload: {
-          target: 'loading',
+          target: '.hydrating',
           actions: ['updateProjectId', 'setLoading'],
           reenter: true,
+        },
+      },
+      states: {
+        hydrating: {
+          invoke: {
+            src: 'loadEditorStateActor',
+            input: ({ context }) => ({ projectId: context.projectId }),
+            onDone: {
+              target: 'ensuringFocusedChat',
+            },
+            onError: {
+              // Loading failed; still run the ensure path so the route
+              // gate sees either a healed focusedChatId or a typed error
+              // panel rather than a stuck spinner.
+              target: 'ensuringFocusedChat',
+              actions: ['clearLoading', 'emitEditorStateLoadedEmpty'],
+            },
+          },
+          on: {
+            editorStateRetrieved: {
+              actions: 'setLoadedState',
+            },
+          },
+        },
+        ensuringFocusedChat: {
+          entry: 'clearFocusedChatError',
+          invoke: {
+            src: 'ensureFocusedChatActor',
+            input: ({ context }) => ({
+              projectId: context.projectId,
+              candidateFocusedChatId: context.focusedChatId,
+            }),
+            onError: {
+              // Surface the error to the route gate via `focusedChatError`.
+              // The runtime ensure loop in `ready.operation` lets the user
+              // retry via `<FocusedChatErrorPanel>` without a full reload.
+              target: '#editor.ready',
+              actions: 'assignFocusedChatError',
+            },
+          },
+          on: {
+            focusedChatEnsured: {
+              target: '#editor.ready',
+              actions: ['assignEnsuredFocusedChat', 'raiseSetFocusedChatId'],
+            },
+          },
         },
       },
     },
@@ -674,7 +788,15 @@ export const editorMachine = setup({
         operation: {
           initial: 'idle',
           states: {
-            idle: {},
+            idle: {
+              // Self-heal at runtime: any path that leaves `focusedChatId`
+              // undefined (e.g. `setFocusedChatId(undefined)` from the
+              // last-chat deletion in `chat-history-selector`) immediately
+              // re-enters `ensuringFocusedChat` so the route gate's
+              // <ActiveChatProvider chatId> mount-precondition is always
+              // restored.
+              always: [{ guard: 'focusedChatIdIsUndefined', target: 'ensuringFocusedChat' }],
+            },
             materializingOpenFile: {
               invoke: {
                 src: 'materialiseOpenFileActor',
@@ -689,6 +811,33 @@ export const editorMachine = setup({
                 onError: {
                   target: 'idle',
                   actions: 'finalizeMaterializedOpenFailure',
+                },
+              },
+            },
+            ensuringFocusedChat: {
+              entry: 'clearFocusedChatError',
+              invoke: {
+                src: 'ensureFocusedChatActor',
+                input: ({ context }) => ({
+                  projectId: context.projectId,
+                  candidateFocusedChatId: context.focusedChatId,
+                }),
+                onError: {
+                  target: 'focusedChatUnresolved',
+                  actions: 'assignFocusedChatError',
+                },
+              },
+              on: {
+                focusedChatEnsured: {
+                  target: 'idle',
+                  actions: ['assignEnsuredFocusedChat', 'raiseSetFocusedChatId'],
+                },
+              },
+            },
+            focusedChatUnresolved: {
+              on: {
+                retryEnsureFocusedChat: {
+                  target: 'ensuringFocusedChat',
                 },
               },
             },

@@ -3,6 +3,18 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { tauEditorPanelDragMime, tauFileDragMime, tauViewerPanelDragMime } from '@taucad/types/constants';
 import type { ResolvedModel } from '#hooks/use-models.js';
+import type { ChatComposerContextValue } from '#hooks/active-chat-provider.js';
+
+// ---------------------------------------------------------------------------
+// Unified composer-context mock — `useChatTextareaLogic` is a single
+// consumer of `useChatComposer()` (which the providers populate). We mock
+// that one hook and feed it a shape mirroring the production contract;
+// `useDraftActions` / `useDraftSelector` proxy to the same actorRef under
+// the hood, so a single mock object backs all surfaces. This collapses
+// the previous five-mock arrangement (use-active-chat-model + use-chat
+// + use-keyboard + sonner + ...) into one composer mock + the keyboard
+// + sonner mocks.
+// ---------------------------------------------------------------------------
 
 const stableModel: ResolvedModel = {
   id: 'chat-scoped-model',
@@ -10,27 +22,6 @@ const stableModel: ResolvedModel = {
 } as unknown as ResolvedModel;
 
 let mockActiveModel: ResolvedModel = stableModel;
-const mockSetActiveModel = vi.fn();
-
-vi.mock('#hooks/use-active-chat-model.js', () => ({
-  useActiveChatModel: () => ({
-    modelId: mockActiveModel.id,
-    model: mockActiveModel,
-    setActiveModel: mockSetActiveModel,
-  }),
-}));
-
-const mockUseChatSelector = vi.fn((selector: (state: unknown) => unknown) =>
-  selector({
-    status: 'idle',
-    draftText: 'hello world',
-    draftImages: [] as string[],
-    draftToolChoice: 'auto',
-    draftMode: 'agent',
-    editDraftText: '',
-    editDraftImages: [] as string[],
-  }),
-);
 
 const chatActionsMock = {
   stop: vi.fn<() => void>(),
@@ -43,9 +34,41 @@ const chatActionsMock = {
   removeEditDraftImage: vi.fn<(index: number) => void>(),
 };
 
+const defaultDraftState = {
+  status: 'idle',
+  draftText: 'hello world',
+  draftImages: [] as string[],
+  draftToolChoice: 'auto',
+  draftMode: 'agent',
+  editDraftText: '',
+  editDraftImages: [] as string[],
+};
+
+const mockUseChatSelector = vi.fn((selector: (state: unknown) => unknown) => selector(defaultDraftState));
+
 vi.mock('#hooks/use-chat.js', () => ({
   useChatActions: () => chatActionsMock,
   useChatSelector: (selector: (state: unknown) => unknown) => mockUseChatSelector(selector),
+  useDraftActions: () => chatActionsMock,
+  useDraftSelector: (selector: (state: unknown) => unknown) => mockUseChatSelector(selector),
+}));
+
+// Single composer mock. Fields the hook actually reads:
+//   - model.model (selectedModel display)
+//   - status / stop (no-op pair for marketing-route tests; the textarea
+//     never reads `model.modelId`, `kernel`, `contextUsage` or `session`
+//     so we leave them at default-shape values).
+vi.mock('#hooks/active-chat-provider.js', () => ({
+  useChatComposer: (): ChatComposerContextValue =>
+    ({
+      draftActorRef: undefined,
+      model: { modelId: mockActiveModel.id, model: mockActiveModel, setActiveModel: vi.fn() },
+      kernel: { kernelId: 'openscad', kernel: undefined, setActiveKernel: vi.fn() },
+      status: 'ready',
+      stop: () => undefined,
+      contextUsage: undefined,
+      session: undefined,
+    }) as unknown as ChatComposerContextValue,
 }));
 
 vi.mock('#hooks/use-keyboard.js', () => ({

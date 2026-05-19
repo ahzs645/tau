@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
+import { useImperativeHandle } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import type { MyUIMessage } from '@taucad/chat';
 import { chatTurnRequestSchema } from '@taucad/chat/schemas';
+import type { ChatTextareaHandle } from '#components/chat/chat-textarea-types.js';
 
 // `useKernel` must NOT be called from chat-history anymore — guard with a
 // throwing mock so any regression is caught loudly.
@@ -12,21 +14,46 @@ vi.mock('#hooks/use-kernel.js', () => ({
   },
 }));
 
-// `useActiveChatKernel` and `useCookie` are no longer consumed by chat-history
-// directly — they live inside `useCadChatClient` via `useCadAgentConfig`. Guard
-// with throwing mocks so a future re-introduction would fail fast.
-vi.mock('#hooks/use-active-chat-kernel.js', () => ({
-  useActiveChatKernel: () => {
-    throw new Error('chat-history should no longer call useActiveChatKernel — switch to useCadChatClient');
-  },
-}));
-
 // Chat-history only reads `messageOrder` / `messages` selectors from useChat
 // now; sendMessage / retryMessage / etc. flow through useCadChatClient.
 const chatStateRef: { current: { messages: readonly MyUIMessage[] } } = { current: { messages: [] } };
 const setMockMessages = (messages: readonly MyUIMessage[]): void => {
   chatStateRef.current = { messages };
 };
+// Fake persistence actor — `chat-history.tsx` subscribes to
+// `restoreCancelledDraft` emits to refocus the composer after the
+// persistence machine lifts a cancelled user message back into the draft.
+// The fake captures registered callbacks so the empty-cancel test below
+// can drive the emit synchronously.
+type FakePersistenceListener = (payload: unknown) => void;
+const persistenceListeners = new Map<string, Set<FakePersistenceListener>>();
+const fakePersistenceActorRef = {
+  on: (type: string, callback: FakePersistenceListener) => {
+    let bucket = persistenceListeners.get(type);
+    if (!bucket) {
+      bucket = new Set();
+      persistenceListeners.set(type, bucket);
+    }
+    bucket.add(callback);
+    const ownedBucket = bucket;
+    return {
+      unsubscribe: () => {
+        ownedBucket.delete(callback);
+      },
+    };
+  },
+};
+
+const emitRestoreCancelledDraft = (payload: unknown): void => {
+  const bucket = persistenceListeners.get('restoreCancelledDraft');
+  if (!bucket) {
+    return;
+  }
+  for (const listener of bucket) {
+    listener(payload);
+  }
+};
+
 vi.mock('#hooks/use-chat.js', () => ({
   useChatSelector: (selector: (state: unknown) => unknown) => {
     const { messages } = chatStateRef.current;
@@ -35,6 +62,7 @@ vi.mock('#hooks/use-chat.js', () => ({
       messageOrder: messages.map((m) => m.id),
     });
   },
+  useChatContext: () => ({ persistenceActorRef: fakePersistenceActorRef }),
 }));
 
 // Capture the body the chat client receives on submit so the wire-format
@@ -62,14 +90,22 @@ vi.mock('#chat-clients/use-cad-chat-client.js', () => ({
   useCadChatClient: () => cadChatRef.current,
 }));
 
-// Capture the textarea onSubmit callback so the test can invoke it
-// directly without driving the full draft pipeline.
-const capturedTextarea: { onSubmit?: (payload: { content: string; imageUrls: string[] }) => Promise<void> } = {};
+// Capture the textarea onSubmit callback and focus handle so the tests
+// can both invoke onSubmit directly and assert that empty-cancel
+// recoveries refocus the composer.
+const capturedTextarea: {
+  onSubmit?: (payload: { content: string; imageUrls: string[] }) => Promise<void>;
+  focus: ReturnType<typeof vi.fn<() => void>>;
+} = {
+  focus: vi.fn<() => void>(),
+};
 vi.mock('#components/chat/chat-textarea.js', () => ({
   ChatTextarea: (properties: {
+    readonly ref?: React.Ref<ChatTextareaHandle>;
     readonly onSubmit?: (payload: { content: string; imageUrls: string[] }) => Promise<void>;
   }): React.JSX.Element => {
     capturedTextarea.onSubmit = properties.onSubmit;
+    useImperativeHandle(properties.ref, () => ({ focus: capturedTextarea.focus }), []);
     return <div data-testid='chat-textarea' />;
   },
 }));
@@ -299,5 +335,60 @@ describe('ChatHistory — turn group rendering', () => {
 
     expect(capturedVirtuoso.totalCount).toBe(3);
     expect(typeof capturedVirtuoso.itemContent).toBe('function');
+  });
+});
+
+describe('ChatHistory — empty-cancel composer refocus', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    capturedTextarea.onSubmit = undefined;
+    capturedTextarea.focus = vi.fn<() => void>();
+    persistenceListeners.clear();
+    setMockMessages([]);
+  });
+
+  it('refocuses the composer on the next animation frame when persistence emits restoreCancelledDraft', async () => {
+    const requestAnimationFrameSpy = vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation((callback) => {
+      callback(0);
+      return 0;
+    });
+
+    try {
+      render(<ChatHistory />);
+
+      const userMessage: MyUIMessage = {
+        id: 'msg_user_cancelled',
+        role: 'user',
+        parts: [{ type: 'text', text: 'design a bracket' }],
+      };
+
+      // Subscriber registers during the mount effect.
+      expect(persistenceListeners.get('restoreCancelledDraft')?.size).toBe(1);
+      expect(capturedTextarea.focus).not.toHaveBeenCalled();
+
+      act(() => {
+        emitRestoreCancelledDraft({
+          type: 'restoreCancelledDraft',
+          userMessage,
+          truncatedMessages: [],
+          cause: 'user_stop',
+        });
+      });
+
+      expect(requestAnimationFrameSpy).toHaveBeenCalledTimes(1);
+      expect(capturedTextarea.focus).toHaveBeenCalledTimes(1);
+    } finally {
+      requestAnimationFrameSpy.mockRestore();
+    }
+  });
+
+  it('unsubscribes the restore listener on unmount', () => {
+    const { unmount } = render(<ChatHistory />);
+
+    expect(persistenceListeners.get('restoreCancelledDraft')?.size).toBe(1);
+
+    unmount();
+
+    expect(persistenceListeners.get('restoreCancelledDraft')?.size ?? 0).toBe(0);
   });
 });

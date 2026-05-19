@@ -20,9 +20,9 @@ import { ChatTextareaSubmitButton } from '#components/chat/chat-textarea-submit-
 import { focusTrapAttribute } from '#components/chat/chat-textarea-types.js';
 import type { ChatTextareaDragKind } from '#components/chat/chat-textarea-types.js';
 import { useSelector } from '@xstate/react';
-import { useChatActions, useChatContext } from '#hooks/use-chat.js';
+import { useChatComposer } from '#hooks/active-chat-provider.js';
+import { useDraftActions } from '#hooks/use-chat.js';
 import type { ResolvedModel } from '#hooks/use-models.js';
-import { useActiveChatKernel } from '#hooks/use-active-chat-kernel.js';
 import { useFeature } from '#flags/use-feature.js';
 import { ChatEditor } from '#components/chat/tiptap/chat-editor.js';
 import { useChatEditor, buildEditorContentJson } from '#components/chat/tiptap/use-chat-editor.js';
@@ -371,7 +371,9 @@ export const ChatTextareaLeftControls = memo(function ({
   // Chat-scoped resolver — falls back to cookie kernel when no chat-local
   // selection exists. Display label follows the chat's active kernel so
   // cookie changes elsewhere can no longer flip the label mid-conversation.
-  const { kernel: selectedKernel } = useActiveChatKernel();
+  const {
+    kernel: { kernel: selectedKernel },
+  } = useChatComposer();
   const selectedKernelName = selectedKernel?.name;
 
   return (
@@ -580,9 +582,9 @@ const ChatTextareaRightControls = memo(function ({
 
 function ChatTextareaModeControl(): React.JSX.Element | undefined {
   const planModeEnabled = useFeature('planMode');
-  const { draftActorRef } = useChatContext();
+  const { draftActorRef } = useChatComposer();
   const mode = useSelector(draftActorRef, (state) => state.context.draftMode);
-  const { setDraftMode } = useChatActions();
+  const { setDraftMode } = useDraftActions();
 
   if (!planModeEnabled) {
     return undefined;

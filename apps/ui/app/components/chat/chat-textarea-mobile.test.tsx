@@ -4,6 +4,7 @@ import { render, screen } from '@testing-library/react';
 import type { ResolvedModel } from '#hooks/use-models.js';
 import { kernelConfigurations } from '@taucad/types/constants';
 import type { KernelConfiguration } from '@taucad/types/constants';
+import type { ChatComposerContextValue } from '#hooks/active-chat-provider.js';
 
 const manifoldKernel = kernelConfigurations.find((k) => k.id === 'manifold')!;
 const jscadKernel = kernelConfigurations.find((k) => k.id === 'jscad')!;
@@ -11,14 +12,26 @@ const mockKernel: { current: KernelConfiguration | undefined } = {
   current: manifoldKernel,
 };
 
-const mockUseActiveChatKernel = vi.fn(() => ({
-  kernelId: mockKernel.current?.id,
-  kernel: mockKernel.current,
-  setActiveKernel: vi.fn(),
-}));
+// Single composer-context mock backs the kernel-label read on mobile.
+const mockUseChatComposer = vi.fn(
+  (): ChatComposerContextValue =>
+    ({
+      draftActorRef: { send: vi.fn() },
+      model: { modelId: 'm', model: undefined, setActiveModel: vi.fn() },
+      kernel: {
+        kernelId: mockKernel.current?.id,
+        kernel: mockKernel.current,
+        setActiveKernel: vi.fn(),
+      },
+      status: 'ready',
+      stop: () => undefined,
+      contextUsage: undefined,
+      session: undefined,
+    }) as unknown as ChatComposerContextValue,
+);
 
-vi.mock('#hooks/use-active-chat-kernel.js', () => ({
-  useActiveChatKernel: () => mockUseActiveChatKernel(),
+vi.mock('#hooks/active-chat-provider.js', () => ({
+  useChatComposer: () => mockUseChatComposer(),
 }));
 
 vi.mock('#components/chat/chat-model-selector.js', () => ({
@@ -156,9 +169,9 @@ describe('ChatTextareaMobile — chat-scoped kernel resolution', () => {
     mockKernel.current = manifoldKernel;
   });
 
-  it('should consume useActiveChatKernel instead of the prior hardcoded openscad lookup', () => {
+  it('should consume useChatComposer().kernel instead of the prior hardcoded openscad lookup', () => {
     renderMobile();
-    expect(mockUseActiveChatKernel).toHaveBeenCalled();
+    expect(mockUseChatComposer).toHaveBeenCalled();
     expect(screen.getAllByText('Manifold').length).toBeGreaterThan(0);
   });
 

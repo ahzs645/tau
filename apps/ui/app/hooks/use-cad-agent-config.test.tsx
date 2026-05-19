@@ -2,18 +2,15 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import type { ChatSnapshot, ContextPayload } from '@taucad/chat';
 import { useCadAgentConfig } from '#hooks/use-cad-agent-config.js';
-import { useActiveChatModel } from '#hooks/use-active-chat-model.js';
-import { useActiveChatKernel } from '#hooks/use-active-chat-kernel.js';
+import { useChatComposer } from '#hooks/active-chat-provider.js';
+import type { ChatComposerContextValue } from '#hooks/active-chat-provider.js';
 import { useChatSelector } from '#hooks/use-chat.js';
 import { useCookie } from '#hooks/use-cookie.js';
 import { useChatSnapshot } from '#hooks/use-chat-snapshot.js';
 import { useContextPayload } from '#hooks/use-context-payload.js';
 
-vi.mock('#hooks/use-active-chat-model.js', () => ({
-  useActiveChatModel: vi.fn(),
-}));
-vi.mock('#hooks/use-active-chat-kernel.js', () => ({
-  useActiveChatKernel: vi.fn(),
+vi.mock('#hooks/active-chat-provider.js', () => ({
+  useChatComposer: vi.fn(),
 }));
 vi.mock('#hooks/use-chat.js', () => ({
   useChatSelector: vi.fn(),
@@ -30,16 +27,24 @@ vi.mock('#hooks/use-context-payload.js', () => ({
 
 const noop = (): void => undefined;
 
-const useActiveChatModelMock = vi.mocked(useActiveChatModel);
-const useActiveChatKernelMock = vi.mocked(useActiveChatKernel);
+const useChatComposerMock = vi.mocked(useChatComposer);
 const useChatSelectorMock = vi.mocked(useChatSelector);
 const useCookieMock = vi.mocked(useCookie);
 const useChatSnapshotMock = vi.mocked(useChatSnapshot);
 const useContextPayloadMock = vi.mocked(useContextPayload);
 
-type ActiveChatModelReturn = ReturnType<typeof useActiveChatModel>;
-type ActiveChatKernelReturn = ReturnType<typeof useActiveChatKernel>;
 type CookieReturn = ReturnType<typeof useCookie>;
+
+const buildComposer = (overrides: { modelId?: string; kernelId?: string }): ChatComposerContextValue =>
+  ({
+    draftActorRef: { send: vi.fn() },
+    model: { modelId: overrides.modelId ?? 'openai-gpt-5.5', model: undefined, setActiveModel: noop },
+    kernel: { kernelId: overrides.kernelId ?? 'replicad', kernel: undefined, setActiveKernel: noop },
+    status: 'ready',
+    stop: noop,
+    contextUsage: undefined,
+    session: undefined,
+  }) as unknown as ChatComposerContextValue;
 
 const mountChatSelectorMocks = (overrides: { draftMode?: string; draftToolChoice?: string | string[] } = {}): void => {
   const draftMode = overrides.draftMode ?? 'agent';
@@ -55,16 +60,7 @@ const mountChatSelectorMocks = (overrides: { draftMode?: string; draftToolChoice
 
 beforeEach(() => {
   vi.clearAllMocks();
-  useActiveChatModelMock.mockReturnValue({
-    modelId: 'openai-gpt-5.5',
-    model: undefined,
-    setActiveModel: noop,
-  } as unknown as ActiveChatModelReturn);
-  useActiveChatKernelMock.mockReturnValue({
-    kernelId: 'replicad',
-    kernel: undefined,
-    setActiveKernel: noop,
-  } as unknown as ActiveChatKernelReturn);
+  useChatComposerMock.mockReturnValue(buildComposer({}));
   mountChatSelectorMocks();
   useCookieMock.mockReturnValue([true, noop, noop] as unknown as CookieReturn);
   useChatSnapshotMock.mockReturnValue(undefined);
@@ -87,12 +83,8 @@ describe('useCadAgentConfig', () => {
     });
   });
 
-  it('should source `kernel` from useActiveChatKernel.kernelId — not from useActiveChatModel', () => {
-    useActiveChatKernelMock.mockReturnValue({
-      kernelId: 'openscad',
-      kernel: undefined,
-      setActiveKernel: noop,
-    } as unknown as ActiveChatKernelReturn);
+  it('should source `kernel` from useChatComposer().kernel.kernelId — not from model', () => {
+    useChatComposerMock.mockReturnValue(buildComposer({ kernelId: 'openscad' }));
 
     const { result } = renderHook(() => useCadAgentConfig());
 

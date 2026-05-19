@@ -535,7 +535,7 @@ export const projectMachine = setup({
             upDirection: settings.upDirection,
             environmentPreset: settings.environmentPreset,
             pinnedMeasurements: settings.pinnedMeasurements,
-            graphicsBackendPreference: settings.graphicsBackend ?? 'auto',
+            graphicsBackendPreference: settings.graphicsBackend ?? 'webgl',
           },
         });
 

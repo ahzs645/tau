@@ -3,33 +3,46 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render } from '@testing-library/react';
 import type { KernelConfiguration, KernelId } from '@taucad/types/constants';
 import { kernelConfigurations } from '@taucad/types/constants';
+import type { ChatComposerContextValue } from '#hooks/active-chat-provider.js';
 
-// The chat kernel selector must read AND write through
-// `useActiveChatKernel` so the chat row gets patched alongside the cookie
-// default. These tests capture the props the component hands to
-// ComboBoxResponsive and assert the chat-scoped resolver is the only kernel
-// state surface used.
+// The chat kernel selector reads AND writes through the unified composer
+// context (`useChatComposer().kernel`). The active provider's strategy
+// (composer-only → cookie; session-backed → chat row + cookie dual-write)
+// decides whether the patch hits the chat row. Tests here lock the
+// component's contract: it must never touch raw cookie state via
+// `useKernel` — a throwing mock guarantees a loud failure on regression.
 
 const stubKernel: KernelConfiguration = kernelConfigurations.find((k) => k.id === 'manifold')!;
 
 const chatKernelState: { current: KernelConfiguration | undefined } = { current: stubKernel };
 const setActiveKernel = vi.fn();
 
-const useActiveChatKernelMock = vi.fn(() => ({
-  kernelId: chatKernelState.current?.id as KernelId,
-  kernel: chatKernelState.current,
-  setActiveKernel,
-}));
+const useChatComposerMock = vi.fn(
+  (): ChatComposerContextValue =>
+    ({
+      draftActorRef: { send: vi.fn() },
+      model: { modelId: 'm', model: undefined, setActiveModel: vi.fn() },
+      kernel: {
+        kernelId: chatKernelState.current?.id as KernelId,
+        kernel: chatKernelState.current,
+        setActiveKernel,
+      },
+      status: 'ready',
+      stop: () => undefined,
+      contextUsage: undefined,
+      session: undefined,
+    }) as unknown as ChatComposerContextValue,
+);
 
-vi.mock('#hooks/use-active-chat-kernel.js', () => ({
-  useActiveChatKernel: () => useActiveChatKernelMock(),
+vi.mock('#hooks/active-chat-provider.js', () => ({
+  useChatComposer: () => useChatComposerMock(),
 }));
 
 // The selector must NOT import `useKernel` anymore — guard with a
 // throwing mock so any regression is caught at module load.
 vi.mock('#hooks/use-kernel.js', () => ({
   useKernel: () => {
-    throw new Error('chat-kernel-selector should no longer call useKernel — switch to useActiveChatKernel');
+    throw new Error('chat-kernel-selector should no longer call useKernel — switch to useChatComposer().kernel');
   },
 }));
 
@@ -68,9 +81,9 @@ describe('ChatKernelSelector — chat-scoped read + dual-write', () => {
     capturedComboBox.value = undefined;
   });
 
-  it('renders the selected kernel from useActiveChatKernel (not useKernel)', () => {
+  it('renders the selected kernel from useChatComposer().kernel (not useKernel)', () => {
     renderSelector();
-    expect(useActiveChatKernelMock).toHaveBeenCalled();
+    expect(useChatComposerMock).toHaveBeenCalled();
     expect(capturedComboBox.value).toBe(stubKernel);
   });
 

@@ -11,7 +11,7 @@ import { ChatTextareaSkeleton } from '#components/chat/chat-textarea-skeleton.js
 import { useProject } from '#hooks/use-project.js';
 import { useFileManager } from '#hooks/use-file-manager.js';
 import { useChats } from '#hooks/use-chats.js';
-import { useChatActions } from '#hooks/use-chat.js';
+import { useDraftActions } from '#hooks/use-chat.js';
 import { useImageQuality } from '#hooks/use-image-quality.js';
 import { toast } from '#components/ui/sonner.js';
 import { orthographicViews, screenshotRequestMachine } from '#machines/screenshot-request.machine.js';
@@ -76,7 +76,7 @@ export const ChatTextarea = memo(function ({
   const projectContext = useProject({ enableNoContext: true });
   const { treeService } = useFileManager();
   const { chats } = useChats(projectContext?.projectId ?? '');
-  const { setDraftText: setMainDraftText, setEditDraftText } = useChatActions();
+  const { setDraftText: setMainDraftText, setEditDraftText } = useDraftActions();
 
   const setDraftText = useCallback(
     (text: string) => {

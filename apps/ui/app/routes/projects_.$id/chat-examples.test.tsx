@@ -38,18 +38,6 @@ vi.mock('#hooks/use-chat.js', () => ({
   },
 }));
 
-vi.mock('#hooks/use-active-chat-model.js', () => ({
-  useActiveChatModel: () => {
-    throw new Error('chat-examples should no longer call useActiveChatModel — switch to useCadChatClient');
-  },
-}));
-
-vi.mock('#hooks/use-active-chat-kernel.js', () => ({
-  useActiveChatKernel: () => {
-    throw new Error('chat-examples should no longer call useActiveChatKernel — switch to useCadChatClient');
-  },
-}));
-
 vi.mock('#hooks/use-models.js', () => ({
   useModels: () => {
     throw new Error('chat-examples should no longer call useModels — switch to useCadChatClient');

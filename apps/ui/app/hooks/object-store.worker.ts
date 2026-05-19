@@ -16,6 +16,46 @@ export type InitialEditorState = PartialDeep<Omit<EditorStateInput, 'projectId' 
 // Create a singleton instance of the storage provider
 const storage = new IndexedDbStorageProvider();
 
+/**
+ * Pick the focused chat id to persist on a duplicated project. Prefers the
+ * source project's mapped chat (so reopening the duplicate matches the
+ * source's last focus), falling back to the most-recently-updated cloned
+ * chat. Returns `undefined` only when no chats were cloned (in which case
+ * the caller skips the editor-state write entirely — the editor machine's
+ * load-time `ensureFocusedChat` actor will auto-create a chat on first
+ * open).
+ *
+ * Exported for direct unit-test coverage so the policy can be exercised
+ * without a live IndexedDB harness.
+ *
+ * @internal
+ */
+// oxlint-disable-next-line tau-lint/require-public-export-jsdoc -- @internal, scoped to object-store worker
+export function pickDuplicatedFocusedChatId(args: {
+  readonly sourceFocusedChatId: string | undefined;
+  readonly chatIdMapping: Readonly<Record<string, string>>;
+  readonly clonedChats: readonly Chat[];
+}): string | undefined {
+  const { sourceFocusedChatId, chatIdMapping, clonedChats } = args;
+  if (clonedChats.length === 0) {
+    return undefined;
+  }
+
+  const mappedFromSource = sourceFocusedChatId ? chatIdMapping[sourceFocusedChatId] : undefined;
+  if (mappedFromSource) {
+    return mappedFromSource;
+  }
+
+  let mostRecent = clonedChats[0]!;
+  for (let i = 1; i < clonedChats.length; i++) {
+    const candidate = clonedChats[i]!;
+    if (candidate.updatedAt > mostRecent.updatedAt) {
+      mostRecent = candidate;
+    }
+  }
+  return mostRecent.id;
+}
+
 // Define the worker's API
 const objectStoreWorker = {
   // ============================================================================
@@ -137,21 +177,30 @@ const objectStoreWorker = {
     // Duplicate all chats for this project
     const chatIdMapping = await storage.duplicateResourceChats(projectId, newProject.id);
 
-    // Duplicate Editor state if it exists, mapping focusedChatId to the cloned chat
+    // Always carry forward a valid `focusedChatId` to the duplicate. The
+    // editor route's `<ActiveChatProvider chatId>` is type-required (Layer
+    // 0), so persisting `undefined` here would force the load-time
+    // ensureFocusedChat actor to heal it on first open — correct but
+    // wasteful, and historically a producer of the project-chat crash-loop.
+    // Mirror the most-recent-update policy used by `pickNextFocusedChatId`
+    // so the duplicated project opens on the freshest cloned chat.
+    const clonedChats = await storage.getChatsForResource(newProject.id);
     const sourceEditorState = await storage.getEditorState(projectId);
-    if (sourceEditorState) {
-      const newFocusedChatId = sourceEditorState.focusedChatId
-        ? chatIdMapping[sourceEditorState.focusedChatId]
-        : undefined;
+    const mappedFocusedChatId = pickDuplicatedFocusedChatId({
+      sourceFocusedChatId: sourceEditorState?.focusedChatId,
+      chatIdMapping,
+      clonedChats,
+    });
+    if (mappedFocusedChatId) {
       await storage.updateEditorState({
         projectId: newProject.id,
-        openFiles: sourceEditorState.openFiles,
-        activeFilePath: sourceEditorState.activeFilePath,
-        focusedChatId: newFocusedChatId,
-        panelState: sourceEditorState.panelState,
-        editorLayout: sourceEditorState.editorLayout,
-        viewerLayout: sourceEditorState.viewerLayout,
-        viewSettings: sourceEditorState.viewSettings,
+        openFiles: sourceEditorState?.openFiles ?? [],
+        activeFilePath: sourceEditorState?.activeFilePath,
+        focusedChatId: mappedFocusedChatId,
+        panelState: sourceEditorState?.panelState ?? defaultPanelState,
+        editorLayout: sourceEditorState?.editorLayout,
+        viewerLayout: sourceEditorState?.viewerLayout,
+        viewSettings: sourceEditorState?.viewSettings ?? {},
       });
     }
 

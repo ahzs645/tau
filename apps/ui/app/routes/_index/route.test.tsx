@@ -54,16 +54,6 @@ vi.mock('#hooks/use-kernel.js', () => ({
   },
 }));
 
-vi.mock('#hooks/use-active-chat-model.js', () => ({
-  useActiveChatModel() {
-    return {
-      modelId: 'gpt-5-test-id',
-      model: { id: 'gpt-5-test-id', name: 'Test GPT' },
-      setActiveModel: vi.fn(),
-    };
-  },
-}));
-
 vi.mock('#hooks/use-chat.js', () => ({
   useChatContext() {
     return {
@@ -80,11 +70,38 @@ vi.mock('#hooks/use-chat.js', () => ({
       clearDraft: vi.fn(),
     };
   },
+  useDraftActions() {
+    return {
+      clearDraft: vi.fn(),
+    };
+  },
 }));
 
+// Single composer-context mock. `HomepageChatInput` now reads modelId,
+// kernelId and draftActorRef off the unified contract (`useChatComposer()`),
+// so this one mock replaces both the legacy `useActiveChatModel` mock and
+// the bespoke `useChatComposer` stub.
 vi.mock('#hooks/active-chat-provider.js', () => ({
   ActiveChatProvider({ children }: { readonly children: React.ReactNode }) {
     return <div data-testid='active-chat-provider'>{children}</div>;
+  },
+  ChatComposerProvider({ children }: { readonly children: React.ReactNode }) {
+    return <div data-testid='chat-composer-provider'>{children}</div>;
+  },
+  useChatComposer() {
+    return {
+      draftActorRef: { send: vi.fn() },
+      model: {
+        modelId: 'gpt-5-test-id',
+        model: { id: 'gpt-5-test-id', name: 'Test GPT' },
+        setActiveModel: vi.fn(),
+      },
+      kernel: { kernelId: 'openscad', kernel: undefined, setActiveKernel: vi.fn() },
+      status: 'ready',
+      stop: () => undefined,
+      contextUsage: undefined,
+      session: undefined,
+    };
   },
 }));
 

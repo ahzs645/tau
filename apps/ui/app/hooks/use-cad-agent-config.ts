@@ -1,7 +1,6 @@
 import type { CadAgentConfigInput, ToolSelection } from '@taucad/chat';
 import type { ChatMode } from '@taucad/chat/constants';
-import { useActiveChatModel } from '#hooks/use-active-chat-model.js';
-import { useActiveChatKernel } from '#hooks/use-active-chat-kernel.js';
+import { useChatComposer } from '#hooks/active-chat-provider.js';
 import { useChatSelector } from '#hooks/use-chat.js';
 import { useCookie } from '#hooks/use-cookie.js';
 import { useChatSnapshot } from '#hooks/use-chat-snapshot.js';
@@ -27,8 +26,10 @@ import { cookieName } from '#constants/cookie.constants.js';
  * @public
  */
 export const useCadAgentConfig = (): CadAgentConfigInput => {
-  const { modelId } = useActiveChatModel();
-  const { kernelId } = useActiveChatKernel();
+  const {
+    model: { modelId },
+    kernel: { kernelId },
+  } = useChatComposer();
   const mode = useChatSelector((state) => state.draftMode as ChatMode);
   const toolChoice = useChatSelector((state) => state.draftToolChoice as ToolSelection);
   const [testingEnabled] = useCookie(cookieName.chatTestingEnabled, true);

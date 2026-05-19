@@ -4,8 +4,8 @@ import { mock } from 'vitest-mock-extended';
 import type { Chat } from '@ai-sdk/react';
 import { chatTurnRequestSchema } from '@taucad/chat/schemas';
 import type { ChatSnapshot, ContextPayload, MyUIMessage } from '@taucad/chat';
-import { useActiveChatModel } from '#hooks/use-active-chat-model.js';
-import { useActiveChatKernel } from '#hooks/use-active-chat-kernel.js';
+import { useChatComposer } from '#hooks/active-chat-provider.js';
+import type { ChatComposerContextValue } from '#hooks/active-chat-provider.js';
 import { useChatSelector, useChatActions } from '#hooks/use-chat.js';
 import type { ChatActions } from '#hooks/use-chat.js';
 import { useCookie } from '#hooks/use-cookie.js';
@@ -14,8 +14,6 @@ import { useContextPayload } from '#hooks/use-context-payload.js';
 import { useActiveChatInstance } from '#chat-clients/_internal/use-active-chat-instance.js';
 import { useCadChatClient } from '#chat-clients/use-cad-chat-client.js';
 
-vi.mock('#hooks/use-active-chat-model.js', () => ({ useActiveChatModel: vi.fn() }));
-vi.mock('#hooks/use-active-chat-kernel.js', () => ({ useActiveChatKernel: vi.fn() }));
 vi.mock('#hooks/use-chat.js', () => ({
   useChatSelector: vi.fn(),
   useChatActions: vi.fn(),
@@ -26,8 +24,13 @@ vi.mock('#hooks/use-context-payload.js', () => ({ useContextPayload: vi.fn() }))
 vi.mock('#chat-clients/_internal/use-active-chat-instance.js', () => ({
   useActiveChatInstance: vi.fn(),
 }));
+// Unified provider: `useCadAgentConfig` reads model + kernel via
+// `useChatComposer()`; `useCadChatClient` reads `activeChatId` via
+// `useActiveChatSession()`. Both stub-return the same active id so this
+// integration test exercises the real assembler + client wiring.
 vi.mock('#hooks/active-chat-provider.js', () => ({
-  useActiveChatId: () => 'chat_integration',
+  useChatComposer: vi.fn(),
+  useActiveChatSession: () => ({ activeChatId: 'chat_integration' }),
 }));
 vi.mock('#hooks/chat-session-store-provider.js', () => ({
   useChatSessionStore: () => ({ setLatestAgentBody: vi.fn() }),
@@ -88,16 +91,15 @@ const installActions = (actions: ActionsMock): void => {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(useActiveChatModel).mockReturnValue({
-    modelId: 'openai-gpt-5.5',
-    model: undefined,
-    setActiveModel: noop,
-  } as unknown as ReturnType<typeof useActiveChatModel>);
-  vi.mocked(useActiveChatKernel).mockReturnValue({
-    kernelId: 'replicad',
-    kernel: undefined,
-    setActiveKernel: noop,
-  } as unknown as ReturnType<typeof useActiveChatKernel>);
+  vi.mocked(useChatComposer).mockReturnValue({
+    draftActorRef: { send: vi.fn() },
+    model: { modelId: 'openai-gpt-5.5', model: undefined, setActiveModel: noop },
+    kernel: { kernelId: 'replicad', kernel: undefined, setActiveKernel: noop },
+    status: 'ready',
+    stop: noop,
+    contextUsage: undefined,
+    session: undefined,
+  } as unknown as ChatComposerContextValue);
   vi.mocked(useChatSelector).mockImplementation((selector) =>
     selector({ draftMode: 'agent', draftToolChoice: 'auto', status: 'ready' } as unknown as Parameters<
       typeof selector

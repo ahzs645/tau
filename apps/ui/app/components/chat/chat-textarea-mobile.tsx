@@ -1,7 +1,7 @@
 import { memo, useState } from 'react';
 import { Plus, Wrench, Paperclip, ChevronRight } from 'lucide-react';
 import type { ToolSelection } from '@taucad/chat';
-import { useActiveChatKernel } from '#hooks/use-active-chat-kernel.js';
+import { useChatComposer } from '#hooks/active-chat-provider.js';
 import { Button } from '#components/ui/button.js';
 import { Textarea } from '#components/ui/textarea.js';
 import { SvgIcon } from '#components/icons/svg-icon.js';
@@ -163,7 +163,9 @@ export const ChatTextareaMobile = memo(function ({
   // Chat-scoped kernel resolver — replaces the prior hardcoded
   // `'openscad'` lookup so the mobile drawer label matches the chat's
   // actual active kernel (and falls back to the cookie when unset).
-  const { kernel: selectedKernel } = useActiveChatKernel();
+  const {
+    kernel: { kernel: selectedKernel },
+  } = useChatComposer();
 
   const handleDrawerAddImage = (image: string): void => {
     handleAddImage(image);

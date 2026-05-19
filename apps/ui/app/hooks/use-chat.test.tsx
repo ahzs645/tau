@@ -151,9 +151,36 @@ vi.mock('#hooks/use-project-manager.js', () => ({
   }),
 }));
 
+// `<ChatComposerProvider>` and `<ActiveChatProvider>` both populate the
+// unified composer context, which means they now read the cookie-backed
+// model/kernel hooks at mount time. The real `useModels`/`useKernel`
+// reach `useRouteLoaderData('root')` for the cookie payload — that
+// throws under `renderHook` because no react-router data router is
+// mounted. Stub them with module-local defaults so the provider's
+// strategy helpers can resolve without the router context.
+vi.mock('#hooks/use-models.js', () => ({
+  useModels: () => ({
+    selectedModelId: 'cookie-model',
+    setSelectedModelId: vi.fn(),
+    selectedModel: { id: 'cookie-model', name: 'Cookie Model', isResolved: true },
+    resolveModel: (id: string) => ({ id, name: id, isResolved: false }),
+    data: [],
+    isLoading: false,
+  }),
+}));
+
+vi.mock('#hooks/use-kernel.js', () => ({
+  useKernel: () => ({
+    kernel: 'openscad',
+    setKernel: vi.fn(),
+    selectedKernel: undefined,
+  }),
+}));
+
 const { ChatSessionStoreProvider, useChatSessionStore } = await import('#hooks/chat-session-store-provider.js');
-const { ActiveChatProvider, useActiveChatId } = await import('#hooks/active-chat-provider.js');
-const { useChatActions, useChatContext, useChatSelector, useChatById } = await import('#hooks/use-chat.js');
+const { ActiveChatProvider, ChatComposerProvider } = await import('#hooks/active-chat-provider.js');
+const { useChatActions, useChatContext, useChatSelector, useChatById, useDraftActions, useDraftSelector } =
+  await import('#hooks/use-chat.js');
 
 function makeUserMessage(id: string, text: string): MyUIMessage {
   return {
@@ -199,15 +226,32 @@ const defaultTestChatId = 'chat_test_default';
 /**
  * Mounts the full new-architecture stack: `<ChatSessionStoreProvider>`
  * (singleton vanilla store) → `<ActiveChatProvider>` (per-subtree active
- * chat + draft binding which acquires the session from the store when a
- * chatId is provided). Pass `chatId={undefined}` to exercise the
- * marketing / draft-only path.
+ * chat + draft binding which acquires the session from the store).
+ *
+ * Post-Layer-0 split: `<ActiveChatProvider>` always requires a real
+ * `chatId: string`. For draft-only / marketing tests, use
+ * {@link createComposerWrapper} instead.
  */
-function createWrapper(chatId: string | undefined = defaultTestChatId) {
+function createWrapper(chatId: string = defaultTestChatId) {
   return function Wrapper({ children }: { readonly children: ReactNode }) {
     return (
       <ChatSessionStoreProvider>
         <ActiveChatProvider chatId={chatId}>{children}</ActiveChatProvider>
+      </ChatSessionStoreProvider>
+    );
+  };
+}
+
+/**
+ * Composer-only wrapper for draft-mode tests. Mirrors what marketing
+ * routes (CTA section, library empty state) mount — no session is
+ * acquired, only the draft actor is provided.
+ */
+function createComposerWrapper() {
+  return function Wrapper({ children }: { readonly children: ReactNode }) {
+    return (
+      <ChatSessionStoreProvider>
+        <ChatComposerProvider>{children}</ChatComposerProvider>
       </ChatSessionStoreProvider>
     );
   };
@@ -794,8 +838,11 @@ describe('chat session lifecycle wiring (via ChatSessionStore)', () => {
 
 // ---------------------------------------------------------------------------
 // Hooks resolution rules — store-resolved `useChatContext` /
-// `useChatSelector` / `useChatActions` plus `useChatById` and
-// `useActiveChatId`.
+// `useChatSelector` / `useChatActions` plus `useChatById`. The previously
+// optional `useActiveChatId` reader has been folded into the strict
+// `useActiveChatSession` (session-required) and `useChatComposer().session`
+// (composer-wide) entry points; tests for those live in
+// `active-chat-provider.test.tsx`.
 // ---------------------------------------------------------------------------
 
 describe('hooks resolution rules', () => {
@@ -811,35 +858,15 @@ describe('hooks resolution rules', () => {
     vi.restoreAllMocks();
   });
 
-  it('useActiveChatId returns the active id provided by ActiveChatProvider', () => {
-    const { result } = renderHook(() => useActiveChatId(), {
-      wrapper: createWrapper('chat_active'),
-    });
-
-    expect(result.current).toBe('chat_active');
-  });
-
-  it('useActiveChatId returns undefined when no ActiveChatProvider is in scope', () => {
-    const { result } = renderHook(() => useActiveChatId());
-    expect(result.current).toBeUndefined();
-  });
-
   it('useChatContext throws when used outside an ActiveChatProvider', () => {
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     expect(() => renderHook(() => useChatContext())).toThrow(/activechatprovider/i);
     consoleErrorSpy.mockRestore();
   });
 
-  it('useChatActions().setDraftText works without a session (draft-only mode)', () => {
-    function Wrapper({ children }: { readonly children: ReactNode }) {
-      return (
-        <ChatSessionStoreProvider>
-          <ActiveChatProvider chatId={undefined}>{children}</ActiveChatProvider>
-        </ChatSessionStoreProvider>
-      );
-    }
-    const { result } = renderHook(() => ({ actions: useChatActions(), text: useChatSelector((s) => s.draftText) }), {
-      wrapper: Wrapper,
+  it('useDraftActions().setDraftText works under ChatComposerProvider (draft-only mode)', () => {
+    const { result } = renderHook(() => ({ actions: useDraftActions(), text: useDraftSelector((s) => s.draftText) }), {
+      wrapper: createComposerWrapper(),
     });
 
     expect(result.current.text).toBe('');
@@ -851,25 +878,12 @@ describe('hooks resolution rules', () => {
     expect(result.current.text).toBe('hello world');
   });
 
-  it('useChatActions lifecycle no-ops with a console.warn when no session exists for the active chatId', () => {
-    function Wrapper({ children }: { readonly children: ReactNode }) {
-      return (
-        <ChatSessionStoreProvider>
-          <ActiveChatProvider chatId={undefined}>{children}</ActiveChatProvider>
-        </ChatSessionStoreProvider>
-      );
-    }
-    const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    const { result } = renderHook(() => useChatActions(), { wrapper: Wrapper });
-
-    act(() => {
-      result.current.sendMessage(makeUserMessage('msg_1', 'no session'));
-    });
-
-    expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringMatching(/sendMessage ignored/));
-    expect(harness.created).toHaveLength(0);
-
-    consoleWarnSpy.mockRestore();
+  it('useChatActions throws when used outside an ActiveChatProvider (composer-only subtree)', () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    expect(() => renderHook(() => useChatActions(), { wrapper: createComposerWrapper() })).toThrow(
+      /activechatprovider/i,
+    );
+    consoleErrorSpy.mockRestore();
   });
 
   it('useChatById reads a non-active chat by explicit id', () => {
@@ -897,28 +911,12 @@ describe('hooks resolution rules', () => {
     expect(result.current.background).toBe('ready');
   });
 
-  it('useChatSelector falls back to empty messages when no session is mounted for the resolved chatId', () => {
-    function Wrapper({ children }: { readonly children: ReactNode }) {
-      // ActiveChatProvider with chatId=undefined — no acquire, no session.
-      return (
-        <ChatSessionStoreProvider>
-          <ActiveChatProvider chatId={undefined}>{children}</ActiveChatProvider>
-        </ChatSessionStoreProvider>
-      );
-    }
-
-    const { result } = renderHook(
-      () => ({
-        messages: useChatSelector((s) => s.messages),
-        status: useChatSelector((s) => s.status),
-        order: useChatSelector((s) => s.messageOrder),
-      }),
-      { wrapper: Wrapper },
+  it('useChatSelector throws when used outside an ActiveChatProvider (composer-only subtree)', () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    expect(() => renderHook(() => useChatSelector((s) => s.messages), { wrapper: createComposerWrapper() })).toThrow(
+      /activechatprovider/i,
     );
-
-    expect(result.current.messages).toEqual([]);
-    expect(result.current.status).toBe('ready');
-    expect(result.current.order).toEqual([]);
+    consoleErrorSpy.mockRestore();
   });
 
   // =========================================================================

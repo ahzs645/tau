@@ -21,8 +21,11 @@ import {
   ComingSoonSkeleton,
   CtaSkeleton,
 } from '#routes/_index/section-skeletons.js';
-import { useChatActions, useChatContext } from '#hooks/use-chat.js';
-import { ActiveChatProvider } from '#hooks/active-chat-provider.js';
+import { useDraftActions } from '#hooks/use-chat.js';
+import { ActiveChatProvider, useChatComposer } from '#hooks/active-chat-provider.js';
+// `useKernel` + `setKernel` power the kernel pill strip below the
+// textarea — a cookie-only UI surface that intentionally lives outside
+// the chat composer context.
 // Chat draft / persistence flush is owned by `<GlobalChatFlushGuard>` at
 // the app shell — every live session in `ChatSessionStore` (including the
 // homepage's `chat_homepage_main`, which `<ActiveChatProvider>` acquires
@@ -35,7 +38,6 @@ import { Loader } from '#components/ui/loader.js';
 import type { Handle } from '#types/matches.types.js';
 import { useProjectManager } from '#hooks/use-project-manager.js';
 import { useKernel } from '#hooks/use-kernel.js';
-import { useActiveChatModel } from '#hooks/use-active-chat-model.js';
 import { cacheTag, cdnBackedSsrRouteHeaders } from '#lib/react-router.lib.js';
 const homepageChatResourceId = 'homepage_main_chat_resource';
 const homepageChatId = 'chat_homepage_main';
@@ -174,9 +176,11 @@ function HomepageChatInput({
 }): React.JSX.Element {
   const navigate = useNavigate();
   const projectManager = useProjectManager();
-  const { modelId } = useActiveChatModel();
-  const { clearDraft } = useChatActions();
-  const { draftActorRef } = useChatContext();
+  const {
+    model: { modelId },
+    draftActorRef,
+  } = useChatComposer();
+  const { clearDraft } = useDraftActions();
 
   const onSubmit: ChatTextareaProperties['onSubmit'] = useCallback(
     async ({ content, imageUrls }) => {

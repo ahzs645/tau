@@ -3,12 +3,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render } from '@testing-library/react';
 import type { Model } from '@taucad/chat';
 import type { ResolvedModel } from '#hooks/use-models.js';
+import type { ChatComposerContextValue } from '#hooks/active-chat-provider.js';
 
-// The chat model selector must read AND write through `useActiveChatModel`
-// so the chat row gets patched alongside the cookie default. Tests here lock
-// that dual-write contract in by capturing the `onSelect` handler the
-// component hands to `ComboBoxResponsive` and asserting the chat-scoped
-// resolver is the only model state surface used.
+// The chat model selector reads AND writes through the unified composer
+// context (`useChatComposer().model`). The active provider's strategy
+// (composer-only → cookie; session-backed → chat row + cookie dual-write)
+// decides whether the patch hits the chat row. Tests here lock the
+// component's contract: it must never touch raw cookie state directly,
+// even when the composer's `setActiveModel` is invoked.
 
 const stubModel: ResolvedModel = {
   id: 'cookie-model',
@@ -22,14 +24,25 @@ const chatModelState: { current: ResolvedModel } = { current: stubModel };
 const setActiveModel = vi.fn();
 const setSelectedModelId = vi.fn();
 
-const useActiveChatModelMock = vi.fn(() => ({
-  modelId: chatModelState.current.id,
-  model: chatModelState.current,
-  setActiveModel,
-}));
+const useChatComposerMock = vi.fn(
+  (): ChatComposerContextValue =>
+    ({
+      draftActorRef: { send: vi.fn() },
+      model: {
+        modelId: chatModelState.current.id,
+        model: chatModelState.current,
+        setActiveModel,
+      },
+      kernel: { kernelId: 'openscad', kernel: undefined, setActiveKernel: vi.fn() },
+      status: 'ready',
+      stop: () => undefined,
+      contextUsage: undefined,
+      session: undefined,
+    }) as unknown as ChatComposerContextValue,
+);
 
-vi.mock('#hooks/use-active-chat-model.js', () => ({
-  useActiveChatModel: () => useActiveChatModelMock(),
+vi.mock('#hooks/active-chat-provider.js', () => ({
+  useChatComposer: () => useChatComposerMock(),
 }));
 
 const modelCatalogue: Model[] = [
@@ -70,7 +83,7 @@ vi.mock('#hooks/use-models.js', () => ({
       get(target, key) {
         if (typeof key === 'string' && trappedKeys.has(key)) {
           throw new Error(
-            `chat-model-selector should no longer read \`${key}\` from useModels — switch to useActiveChatModel`,
+            `chat-model-selector should no longer read \`${key}\` from useModels — switch to useChatComposer().model`,
           );
         }
         // oxlint-disable-next-line @typescript-eslint/no-unsafe-return -- proxy passthrough on a typed backing object
@@ -126,9 +139,9 @@ describe('ChatModelSelector — chat-scoped read + dual-write', () => {
     capturedComboBox.value = undefined;
   });
 
-  it('renders the selected model from useActiveChatModel (not useModels)', () => {
+  it('renders the selected model from useChatComposer().model (not useModels)', () => {
     renderSelector();
-    expect(useActiveChatModelMock).toHaveBeenCalled();
+    expect(useChatComposerMock).toHaveBeenCalled();
     expect((capturedComboBox.value as Model | undefined)?.id).toBe('cookie-model');
   });
 
@@ -156,7 +169,7 @@ describe('ChatModelSelector — chat-scoped read + dual-write', () => {
     expect(setActiveModel).toHaveBeenCalledWith('next-model');
     expect(onSelect).toHaveBeenCalledWith('next-model');
     // The selector must NOT call the raw cookie setter directly anymore —
-    // dual-write happens inside `useActiveChatModel.setActiveModel`.
+    // dual-write happens inside the provider's strategy.
     expect(setSelectedModelId).not.toHaveBeenCalled();
   });
 

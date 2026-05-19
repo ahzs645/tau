@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect, useCallback, useImperativeHandle } from 'react';
 import type { ToolSelection } from '@taucad/chat';
 import { tauEditorPanelDragMime, tauFileDragMime, tauViewerPanelDragMime } from '@taucad/types/constants';
-import { useChatActions, useChatSelector } from '#hooks/use-chat.js';
-import { useActiveChatModel } from '#hooks/use-active-chat-model.js';
+import { useDraftActions, useDraftSelector } from '#hooks/use-chat.js';
+import { useChatComposer } from '#hooks/active-chat-provider.js';
 import type { ResolvedModel } from '#hooks/use-models.js';
 import type { KeyCombination } from '#utils/keys.utils.js';
 import { toast } from '#components/ui/sonner.js';
@@ -242,21 +242,26 @@ export function useChatTextareaLogic({
   const fileInputReference = useRef<HTMLInputElement>(null);
   const textareaReference = useRef<HTMLTextAreaElement>(null);
   const containerReference = useRef<HTMLDivElement>(null);
-  // Chat-scoped resolver — falls back to cookie when no chat-local
-  // selection exists. Submit handler stamps `selectedModel.id` into outgoing
-  // metadata, keeping the wire format unchanged.
-  const { model: selectedModel } = useActiveChatModel();
-  const status = useChatSelector((state) => state.status);
+  // Unified composer contract — both providers populate `model`, `status`
+  // and `stop`. Composer-only mounts (marketing CTA, library) get the
+  // cookie-resolved model, a constant `'ready'` status and a no-op stop;
+  // session-backed mounts get the chat-row-preferred model, the live AI
+  // SDK status and a real `stopRequest` dispatcher. The submit handler
+  // stamps `selectedModel.id` into outgoing metadata regardless.
+  const {
+    model: { model: selectedModel },
+    status,
+    stop,
+  } = useChatComposer();
 
   // Read draft state from machine based on mode
-  const inputText = useChatSelector((state) => (mode === 'main' ? state.draftText : state.editDraftText));
-  const images = useChatSelector((state) => (mode === 'main' ? state.draftImages : state.editDraftImages));
-  const selectedToolChoice = useChatSelector((state) =>
+  const inputText = useDraftSelector((state) => (mode === 'main' ? state.draftText : state.editDraftText));
+  const images = useDraftSelector((state) => (mode === 'main' ? state.draftImages : state.editDraftImages));
+  const selectedToolChoice = useDraftSelector((state) =>
     mode === 'main' ? (state.draftToolChoice as ToolSelection) : 'auto',
   );
 
   const {
-    stop,
     setDraftText,
     addDraftImage,
     removeDraftImage,
@@ -264,7 +269,7 @@ export function useChatTextareaLogic({
     setEditDraftText,
     addEditDraftImage,
     removeEditDraftImage,
-  } = useChatActions();
+  } = useDraftActions();
 
   // Helper functions that call the correct action based on mode
   const setText = useCallback(

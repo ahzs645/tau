@@ -7,7 +7,8 @@ import { useCadAgentConfig } from '#hooks/use-cad-agent-config.js';
 import { useActiveChatInstance } from '#chat-clients/_internal/use-active-chat-instance.js';
 import { useChatActions, useChatSelector } from '#hooks/use-chat.js';
 import type { ChatActions } from '#hooks/use-chat.js';
-import { useActiveChatId } from '#hooks/active-chat-provider.js';
+import { useActiveChatSession } from '#hooks/active-chat-provider.js';
+import type { ActiveChatSessionContextValue } from '#hooks/active-chat-provider.js';
 import { useChatSessionStore } from '#hooks/chat-session-store-provider.js';
 import type { ChatSessionStore } from '#services/chat-session-store.js';
 import { useCadChatClient } from '#chat-clients/use-cad-chat-client.js';
@@ -23,7 +24,7 @@ vi.mock('#hooks/use-chat.js', () => ({
   useChatSelector: vi.fn(),
 }));
 vi.mock('#hooks/active-chat-provider.js', () => ({
-  useActiveChatId: vi.fn(),
+  useActiveChatSession: vi.fn(),
 }));
 vi.mock('#hooks/chat-session-store-provider.js', () => ({
   useChatSessionStore: vi.fn(),
@@ -72,11 +73,17 @@ const installSessionStore = (partial: Partial<ChatSessionStore>): void => {
   vi.mocked(useChatSessionStore).mockReturnValue(partial as ChatSessionStore);
 };
 
+const installActiveSession = (activeChatId: string): void => {
+  vi.mocked(useActiveChatSession).mockReturnValue({
+    activeChatId,
+  } as unknown as ActiveChatSessionContextValue);
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   mountAgentMock(buildAgent());
   useChatSelectorMock.mockReturnValue('ready');
-  vi.mocked(useActiveChatId).mockReturnValue('chat_test');
+  installActiveSession('chat_test');
   installSessionStore({ setLatestAgentBody: vi.fn() });
 });
 
@@ -243,8 +250,7 @@ describe('useCadChatClient', () => {
     expect(setLatestAgentBody).toHaveBeenLastCalledWith('chat_test', undefined);
   });
 
-  it('should not publish the agent body when there is no active chat id', () => {
-    vi.mocked(useActiveChatId).mockReturnValue(undefined);
+  it('should republish the agent body under the new chat id when activeChatId changes', () => {
     const chat = mock<Chat<MyUIMessage>>();
     useActiveChatInstanceMock.mockReturnValue(chat);
     const actions = buildActions();
@@ -252,9 +258,16 @@ describe('useCadChatClient', () => {
     const setLatestAgentBody = vi.fn();
     installSessionStore({ setLatestAgentBody });
 
-    renderHook(() => useCadChatClient());
+    const { rerender } = renderHook(() => useCadChatClient());
 
-    expect(setLatestAgentBody).not.toHaveBeenCalled();
+    expect(setLatestAgentBody).toHaveBeenCalledWith('chat_test', { agent: buildAgent() });
+
+    installActiveSession('chat_second');
+    rerender();
+
+    // Cleanup of the previous chat fires first, then the new chat's publish.
+    expect(setLatestAgentBody).toHaveBeenCalledWith('chat_test', undefined);
+    expect(setLatestAgentBody).toHaveBeenCalledWith('chat_second', { agent: buildAgent() });
   });
 
   it('should rebuild submit when the agent identity changes so a fresh body is sent on the next call', () => {

@@ -7,7 +7,7 @@ import { messageRole, messageStatus } from '@taucad/chat/constants';
 import { useCadAgentConfig } from '#hooks/use-cad-agent-config.js';
 import { useActiveChatInstance } from '#chat-clients/_internal/use-active-chat-instance.js';
 import { useChatActions, useChatSelector } from '#hooks/use-chat.js';
-import { useActiveChatId } from '#hooks/active-chat-provider.js';
+import { useActiveChatSession } from '#hooks/active-chat-provider.js';
 import { useChatSessionStore } from '#hooks/chat-session-store-provider.js';
 import { extractMimeTypeFromDataUrl } from '#utils/chat.utils.js';
 
@@ -120,7 +120,11 @@ export const useCadChatClient = (): CadChatClient => {
   const agent = useCadAgentConfig();
   const status = useChatSelector((state) => state.status);
   const body = useMemo(() => ({ agent }), [agent]);
-  const activeChatId = useActiveChatId();
+  // The CAD chat client is session-required by construction (it composes
+  // `useActiveChatInstance` / `useChatActions`), so `activeChatId` is a
+  // guaranteed `string` from the strict session context — no optional
+  // branching needed.
+  const { activeChatId } = useActiveChatSession();
   const store = useChatSessionStore();
 
   // Publish the latest agent body to the chat-session store so the
@@ -130,9 +134,6 @@ export const useCadChatClient = (): CadChatClient => {
   // homepage-seeded turn would dispatch with `body: undefined` and the API
   // would 400 with `agent: Required`. See `ChatSessionStore.setLatestAgentBody`.
   useEffect(() => {
-    if (!activeChatId) {
-      return;
-    }
     store.setLatestAgentBody(activeChatId, body);
     return () => {
       store.setLatestAgentBody(activeChatId, undefined);

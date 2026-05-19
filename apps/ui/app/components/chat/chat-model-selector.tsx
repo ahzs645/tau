@@ -9,7 +9,7 @@ import { SvgIcon } from '#components/icons/svg-icon.js';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '#components/ui/hover-card.js';
 import { useModels } from '#hooks/use-models.js';
 import type { ResolvedModel } from '#hooks/use-models.js';
-import { useActiveChatModel } from '#hooks/use-active-chat-model.js';
+import { useChatComposer } from '#hooks/active-chat-provider.js';
 import { openSettingsDialog } from '#hooks/use-settings-dialog.js';
 import { cn } from '#utils/ui.utils.js';
 
@@ -44,11 +44,13 @@ export const ChatModelSelector = memo(function ({
   isNested,
   ...properties
 }: ChatModelSelectorProps): React.JSX.Element {
-  // Write through the chat-scoped resolver so picking a model inside chat A
-  // patches `Chat.activeModel` for A and updates the cookie default for
-  // future new chats. Reads `data: models` from the global hook because the
-  // catalogue itself is not chat-scoped.
-  const { model: selectedModel, setActiveModel } = useActiveChatModel();
+  // Write through the chat-scoped resolver populated by the active provider
+  // (composer-only → cookie; session-backed → chat row + cookie dual-write).
+  // Reads `data: models` from the global hook because the catalogue itself
+  // is not chat-scoped.
+  const {
+    model: { model: selectedModel, setActiveModel },
+  } = useChatComposer();
   const { data: allModels = [], availableModels } = useModels();
 
   const visibleModels = useMemo(() => {
