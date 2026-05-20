@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render } from '@testing-library/react';
 import type { Model } from '@taucad/chat';
+import { resolveKernel } from '@taucad/types/constants';
 import type { ResolvedModel } from '#hooks/use-models.js';
 import type { ChatComposerContextValue } from '#hooks/active-chat-provider.js';
 
@@ -33,7 +34,7 @@ const useChatComposerMock = vi.fn(
         model: chatModelState.current,
         setActiveModel,
       },
-      kernel: { kernelId: 'openscad', kernel: undefined, setActiveKernel: vi.fn() },
+      kernel: { kernelId: 'openscad', kernel: resolveKernel('openscad'), setActiveKernel: vi.fn() },
       status: 'ready',
       stop: () => undefined,
       contextUsage: undefined,

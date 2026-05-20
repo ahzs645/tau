@@ -1,6 +1,8 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import type { ChatSnapshot, ContextPayload } from '@taucad/chat';
+import type { KernelId } from '@taucad/types/constants';
+import { resolveKernel } from '@taucad/types/constants';
 import { useCadAgentConfig } from '#hooks/use-cad-agent-config.js';
 import { useChatComposer } from '#hooks/active-chat-provider.js';
 import type { ChatComposerContextValue } from '#hooks/active-chat-provider.js';
@@ -35,16 +37,18 @@ const useContextPayloadMock = vi.mocked(useContextPayload);
 
 type CookieReturn = ReturnType<typeof useCookie>;
 
-const buildComposer = (overrides: { modelId?: string; kernelId?: string }): ChatComposerContextValue =>
-  ({
+const buildComposer = (overrides: { modelId?: string; kernelId?: KernelId }): ChatComposerContextValue => {
+  const kernelId: KernelId = overrides.kernelId ?? 'replicad';
+  return {
     draftActorRef: { send: vi.fn() },
     model: { modelId: overrides.modelId ?? 'openai-gpt-5.5', model: undefined, setActiveModel: noop },
-    kernel: { kernelId: overrides.kernelId ?? 'replicad', kernel: undefined, setActiveKernel: noop },
+    kernel: { kernelId, kernel: resolveKernel(kernelId), setActiveKernel: noop },
     status: 'ready',
     stop: noop,
     contextUsage: undefined,
     session: undefined,
-  }) as unknown as ChatComposerContextValue;
+  } as unknown as ChatComposerContextValue;
+};
 
 const mountChatSelectorMocks = (overrides: { draftMode?: string; draftToolChoice?: string | string[] } = {}): void => {
   const draftMode = overrides.draftMode ?? 'agent';

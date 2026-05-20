@@ -46,15 +46,21 @@ vi.mock('#hooks/use-kernel.js', () => ({
   },
 }));
 
-const capturedComboBox: { onSelect?: (id: string) => void; value?: unknown } = {};
+const capturedComboBox: {
+  onSelect?: (id: string) => void;
+  value?: unknown;
+  renderLabel?: (item: KernelConfiguration, selected?: KernelConfiguration) => React.ReactNode;
+} = {};
 vi.mock('#components/ui/combobox-responsive.js', () => ({
   ComboBoxResponsive: (properties: {
     readonly onSelect?: (id: string) => void;
     readonly value?: unknown;
     readonly children?: React.ReactNode;
+    readonly renderLabel?: (item: KernelConfiguration, selected?: KernelConfiguration) => React.ReactNode;
   }): React.JSX.Element => {
     capturedComboBox.onSelect = properties.onSelect;
     capturedComboBox.value = properties.value;
+    capturedComboBox.renderLabel = properties.renderLabel;
     return <div data-testid='combobox'>{properties.children}</div>;
   },
 }));
@@ -68,7 +74,7 @@ const { ChatKernelSelector } = await import('#components/chat/chat-kernel-select
 function renderSelector(onSelect?: (id: KernelId) => void) {
   return render(
     <ChatKernelSelector onSelect={onSelect}>
-      {({ selectedKernel }) => <span data-testid='child'>{selectedKernel?.name ?? 'none'}</span>}
+      {({ selectedKernel }) => <span data-testid='child'>{selectedKernel.name}</span>}
     </ChatKernelSelector>,
   );
 }
@@ -108,5 +114,30 @@ describe('ChatKernelSelector — chat-scoped read + dual-write', () => {
     renderSelector();
     capturedComboBox.onSelect?.('does-not-exist');
     expect(setActiveKernel).not.toHaveBeenCalled();
+  });
+});
+
+describe('ChatKernelSelector — pro tier badge', () => {
+  beforeEach(() => {
+    chatKernelState.current = stubKernel;
+    capturedComboBox.renderLabel = undefined;
+  });
+
+  it('renders KernelTierBadge for pro-tier kernels in the combobox label', () => {
+    const zooKernel = kernelConfigurations.find((k) => k.id === 'zoo')!;
+    render(<ChatKernelSelector>{() => null}</ChatKernelSelector>);
+
+    const label = capturedComboBox.renderLabel?.(zooKernel, undefined);
+    const { getByText } = render(<div>{label}</div>);
+    expect(getByText('Pro')).toBeInTheDocument();
+  });
+
+  it('does not render KernelTierBadge for free-tier kernels in the combobox label', () => {
+    const openscadKernel = kernelConfigurations.find((k) => k.id === 'openscad')!;
+    render(<ChatKernelSelector>{() => null}</ChatKernelSelector>);
+
+    const label = capturedComboBox.renderLabel?.(openscadKernel, undefined);
+    const { queryByText } = render(<div>{label}</div>);
+    expect(queryByText('Pro')).not.toBeInTheDocument();
   });
 });

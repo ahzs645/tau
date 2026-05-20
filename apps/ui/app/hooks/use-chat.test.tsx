@@ -6,6 +6,7 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import type { MyUIMessage } from '@taucad/chat';
 import type { ChatError } from '@taucad/types';
+import { resolveKernel } from '@taucad/types/constants';
 
 // ---------------------------------------------------------------------------
 // Hoisted test harness
@@ -173,7 +174,7 @@ vi.mock('#hooks/use-kernel.js', () => ({
   useKernel: () => ({
     kernel: 'openscad',
     setKernel: vi.fn(),
-    selectedKernel: undefined,
+    selectedKernel: resolveKernel('openscad'),
   }),
 }));
 

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { resolveKernel } from '@taucad/types/constants';
 import type { CreateProjectOptions } from '#hooks/use-project-manager.js';
 import ChatStart from '#routes/_index/route.js';
 
@@ -96,7 +97,7 @@ vi.mock('#hooks/active-chat-provider.js', () => ({
         model: { id: 'gpt-5-test-id', name: 'Test GPT' },
         setActiveModel: vi.fn(),
       },
-      kernel: { kernelId: 'openscad', kernel: undefined, setActiveKernel: vi.fn() },
+      kernel: { kernelId: 'openscad', kernel: resolveKernel('openscad'), setActiveKernel: vi.fn() },
       status: 'ready',
       stop: () => undefined,
       contextUsage: undefined,

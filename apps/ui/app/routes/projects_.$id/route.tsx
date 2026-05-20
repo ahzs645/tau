@@ -5,7 +5,6 @@ import type { Route } from './+types/route.js';
 import { ChatInterface } from '#routes/projects_.$id/chat-interface.js';
 import { ProjectProvider, useProject } from '#hooks/use-project.js';
 import type { Handle } from '#types/matches.types.js';
-import { ActiveChatProvider } from '#hooks/active-chat-provider.js';
 import { ProjectChatRpcBindings } from '#routes/projects_.$id/project-chat-rpc-bindings.js';
 import { ProjectNameEditor } from '#routes/projects_.$id/project-name-editor.js';
 import { ViewContextProvider } from '#routes/projects_.$id/chat-interface-view-context.js';
@@ -28,7 +27,7 @@ function RouteProvider({ children }: { readonly children?: React.ReactNode }): R
   const { id } = useParams();
   return (
     <SharedWorkerGate>
-      <FileManagerProvider projectId={id} rootDirectory={`/projects/${id}`}>
+      <FileManagerProvider projectId={id} rootDirectory={`/projects/${id}`} initialBackend='indexeddb'>
         <ChatRpcSocketProvider>
           <WebglContextTrackerProvider>
             <ProjectProvider projectId={id!} kernelOptionsFactory={debugKernelOptions}>

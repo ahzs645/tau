@@ -31,8 +31,8 @@ import { createContext, useCallback, useContext, useMemo } from 'react';
 import type { Chat } from '@ai-sdk/react';
 import type { ActorRefFrom } from 'xstate';
 import type { ContextUsageData, MyUIMessage } from '@taucad/chat';
-import type { KernelId } from '@taucad/types/constants';
-import { kernelConfigurations } from '@taucad/types/constants';
+import type { KernelEntry, KernelId } from '@taucad/types/constants';
+import { isKernelId, resolveKernel } from '@taucad/types/constants';
 import { fromSafeAsync } from '#lib/xstate.lib.js';
 import { draftMachine } from '#hooks/draft.machine.js';
 import { resizeImageActor } from '#hooks/resize-image.actor.js';
@@ -50,14 +50,6 @@ type ChatInstance = Chat<MyUIMessage>;
 // ---------------------------------------------------------------------------
 // Public contract
 // ---------------------------------------------------------------------------
-
-/**
- * Display-resolved kernel for the composer surface. Preserves the literal
- * `id` union (`KernelId`) so brand-icon props stay strictly typed.
- */
-export type ActiveChatKernelEntry = ReturnType<typeof kernelById.get>;
-
-const kernelById = new Map(kernelConfigurations.map((k) => [k.id, k]));
 
 /**
  * Resolved chat-scoped model state. Mirrors the shape that the session and
@@ -83,11 +75,14 @@ export type ActiveChatModel = {
 
 /**
  * Resolved chat-scoped CAD kernel state. Same dual-strategy shape as
- * {@link ActiveChatModel}.
+ * {@link ActiveChatModel}. `kernel` is non-nullable because every
+ * boundary that produces `kernelId` is guarded by `isKernelId` (cookie
+ * read in `useKernel`, chat-row hydration in `useSessionKernel`) before
+ * the resolver runs.
  */
 export type ActiveChatKernel = {
   kernelId: KernelId;
-  kernel: ActiveChatKernelEntry;
+  kernel: KernelEntry;
   setActiveKernel: (kernelId: KernelId) => void;
 };
 
@@ -325,11 +320,11 @@ function useCookieModel(): ActiveChatModel {
 
 /**
  * Cookie-only kernel resolver. Same role as {@link useCookieModel} for the
- * CAD kernel.
+ * CAD kernel. The cookie boundary is already healed by `useKernel` itself,
+ * so the resolved `kernel` is a definite `KernelConfiguration`.
  */
 function useCookieKernel(): ActiveChatKernel {
-  const { kernel: cookieKernel, setKernel: setCookieKernel } = useKernel();
-  const kernel = kernelById.get(cookieKernel);
+  const { kernel: cookieKernel, setKernel: setCookieKernel, selectedKernel: kernel } = useKernel();
   const setActiveKernel = useCallback(
     (next: KernelId) => {
       setCookieKernel(next);
@@ -376,12 +371,17 @@ function useSessionModel(session: ChatSession): ActiveChatModel {
 
 /**
  * Session-backed kernel resolver. Same shape as {@link useSessionModel}.
+ * The chat-row id is re-validated via {@link isKernelId} so a stale id
+ * (e.g. a kernel that was retired from `kernelConfigurations` after the
+ * row was persisted) heals to the cookie default instead of resurrecting
+ * into the UI.
  */
 function useSessionKernel(session: ChatSession): ActiveChatKernel {
   const chatActiveKernel = useSelector(session.persistenceActorRef, (state) => state.context.activeKernel);
   const { kernel: cookieKernel, setKernel: setCookieKernel } = useKernel();
-  const kernelId: KernelId = chatActiveKernel ?? cookieKernel;
-  const kernel = kernelById.get(kernelId);
+  const sessionKernel = isKernelId(chatActiveKernel) ? chatActiveKernel : undefined;
+  const kernelId: KernelId = sessionKernel ?? cookieKernel;
+  const kernel = resolveKernel(kernelId);
   const setActiveKernel = useCallback(
     (next: KernelId) => {
       setCookieKernel(next);

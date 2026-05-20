@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { userEvent } from '@testing-library/user-event';
 import type { ContextUsageData } from '@taucad/chat';
+import { resolveKernel } from '@taucad/types/constants';
 import { TooltipProvider } from '#components/ui/tooltip.js';
 import type { ChatComposerContextValue } from '#hooks/active-chat-provider.js';
 
@@ -15,7 +16,7 @@ vi.mock('#hooks/active-chat-provider.js', () => ({
     ({
       draftActorRef: { send: vi.fn() },
       model: { modelId: 'm', model: undefined, setActiveModel: vi.fn() },
-      kernel: { kernelId: 'openscad', kernel: undefined, setActiveKernel: vi.fn() },
+      kernel: { kernelId: 'openscad', kernel: resolveKernel('openscad'), setActiveKernel: vi.fn() },
       status: 'ready',
       stop: () => undefined,
       contextUsage: mockContextUsage.current,

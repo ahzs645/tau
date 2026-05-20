@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, renderHook, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import type { Chat, MyUIMessage } from '@taucad/chat';
-import { kernelConfigurations } from '@taucad/types/constants';
+import { resolveKernel } from '@taucad/types/constants';
 import { fromSafeAsync } from '#lib/xstate.lib.js';
 
 // ---------------------------------------------------------------------------
@@ -186,7 +186,7 @@ vi.mock('#hooks/use-kernel.js', () => ({
   useKernel: () => ({
     kernel: harness.cookieKernel,
     setKernel: harness.setKernel,
-    selectedKernel: kernelConfigurations.find((k) => k.id === harness.cookieKernel),
+    selectedKernel: resolveKernel(harness.cookieKernel),
   }),
 }));
 
@@ -319,7 +319,7 @@ describe('ChatComposerProvider', () => {
     });
 
     expect(result.current.kernel.kernelId).toBe('openscad');
-    expect(result.current.kernel.kernel?.id).toBe('openscad');
+    expect(result.current.kernel.kernel.id).toBe('openscad');
   });
 
   it('should write only the cookie when setActiveModel is called (no chat row to patch)', () => {
@@ -615,7 +615,7 @@ describe('ActiveChatProvider', () => {
       await waitFor(() => {
         expect(result.current.kernel.kernelId).toBe('manifold');
       });
-      expect(result.current.kernel.kernel?.id).toBe('manifold');
+      expect(result.current.kernel.kernel.id).toBe('manifold');
     });
 
     it('should fall back to the cookie when Chat.activeKernel is undefined', async () => {

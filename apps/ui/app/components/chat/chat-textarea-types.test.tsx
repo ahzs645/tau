@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
-import { tauEditorPanelDragMime, tauFileDragMime, tauViewerPanelDragMime } from '@taucad/types/constants';
+import {
+  resolveKernel,
+  tauEditorPanelDragMime,
+  tauFileDragMime,
+  tauViewerPanelDragMime,
+} from '@taucad/types/constants';
 import type { ResolvedModel } from '#hooks/use-models.js';
 import type { ChatComposerContextValue } from '#hooks/active-chat-provider.js';
 
@@ -63,7 +68,7 @@ vi.mock('#hooks/active-chat-provider.js', () => ({
     ({
       draftActorRef: undefined,
       model: { modelId: mockActiveModel.id, model: mockActiveModel, setActiveModel: vi.fn() },
-      kernel: { kernelId: 'openscad', kernel: undefined, setActiveKernel: vi.fn() },
+      kernel: { kernelId: 'openscad', kernel: resolveKernel('openscad'), setActiveKernel: vi.fn() },
       status: 'ready',
       stop: () => undefined,
       contextUsage: undefined,

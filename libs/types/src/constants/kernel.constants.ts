@@ -153,6 +153,42 @@ export const kernelProviders = kernelConfigurations.map((option) => option.id) a
 
 export const backendProviders = kernelConfigurations.map((option) => option.backendProvider) as [KernelBackendProvider];
 
+/**
+ * Narrow per-kernel entry type preserving the literal `id` union and all
+ * other const-asserted field literals. Prefer this over
+ * {@link KernelConfiguration} (which widens `id` to `string`) when the
+ * value participates in typed-id consumers like `SvgIcon` or
+ * `KernelTierBadge`.
+ */
+export type KernelEntry = (typeof kernelConfigurations)[number];
+
+const kernelById = new Map<KernelId, KernelEntry>(kernelConfigurations.map((k) => [k.id, k]));
+
+/**
+ * Resolve a {@link KernelId} to its {@link KernelEntry}. The lookup cannot
+ * miss because `id` is the closed union literally derived from
+ * `kernelConfigurations[number]['id']`, so the non-null assertion is safe
+ * by construction. Encapsulating it here removes the `?? 'openscad'`
+ * fallback class at every consumer site.
+ *
+ * Preferred over a `Record<KernelId, KernelEntry>` lookup because the
+ * repo runs with `noUncheckedIndexedAccess: true`, which widens dynamic
+ * indexed access to `T | undefined` regardless of key narrowness.
+ */
+export function resolveKernel(id: KernelId): KernelEntry {
+  // oxlint-disable-next-line @typescript-eslint/no-non-null-assertion -- safe by construction: `id` is the closed union of registered kernel ids
+  return kernelById.get(id)!;
+}
+
+/**
+ * Type guard for {@link KernelId}. Use at every external-data boundary
+ * (cookies, IndexedDB rows, Postgres rows, wire payloads) to heal stale
+ * ids — e.g. ids referencing a kernel that was retired from
+ * {@link kernelConfigurations} after the value was persisted.
+ */
+export const isKernelId = (v: unknown): v is KernelId =>
+  typeof v === 'string' && (kernelProviders as readonly string[]).includes(v);
+
 // oxlint-disable-next-line unicorn/no-array-reduce -- we know the keys are unique
 export const languageFromKernel = kernelConfigurations.reduce(
   (accumulator, option: KernelConfiguration) => {

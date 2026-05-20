@@ -4,35 +4,16 @@ import { render, screen } from '@testing-library/react';
 import type { ResolvedModel } from '#hooks/use-models.js';
 import { kernelConfigurations } from '@taucad/types/constants';
 import type { KernelConfiguration } from '@taucad/types/constants';
-import type { ChatComposerContextValue } from '#hooks/active-chat-provider.js';
 
 const manifoldKernel = kernelConfigurations.find((k) => k.id === 'manifold')!;
 const jscadKernel = kernelConfigurations.find((k) => k.id === 'jscad')!;
-const mockKernel: { current: KernelConfiguration | undefined } = {
-  current: manifoldKernel,
-};
-
-// Single composer-context mock backs the kernel-label read on mobile.
-const mockUseChatComposer = vi.fn(
-  (): ChatComposerContextValue =>
-    ({
-      draftActorRef: { send: vi.fn() },
-      model: { modelId: 'm', model: undefined, setActiveModel: vi.fn() },
-      kernel: {
-        kernelId: mockKernel.current?.id,
-        kernel: mockKernel.current,
-        setActiveKernel: vi.fn(),
-      },
-      status: 'ready',
-      stop: () => undefined,
-      contextUsage: undefined,
-      session: undefined,
-    }) as unknown as ChatComposerContextValue,
-);
-
-vi.mock('#hooks/active-chat-provider.js', () => ({
-  useChatComposer: () => mockUseChatComposer(),
-}));
+// Holds the kernel that the (mocked) ChatKernelSelector will hand back
+// via its render-prop. The mobile component no longer reads
+// `useChatComposer().kernel` directly — the kernel flows in through the
+// selector's children-as-function signature, which post-tightening
+// guarantees a non-nullable `KernelConfiguration`. This test mirrors
+// that contract.
+const mockKernel: { current: KernelConfiguration } = { current: manifoldKernel };
 
 vi.mock('#components/chat/chat-model-selector.js', () => ({
   ChatModelSelector: ({ children }: { readonly children: (props: unknown) => React.ReactNode }) => (
@@ -44,7 +25,7 @@ vi.mock('#components/chat/chat-kernel-selector.js', () => ({
   ChatKernelSelector: ({
     children,
   }: {
-    readonly children: (props: { selectedKernel: KernelConfiguration | undefined }) => React.ReactNode;
+    readonly children: (props: { selectedKernel: KernelConfiguration }) => React.ReactNode;
   }) => <div>{children({ selectedKernel: mockKernel.current })}</div>,
 }));
 
@@ -169,13 +150,12 @@ describe('ChatTextareaMobile — chat-scoped kernel resolution', () => {
     mockKernel.current = manifoldKernel;
   });
 
-  it('should consume useChatComposer().kernel instead of the prior hardcoded openscad lookup', () => {
+  it('renders the kernel handed back by ChatKernelSelector (no hardcoded openscad fallback)', () => {
     renderMobile();
-    expect(mockUseChatComposer).toHaveBeenCalled();
     expect(screen.getAllByText('Manifold').length).toBeGreaterThan(0);
   });
 
-  it('should reflect the chat-active kernel name in the drawer label, not "OpenSCAD"', () => {
+  it('reflects the chat-active kernel name in the drawer label, not "OpenSCAD"', () => {
     mockKernel.current = jscadKernel;
     renderMobile();
     expect(screen.getAllByText('JSCAD').length).toBeGreaterThan(0);

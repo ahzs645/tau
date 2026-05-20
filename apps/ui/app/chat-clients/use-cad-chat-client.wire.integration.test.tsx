@@ -4,6 +4,7 @@ import { mock } from 'vitest-mock-extended';
 import type { Chat } from '@ai-sdk/react';
 import { chatTurnRequestSchema } from '@taucad/chat/schemas';
 import type { ChatSnapshot, ContextPayload, MyUIMessage } from '@taucad/chat';
+import { resolveKernel } from '@taucad/types/constants';
 import { useChatComposer } from '#hooks/active-chat-provider.js';
 import type { ChatComposerContextValue } from '#hooks/active-chat-provider.js';
 import { useChatSelector, useChatActions } from '#hooks/use-chat.js';
@@ -94,7 +95,7 @@ beforeEach(() => {
   vi.mocked(useChatComposer).mockReturnValue({
     draftActorRef: { send: vi.fn() },
     model: { modelId: 'openai-gpt-5.5', model: undefined, setActiveModel: noop },
-    kernel: { kernelId: 'replicad', kernel: undefined, setActiveKernel: noop },
+    kernel: { kernelId: 'replicad', kernel: resolveKernel('replicad'), setActiveKernel: noop },
     status: 'ready',
     stop: noop,
     contextUsage: undefined,
