@@ -500,7 +500,7 @@
     "json-schema-default": "catalog:",
     "manifold-3d": "catalog:",
     "opencascade.js": "file:../../tarballs/opencascade-fork/taucad-opencascade.js-3.0.0-beta.d3056ef.tgz",
-    "replicad": "npm:@taucad/replicad@0.21.0-v8.57.1",
+    "replicad": "file:../../tarballs/replicad-fork/taucad-replicad-0.21.0-v8.57.2-jsdoc.tgz",
     "replicad-opencascadejs": "npm:@taucad/replicad-opencascadejs@0.21.0-v8.57",
     "source-map-js": "catalog:",
     "type-fest": "catalog:",

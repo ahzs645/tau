@@ -13,6 +13,7 @@
     "@tanstack/react-pacer": "catalog:",
     "@tanstack/react-query": "catalog:",
     "@taucad/api-extractor": "workspace:*",
+    "@taucad/billing": "workspace:*",
     "@taucad/chat": "workspace:*",
     "@taucad/converter": "workspace:*",
     "@taucad/filesystem": "workspace:*",
