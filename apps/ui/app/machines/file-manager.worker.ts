@@ -115,6 +115,10 @@ async function createNodeModulesMount(): Promise<void> {
     const opfsRoot = await navigator.storage.getDirectory();
     const nodeModulesHandle = await opfsRoot.getDirectoryHandle('tau-node-modules', { create: true });
     const nodeModulesProvider = new FileSystemAccessProvider(nodeModulesHandle);
+    // Worker-internal OPFS-backed mount — no workspaceId because the
+    // backing storage isn't user-pickable. The discriminated
+    // `MountConfig` accepts `backend: 'opfs'` without the webaccess
+    // identity fields.
     mountTable.mount('/node_modules', nodeModulesProvider, { backend: 'opfs' });
     console.debug('[FM-Worker] /node_modules mounted on OPFS');
   } catch (error) {
@@ -145,7 +149,7 @@ const t0 = performance.now();
 console.debug(`[FM-Worker] module evaluated in ${t0.toFixed(1)}ms`);
 
 try {
-  await fileService.mount('/', 'indexeddb');
+  await fileService.mount('/', { backend: 'indexeddb' });
 } catch (error) {
   postWorkerInitError("mount('/', 'indexeddb')", error);
   throw error;

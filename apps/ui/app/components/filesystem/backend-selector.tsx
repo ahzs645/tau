@@ -6,9 +6,8 @@
  */
 
 import { useMemo } from 'react';
-import { Check, ChevronDown, Database, FolderOpen, HardDrive, MemoryStick } from 'lucide-react';
+import { Check, ChevronDown, Database, FolderOpen, HardDrive } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import type { FileSystemBackend } from '@taucad/types';
 import { filesystemBackendMeta } from '@taucad/types/constants';
 import { Button } from '#components/ui/button.js';
 import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
@@ -16,17 +15,43 @@ import { Loader } from '#components/ui/loader.js';
 import { isFileSystemAccessSupported } from '#constants/browser.constants.js';
 
 /**
+ * Subset of `FileSystemBackend` that is user-pickable. The `memory`
+ * backend is internal-only — projects must commit to a durable backend
+ * (Audit R9), so the selector cannot offer it. `coerceFilesystemBackendCookie`
+ * narrows stale cookie values back into this union.
+ */
+export type SelectableFilesystemBackend = 'indexeddb' | 'opfs' | 'webaccess';
+
+/**
+ * Narrow a raw filesystem-backend cookie value to a
+ * {@link SelectableFilesystemBackend}. Stale `memory` values written by
+ * older builds (when the runtime memory backend was still selectable)
+ * coerce back to `indexeddb` — the safest persistent default. Used at
+ * every cookie-read site that needs the value to feed back into a
+ * selector or a project-creation backend choice.
+ */
+export function coerceFilesystemBackendCookie(value: string | undefined): SelectableFilesystemBackend {
+  if (value === 'opfs' || value === 'webaccess' || value === 'indexeddb') {
+    return value;
+  }
+  return 'indexeddb';
+}
+
+/**
  * Backend option for the selector dropdown.
  */
 export type BackendOption = {
-  value: FileSystemBackend;
+  value: SelectableFilesystemBackend;
   label: string;
   description: string;
   icon: LucideIcon;
 };
 
 /**
- * All available backend options with their icons.
+ * All user-pickable backend options. `memory` is excluded — the
+ * runtime memory backend exists for transient internal mounts (tests
+ * and ephemeral helpers) and cannot persist project state across a
+ * tab reload.
  */
 export const backendOptions: BackendOption[] = [
   {
@@ -44,19 +69,12 @@ export const backendOptions: BackendOption[] = [
     ...filesystemBackendMeta.webaccess,
     icon: FolderOpen,
   },
-  {
-    value: 'memory',
-    ...filesystemBackendMeta.memory,
-    icon: MemoryStick,
-  },
 ];
 
 type BackendSelectorProps = {
-  readonly value: FileSystemBackend;
+  readonly value: SelectableFilesystemBackend;
   readonly onSelect: (backend: string) => void | Promise<void>;
   readonly isLoading?: boolean;
-  /** Whether to hide internal-only backends like memory. Defaults to false. */
-  readonly isInternalHidden?: boolean;
   /**
    * Optional badge appended to the selected-backend label inside the
    * trigger button. Used by `/projects/new` to surface the bound
@@ -76,27 +94,16 @@ export function BackendSelector({
   value,
   onSelect,
   isLoading = false,
-  isInternalHidden = false,
   badge,
 }: BackendSelectorProps): React.JSX.Element {
-  const filteredOptions = useMemo(
-    () =>
-      backendOptions.filter(
-        (option) =>
-          // Memory is internal-only
-          !isInternalHidden || option.value !== 'memory',
-      ),
-    [isInternalHidden],
-  );
-
   const currentOption = useMemo(
-    () => filteredOptions.find((option) => option.value === value) ?? filteredOptions[0]!,
-    [filteredOptions, value],
+    () => backendOptions.find((option) => option.value === value) ?? backendOptions[0]!,
+    [value],
   );
 
   return (
     <ComboBoxResponsive
-      groupedItems={[{ name: 'Storage Backends', items: filteredOptions }]}
+      groupedItems={[{ name: 'Storage Backends', items: backendOptions }]}
       value={currentOption}
       getValue={(item) => item.value}
       renderLabel={(item, selectedItem) => (

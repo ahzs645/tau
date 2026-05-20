@@ -16,22 +16,46 @@ vi.mock('#hooks/use-file-manager.js', () => ({
   useFileManager: () => ({
     backendType: mockBackendType,
     writeFiles: mockWriteFiles,
-    mount: mockMount,
-    unmount: mockUnmount,
+    workspace: {
+      mount: mockMount,
+      unmount: mockUnmount,
+      invalidateStandaloneProvider: vi.fn(async () => undefined),
+    },
     copyDirectory: vi.fn(),
     fileManagerRef: { getSnapshot: () => ({ matches: () => true }) },
   }),
 }));
 
-const mockSetProjectFileSystemConfig = vi.fn<(projectId: string, backend: string) => Promise<void>>();
-const mockGetStoredDirectoryHandle = vi.fn<() => Promise<undefined>>();
+type ProjectFsConfigInput =
+  | { projectId: string; backend: 'indexeddb' | 'opfs' | 'memory' }
+  | { projectId: string; backend: 'webaccess'; workspaceId: string };
+
+const mockSetProjectFileSystemConfig = vi.fn<(config: ProjectFsConfigInput) => Promise<void>>();
+const mockGetDefaultWorkspace =
+  vi.fn<
+    () => Promise<{ workspace: { workspaceId: string; name: string }; handle: FileSystemDirectoryHandle } | undefined>
+  >();
+const mockGetWorkspace =
+  vi.fn<
+    (
+      workspaceId: string,
+    ) => Promise<{ workspace: { workspaceId: string; name: string }; handle: FileSystemDirectoryHandle } | undefined>
+  >();
 const mockCheckHandlePermission = vi.fn<() => Promise<string>>();
 
 vi.mock('#filesystem/handle-store.js', () => ({
   setProjectFileSystemConfig: async (...args: unknown[]) =>
-    mockSetProjectFileSystemConfig(...(args as [string, string])),
-  getStoredDirectoryHandle: async () => mockGetStoredDirectoryHandle(),
+    mockSetProjectFileSystemConfig(...(args as [ProjectFsConfigInput])),
+  getDefaultWorkspace: async () => mockGetDefaultWorkspace(),
+  getWorkspace: async (...args: unknown[]) => mockGetWorkspace(...(args as [string])),
   checkHandlePermission: async () => mockCheckHandlePermission(),
+}));
+
+let mockIsFileSystemAccessSupported = false;
+vi.mock('#constants/browser.constants.js', () => ({
+  get isFileSystemAccessSupported() {
+    return mockIsFileSystemAccessSupported;
+  },
 }));
 
 const mainFile = 'main.ts';
@@ -161,7 +185,10 @@ describe('useProjectManager', () => {
     mockMount.mockResolvedValue(undefined);
     mockUnmount.mockReturnValue(undefined);
     mockSetProjectFileSystemConfig.mockResolvedValue(undefined);
-    mockGetStoredDirectoryHandle.mockResolvedValue(undefined);
+    mockGetDefaultWorkspace.mockResolvedValue(undefined);
+    mockGetWorkspace.mockResolvedValue(undefined);
+    mockCheckHandlePermission.mockResolvedValue('granted');
+    mockIsFileSystemAccessSupported = false;
   });
 
   describe('createProject mount-based backend wiring', () => {
@@ -176,7 +203,10 @@ describe('useProjectManager', () => {
         });
       });
 
-      expect(mockMount).toHaveBeenCalledWith(`/projects/${fakeProject.id}`, 'opfs', { preservePath: true });
+      expect(mockMount).toHaveBeenCalledWith(`/projects/${fakeProject.id}`, {
+        backend: 'opfs',
+        preservePath: true,
+      });
     });
 
     it('should call unmount in finally block after writeFiles', async () => {
@@ -220,7 +250,10 @@ describe('useProjectManager', () => {
         }),
       ).rejects.toThrow('write failed');
 
-      expect(mockMount).toHaveBeenCalledWith(`/projects/${fakeProject.id}`, 'opfs', { preservePath: true });
+      expect(mockMount).toHaveBeenCalledWith(`/projects/${fakeProject.id}`, {
+        backend: 'opfs',
+        preservePath: true,
+      });
       expect(mockUnmount).toHaveBeenCalledWith(`/projects/${fakeProject.id}`);
     });
 
@@ -249,7 +282,7 @@ describe('useProjectManager', () => {
         });
       });
 
-      expect(mockSetProjectFileSystemConfig).toHaveBeenCalledWith(fakeProject.id, 'opfs');
+      expect(mockSetProjectFileSystemConfig).toHaveBeenCalledWith({ projectId: fakeProject.id, backend: 'opfs' });
     });
 
     it('should mount with default indexeddb when no backend specified', async () => {
@@ -264,12 +297,47 @@ describe('useProjectManager', () => {
         });
       });
 
-      expect(mockMount).toHaveBeenCalledWith(`/projects/${fakeProject.id}`, 'indexeddb', { preservePath: true });
+      expect(mockMount).toHaveBeenCalledWith(`/projects/${fakeProject.id}`, {
+        backend: 'indexeddb',
+        preservePath: true,
+      });
       expect(mockUnmount).toHaveBeenCalledWith(`/projects/${fakeProject.id}`);
     });
 
-    it('should fall back to indexeddb when webaccess has no stored handle', async () => {
-      mockGetStoredDirectoryHandle.mockResolvedValue(undefined);
+    it('should throw WorkspaceDirectoryRequiredError when webaccess cannot resolve a workspace', async () => {
+      // In jsdom `isFileSystemAccessSupported === false`, so this exercises
+      // the `'unsupported'` branch. Either way `createProject` MUST refuse
+      // to silently downgrade to indexeddb (Audit R3).
+      mockGetDefaultWorkspace.mockResolvedValue(undefined);
+
+      const { result } = renderHook(() => useProjectManager(), { wrapper: createWrapper() });
+
+      await expect(
+        act(async () => {
+          await result.current.createProject({
+            project: stubProjectData,
+            files: makeFiles({ [mainFile]: [1] }),
+            backend: 'webaccess',
+          });
+        }),
+      ).rejects.toMatchObject({ name: 'WorkspaceDirectoryRequiredError' });
+
+      expect(mockSetProjectFileSystemConfig).not.toHaveBeenCalled();
+      expect(mockMount).not.toHaveBeenCalled();
+    });
+
+    // Audit R15 happy-path regression: webaccess with a resolved + permitted
+    // default workspace MUST bind the project to that workspaceId in
+    // `configs[projectId]` and mount with `'webaccess'`. Silent downgrade
+    // is forbidden (Rule 13a).
+    it('should bind webaccess project to the default workspaceId and mount webaccess', async () => {
+      mockIsFileSystemAccessSupported = true;
+      const defaultEntry = {
+        workspace: { workspaceId: 'wsp_default', name: 'Default Workspace' },
+        handle: { kind: 'directory', name: 'Default' } as unknown as FileSystemDirectoryHandle,
+      };
+      mockGetDefaultWorkspace.mockResolvedValue(defaultEntry);
+      mockCheckHandlePermission.mockResolvedValue('granted');
 
       const { result } = renderHook(() => useProjectManager(), { wrapper: createWrapper() });
 
@@ -281,8 +349,109 @@ describe('useProjectManager', () => {
         });
       });
 
-      expect(mockSetProjectFileSystemConfig).toHaveBeenCalledWith(fakeProject.id, 'indexeddb');
-      expect(mockMount).toHaveBeenCalledWith(`/projects/${fakeProject.id}`, 'indexeddb', { preservePath: true });
+      expect(mockSetProjectFileSystemConfig).toHaveBeenCalledWith({
+        projectId: fakeProject.id,
+        backend: 'webaccess',
+        workspaceId: 'wsp_default',
+      });
+      expect(mockMount).toHaveBeenCalledWith(`/projects/${fakeProject.id}`, {
+        backend: 'webaccess',
+        directoryHandle: defaultEntry.handle,
+        workspaceId: 'wsp_default',
+        preservePath: true,
+      });
+    });
+
+    // Audit R15 explicit-workspace regression: when callers (e.g. the
+    // `/projects/new` workspace picker) pass an explicit `workspaceId`, the
+    // project must bind to that workspace, NOT the default. This is the
+    // foundation for Finding 15 — projects are pinned to the workspace
+    // chosen at creation time and never re-point to the current default.
+    it('should bind webaccess project to the explicit workspaceId option, ignoring the default', async () => {
+      mockIsFileSystemAccessSupported = true;
+      const defaultEntry = {
+        workspace: { workspaceId: 'wsp_default', name: 'Default Workspace' },
+        handle: { kind: 'directory', name: 'Default' } as unknown as FileSystemDirectoryHandle,
+      };
+      const explicitEntry = {
+        workspace: { workspaceId: 'wsp_explicit', name: 'Explicit Workspace' },
+        handle: { kind: 'directory', name: 'Explicit' } as unknown as FileSystemDirectoryHandle,
+      };
+      mockGetDefaultWorkspace.mockResolvedValue(defaultEntry);
+      mockGetWorkspace.mockResolvedValue(explicitEntry);
+      mockCheckHandlePermission.mockResolvedValue('granted');
+
+      const { result } = renderHook(() => useProjectManager(), { wrapper: createWrapper() });
+
+      await act(async () => {
+        await result.current.createProject({
+          project: stubProjectData,
+          files: makeFiles({ [mainFile]: [1] }),
+          backend: 'webaccess',
+          workspaceId: 'wsp_explicit',
+        });
+      });
+
+      expect(mockGetWorkspace).toHaveBeenCalledWith('wsp_explicit');
+      expect(mockGetDefaultWorkspace).not.toHaveBeenCalled();
+      expect(mockSetProjectFileSystemConfig).toHaveBeenCalledWith({
+        projectId: fakeProject.id,
+        backend: 'webaccess',
+        workspaceId: 'wsp_explicit',
+      });
+    });
+
+    // Audit R15 permission-denied regression: a resolved workspace with
+    // `permission !== 'granted'` must surface as a structured
+    // `WorkspaceDirectoryRequiredError({ code: 'permission' })` and NOT
+    // partially bind the project. The route layer translates this into
+    // the inline `WorkspaceDirectoryPanel` recovery UX.
+    it('should throw permission-coded error when webaccess workspace has revoked permission', async () => {
+      mockIsFileSystemAccessSupported = true;
+      mockGetDefaultWorkspace.mockResolvedValue({
+        workspace: { workspaceId: 'wsp_revoked', name: 'Revoked' },
+        handle: { kind: 'directory', name: 'Revoked' } as unknown as FileSystemDirectoryHandle,
+      });
+      mockCheckHandlePermission.mockResolvedValue('prompt');
+
+      const { result } = renderHook(() => useProjectManager(), { wrapper: createWrapper() });
+
+      await expect(
+        act(async () => {
+          await result.current.createProject({
+            project: stubProjectData,
+            files: makeFiles({ [mainFile]: [1] }),
+            backend: 'webaccess',
+          });
+        }),
+      ).rejects.toMatchObject({ name: 'WorkspaceDirectoryRequiredError', code: 'permission' });
+
+      expect(mockSetProjectFileSystemConfig).not.toHaveBeenCalled();
+      expect(mockMount).not.toHaveBeenCalled();
+    });
+
+    // Audit R15 missing-workspace regression: an explicit `workspaceId`
+    // that no longer exists in IDB must surface as
+    // `code: 'missing'` so the UI can prompt the user to re-pick the
+    // workspace (rather than silently falling back to the default).
+    it('should throw missing-coded error when explicit workspaceId is not in the store', async () => {
+      mockIsFileSystemAccessSupported = true;
+      mockGetWorkspace.mockResolvedValue(undefined);
+
+      const { result } = renderHook(() => useProjectManager(), { wrapper: createWrapper() });
+
+      await expect(
+        act(async () => {
+          await result.current.createProject({
+            project: stubProjectData,
+            files: makeFiles({ [mainFile]: [1] }),
+            backend: 'webaccess',
+            workspaceId: 'wsp_gone',
+          });
+        }),
+      ).rejects.toMatchObject({ name: 'WorkspaceDirectoryRequiredError', code: 'missing' });
+
+      expect(mockSetProjectFileSystemConfig).not.toHaveBeenCalled();
     });
 
     it('should seed activeKernel from the kernel template and leave activeModel unset when not supplied', async () => {

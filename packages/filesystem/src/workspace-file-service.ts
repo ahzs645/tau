@@ -16,11 +16,12 @@ import { WatchRegistry } from '#watch-registry.js';
 import { bufferToStream } from '#backend/stream-utils.js';
 import { CrossTabCoordinator } from '#cross-tab-coordinator.js';
 import type { SharedPool } from '@taucad/memory';
-import type { MountTable, MountOptions, MountResolution } from '#mount-table.js';
+import type { MountTable, MountConfig, MountResolution, WorkspaceScope } from '#mount-table.js';
 import { createFileSystemService } from '#file-system-service.js';
 import type { FileSystemService } from '#file-system-service.js';
 import { tagEventOrigin } from '#event-origin-registry.js';
 import { parentDirectory, joinPath, normalizePath } from '@taucad/utils/path';
+import { MissingWorkspaceHandleError } from '#workspace-errors.js';
 
 /** Milliseconds. */
 const kernelCoalescingWindow = 75;
@@ -117,30 +118,35 @@ export class WorkspaceFileService {
   // --- Read operations (direct to provider, no serialization) ---
 
   /**
-   * Read a single file. Pass `'utf8'` to decode as a string.
+   * Read a single file. Pass `'utf8'` to decode as a string. Pass
+   * `{ scope }` to read from the standalone provider for that workspace
+   * scope instead of the mount table.
    *
    * @param filepath - Absolute path to the file.
-   * @param options - Encoding option; omit for raw bytes.
+   * @param options  - Encoding shorthand `'utf8'`, or an options bag with
+   *                   optional `encoding`, `signal`, and `scope`.
    * @returns File contents as a string or `Uint8Array`.
    */
   public async readFile(
     filepath: string,
-    options?: 'utf8' | { encoding?: 'utf8'; signal?: AbortSignal },
+    options?: 'utf8' | { encoding?: 'utf8'; signal?: AbortSignal; scope?: WorkspaceScope },
   ): Promise<string | Uint8Array<ArrayBuffer>> {
-    const signal = typeof options === 'object' ? options.signal : undefined;
+    const optionsObject = typeof options === 'object' ? options : undefined;
+    const signal = optionsObject?.signal;
     if (signal?.aborted) {
       throw new DOMException('The operation was aborted.', 'AbortError');
     }
 
-    const { provider, path: resolvedPath } = this._resolveProvider(filepath);
-    const encoding =
-      options === 'utf8' || (typeof options === 'object' && options.encoding === 'utf8') ? 'utf8' : undefined;
+    const { provider, path: resolvedPath } = await this._resolve(filepath, { scope: optionsObject?.scope });
+    const encoding = options === 'utf8' || optionsObject?.encoding === 'utf8' ? 'utf8' : undefined;
 
     if (encoding === 'utf8') {
       return provider.readFile(resolvedPath, 'utf8');
     }
     const data = await provider.readFile(resolvedPath);
-    this._filePool?.store(filepath, data);
+    if (optionsObject?.scope === undefined) {
+      this._filePool?.store(filepath, data);
+    }
     return data;
   }
 
@@ -416,19 +422,27 @@ export class WorkspaceFileService {
   }
 
   /**
-   * Delete a file.
+   * Delete a file. Pass `{ scope }` to target the standalone provider
+   * for an explicit workspace scope instead of the mount table.
    *
-   * @param path - Absolute file path.
+   * @param path    - Absolute file path.
+   * @param options - Optional `{ scope }` discriminator.
    * @param context - Optional mutation source metadata for change-bus subscribers.
    * @returns Resolves when the file is deleted.
    */
-  public async unlink(path: string, context?: WorkspaceMutationContext): Promise<void> {
+  public async unlink(
+    path: string,
+    options?: { scope?: WorkspaceScope },
+    context?: WorkspaceMutationContext,
+  ): Promise<void> {
     return this._resourceQueue.queueFor(path, async () => {
-      const { provider, path: resolvedPath, backend: resolvedBackend } = this._resolveProvider(path);
+      const { provider, path: resolvedPath, backend: resolvedBackend } = await this._resolve(path, options);
       await provider.unlink(resolvedPath);
 
-      this._filePool?.invalidate(path);
-      this._inMemoryTreeRemoveFile(path);
+      if (options?.scope === undefined) {
+        this._filePool?.invalidate(path);
+        this._inMemoryTreeRemoveFile(path);
+      }
       this._emitChangeEvent(
         {
           type: 'fileDeleted',
@@ -441,18 +455,38 @@ export class WorkspaceFileService {
   }
 
   /**
-   * Remove a directory.
+   * Remove a directory. Pass `{ scope }` to target the standalone
+   * provider for an explicit workspace scope instead of the mount
+   * table. Pass `{ scope, recursive: true }` for a recursive walk
+   * (mount-routed recursive removal is not supported and throws).
    *
-   * @param path - Absolute directory path.
+   * @param path    - Absolute directory path.
+   * @param options - Optional `{ scope, recursive }` discriminator.
    * @param context - Optional mutation source metadata for change-bus subscribers.
    * @returns Resolves when the directory is removed.
    */
-  public async rmdir(path: string, context?: WorkspaceMutationContext): Promise<void> {
+  public async rmdir(
+    path: string,
+    options?: { scope?: WorkspaceScope; recursive?: boolean },
+    context?: WorkspaceMutationContext,
+  ): Promise<void> {
     return this._resourceQueue.queueFor(path, async () => {
-      const { provider, path: resolvedPath, backend: resolvedBackend } = this._resolveProvider(path);
-      await provider.rmdir(resolvedPath);
+      const { provider, path: resolvedPath, backend: resolvedBackend } = await this._resolve(path, options);
 
-      this._inMemoryTreeRemoveDirectory(path);
+      if (options?.recursive === true) {
+        if (options.scope === undefined) {
+          throw new Error(
+            '[WorkspaceFileService] rmdir({ recursive: true }) without an explicit scope is not supported.',
+          );
+        }
+        await this._rmdirRecursive(provider, resolvedPath);
+      } else {
+        await provider.rmdir(resolvedPath);
+      }
+
+      if (options?.scope === undefined) {
+        this._inMemoryTreeRemoveDirectory(path);
+      }
       this._emitChangeEvent(
         {
           type: 'directoryChanged',
@@ -569,16 +603,21 @@ export class WorkspaceFileService {
   }
 
   /**
-   * Package a directory's contents into a ZIP blob.
+   * Package a directory's contents into a ZIP blob. Pass `{ scope }` to
+   * zip from the standalone provider for an explicit workspace scope
+   * instead of the mount table.
    *
-   * @param path - Absolute directory path.
+   * @param path    - Absolute directory path.
+   * @param options - Optional `{ scope }` discriminator.
    * @returns ZIP archive as a `Blob`.
    */
-  public async getZippedDirectory(path: string): Promise<Blob> {
+  public async getZippedDirectory(path: string, options?: { scope?: WorkspaceScope }): Promise<Blob> {
     // eslint-disable-next-line @typescript-eslint/naming-convention -- JSZip is the library's class name
     const { default: JSZip } = await import('jszip');
     const zip = new JSZip();
-    const files = await this.getDirectoryContents(path);
+    const { provider, path: resolvedPath } = await this._resolve(path, options);
+    const directoryExists = await provider.exists(resolvedPath);
+    const files = directoryExists ? await this._getDirectoryContentsInternal(provider, resolvedPath) : {};
     for (const [relativePath, content] of Object.entries(files)) {
       zip.file(relativePath, content);
     }
@@ -712,55 +751,53 @@ export class WorkspaceFileService {
   }
 
   /**
-   * Read a single directory level from a specific backend, bypassing the
-   * active provider. Used by the `/files` route to show all backends.
+   * Read a single directory level. Pass `{ scope }` to read via the
+   * standalone provider for an explicit workspace scope (used by the
+   * `/files` route to show all backends side-by-side); omit `scope` to
+   * route through the mount table.
    *
-   * @param path - Absolute directory path.
-   * @param backend - Storage backend to read from.
-   * @param handle - Optional directory handle for webaccess backends.
+   * Webaccess scopes carry an explicit `directoryHandle` and stable
+   * `workspaceId`; the standalone cache is keyed by `workspaceId` so two
+   * workspaces with the same folder name never share a provider
+   * (Finding 3 of the explicit-workspace-boundaries blueprint).
+   *
+   * Memory scopes return `[]` (no persisted cross-mount tree to render).
+   * Provider construction or readdir failures bubble up to the caller
+   * so the UI can render structured recovery (the previous "swallow to
+   * `[]`" fallback hid revoked-permission errors).
+   *
+   * @param path    - Absolute directory path.
+   * @param options - Optional `{ scope }` discriminator.
    * @returns Sorted tree nodes (folders first, then alphabetical).
    */
-  public async readShallowDirectory(
-    path: string,
-    backend: FileSystemBackend,
-    handle?: FileSystemDirectoryHandle,
-  ): Promise<FileTreeNode[]> {
-    if (backend === 'memory') {
+  public async readShallowDirectory(path: string, options?: { scope?: WorkspaceScope }): Promise<FileTreeNode[]> {
+    if (options?.scope?.backend === 'memory') {
       return [];
     }
 
-    let provider;
-    try {
-      provider = await this._registry.getStandaloneProvider(backend, handle);
-    } catch {
-      return [];
-    }
+    const { provider, path: resolvedPath } = await this._resolve(path, options);
 
     const nodes: FileTreeNode[] = [];
-    try {
-      if (provider.readdirWithStats) {
-        const statsEntries = await provider.readdirWithStats(path);
-        for (const entry of statsEntries) {
-          const fullPath = path === '/' ? `/${entry.name}` : `${path}/${entry.name}`;
-          if (entry.type === 'dir') {
-            nodes.push({ id: fullPath, name: entry.name, size: entry.size, mtimeMs: entry.mtimeMs, children: [] });
-          } else {
-            nodes.push({ id: fullPath, name: entry.name, size: entry.size, mtimeMs: entry.mtimeMs });
-          }
-        }
-      } else {
-        const entries = await provider.readdir(path);
-        for (const entry of entries) {
-          const fullPath = path === '/' ? `/${entry}` : `${path}/${entry}`;
-          // oxlint-disable-next-line no-await-in-loop -- Sequential stat required for tree building
-          const node = await this._statToTreeNode(provider, fullPath, entry);
-          if (node) {
-            nodes.push(node);
-          }
+    if (provider.readdirWithStats) {
+      const statsEntries = await provider.readdirWithStats(resolvedPath);
+      for (const entry of statsEntries) {
+        const fullPath = path === '/' ? `/${entry.name}` : `${path}/${entry.name}`;
+        if (entry.type === 'dir') {
+          nodes.push({ id: fullPath, name: entry.name, size: entry.size, mtimeMs: entry.mtimeMs, children: [] });
+        } else {
+          nodes.push({ id: fullPath, name: entry.name, size: entry.size, mtimeMs: entry.mtimeMs });
         }
       }
-    } catch {
-      return [];
+    } else {
+      const entries = await provider.readdir(resolvedPath);
+      for (const entry of entries) {
+        const fullPath = path === '/' ? `/${entry}` : `${path}/${entry}`;
+        // oxlint-disable-next-line no-await-in-loop -- Sequential stat required for tree building
+        const node = await this._statToTreeNode(provider, fullPath, entry);
+        if (node) {
+          nodes.push(node);
+        }
+      }
     }
 
     return nodes.sort((a, b) => {
@@ -812,16 +849,20 @@ export class WorkspaceFileService {
   // --- Backend management ---
 
   /**
-   * Dynamically mount a path prefix on a new provider instance of the given backend.
-   * The caller owns the path convention; WorkspaceFileService is domain-agnostic.
+   * Dynamically mount a path prefix on a new provider instance for the
+   * supplied {@link MountConfig}. The discriminated config makes
+   * webaccess mounts compile-time-safe: callers must pass
+   * `{ directoryHandle, workspaceId }` together with `backend: 'webaccess'`.
+   *
+   * The caller owns the path convention; WorkspaceFileService is
+   * domain-agnostic.
    *
    * @param prefix - Absolute path prefix to mount (e.g. `/data`, `/projects/abc`).
-   * @param backend - Storage backend for the new mount.
-   * @param options - Optional mount options (preservePath, etc.).
+   * @param config - Discriminated mount configuration.
    */
-  public async mount(prefix: string, backend: FileSystemBackend, options?: MountOptions): Promise<void> {
-    const provider = await this._registry.createMountProvider(backend);
-    this._mountTable.mount(prefix, provider, { backend, ...options });
+  public async mount(prefix: string, config: MountConfig): Promise<void> {
+    const provider = await this._registry.createMountProvider(this._toScope(config));
+    this._mountTable.mount(prefix, provider, config);
 
     if (prefix === '/') {
       this._watchRegistry.setCaseSensitive(provider.capabilities.caseSensitive ?? true);
@@ -830,26 +871,44 @@ export class WorkspaceFileService {
 
   /**
    * Remove a dynamic mount, disposing the provider that backs it.
+   * Subsequent reads under the prefix fall through to whichever broader
+   * mount covers the path (typically the root mount), matching POSIX-like
+   * `umount` semantics.
    *
    * @param prefix - The mount prefix to remove.
    */
   public unmount(prefix: string): void {
+    let provider: FileSystemProvider | undefined;
     try {
-      const { provider } = this._mountTable.resolve(prefix);
-      this._mountTable.unmount(prefix);
-      provider.dispose();
+      provider = this._mountTable.resolve(prefix).provider;
     } catch {
-      this._mountTable.unmount(prefix);
+      // No matching mount — fall through to `unmount` which is a no-op.
     }
+    this._mountTable.unmount(prefix);
+    provider?.dispose();
   }
 
   /**
-   * Set the directory handle used by webaccess backends.
+   * Invalidate the standalone provider cache for a given backend / scope.
    *
-   * @param handle - Browser File System Access API directory handle.
+   * The webaccess standalone cache is keyed by `workspaceId` (Audit R6).
+   * When the user picks a different folder for an existing workspace
+   * (`/files` "Change Folder" or recovery `bindProjectToWorkspace`), the
+   * cached provider holds onto the previous handle — invalidating the
+   * `workspaceId` slot forces a fresh provider on the next standalone
+   * read. For non-webaccess backends, the registry's invalidator drops
+   * every entry for that backend.
+   *
+   * @param backend     - The backend whose standalone cache should be cleared.
+   * @param workspaceId - Optional workspace id; required to scope webaccess
+   *                      invalidation to a single entry. When omitted for
+   *                      `webaccess`, every webaccess entry is dropped.
    */
-  public setDirectoryHandle(handle: FileSystemDirectoryHandle): void {
-    this._registry.setDirectoryHandle(handle);
+  public invalidateStandaloneProvider(
+    backend: 'webaccess' | 'indexeddb' | 'opfs' | 'memory',
+    workspaceId?: string,
+  ): void {
+    this._registry.invalidateStandaloneProvider(backend, workspaceId);
   }
 
   /**
@@ -867,6 +926,24 @@ export class WorkspaceFileService {
     this._fs.dispose();
     this._registry.disposeAll();
     this._eventBus.dispose();
+  }
+
+  private _toScope(config: MountConfig): WorkspaceScope {
+    if (config.backend === 'webaccess') {
+      // Defensive runtime check — the discriminated `MountConfig` makes
+      // this unreachable in well-typed call sites, but structured-clone
+      // deserialisation through the worker bridge is not type-checked.
+      // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- defensive runtime guard against unsafe (untyped RPC / `as any`) callers
+      if (!config.directoryHandle) {
+        throw new MissingWorkspaceHandleError({ workspaceId: config.workspaceId });
+      }
+      return {
+        backend: 'webaccess',
+        directoryHandle: config.directoryHandle,
+        workspaceId: config.workspaceId,
+      };
+    }
+    return { backend: config.backend };
   }
 
   // --- Private helpers ---
@@ -1067,6 +1144,28 @@ export class WorkspaceFileService {
     return this._mountTable.resolve(path);
   }
 
+  /**
+   * Resolve the provider for an FS operation. When `options.scope` is
+   * supplied the standalone provider for that scope is returned and the
+   * absolute path is passed through verbatim (no mount-prefix stripping).
+   * Otherwise the mount table is consulted as in {@link _resolveProvider}.
+   *
+   * @param path - Absolute virtual path inside the (possibly scoped) workspace.
+   * @param options - Optional scope discriminator.
+   * @returns Resolved provider, provider-relative path, and backend tag.
+   */
+  private async _resolve(
+    path: string,
+    options?: { scope?: WorkspaceScope },
+  ): Promise<{ provider: FileSystemProvider; path: string; backend: FileSystemBackend }> {
+    if (options?.scope !== undefined) {
+      const provider = await this._registry.getStandaloneProvider(options.scope);
+      return { provider, path, backend: options.scope.backend };
+    }
+    const resolution = this._mountTable.resolve(path);
+    return { provider: resolution.provider, path: resolution.path, backend: resolution.backend };
+  }
+
   private async _ensureParentDir(
     provider: { mkdir(path: string, options?: { recursive?: boolean }): Promise<void> },
     filePath: string,
@@ -1099,6 +1198,18 @@ export class WorkspaceFileService {
         }
       }
     }
+  }
+
+  private async _rmdirRecursive(provider: FileSystemProvider, directoryPath: string): Promise<void> {
+    const entries = await provider.readdir(directoryPath);
+    for (const entry of entries) {
+      const fullPath = joinPath(directoryPath, entry);
+      // oxlint-disable-next-line no-await-in-loop -- Sequential stat required for ordered deletion
+      const entryStat = await provider.stat(fullPath);
+      // oxlint-disable-next-line no-await-in-loop -- Sequential traversal required for recursive deletion
+      await (entryStat.type === 'dir' ? this._rmdirRecursive(provider, fullPath) : provider.unlink(fullPath));
+    }
+    await provider.rmdir(directoryPath);
   }
 
   private async _getDirectoryContentsInternal(

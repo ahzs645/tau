@@ -1,20 +1,32 @@
 import type { ReactNode } from 'react';
-import { createContext, useContext, useMemo, useCallback, useEffect, useRef, useState } from 'react';
+import { createContext, useContext, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useActorRef, useSelector } from '@xstate/react';
 import { waitFor } from 'xstate';
 import type { SnapshotFrom } from 'xstate';
 import type { FileTreeEntry, FileSystemBackend, FileStatEntry, FileStat } from '@taucad/types';
 import { fileManagerMachine } from '#machines/file-manager.machine.js';
 import type { FileWriteSource } from '@taucad/fs-client/file-write-source';
+import type { FileSystemClient } from '@taucad/fs-client/file-system-client';
 import type { FileManagerRef, FileManagerProxy } from '#machines/file-manager.machine.types.js';
-import type { FileTreeNode, MountOptions } from '@taucad/filesystem';
-import { getStoredDirectoryHandle } from '#filesystem/handle-store.js';
-import { useCookie } from '#hooks/use-cookie.js';
-import { cookieName } from '#constants/cookie.constants.js';
+import type { MountConfig } from '@taucad/filesystem';
+import { setProjectFileSystemConfig } from '#filesystem/handle-store.js';
+import type { WorkspaceUnavailableReason } from '#machines/file-manager.machine.js';
+import { useWorkspaceTelemetry } from '#utils/workspace-telemetry.utils.js';
 import type { FileContentService } from '@taucad/fs-client/file-content-service';
 import type { FileTreeService } from '@taucad/fs-client/file-tree-service';
+import { FileManagerNotReadyError } from '#filesystem/workspace-errors.js';
 
 type FileManagerSnapshot = SnapshotFrom<typeof fileManagerMachine>;
+
+/**
+ * Default timeout for {@link waitForFileManagerServices} and the proxy
+ * gate inside `useFileManager`. Closes Finding 8 of the explicit-
+ * workspace blueprint — without a timeout the hook hangs the whole UI
+ * (chat composer, project creation) when the FM machine gets stuck in
+ * `connectingWorker`/`initializingServices`. 30s matches the worker
+ * boot budget tracked in `runtime-blueprint-v5-implementation-audit`.
+ */
+export const fileManagerReadyTimeout = 30_000;
 
 function createErrorAwareWaitPredicate(
   predicate: (state: FileManagerSnapshot) => boolean,
@@ -28,14 +40,18 @@ function createErrorAwareWaitPredicate(
   };
 }
 
-function assertNotErrorState(snapshot: FileManagerSnapshot, fallbackMessage: string): void {
+function assertNotErrorState(snapshot: FileManagerSnapshot): void {
   if (snapshot.matches('error')) {
-    throw new Error(snapshot.context.error?.message ?? fallbackMessage);
+    throw new FileManagerNotReadyError('machine-error', { cause: snapshot.context.error });
   }
 }
 
 export async function waitForFileManagerServices(
   fileManagerRef: FileManagerRef,
+  options?: {
+    /** Milliseconds. */
+    readyTimeout?: number;
+  },
 ): Promise<{ contentService: FileContentService; treeService: FileTreeService }> {
   const snapshot = fileManagerRef.getSnapshot();
   const { contentService: content, treeService: tree } = snapshot.context;
@@ -43,20 +59,49 @@ export async function waitForFileManagerServices(
     return { contentService: content, treeService: tree };
   }
 
-  const settled = await waitFor(
+  const settled = await waitForWithTimeout({
     fileManagerRef,
-    createErrorAwareWaitPredicate(
+    predicate: createErrorAwareWaitPredicate(
       (state) => state.context.contentService !== undefined && state.context.treeService !== undefined,
     ),
-  );
-  assertNotErrorState(settled, 'File manager failed to initialize before services were requested');
+    readyTimeout: options?.readyTimeout ?? fileManagerReadyTimeout,
+    reason: 'services-timeout',
+  });
+  assertNotErrorState(settled);
   const readyContent = settled.context.contentService;
   const readyTree = settled.context.treeService;
   if (!readyContent || !readyTree) {
-    throw new Error('File manager services not available');
+    throw new FileManagerNotReadyError('services-timeout');
   }
 
   return { contentService: readyContent, treeService: readyTree };
+}
+
+type WaitForWithTimeoutOptions = {
+  readonly fileManagerRef: FileManagerRef;
+  readonly predicate: (state: FileManagerSnapshot) => boolean;
+  /** Milliseconds. */
+  readonly readyTimeout: number;
+  readonly reason: 'proxy-timeout' | 'services-timeout';
+};
+
+async function waitForWithTimeout({
+  fileManagerRef,
+  predicate,
+  readyTimeout,
+  reason,
+}: WaitForWithTimeoutOptions): Promise<FileManagerSnapshot> {
+  return Promise.race([
+    waitFor(fileManagerRef, predicate),
+    new Promise<FileManagerSnapshot>((_resolve, reject) => {
+      const id = setTimeout(() => {
+        reject(new FileManagerNotReadyError(reason));
+      }, readyTimeout);
+      // oxlint-disable-next-line @typescript-eslint/no-explicit-any -- access guarded below
+      const unrefable = id as unknown as { unref?: () => void };
+      unrefable.unref?.();
+    }),
+  ]);
 }
 
 type WriteFileOptions = {
@@ -65,6 +110,63 @@ type WriteFileOptions = {
 
 type DeleteFileOptions = {
   source: FileWriteSource;
+};
+
+/**
+ * Typed proxy dispatch facade. Mirrors the worker {@link FileSystemClient}
+ * one-to-one. Each method gates on the FM machine becoming `ready`
+ * before forwarding to the worker — no per-method `useCallback`
+ * ceremony. Use this surface for cache-free or scope-routed operations
+ * (`/files`-style cross-workspace dispatch, admin reads); the cache-
+ * bound editor flows continue to use the dedicated `readFile` /
+ * `writeFile` / `renameFile` callbacks below.
+ *
+ * @public
+ */
+export type FileSystemClientFacade = Pick<
+  FileSystemClient,
+  | 'readFile'
+  | 'readFiles'
+  | 'writeFile'
+  | 'writeFiles'
+  | 'mkdir'
+  | 'readdir'
+  | 'stat'
+  | 'lstat'
+  | 'rename'
+  | 'unlink'
+  | 'rmdir'
+  | 'exists'
+  | 'batchExists'
+  | 'ensureDirectoryExists'
+  | 'getDirectoryStat'
+  | 'getDirectoryContents'
+  | 'duplicateFile'
+  | 'copyDirectory'
+  | 'getZippedDirectory'
+  | 'readShallowDirectory'
+  | 'readDirectory'
+>;
+
+/**
+ * Workspace lifecycle facade. Groups admin operations that are not
+ * per-call FS dispatch — mount/unmount and standalone-provider
+ * invalidation. Each call gates on the FM machine becoming `ready`.
+ *
+ * @public
+ */
+export type WorkspaceFacade = {
+  mount: (prefix: string, config: MountConfig) => Promise<void>;
+  unmount: (prefix: string) => void;
+  /**
+   * Drop the cached standalone provider for the supplied backend /
+   * workspace pair. Used by `/files` "Change Folder" and recovery
+   * binding so the next standalone call picks up the new handle.
+   */
+  invalidateStandaloneProvider: (
+    backend: 'webaccess' | 'indexeddb' | 'opfs' | 'memory',
+    workspaceId?: string,
+  ) => Promise<void>;
 };
 
 type FileManagerContextType = {
@@ -86,10 +188,41 @@ type FileManagerContextType = {
   getDirectoryStat: (path: string) => Promise<FileStatEntry[]>;
   getZippedDirectory: (path: string) => Promise<Blob>;
   copyDirectory: (sourcePath: string, destinationPath: string) => Promise<void>;
-  mount: (prefix: string, backend: FileSystemBackend, options?: MountOptions) => Promise<void>;
-  unmount: (prefix: string) => void;
-  connectedDirectoryName: string | undefined;
-  readShallowDirectory: (path: string, backend: FileSystemBackend) => Promise<FileTreeNode[]>;
+  /**
+   * Typed proxy dispatch facade. Use for cache-free reads/writes,
+   * scope-routed calls against any workspace, and other operations
+   * that should bypass the per-project `FileContentService` cache.
+   */
+  client: FileSystemClientFacade;
+  /**
+   * Workspace lifecycle facade (mount, unmount, invalidate cached
+   * standalone providers).
+   */
+  workspace: WorkspaceFacade;
+  /**
+   * Human label for the workspace currently driving the FM machine,
+   * sourced from machine context (closes Audit F14 — no more stale IDB
+   * reads). `undefined` for non-webaccess backends.
+   */
+  activeWorkspaceName: string | undefined;
+  /** Active workspace `wsp_*` id, or `undefined` when not webaccess. */
+  activeWorkspaceId: string | undefined;
+  /**
+   * Why webaccess can't be initialized (handle missing or permission
+   * revoked), or `undefined` when the backend is healthy. Drives the
+   * `ProjectUnavailableOverlay` recovery branch (R8).
+   */
+  unavailableReason: WorkspaceUnavailableReason | undefined;
+  /**
+   * Bind the current project to a workspace as a single transaction:
+   * write the persistent `ProjectFileSystemConfig.workspaceId` row first,
+   * then dispatch `reloadWorkspace` so the FM machine re-reads it from
+   * IDB. The persistent record is the only authority for the project ↔
+   * workspace binding — the machine never carries that identity as
+   * ambient state. Rejects when called outside a project route
+   * (`projectId === undefined`).
+   */
+  bindProjectToWorkspace: (workspaceId: string) => Promise<void>;
 };
 
 const FileManagerContext = createContext<FileManagerContextType | undefined>(undefined);
@@ -120,26 +253,53 @@ export function SharedWorkerGate({ children }: { readonly children: ReactNode })
   return children;
 }
 
+/**
+ * Common props shared by every {@link FileManagerProvider} mount.
+ * `initialBackend` is required (Audit R4 / Finding 7) — the call site
+ * must commit to a backend explicitly so the FM machine can bootstrap
+ * deterministically. The cookie used to be consulted inside the hook;
+ * that read now lives in `apps/ui/app/root.tsx` where the policy
+ * decision is centralized.
+ */
+type FileManagerProviderCommonProps = {
+  readonly children: ReactNode;
+  readonly rootDirectory: string;
+  readonly shouldInitializeOnStart?: boolean;
+};
+
+/**
+ * Discriminated provider props that compile-time-reject `webaccess`
+ * mounts without a `projectId` (Audit R15). A workspace-bound
+ * (webaccess) FM provider only makes sense inside a project route; the
+ * type system surfaces violations as `TS2322` instead of failing at
+ * runtime once the worker tries to mount.
+ */
+export type FileManagerProviderProps = FileManagerProviderCommonProps &
+  (
+    | { readonly initialBackend: 'webaccess'; readonly projectId: string }
+    | {
+        readonly initialBackend: 'indexeddb' | 'opfs' | 'memory';
+        readonly projectId?: string;
+      }
+  );
+
 export function FileManagerProvider({
   children,
   rootDirectory,
   projectId,
+  initialBackend,
   shouldInitializeOnStart = true,
-}: {
-  readonly children: ReactNode;
-  readonly rootDirectory: string;
-  readonly projectId?: string;
-  readonly shouldInitializeOnStart?: boolean;
-}): React.JSX.Element {
-  const [backendCookie] = useCookie(cookieName.filesystemBackend, 'indexeddb' as FileSystemBackend);
+}: FileManagerProviderProps): React.JSX.Element {
   const parentWorker = useContext(SharedWorkerContext);
   const parentFilePoolBuffer = useContext(SharedFilePoolBufferContext);
+
+  const workspaceTelemetry = useWorkspaceTelemetry();
 
   const fileManagerRef = useActorRef(fileManagerMachine, {
     input: {
       rootDirectory,
       shouldInitializeOnStart,
-      initialBackend: backendCookie,
+      initialBackend,
       projectId,
       sharedWorker: parentWorker,
       sharedFilePoolBuffer: parentFilePoolBuffer,
@@ -156,22 +316,70 @@ export function FileManagerProvider({
   const contentService = useSelector(fileManagerRef, (state) => state.context.contentService);
   const treeService = useSelector(fileManagerRef, (state) => state.context.treeService);
   const backendType = useSelector(fileManagerRef, (state) => state.context.backendType);
+  const activeWorkspaceId = useSelector(fileManagerRef, (state) => state.context.activeWorkspaceId);
+  const activeWorkspaceName = useSelector(fileManagerRef, (state) => state.context.activeWorkspaceName);
+  const unavailableReason = useSelector(fileManagerRef, (state) => state.context.unavailableReason);
+
+  const bindProjectToWorkspace = useCallback(
+    async (workspaceId: string): Promise<void> => {
+      if (!projectId) {
+        throw new Error('bindProjectToWorkspace requires a project scope (provider mounted without projectId)');
+      }
+      const previousWorkspaceId = fileManagerRef.getSnapshot().context.activeWorkspaceId;
+      await setProjectFileSystemConfig({ projectId, backend: 'webaccess', workspaceId });
+
+      // Drop the worker-side standalone cache before reload (Audit R6
+      // / Finding 9). The previous workspace's cached provider must go
+      // — otherwise a stale `FileSystemAccessProvider` keyed by the
+      // old `workspaceId` keeps serving reads against a handle the
+      // user has swapped away from. We also invalidate the new
+      // workspaceId so a freshly-granted handle replaces any cached
+      // provider that was created while permission was missing.
+      const snapshot = fileManagerRef.getSnapshot();
+      const { proxy } = snapshot.context;
+      if (proxy) {
+        if (previousWorkspaceId && previousWorkspaceId !== workspaceId) {
+          proxy.invalidateStandaloneProvider('webaccess', previousWorkspaceId);
+        }
+        proxy.invalidateStandaloneProvider('webaccess', workspaceId);
+      }
+
+      workspaceTelemetry.workspaceSwap({ previousWorkspaceId, nextWorkspaceId: workspaceId });
+      fileManagerRef.send({ type: 'reloadWorkspace' });
+    },
+    [fileManagerRef, projectId, workspaceTelemetry],
+  );
+
+  useEffect(() => {
+    if (unavailableReason === 'permission' && activeWorkspaceId) {
+      workspaceTelemetry.workspacePermissionRevoked({ workspaceId: activeWorkspaceId });
+    }
+    if (unavailableReason) {
+      workspaceTelemetry.workspaceOpenFailed({
+        workspaceId: activeWorkspaceId,
+        reason: unavailableReason,
+      });
+    }
+  }, [activeWorkspaceId, unavailableReason, workspaceTelemetry]);
 
   /**
-   * Wait for machine ready and return proxy. Used for admin operations
-   * (mount, unmount, readShallowDirectory) that are not file I/O.
+   * Wait for the FM machine to enter `ready` and return the typed
+   * worker proxy. Backs the `client` and `workspace` facades exposed
+   * on the hook value.
    */
   const getReadiedProxy = useCallback(async (): Promise<FileManagerProxy> => {
-    const snapshot = await waitFor(
+    const snapshot = await waitForWithTimeout({
       fileManagerRef,
-      createErrorAwareWaitPredicate((state) => state.matches('ready')),
-    );
+      predicate: createErrorAwareWaitPredicate((state) => state.matches('ready')),
+      readyTimeout: fileManagerReadyTimeout,
+      reason: 'proxy-timeout',
+    });
 
-    assertNotErrorState(snapshot, 'File manager initialization failed');
+    assertNotErrorState(snapshot);
 
     const { proxy } = snapshot.context;
     if (!proxy) {
-      throw new Error('File manager worker not initialized');
+      throw new FileManagerNotReadyError('proxy-timeout');
     }
 
     return proxy;
@@ -281,54 +489,73 @@ export function FileManagerProvider({
     [whenServicesReady],
   );
 
-  const mount = useCallback(
-    async (prefix: string, backend: FileSystemBackend, options?: MountOptions): Promise<void> => {
-      const proxy = await getReadiedProxy();
-      await proxy.mount(prefix, backend, options);
-    },
-    [getReadiedProxy],
-  );
-
-  const unmount = useCallback(
-    (prefix: string): void => {
-      // async-iife: bootstrap
-      void (async () => {
+  const client = useMemo<FileSystemClientFacade>(() => {
+    const gated = <K extends keyof FileSystemClientFacade>(method: K): FileSystemClientFacade[K] =>
+      // oxlint-disable-next-line @typescript-eslint/no-explicit-any -- pass-through gate, runtime types preserved by FileSystemClientFacade
+      (async (...args: unknown[]) => {
         const proxy = await getReadiedProxy();
-        proxy.unmount(prefix);
-      })();
-    },
-    [getReadiedProxy],
-  );
+        // oxlint-disable-next-line @typescript-eslint/no-explicit-any -- forward through to the typed proxy method
+        return (proxy[method] as (...rest: unknown[]) => unknown)(...args);
+      }) as FileSystemClientFacade[K];
 
-  const [connectedDirectoryName, setConnectedDirectoryName] = useState<string | undefined>(undefined);
-
-  const readShallowDirectory = useCallback(
-    async (path: string, backend: FileSystemBackend): Promise<FileTreeNode[]> => {
-      const { treeService } = await whenServicesReady();
-      const handle = backend === 'webaccess' ? await getStoredDirectoryHandle() : undefined;
-      if (handle) {
-        const proxy = await getReadiedProxy();
-        return proxy.readShallowDirectory(path, backend, handle);
-      }
-      return treeService.readShallowDirectory(path, backend);
-    },
-    [whenServicesReady, getReadiedProxy],
-  );
-
-  useEffect(() => {
-    const resolveDirectoryName = async (): Promise<void> => {
-      try {
-        const handle = await getStoredDirectoryHandle();
-        if (handle) {
-          setConnectedDirectoryName(handle.name);
-        }
-      } catch {
-        // Handle store might not be available (e.g., private browsing)
-      }
+    return {
+      readFile: gated('readFile'),
+      readFiles: gated('readFiles'),
+      writeFile: gated('writeFile'),
+      writeFiles: gated('writeFiles'),
+      mkdir: gated('mkdir'),
+      readdir: gated('readdir'),
+      stat: gated('stat'),
+      lstat: gated('lstat'),
+      rename: gated('rename'),
+      unlink: gated('unlink'),
+      rmdir: gated('rmdir'),
+      exists: gated('exists'),
+      batchExists: gated('batchExists'),
+      ensureDirectoryExists: gated('ensureDirectoryExists'),
+      getDirectoryStat: gated('getDirectoryStat'),
+      getDirectoryContents: gated('getDirectoryContents'),
+      duplicateFile: gated('duplicateFile'),
+      copyDirectory: gated('copyDirectory'),
+      getZippedDirectory: gated('getZippedDirectory'),
+      readShallowDirectory: gated('readShallowDirectory'),
+      readDirectory: gated('readDirectory'),
     };
+  }, [getReadiedProxy]);
 
-    void resolveDirectoryName();
-  }, []);
+  const workspace = useMemo<WorkspaceFacade>(
+    () => ({
+      mount: async (prefix, config) => {
+        const proxy = await getReadiedProxy();
+        await proxy.mount(prefix, config);
+      },
+      unmount: (prefix) => {
+        // async-iife: bootstrap. Errors here are non-fatal but worth
+        // surfacing — `workspace.unmount_failed` lights up the metrics
+        // dashboard when an unmount step fails to dispose cleanly
+        // (Audit Finding 10).
+        void (async () => {
+          try {
+            const proxy = await getReadiedProxy();
+            proxy.unmount(prefix);
+          } catch (error) {
+            const snapshot = fileManagerRef.getSnapshot();
+            workspaceTelemetry.workspaceUnmountFailed({
+              workspaceId: snapshot.context.activeWorkspaceId,
+              prefix,
+              reason: 'dispose-failed',
+            });
+            console.warn(`[FileManager] unmount('${prefix}') failed`, error);
+          }
+        })();
+      },
+      invalidateStandaloneProvider: async (backend, workspaceId) => {
+        const proxy = await getReadiedProxy();
+        proxy.invalidateStandaloneProvider(backend, workspaceId);
+      },
+    }),
+    [getReadiedProxy, fileManagerRef, workspaceTelemetry],
+  );
 
   const value = useMemo<FileManagerContextType>(
     () => ({
@@ -349,10 +576,12 @@ export function FileManagerProvider({
       getDirectoryStat,
       getZippedDirectory,
       copyDirectory,
-      mount,
-      unmount,
-      connectedDirectoryName,
-      readShallowDirectory,
+      client,
+      workspace,
+      activeWorkspaceName,
+      activeWorkspaceId,
+      unavailableReason,
+      bindProjectToWorkspace,
     }),
     [
       fileManagerRef,
@@ -372,10 +601,12 @@ export function FileManagerProvider({
       getDirectoryStat,
       getZippedDirectory,
       copyDirectory,
-      mount,
-      unmount,
-      connectedDirectoryName,
-      readShallowDirectory,
+      client,
+      workspace,
+      activeWorkspaceName,
+      activeWorkspaceId,
+      unavailableReason,
+      bindProjectToWorkspace,
     ],
   );
 

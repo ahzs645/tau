@@ -1,4 +1,4 @@
-import type { FileEntry, FileStatEntry, FileSystemBackend, FileStat } from '@taucad/types';
+import type { FileEntry, FileStatEntry, FileStat } from '@taucad/types';
 import type { FileTreeNode } from '@taucad/filesystem';
 import { FileSystemObserverBridge } from '@taucad/filesystem';
 import type { FileContentService, ContentChangeEvent } from '#file-content-service.js';
@@ -334,16 +334,6 @@ export class FileTreeService {
       this._searchIndexWarmed = true;
     }
     return this.proxy.searchFiles(absolutePath, query, options);
-  }
-
-  /**
-   * Read shallow directory for files route.
-   * @param path - Directory to read shallowly on the requested backend.
-   * @param backend - Filesystem backend identifier for disambiguation.
-   * @returns Immediate children as {@link FileTreeNode} stubs.
-   */
-  public async readShallowDirectory(path: string, backend: FileSystemBackend): Promise<FileTreeNode[]> {
-    return this.proxy.readShallowDirectory(path, backend);
   }
 
   /**

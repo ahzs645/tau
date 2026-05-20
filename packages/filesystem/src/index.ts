@@ -47,4 +47,6 @@ export type { FileReadStreamOptions as StreamFileReadOptions } from '#backend/st
 export { CrossTabCoordinator, isNavigatorLocksSupported } from '#cross-tab-coordinator.js';
 
 export { MountTable } from '#mount-table.js';
-export type { MountConfig, MountEntry, MountOptions, MountResolution } from '#mount-table.js';
+export type { MountConfig, MountConfigCommon, MountEntry, MountResolution, WorkspaceScope } from '#mount-table.js';
+
+export { MissingWorkspaceHandleError, isMissingWorkspaceHandleError } from '#workspace-errors.js';

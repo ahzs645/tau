@@ -15,9 +15,13 @@ import type { ObjectStoreWorker, InitialEditorState } from '#hooks/object-store.
 import { useFileManager } from '#hooks/use-file-manager.js';
 import {
   setProjectFileSystemConfig,
-  getStoredDirectoryHandle,
+  getProjectFileSystemConfig,
+  getDefaultWorkspace,
+  getWorkspace,
   checkHandlePermission,
 } from '#filesystem/handle-store.js';
+import { WorkspaceDirectoryRequiredError } from '#filesystem/workspace-errors.js';
+import { isFileSystemAccessSupported } from '#constants/browser.constants.js';
 import { createInitialProject } from '#constants/project.constants.js';
 import { useCookie } from '#hooks/use-cookie.js';
 import { cookieName } from '#constants/cookie.constants.js';
@@ -50,6 +54,14 @@ type CreateProjectChatOptions = {
   editorState?: InitialEditorState;
   /** Explicit backend override — takes precedence over the cookie default */
   backend?: FileSystemBackend;
+  /**
+   * Workspace to bind the project to when `backend === 'webaccess'`.
+   * Required for explicit webaccess creation; when omitted the default
+   * workspace is used. Throws `WorkspaceDirectoryRequiredError` when
+   * webaccess is requested but no usable workspace can be resolved (no
+   * more silent fallback to `indexeddb`).
+   */
+  workspaceId?: string;
   /**
    * Seed `Chat.activeModel` so the chat owns its model choice independent
    * of the cookie default. Required when `initialMessage` is supplied so the
@@ -241,33 +253,88 @@ export function ProjectManagerProvider({ children }: { readonly children: ReactN
         editorState: options.editorState,
       });
 
-      // Persist the per-build filesystem config
-      let resolvedBackend: FileSystemBackend = options.backend ?? defaultBackend;
+      // Persist the per-project filesystem config. Webaccess projects bind
+      // to a specific workspace at creation time so the FM machine resolves
+      // the correct handle on every subsequent open (closes Finding 15:
+      // workspace identity is immutable once a project is bound). Failures
+      // now surface as `WorkspaceDirectoryRequiredError` instead of falling
+      // back to `indexeddb` — callers route the structured code to a toast
+      // / banner that walks the user through recovery (R3 / R2).
+      const resolvedBackend: FileSystemBackend = options.backend ?? defaultBackend;
 
-      if (resolvedBackend === 'webaccess') {
-        // Verify workspace handle exists and has permission before using webaccess
-        try {
-          const workspaceHandle = await getStoredDirectoryHandle();
-          if (workspaceHandle) {
-            const permission = await checkHandlePermission(workspaceHandle);
-            if (permission !== 'granted') {
-              // Permission not granted, fall back to indexeddb
-              resolvedBackend = 'indexeddb';
-            }
-          } else {
-            // No workspace handle connected, fall back to indexeddb
-            resolvedBackend = 'indexeddb';
-          }
-        } catch {
-          // Fall back to indexeddb on any error
-          resolvedBackend = 'indexeddb';
-        }
+      // `memory` cannot persist project state across a tab reload —
+      // creation must always commit to a durable backend. Reject upfront
+      // with a structured `unsupported` code (Audit R9) so the UI can
+      // surface a "memory backend not allowed for projects" toast
+      // instead of writing files into a volatile mount.
+      if (resolvedBackend === 'memory') {
+        throw new WorkspaceDirectoryRequiredError('unsupported');
       }
 
-      await setProjectFileSystemConfig(project.id, resolvedBackend);
+      // Resolve the webaccess handle + workspaceId pair atomically with
+      // the mount call below — Audit R3 / Finding 2 require the worker
+      // to receive `(handle, workspaceId)` together, never via a
+      // separate `setDirectoryHandle` round-trip.
+      let webaccessEntry:
+        | {
+            readonly handle: FileSystemDirectoryHandle;
+            readonly workspaceId: string;
+          }
+        | undefined;
+
+      if (resolvedBackend === 'webaccess') {
+        if (!isFileSystemAccessSupported) {
+          throw new WorkspaceDirectoryRequiredError('unsupported');
+        }
+        const entry = options.workspaceId ? await getWorkspace(options.workspaceId) : await getDefaultWorkspace();
+        if (!entry) {
+          throw new WorkspaceDirectoryRequiredError('missing', {
+            workspaceId: options.workspaceId,
+          });
+        }
+        const permission = await checkHandlePermission(entry.handle);
+        if (permission !== 'granted') {
+          throw new WorkspaceDirectoryRequiredError('permission', {
+            workspaceId: entry.workspace.workspaceId,
+          });
+        }
+        webaccessEntry = {
+          handle: entry.handle,
+          workspaceId: entry.workspace.workspaceId,
+        };
+      }
+
+      if (resolvedBackend === 'webaccess') {
+        await setProjectFileSystemConfig({
+          projectId: project.id,
+          backend: 'webaccess',
+          workspaceId: webaccessEntry!.workspaceId,
+        });
+      } else {
+        await setProjectFileSystemConfig({
+          projectId: project.id,
+          backend: resolvedBackend,
+        });
+      }
 
       const projectPrefix = `/projects/${project.id}`;
-      await fileManager.mount(projectPrefix, resolvedBackend, { preservePath: true });
+
+      // Atomic mount → write → unmount transaction. The discriminated
+      // `MountConfig` makes it impossible to mount webaccess without an
+      // explicit handle + workspaceId pair (Audit R3 / Finding 1).
+      if (resolvedBackend === 'webaccess') {
+        await fileManager.workspace.mount(projectPrefix, {
+          backend: 'webaccess',
+          directoryHandle: webaccessEntry!.handle,
+          workspaceId: webaccessEntry!.workspaceId,
+          preservePath: true,
+        });
+      } else {
+        await fileManager.workspace.mount(projectPrefix, {
+          backend: resolvedBackend,
+          preservePath: true,
+        });
+      }
 
       const projectFiles: Record<string, { content: Uint8Array<ArrayBuffer> }> = {};
       for (const [path, file] of Object.entries(files)) {
@@ -277,7 +344,7 @@ export function ProjectManagerProvider({ children }: { readonly children: ReactN
       try {
         await fileManager.writeFiles(projectFiles);
       } finally {
-        fileManager.unmount(projectPrefix);
+        fileManager.workspace.unmount(projectPrefix);
       }
 
       return project;
@@ -310,12 +377,86 @@ export function ProjectManagerProvider({ children }: { readonly children: ReactN
   const duplicateProject = useCallback(
     async (projectId: string): Promise<Project> => {
       const worker = await getReadiedWorker();
+
+      // Source-project filesystem config drives the duplicate's backend
+      // (Audit R8 / Finding 5). Without an existing config we cannot
+      // honour the same-workspace contract, so fall through to whatever
+      // the FM is configured with — which for non-webaccess is the
+      // root indexeddb mount.
+      const sourceConfig = await getProjectFileSystemConfig(projectId);
       const project = await worker.duplicateProject(projectId);
-      await fileManager.copyDirectory(`/projects/${projectId}`, `/projects/${project.id}`);
+      const sourcePrefix = `/projects/${projectId}`;
+      const destinationPrefix = `/projects/${project.id}`;
+
+      if (sourceConfig?.backend === 'webaccess') {
+        // Same-workspace, same-backend: bind the duplicate to the same
+        // webaccess workspace and mount it explicitly. Cross-workspace
+        // duplication is rejected with a structured `unsupported` code
+        // — copying webaccess bytes into a different workspace is a
+        // user-driven export, not a duplicate.
+        const entry = await getWorkspace(sourceConfig.workspaceId);
+        if (!entry) {
+          throw new WorkspaceDirectoryRequiredError('missing', {
+            workspaceId: sourceConfig.workspaceId,
+          });
+        }
+        const permission = await checkHandlePermission(entry.handle);
+        if (permission !== 'granted') {
+          throw new WorkspaceDirectoryRequiredError('permission', {
+            workspaceId: entry.workspace.workspaceId,
+          });
+        }
+
+        await setProjectFileSystemConfig({
+          projectId: project.id,
+          backend: 'webaccess',
+          workspaceId: entry.workspace.workspaceId,
+        });
+
+        // Mount the workspace's `/projects` parent once — both source
+        // and destination resolve through the single provider with
+        // `preservePath: true`, avoiding two separate webaccess mounts
+        // for the same workspace handle.
+        const workspaceProjectsPrefix = '/projects';
+        await fileManager.workspace.mount(workspaceProjectsPrefix, {
+          backend: 'webaccess',
+          directoryHandle: entry.handle,
+          workspaceId: entry.workspace.workspaceId,
+          preservePath: true,
+        });
+        try {
+          await fileManager.copyDirectory(sourcePrefix, destinationPrefix);
+        } finally {
+          fileManager.workspace.unmount(workspaceProjectsPrefix);
+        }
+        return project;
+      }
+
+      // Non-webaccess source: reuse the existing root mount via the
+      // facade. `memory` is not a legal source for duplication because
+      // memory-backed projects shouldn't exist post-creation hardening
+      // (R9), but we surface a structured code rather than allow the
+      // copy to silently succeed against a volatile mount.
+      if (sourceConfig?.backend === 'memory') {
+        throw new WorkspaceDirectoryRequiredError('unsupported');
+      }
+
+      // For indexeddb / opfs / legacy-no-config, the root mount already
+      // covers `/projects/*` so a direct copyDirectory is the same-
+      // backend operation requested by R8.
+      if (sourceConfig) {
+        await setProjectFileSystemConfig({
+          projectId: project.id,
+          backend: sourceConfig.backend,
+        });
+      }
+      await fileManager.copyDirectory(sourcePrefix, destinationPrefix);
       return project;
     },
     [getReadiedWorker, fileManager],
   );
+  // (getProjectFileSystemConfig / getWorkspace are stable module-level
+  // bindings — intentionally omitted from the dep array.)
 
   const getProjects = useCallback(
     async (options?: { includeDeleted?: boolean }): Promise<Project[]> => {

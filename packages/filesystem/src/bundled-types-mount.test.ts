@@ -12,7 +12,7 @@ const decoder = new TextDecoder();
 
 async function createService(): Promise<WorkspaceFileService> {
   const providerRegistry = new ProviderRegistry();
-  const provider = await providerRegistry.createMountProvider('memory');
+  const provider = await providerRegistry.createMountProvider({ backend: 'memory' });
   const mountTable = new MountTable();
   mountTable.mount('/', provider, { backend: 'memory' });
   return new WorkspaceFileService({
