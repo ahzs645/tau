@@ -3,6 +3,7 @@ import { DropdownMenuItem } from '#components/ui/dropdown-menu.js';
 import { ClientOnly } from '#components/ui/utils/client-only.js';
 import { openSettingsDialog } from '#hooks/use-settings-dialog.js';
 import { UserButton } from '#components/auth/user/user-button.js';
+import { ProBadge } from '#components/tier-badge.js';
 
 /**
  * Nav user button: delegates avatar, sign-in/up/out chrome to the registry
@@ -32,6 +33,7 @@ export function NavUser(): React.JSX.Element {
           >
             <Sparkles />
             Upgrade to Pro
+            <ProBadge className='ml-auto' />
           </DropdownMenuItem>,
           <DropdownMenuItem
             key='billing'

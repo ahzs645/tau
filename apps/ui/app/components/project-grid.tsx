@@ -12,6 +12,7 @@ import { useProjectManager } from '#hooks/use-project-manager.js';
 import { CadPreviewProvider } from '#hooks/use-cad-preview.js';
 import { CadPreviewViewer } from '#components/cad-preview.js';
 import type { ProjectsWithFiles } from '#constants/project-examples.js';
+import { KernelTierBadge } from '#components/tier-badge.js';
 
 export const communityGridClassName = 'grid grid-cols-2 gap-3 sm:gap-6 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5';
 
@@ -173,7 +174,10 @@ function ProjectCard({
                           </AvatarFallback>
                         </Avatar>
                       </TooltipTrigger>
-                      <TooltipContent>{kernelName}</TooltipContent>
+                      <TooltipContent className='flex items-center gap-1.5'>
+                        {kernelName}
+                        <KernelTierBadge kernelId={kernelConfiguration.id} />
+                      </TooltipContent>
                     </Tooltip>
                   );
                 })}
