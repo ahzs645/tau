@@ -25,10 +25,6 @@ export const idPrefix = {
    */
   publication: 'pub',
   /**
-   * Non-secret token for unlisted publication URLs (`publication.unlisted_token`).
-   */
-  publicationToken: 'put',
-  /**
    * Opaque visitor id embedded in the signed `tau_view_id` publication-view cookie.
    */
   publicationViewer: 'pvv',
@@ -134,4 +130,10 @@ export const idPrefix = {
    * A browser tab ID.
    */
   tab: 'tab',
+  /**
+   * A File System Access API workspace ID. Identifies a connected directory
+   * handle in the `apps/ui` handle-store. Stable across renames of the
+   * underlying folder; immutable for the lifetime of a project bound to it.
+   */
+  workspace: 'wsp',
 } as const satisfies Record<string, string>;
