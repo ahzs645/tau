@@ -9,7 +9,7 @@
 
 import type * as Monaco from 'monaco-editor';
 import type { LanguageContribution, ActivationContext, ActivationResult } from '#lib/monaco-language-registry.js';
-import { registerMaterializingTsProviders } from '#lib/monaco-typescript-extras/register-materializing-typescript-providers.js';
+import { registerMaterializingTsProviders } from '#lib/monaco-typescript-extras/register-materializing-typescript-providers.client.js';
 import { ensureAtaBoot, forwardAtaProjectSessionChange, setTsCompilerOptions } from '#lib/typescript-family-shared.js';
 
 export const tsContribution: LanguageContribution = {

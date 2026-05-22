@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import * as monaco from 'monaco-editor';
-import { searchTauWorkspaceSymbols } from '#lib/monaco-typescript-extras/tau-workspace-symbol-search.js';
+import { searchTauWorkspaceSymbols } from '#lib/monaco-typescript-extras/tau-workspace-symbol-search.client.js';
 import { createMonacoWorkspaceFs } from '#lib/monaco-workspace-fs/monaco-workspace-fs.js';
 import { drainMonacoPostTestWork } from '#lib/testing/monaco-async-drain.js';
 

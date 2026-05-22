@@ -1,7 +1,7 @@
 import * as monaco from 'monaco-editor';
 import { RenameAdapter } from 'monaco-editor/esm/vs/language/typescript/languageFeatures.js';
 import type { MonacoWorkspaceFs } from '#lib/monaco-workspace-fs/monaco-workspace-fs.types.js';
-import type { MaterializingLibFiles } from '#lib/monaco-typescript-extras/materializing-lib-files.js';
+import type { MaterializingLibFiles } from '#lib/monaco-typescript-extras/materializing-lib-files.client.js';
 
 type TsWorkerAccessor = (...uris: monaco.Uri[]) => Promise<unknown>;
 

@@ -1,6 +1,6 @@
 import * as monaco from 'monaco-editor';
 import { Adapter } from 'monaco-editor/esm/vs/language/typescript/languageFeatures.js';
-import type { MaterializingLibFiles } from '#lib/monaco-typescript-extras/materializing-lib-files.js';
+import type { MaterializingLibFiles } from '#lib/monaco-typescript-extras/materializing-lib-files.client.js';
 import type {
   TauTypeScriptLanguageServiceWorker,
   TsDefinitionLike,

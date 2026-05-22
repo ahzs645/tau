@@ -1,12 +1,16 @@
 import type * as Monaco from 'monaco-editor';
 import { DefinitionAdapter, ReferenceAdapter } from 'monaco-editor/esm/vs/language/typescript/languageFeatures.js';
+import type { FileContentService } from '@taucad/fs-client/file-content-service';
 import type { MonacoWorkspaceFs } from '#lib/monaco-workspace-fs/monaco-workspace-fs.types.js';
-import { MaterializingLibFiles } from '#lib/monaco-typescript-extras/materializing-lib-files.js';
-import { MaterializingRenameAdapter } from '#lib/monaco-typescript-extras/materializing-rename-adapter.js';
+import { MaterializingLibFiles } from '#lib/monaco-typescript-extras/materializing-lib-files.client.js';
+import { MaterializingRenameAdapter } from '#lib/monaco-typescript-extras/materializing-rename-adapter.client.js';
 import {
   TauImplementationAdapter,
   TauTypeDefinitionAdapter,
-} from '#lib/monaco-typescript-extras/tau-ts-definition-adapters.js';
+} from '#lib/monaco-typescript-extras/tau-ts-definition-adapters.client.js';
+import { registerTsRenameParticipant } from '#lib/monaco-typescript-extras/ts-rename-participant.js';
+import type { TsRenameWorkerAccessor } from '#lib/monaco-typescript-extras/ts-rename-participant.js';
+import type { TauTypeScriptLanguageServiceWorker } from '#lib/monaco-typescript-extras/ts-worker-extras.types.js';
 
 const tsLanguageIds = ['typescript', 'typescriptreact'] as const;
 const jsLanguageIds = ['javascript', 'javascriptreact'] as const;
@@ -217,5 +221,34 @@ export function registerMaterializingJsProviders(
     defaults: options.monaco.typescript.javascriptDefaults,
     triggerLanguageIds: jsLanguageIds,
     logLabel: 'JS family',
+  });
+}
+
+/**
+ * Register the R17 TS-rename participant on the active Monaco
+ * `FileContentService`. Wired separately from the materializing
+ * provider registration so the participant is family-global (lives
+ * once per Monaco session, not per language id) and matches the
+ * upstream tsserver lifecycle.
+ *
+ * @param options - Monaco + content service + workspace FS handles.
+ * @returns A disposer the host invokes on Monaco teardown.
+ */
+export function registerTsFileRenameParticipant(
+  options: Readonly<{
+    monaco: typeof Monaco;
+    workspaceFs: MonacoWorkspaceFs;
+    contentService: FileContentService;
+  }>,
+): Monaco.IDisposable {
+  const accessor: TsRenameWorkerAccessor = async (...resources) => {
+    const worker = await awaitTypescriptFamilyWorker(options.monaco, 'typescript');
+    return (await worker(...resources)) as unknown as TauTypeScriptLanguageServiceWorker;
+  };
+  return registerTsRenameParticipant({
+    monaco: options.monaco,
+    contentService: options.contentService,
+    workspaceFs: options.workspaceFs,
+    getWorker: accessor,
   });
 }

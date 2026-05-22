@@ -4,7 +4,7 @@ import {
   tauPrepareCallHierarchy,
   tauProvideCallHierarchyIncomingCalls,
   tauProvideCallHierarchyOutgoingCalls,
-} from '#lib/monaco-typescript-extras/tau-call-hierarchy-bridge.js';
+} from '#lib/monaco-typescript-extras/tau-call-hierarchy-bridge.client.js';
 import type { TauTypeScriptLanguageServiceWorker } from '#lib/monaco-typescript-extras/ts-worker-extras.types.js';
 
 import { drainMonacoPostTestWork } from '#lib/testing/monaco-async-drain.js';

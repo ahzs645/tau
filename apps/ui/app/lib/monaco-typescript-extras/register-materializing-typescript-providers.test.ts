@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type * as Monaco from 'monaco-editor';
-import { awaitTypescriptFamilyWorker } from '#lib/monaco-typescript-extras/register-materializing-typescript-providers.js';
+import { awaitTypescriptFamilyWorker } from '#lib/monaco-typescript-extras/register-materializing-typescript-providers.client.js';
 
 describe('awaitTypescriptFamilyWorker', () => {
   it('retries TypeScript family until worker accessor resolves', async () => {

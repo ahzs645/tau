@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef } from 'react';
 import type { CompletionRegistration } from 'monacopilot';
 import type * as Monaco from 'monaco-editor';
 import { cn } from '#utils/ui.utils.js';
-import { configureMonaco, registerCompletions } from '#lib/monaco.lib.js';
+import { configureMonaco, registerCompletions } from '#lib/monaco.lib.client.js';
 import { useIsMobile } from '#hooks/use-mobile.js';
 import { Theme, useTheme } from '#hooks/use-theme.js';
 

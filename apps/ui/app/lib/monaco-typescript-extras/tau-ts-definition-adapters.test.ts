@@ -4,8 +4,8 @@ import { createTestCancellationToken } from '#lib/testing/monaco-test-token.js';
 import {
   TauImplementationAdapter,
   TauTypeDefinitionAdapter,
-} from '#lib/monaco-typescript-extras/tau-ts-definition-adapters.js';
-import { MaterializingLibFiles } from '#lib/monaco-typescript-extras/materializing-lib-files.js';
+} from '#lib/monaco-typescript-extras/tau-ts-definition-adapters.client.js';
+import { MaterializingLibFiles } from '#lib/monaco-typescript-extras/materializing-lib-files.client.js';
 import { createMonacoWorkspaceFs } from '#lib/monaco-workspace-fs/monaco-workspace-fs.js';
 import { drainMonacoPostTestWork } from '#lib/testing/monaco-async-drain.js';
 

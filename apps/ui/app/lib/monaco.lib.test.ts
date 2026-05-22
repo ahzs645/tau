@@ -68,7 +68,7 @@ describe('configureMonaco', () => {
   });
 
   it('should emit performance marks when creating TS worker', async () => {
-    const { configureMonaco } = await import('#lib/monaco.lib.js');
+    const { configureMonaco } = await import('#lib/monaco.lib.client.js');
 
     // eslint-disable-next-line @typescript-eslint/naming-convention -- Monaco global
     vi.stubGlobal('self', { MonacoEnvironment: undefined });

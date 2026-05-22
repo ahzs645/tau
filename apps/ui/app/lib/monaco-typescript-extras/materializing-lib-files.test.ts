@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import * as monaco from 'monaco-editor';
 import type { LibFiles } from 'monaco-editor/esm/vs/language/typescript/languageFeatures.js';
-import { MaterializingLibFiles } from '#lib/monaco-typescript-extras/materializing-lib-files.js';
+import { MaterializingLibFiles } from '#lib/monaco-typescript-extras/materializing-lib-files.client.js';
 import { createMonacoWorkspaceFs } from '#lib/monaco-workspace-fs/monaco-workspace-fs.js';
 import { drainMonacoPostTestWork } from '#lib/testing/monaco-async-drain.js';
 
