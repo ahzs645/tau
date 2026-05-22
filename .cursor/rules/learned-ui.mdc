@@ -26,6 +26,8 @@ cleanup; they may exceed the 200-char cap.
 - `apps/ui/app/chat-clients/` wrappers compose AI-SDK public abstractions only — never reach into wire internals like SSE `[DONE]` sentinels; the wrapper layer localizes future chat-API changes to one place.
 - Selector trigger/pill text must read from the same source as the dropdown's selected state — divergent display-vs-selection sources are a recurring latent-bug class (ComboboxResponsive callsites).
 - Chat skeleton/loading lives in ONE layer (chat-history's TurnGroup); never duplicate render-gates at the route or `chat-interface-desktop.tsx` level — multiple gates produce visible flash mid-stream.
+- Editor machine is the sole owner of the open-tab set; Dockview is a pure idempotent reconciler keyed by stable `paneId`; file path is a property of the tab, never its identity. Filesystem mutations flow through `file-operation-participants.ts` (`ContentChangeEvent` → editor + project intents); UI components never send `renameFile`/`closeFile` directly. See `docs/research/editor-filesystem-surface-audit.md` R3.
+- `monaco-editor` runtime is quarantined to `*.client.{ts,tsx}` modules (React Router v7 erases them server-side); `import type * as Monaco from 'monaco-editor'` is unrestricted. Enforced by `no-restricted-imports` in `eslint.config.mjs`. See `docs/policy/ssr-bundle-policy.md` rule #7.
 
 ## Learned Workspace Facts
 

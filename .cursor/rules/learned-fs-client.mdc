@@ -18,3 +18,4 @@ capped at 200 chars and 12 bullets per section.
 ## Learned Workspace Facts
 
 - `packages/fs-client` exposes two typed facades: `client` for generic file-system RPC (read/write/stat/list) and `workspace` for mount-table/workspace-binding lifecycle; consumer code addresses scoping by picking the right facade, not by calling `*Scoped` variants.
+- `WorkspacePathEscapeError` class-of-bug: project IDs like `proj_X` must be resolved through the workspace-aware `client` facade (it dispatches to the project's bound workspace/backend), never by composing `/projects/${id}` and feeding it to a single-root resolver — projects may live under different backends/workspaces, so `toAbsoluteWorkspacePath` against `/` throws when the project's true mount sits elsewhere.
