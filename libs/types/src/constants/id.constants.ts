@@ -128,8 +128,21 @@ export const idPrefix = {
   view: 'view',
   /**
    * A browser tab ID.
+   *
+   * Used by `packages/filesystem/src/cross-tab-coordinator.ts` for
+   * cross-tab write coordination via `navigator.locks` + `BroadcastChannel`.
+   * Distinct from {@link pane} — see that entry.
    */
   tab: 'tab',
+  /**
+   * An editor pane ID.
+   *
+   * Stable identity of a Dockview editor tab (`OpenFile.paneId`,
+   * `EditorState.activePaneId`, the Dockview panel id). Distinct from
+   * {@link tab} (browser tab) — the "pane" terminology mirrors VS Code's
+   * `IEditorPane` and avoids collision with browser-tab coordination.
+   */
+  pane: 'pane',
   /**
    * A File System Access API workspace ID. Identifies a connected directory
    * handle in the `apps/ui` handle-store. Stable across renames of the
