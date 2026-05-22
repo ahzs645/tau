@@ -31,6 +31,7 @@
 
 import type { Chat } from '@ai-sdk/react';
 import type { ChatStatus } from 'ai';
+import { Topic } from '@taucad/events';
 import { createActor } from 'xstate';
 import type { ActorRefFrom } from 'xstate';
 import type { Chat as ChatEntity, MyUIMessage } from '@taucad/chat';
@@ -187,10 +188,10 @@ type InternalSession = ChatSession & {
 
 export class ChatSessionStore {
   readonly #sessions = new Map<string, InternalSession>();
-  readonly #membershipListeners = new Set<() => void>();
-  readonly #chatListeners = new Map<string, Set<() => void>>();
-  readonly #statusListeners = new Map<string, Set<() => void>>();
-  readonly #usageListeners = new Map<string, Set<() => void>>();
+  readonly #membershipTopic = new Topic<void>({ name: 'ChatSessionStore.membership' });
+  readonly #chatTopics = new Map<string, Topic<void>>();
+  readonly #statusTopics = new Map<string, Topic<void>>();
+  readonly #usageTopics = new Map<string, Topic<void>>();
   #snapshot: readonly string[] = [];
   /**
    * Coalesces membership notifications onto a microtask so an `acquire`/
@@ -258,6 +259,7 @@ export class ChatSessionStore {
     session.draftActorRef.stop();
     this.#sessions.delete(chatId);
     clearLedger(chatId);
+    this.#disposeChatTopics(chatId);
     this.#refreshSnapshot();
     this.#notifyMembership();
   }
@@ -271,14 +273,11 @@ export class ChatSessionStore {
   }
 
   public subscribeMembership(listener: () => void): () => void {
-    this.#membershipListeners.add(listener);
-    return () => {
-      this.#membershipListeners.delete(listener);
-    };
+    return this.#membershipTopic.subscribe(listener);
   }
 
   public subscribeChat(chatId: string, listener: () => void): () => void {
-    return this.#addPerChatListener(this.#chatListeners, chatId, listener);
+    return this.#addPerChatListener(this.#chatTopics, 'chat', chatId, listener);
   }
 
   public getStatus(chatId: string): ChatStatus | undefined {
@@ -286,7 +285,7 @@ export class ChatSessionStore {
   }
 
   public subscribeStatus(chatId: string, listener: () => void): () => void {
-    return this.#addPerChatListener(this.#statusListeners, chatId, listener);
+    return this.#addPerChatListener(this.#statusTopics, 'status', chatId, listener);
   }
 
   public getUsage(chatId: string): UsageSnapshot | undefined {
@@ -294,7 +293,7 @@ export class ChatSessionStore {
   }
 
   public subscribeUsage(chatId: string, listener: () => void): () => void {
-    return this.#addPerChatListener(this.#usageListeners, chatId, listener);
+    return this.#addPerChatListener(this.#usageTopics, 'usage', chatId, listener);
   }
 
   /**
@@ -646,13 +645,9 @@ export class ChatSessionStore {
       const totalCost = aggregateUsageCost(chat.messages);
       if (totalCost > 0 && totalCost !== session.usage?.totalCost) {
         session.usage = { totalCost, lastUpdatedAt: Date.now() };
-        for (const listener of this.#usageListeners.get(chatId) ?? []) {
-          listener();
-        }
+        this.#usageTopics.get(chatId)?.emit();
       }
-      for (const listener of this.#chatListeners.get(chatId) ?? []) {
-        listener();
-      }
+      this.#chatTopics.get(chatId)?.emit();
     });
     const unregisterStatus = chat['~registerStatusCallback'](() => {
       const next = chat.status;
@@ -661,18 +656,12 @@ export class ChatSessionStore {
         if (next === 'streaming') {
           persistenceActorRef.send({ type: 'streamResumed' });
         }
-        for (const listener of this.#statusListeners.get(chatId) ?? []) {
-          listener();
-        }
+        this.#statusTopics.get(chatId)?.emit();
       }
-      for (const listener of this.#chatListeners.get(chatId) ?? []) {
-        listener();
-      }
+      this.#chatTopics.get(chatId)?.emit();
     });
     const unregisterError = chat['~registerErrorCallback'](() => {
-      for (const listener of this.#chatListeners.get(chatId) ?? []) {
-        listener();
-      }
+      this.#chatTopics.get(chatId)?.emit();
     });
 
     persistenceActorRef.start();
@@ -707,20 +696,35 @@ export class ChatSessionStore {
     return session;
   }
 
-  #addPerChatListener(bucket: Map<string, Set<() => void>>, chatId: string, listener: () => void): () => void {
-    let listeners = bucket.get(chatId);
-    if (!listeners) {
-      listeners = new Set();
-      bucket.set(chatId, listeners);
+  #addPerChatListener(
+    bucket: Map<string, Topic<void>>,
+    namePrefix: string,
+    chatId: string,
+    listener: () => void,
+  ): () => void {
+    let topic = bucket.get(chatId);
+    if (!topic) {
+      topic = new Topic<void>({ name: `ChatSessionStore.${namePrefix}[${chatId}]` });
+      bucket.set(chatId, topic);
     }
-    listeners.add(listener);
+    const unsubscribe = topic.subscribe(listener);
     return () => {
-      const current = bucket.get(chatId);
-      current?.delete(listener);
-      if (current?.size === 0) {
+      unsubscribe();
+      if (topic.size === 0) {
         bucket.delete(chatId);
+        topic.dispose();
       }
     };
+  }
+
+  #disposeChatTopics(chatId: string): void {
+    for (const bucket of [this.#chatTopics, this.#statusTopics, this.#usageTopics]) {
+      const topic = bucket.get(chatId);
+      if (topic) {
+        topic.dispose();
+        bucket.delete(chatId);
+      }
+    }
   }
 
   #refreshSnapshot(): void {
@@ -734,9 +738,7 @@ export class ChatSessionStore {
     this.#membershipNotifyScheduled = true;
     queueMicrotask(() => {
       this.#membershipNotifyScheduled = false;
-      for (const listener of this.#membershipListeners) {
-        listener();
-      }
+      this.#membershipTopic.emit();
     });
   }
 }
