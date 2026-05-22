@@ -3,8 +3,8 @@ import type { ReactNode } from 'react';
 import { Check, Plus } from 'lucide-react';
 import type { Model } from '@taucad/chat';
 import { ComboBoxResponsive } from '#components/ui/combobox-responsive.js';
-import { Button } from '#components/ui/button.js';
 import { Badge } from '#components/ui/badge.js';
+import { menuItemVariants } from '#components/ui/menu.variants.js';
 import { SvgIcon } from '#components/icons/svg-icon.js';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '#components/ui/hover-card.js';
 import { useModels } from '#hooks/use-models.js';
@@ -167,20 +167,21 @@ export const ChatModelSelector = memo(function ({
       onSelect={handleSelectModel}
       onClose={onClose}
       footer={
-        <Button
-          type='button'
-          variant='ghost'
-          className={cn(
-            'h-auto w-full justify-start gap-2 rounded-t-none rounded-b-md border-t px-4 py-1 text-[13px] font-normal has-[>svg]:px-4',
-            '[&_svg]:-translate-y-[0.5px] [&_svg]:text-muted-foreground',
-          )}
-          onClick={() => {
-            openSettingsDialog('models');
-          }}
-        >
-          <Plus className='size-3.5 shrink-0' />
-          Add models
-        </Button>
+        <>
+          <div className='border-t' />
+          <div className='p-1'>
+            <button
+              type='button'
+              className={cn(menuItemVariants({ highlight: 'selected' }), 'h-auto w-full')}
+              onClick={() => {
+                openSettingsDialog('models');
+              }}
+            >
+              <Plus />
+              Add models
+            </button>
+          </div>
+        </>
       }
     >
       {children({ selectedModel })}
