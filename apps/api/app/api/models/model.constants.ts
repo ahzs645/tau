@@ -272,17 +272,18 @@ export const modelList: Record<CloudCatalogProviderId, Record<string, ModelListE
         thinkingLevel: 'HIGH',
       },
     },
-    'gemini-3-flash': {
-      id: 'google-gemini-3-flash',
-      name: 'Gemini 3 Flash',
-      slug: 'gemini-3-flash',
+    'gemini-3.5-flash': {
+      id: 'google-gemini-3.5-flash',
+      name: 'Gemini 3.5 Flash',
+      slug: 'gemini-3.5-flash',
       recommended: true,
-      description: 'Pro-grade reasoning at Flash speed, ideal for rapid design iterations and small changes.',
+      description:
+        'Frontier intelligence at Flash speed with sharpened agentic coding, ideal for rapid design iterations and small changes.',
       provider: {
         id: 'vertexai',
         name: 'Google',
       },
-      model: 'gemini-3-flash-preview',
+      model: 'gemini-3.5-flash',
       details: {
         family: 'gemini',
         families: ['gemini'],
@@ -290,15 +291,14 @@ export const modelList: Record<CloudCatalogProviderId, Record<string, ModelListE
         maxTokens: 65_536,
         knowledgeCutoff: '2025-01',
         cost: {
-          inputTokens: 0.5,
-          outputTokens: 3,
-          cacheReadTokens: 0.05,
+          inputTokens: 1.5,
+          outputTokens: 9,
+          cacheReadTokens: 0.15,
           cacheWriteTokens: 0,
         },
       },
       configuration: {
         streaming: true,
-        temperature: 1,
         thinkingLevel: 'MEDIUM',
       },
     },
