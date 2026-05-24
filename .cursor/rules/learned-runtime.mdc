@@ -38,6 +38,10 @@ cleanup; they may exceed the 200-char cap.
 
 ## Learned Workspace Facts
 
+- OCCT `BRepGraph` is normalized B-Rep storage, not an intermediate/feature-tree cache; its internal caches are not plumbed into `ModelingAlgorithms`.
+- OCJS Docker LLVM trimming must keep all `include/`; Linux libc++ stores `__config_site` under target-triple paths, so `include/c++` only breaks bindgen.
+- Never end OCJS Docker mega-RUN chains with `|| true`; bash masks failed `cmd1 && ...` chains as success, yielding false-green generated images.
+- `@taucad/opencascade.js` has no runtime deps or `ws` peer; ship `LGPL-2.1-only WITH Open-CASCADE-Exception-1.0` plus `LICENSE.OCCT-Exception`.
 - `repos/opencascade.js/docs-site` is the canonical OCJS Fumadocs/Next.js documentation site; legacy Alpine viewer archived under `docs-site/legacy-viewer/`; CI `fork-hygiene` rules apply.
 - replicad-opencascadejs migrated `additionalCppCode` (inline string) → `additionalCppFiles` (separate .cpp files) in `build-config/custom_build_single*.yml` for separation of concerns.
 - OCJS multi-threaded WASM variant: `build-configs/full_multi.yml` config emits `opencascade_full_multi.*` to `dist/`; single vs multi-thread perf tracked in `repos/opencascade.js/BENCHMARKS.md`.

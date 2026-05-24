@@ -22,7 +22,7 @@ import {
   WorkspaceFileService,
 } from '@taucad/filesystem';
 import { SharedPool } from '@taucad/memory';
-import { kernelTypeMaps } from '@taucad/api-extractor';
+import { kernelTypeMaps } from '@taucad/api-extractor/kernel-types';
 import type { SyncFsWorkspaceAdapter } from '@taucad/lsp-fs/sync';
 import { attachSyncFsServer } from '@taucad/lsp-fs/sync';
 import { metaConfig } from '#constants/meta.constants.js';

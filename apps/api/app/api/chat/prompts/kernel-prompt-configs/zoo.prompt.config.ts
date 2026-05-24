@@ -1,4 +1,4 @@
-import { kclStdlibReference } from '@taucad/api-extractor';
+import { kclStdlibReference } from '@taucad/api-extractor/kcl-reference';
 import type { KernelConfig } from '#api/chat/prompts/kernel-prompt-configs/kernel.prompt.config.types.js';
 import canonicalExample from '#api/chat/prompts/kernel-prompt-configs/zoo.prompt.example.kcl?raw';
 import multiFileMain from '#api/chat/prompts/kernel-prompt-configs/zoo.prompt.example-multifile/main.kcl?raw';

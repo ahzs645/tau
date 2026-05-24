@@ -1,4 +1,4 @@
-import { jscadModelingTypes as jscadTypesMap } from '@taucad/api-extractor';
+import { jscadModelingTypes as jscadTypesMap } from '@taucad/api-extractor/kernel-types';
 import type { KernelConfig } from '#api/chat/prompts/kernel-prompt-configs/kernel.prompt.config.types.js';
 import canonicalExample from '#api/chat/prompts/kernel-prompt-configs/jscad.prompt.example.ts?raw';
 import multiFileMain from '#api/chat/prompts/kernel-prompt-configs/jscad.prompt.example-multifile/main.ts?raw';
