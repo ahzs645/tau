@@ -5,10 +5,16 @@
       "from": "./node_modules/esbuild-wasm/esbuild.wasm",
       "to": "src/bundler/wasm/esbuild.wasm"
     },
-    // OpenCascade WASM files for Replicad kernel (single = fast/compact, with_exceptions = OC error decoding)
+    // OpenCascade WASM files for Replicad kernel.
+    // - single: pthread-free build, default for COOP/COEP-less environments.
+    // - multi: pthread build, picked by default when SharedArrayBuffer is usable.
     {
-      "from": "./node_modules/replicad-opencascadejs/src/replicad_single.wasm",
+      "from": "./node_modules/replicad-opencascadejs/dist/replicad_single.wasm",
       "to": "src/kernels/replicad/wasm/replicad_single.wasm"
+    },
+    {
+      "from": "./node_modules/replicad-opencascadejs/dist/replicad_multi.wasm",
+      "to": "src/kernels/replicad/wasm/replicad_multi.wasm"
     },
     // KCL WASM file for Zoo kernel
     {

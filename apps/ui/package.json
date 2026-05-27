@@ -16,6 +16,7 @@
     "@taucad/billing": "workspace:*",
     "@taucad/chat": "workspace:*",
     "@taucad/converter": "workspace:*",
+    "@taucad/events": "workspace:*",
     "@taucad/filesystem": "workspace:*",
     "@taucad/fs-client": "workspace:*",
     "@taucad/json-schema": "workspace:*",
@@ -41,14 +42,14 @@
     "lucide-react": "catalog:",
     "next-themes": "catalog:",
     "radix-ui": "catalog:",
-    "react-day-picker": "^10.0.0",
+    "react-day-picker": "^10.0.1",
     "sonner": "catalog:",
     "tslib": "catalog:",
     "vscode-uri": "catalog:"
   },
   "devDependencies": {
     "@taucad/vite": "workspace:*",
-    "@types/express": "catalog:"
+    "@types/express": "^5.0.6"
   },
   "imports": {
     "#*": "./app/*"

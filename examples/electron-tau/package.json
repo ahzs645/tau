@@ -24,9 +24,9 @@
     "@testing-library/react": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
-    "@types/three": "^0.184.0",
-    "electron": "^36.0.0",
-    "electron-vite": "^4.0.0",
+    "@types/three": "^0.184.1",
+    "electron": "^36.9.5",
+    "electron-vite": "^4.0.1",
     "jsdom": "catalog:"
   },
   "imports": {

@@ -52,8 +52,8 @@
     }
   },
   "dependencies": {
-    "@gltf-transform/core": "^4.1.1",
-    "@gltf-transform/functions": "^4.1.1"
+    "@gltf-transform/core": "^4.3.0",
+    "@gltf-transform/functions": "^4.3.0"
   },
   "devDependencies": {
     "@taucad/openscad": "workspace:*",
