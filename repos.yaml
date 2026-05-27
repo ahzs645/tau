@@ -30,6 +30,8 @@ groups:
       - skia
       - opencv
       - build123d
+      - FreeCAD
+      - OCCT-Light
   slicers:
     description: 3D printer slicer applications
     repos:
@@ -52,6 +54,7 @@ groups:
       - atopile
       - props
       - pi
+      - text-to-cad
   3d:
     description: 3D rendering and visualization
     repos:
@@ -508,3 +511,13 @@ repos:
   build123d:
     upstream: gumyr/build123d
     description: A python CAD programming library
+  FreeCAD:
+    upstream: FreeCAD/FreeCAD
+    description: FreeCAD - parametric 3D CAD modeler with feature tree caching
+  OCCT-Light:
+    upstream: Open-Cascade-SAS/OCCT-Light
+    branch: prototype-1
+    description: 'OCCT-Light: C ABI wrapper around OCCT with BRepGraph as canonical topology, by Open Cascade SAS — prototype-1 branch'
+  text-to-cad:
+    upstream: earthtojake/text-to-cad
+    description: A collection of agent skills for CAD, robotics and hardware design
