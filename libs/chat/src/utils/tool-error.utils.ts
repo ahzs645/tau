@@ -138,39 +138,39 @@ export function rpcErrorToToolError(
 export function getToolErrorTitle(errorCode: ToolErrorCode): string {
   switch (errorCode) {
     case 'TOOL_EXECUTION_TIMEOUT': {
-      return 'Tool Timed Out';
+      return 'Timed out';
     }
 
     case 'CLIENT_DISCONNECTED': {
-      return 'Connection Lost';
+      return 'Connection lost during';
     }
 
     case 'NO_CLIENT_CONNECTION': {
-      return 'No Connection';
+      return 'No connection for';
     }
 
     case 'TOOL_INPUT_VALIDATION_FAILED': {
-      return 'Invalid Input';
+      return 'Invalid input for';
     }
 
     case 'TOOL_OUTPUT_VALIDATION_FAILED': {
-      return 'Validation Failed';
+      return 'Unexpected output from';
     }
 
     case 'TOOL_EXECUTION_ERROR': {
-      return 'Tool Error';
+      return 'Attempted';
     }
 
     case 'USER_INTERRUPTED': {
-      return 'Interrupted';
+      return 'Stopped';
     }
 
     case 'STREAM_ERROR': {
-      return 'Stream Failed';
+      return 'Stream interrupted during';
     }
 
     case 'TOOL_NO_RESULTS': {
-      return 'No Results';
+      return 'No results from';
     }
   }
 }

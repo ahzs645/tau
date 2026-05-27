@@ -83,7 +83,7 @@ export function ChatMessageToolReadFile({
     }
 
     case 'output-error': {
-      return <ChatToolError errorText={part.errorText} fallbackIcon={FileText} fallbackTitle='Failed to read file' />;
+      return <ChatToolError errorText={part.errorText} icon={FileText} noun='file read' />;
     }
 
     case 'approval-requested':

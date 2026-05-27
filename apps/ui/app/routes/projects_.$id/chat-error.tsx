@@ -1,6 +1,6 @@
 import { memo, useState } from 'react';
 import type React from 'react';
-import { ChevronRight, RefreshCcw } from 'lucide-react';
+import { ChevronRight, Play, RefreshCcw } from 'lucide-react';
 import { errorCategory } from '@taucad/types/constants';
 import type { ChatError as NormalizedChatError } from '@taucad/types';
 import { Button } from '#components/ui/button.js';
@@ -108,7 +108,7 @@ export const ChatError = memo(function ({ className }: { readonly className?: st
                     handleRetry();
                   }}
                 >
-                  <RefreshCcw className='size-3.5' />
+                  {isResumableCategory ? <Play className='size-3.5' /> : <RefreshCcw className='size-3.5' />}
                   {retryLabel}
                 </Button>
               </div>
