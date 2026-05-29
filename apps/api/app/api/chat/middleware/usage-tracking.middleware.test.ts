@@ -135,7 +135,7 @@ describe('createUsageTrackingMiddleware', () => {
       // oxlint-disable-next-line @typescript-eslint/no-explicit-any -- Partial mock state/runtime for middleware testing
       { messages: [aiMessage] } as any,
       // oxlint-disable-next-line @typescript-eslint/no-explicit-any -- Partial mock state/runtime for middleware testing
-      { context: { modelId: 'anthropic-claude-opus-4.7', modelService: mockModelService }, writer } as any,
+      { context: { modelId: 'anthropic-claude-opus-4.8', modelService: mockModelService }, writer } as any,
     );
 
     const { calls } = (metricsService.genAiTokenUsage.record as ReturnType<typeof vi.fn>).mock;
@@ -300,7 +300,7 @@ describe('createUsageTrackingMiddleware', () => {
       // oxlint-disable-next-line @typescript-eslint/no-explicit-any -- Partial mock state/runtime for middleware testing
       { messages: [aiMessage] } as any,
       // oxlint-disable-next-line @typescript-eslint/no-explicit-any -- Partial mock state/runtime for middleware testing
-      { context: { modelId: 'anthropic-claude-opus-4.7', modelService: mockModelService }, writer } as any,
+      { context: { modelId: 'anthropic-claude-opus-4.8', modelService: mockModelService }, writer } as any,
     );
 
     expect(writer).toHaveBeenCalledWith(

@@ -17,10 +17,10 @@ export function isModelListEntryEnabled(entry: ModelListEntry): boolean {
 
 export const modelList: Record<CloudCatalogProviderId, Record<string, ModelListEntry>> = {
   anthropic: {
-    'claude-4.7-opus': {
-      id: 'anthropic-claude-opus-4.7',
-      name: 'Opus 4.7',
-      slug: 'claude-opus-4.7',
+    'claude-4.8-opus': {
+      id: 'anthropic-claude-opus-4.8',
+      name: 'Opus 4.8',
+      slug: 'claude-opus-4.8',
       recommended: true,
       description:
         "Anthropic's most powerful model with adaptive reasoning and 1M context, great for designing complex multi-part assemblies.",
@@ -28,7 +28,7 @@ export const modelList: Record<CloudCatalogProviderId, Record<string, ModelListE
         id: 'anthropic',
         name: 'Anthropic',
       },
-      model: 'claude-opus-4-7',
+      model: 'claude-opus-4-8',
       support: {
         toolChoice: false,
       },

@@ -49,11 +49,11 @@ import { buildCadAgent, requiresEnv } from '#testing/skip-helpers.js';
 // analysis and the spec this test enforces.
 // =============================================================================
 
-const modelId = 'google-gemini-3-flash';
+const modelId = 'google-gemini-3.5-flash';
 const turnCount = 5;
 
 // Steady-state cache_read ratio threshold once the implicit cache has warmed.
-// 0.8 is conservative — Gemini 3 Flash documents a 1024-token implicit-cache
+// 0.8 is conservative — Gemini 3.5 Flash documents a 4096-token implicit-cache
 // minimum (Gemini 2.5 Pro/Flash: 2048), and Tau's static system prompt
 // comfortably exceeds both even before any prior turn's history is included.
 // Empirically the steady-state hit rate runs at ~98%; below 0.8 means

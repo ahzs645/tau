@@ -91,7 +91,7 @@ describe.skipIf(requiresEnv('ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GOOGLE_VERTE
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(
-          buildThinkingThenAskPayload({ first: 'anthropic-claude-haiku-4.5', second: 'google-gemini-3-flash' }),
+          buildThinkingThenAskPayload({ first: 'anthropic-claude-haiku-4.5', second: 'google-gemini-3.5-flash' }),
         ),
       });
 
@@ -123,7 +123,7 @@ describe.skipIf(requiresEnv('ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GOOGLE_VERTE
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(
-          buildThinkingThenAskPayload({ first: 'google-gemini-3-flash', second: 'anthropic-claude-haiku-4.5' }),
+          buildThinkingThenAskPayload({ first: 'google-gemini-3.5-flash', second: 'anthropic-claude-haiku-4.5' }),
         ),
       });
 
