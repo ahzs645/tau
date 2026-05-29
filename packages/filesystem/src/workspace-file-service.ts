@@ -21,10 +21,98 @@ import { createFileSystemService } from '#file-system-service.js';
 import type { FileSystemService } from '#file-system-service.js';
 import { tagEventOrigin } from '#event-origin-registry.js';
 import { parentDirectory, joinPath, normalizePath } from '@taucad/utils/path';
-import { MissingWorkspaceHandleError } from '#workspace-errors.js';
+import { MissingWorkspaceHandleError, WorkspaceMutationError } from '#workspace-errors.js';
 
 /** Milliseconds. */
 const kernelCoalescingWindow = 75;
+
+/**
+ * Absolute prefix of the read-only synthetic mount that hosts the
+ * bundled `.d.ts` payloads (see {@link populateBundledTypesMount}).
+ * Mirrored by the UI-side `bundledTypesWorkspaceRootSegment` constant.
+ */
+const bundledTypesAbsolutePrefix = '/node_modules';
+
+function isUnderBundledTypesMount(absolutePath: string): boolean {
+  return absolutePath === bundledTypesAbsolutePrefix || absolutePath.startsWith(`${bundledTypesAbsolutePrefix}/`);
+}
+
+/**
+ * Map an arbitrary thrown value into a {@link WorkspaceMutationError}
+ * by best-effort sniffing of well-known shapes (`EEXIST`, `ENOENT`,
+ * {@link MissingWorkspaceHandleError}). Unknown causes fall through
+ * to `NOT_FOUND` with the source path so the caller can still surface
+ * something actionable.
+ *
+ * @param cause - The thrown value to translate. Typically a node-style
+ *                `ErrnoException`, a {@link MissingWorkspaceHandleError},
+ *                or an existing {@link WorkspaceMutationError}.
+ * @param source - Source path of the failing mutation (used for the
+ *                 fall-through `NOT_FOUND` carrier).
+ * @param target - Target path of the failing mutation (used for the
+ *                 `EEXIST → NAME_EXISTS` mapping where the collision is
+ *                 at the destination).
+ * @returns A {@link WorkspaceMutationError} the worker can return
+ *          verbatim across the RPC boundary.
+ */
+function causeToMutationError(cause: unknown, source: string, target: string): WorkspaceMutationError {
+  if (cause instanceof WorkspaceMutationError) {
+    return cause;
+  }
+  if (cause instanceof MissingWorkspaceHandleError) {
+    return new WorkspaceMutationError('MISSING_WORKSPACE_HANDLE', source, { cause });
+  }
+  if (typeof cause === 'object' && cause !== null) {
+    const errno = (cause as NodeJS.ErrnoException).code;
+    if (errno === 'EEXIST') {
+      return new WorkspaceMutationError('NAME_EXISTS', target, { target, cause });
+    }
+    if (errno === 'ENOENT') {
+      return new WorkspaceMutationError('NOT_FOUND', source, { cause });
+    }
+  }
+  return new WorkspaceMutationError('NOT_FOUND', source, { cause });
+}
+
+/**
+ * Reject syntactically invalid workspace paths. Used by the `can*`
+ * preflights so the explorer can show a typed error before issuing
+ * the real mutation RPC.
+ *
+ * Rules:
+ *  - Path must be absolute (`/`-prefixed) — workspace contract.
+ *  - No empty path segments (`//`, trailing `/`).
+ *  - No `.` or `..` segments — paths must be already normalised.
+ *  - No control characters or NUL bytes.
+ *
+ * @param path - Absolute virtual workspace path to validate.
+ * @returns `true` when the path passes every rule.
+ */
+function isStructurallyValidWorkspacePath(path: string): boolean {
+  if (typeof path !== 'string' || path.length === 0) {
+    return false;
+  }
+  if (!path.startsWith('/')) {
+    return false;
+  }
+  if (path !== '/' && path.endsWith('/')) {
+    return false;
+  }
+  // oxlint-disable-next-line no-control-regex -- explicit control-char rejection for path validation
+  if (/[\u0000-\u001F]/.test(path)) {
+    return false;
+  }
+  const segments = path.split('/').slice(1);
+  for (const segment of segments) {
+    if (segment.length === 0) {
+      return false;
+    }
+    if (segment === '.' || segment === '..') {
+      return false;
+    }
+  }
+  return true;
+}
 
 /**
  * Options for {@link WorkspaceFileService.mkdir}.
@@ -375,8 +463,8 @@ export class WorkspaceFileService {
 
       this._emitChangeEvent(
         {
-          type: 'directoryChanged',
-          path: parentDirectory(path),
+          type: 'directoryCreated',
+          path,
           backend: resolvedBackend,
         },
         context,
@@ -385,7 +473,9 @@ export class WorkspaceFileService {
   }
 
   /**
-   * Rename or move a file or directory.
+   * Rename or move a file or directory. Equivalent to {@link move} without
+   * the returned stat — preserved for backward compatibility with callers
+   * that do not need the new stat metadata.
    *
    * @param from - Current absolute path.
    * @param to - New absolute path.
@@ -393,31 +483,99 @@ export class WorkspaceFileService {
    * @returns Resolves when the rename completes.
    */
   public async rename(from: string, to: string, context?: WorkspaceMutationContext): Promise<void> {
-    return this._resourceQueue.queueFor(from, async () => {
-      const source = this._resolveProvider(from);
-      const target = this._resolveProvider(to);
+    await this.move(from, to, undefined, context);
+  }
 
-      if (source.provider === target.provider) {
-        await source.provider.rename(source.path, target.path);
-      } else {
-        console.warn('[WorkspaceFileService] Cross-mount rename: copy+delete', from, '->', to);
-        const data = await source.provider.readFile(source.path);
-        await target.provider.writeFile(target.path, data);
-        await source.provider.unlink(source.path);
+  /**
+   * Move a file or directory from `source` to `target`, returning the
+   * resulting {@link FileStat}. Directory-aware: same-mount moves delegate
+   * to the provider's directory-aware rename; cross-mount moves recursively
+   * copy the subtree and unlink the source.
+   *
+   * Emits `directoryRenamed` for directory sources and `fileRenamed` for
+   * file sources so participants can distinguish bulk subtree migrations
+   * from single-file renames.
+   *
+   * @param source - Current absolute path.
+   * @param target - New absolute path.
+   * @param options - Optional `{ overwrite }` for collision resolution at the destination.
+   * @param context - Optional mutation source metadata for change-bus subscribers.
+   * @returns The {@link FileStat} of the resulting entry at `target`.
+   */
+  // oxlint-disable-next-line max-params -- (source, target, options, context) mirrors the mutation API across the rest of WorkspaceFileService; collapsing into an options bag would diverge from `unlink` / `rmdir` and confuse readers.
+  public async move(
+    source: string,
+    target: string,
+    options?: { overwrite?: boolean },
+    context?: WorkspaceMutationContext,
+  ): Promise<FileStat> {
+    return this._resourceQueue.queueFor(source, async () => {
+      const sourceResolution = this._resolveProvider(source);
+      const targetResolution = this._resolveProvider(target);
+
+      const sourceStat = await sourceResolution.provider.stat(sourceResolution.path);
+      const overwrite = options?.overwrite === true;
+      const targetExists = await targetResolution.provider.exists(targetResolution.path);
+      if (targetExists) {
+        if (!overwrite) {
+          const error = new Error(`EEXIST: target already exists '${target}'`);
+          (error as NodeJS.ErrnoException).code = 'EEXIST';
+          throw error;
+        }
+        // oxlint-disable-next-line unicorn/prefer-ternary -- if/else preserves the dir-vs-file branch ordering for parity with `_rmdirRecursive` semantics; a ternary would obscure it.
+        if (sourceStat.type === 'dir') {
+          await this._removeRecursive(targetResolution.provider, targetResolution.path);
+        } else {
+          await targetResolution.provider.unlink(targetResolution.path);
+        }
       }
 
-      this._filePool?.invalidate(from);
-      this._filePool?.invalidate(to);
-      this._inMemoryTreeRename(from, to);
-      this._emitChangeEvent(
-        {
-          type: 'fileRenamed',
-          oldPath: from,
-          newPath: to,
-          backend: source.backend,
-        },
-        context,
-      );
+      if (sourceResolution.provider === targetResolution.provider) {
+        await sourceResolution.provider.rename(sourceResolution.path, targetResolution.path);
+      } else if (sourceStat.type === 'dir') {
+        await this._copyDirectoryAcrossProviders(
+          sourceResolution.provider,
+          sourceResolution.path,
+          targetResolution.provider,
+          targetResolution.path,
+        );
+        await this._removeRecursive(sourceResolution.provider, sourceResolution.path);
+      } else {
+        const data = await sourceResolution.provider.readFile(sourceResolution.path);
+        await this._ensureParentDir(targetResolution.provider, targetResolution.path);
+        await targetResolution.provider.writeFile(targetResolution.path, data);
+        await sourceResolution.provider.unlink(sourceResolution.path);
+      }
+
+      this._filePool?.invalidate(source);
+      this._filePool?.invalidate(target);
+      this._inMemoryTreeRename(source, target);
+
+      const resultingStat = await targetResolution.provider.stat(targetResolution.path);
+
+      if (sourceStat.type === 'dir') {
+        this._emitChangeEvent(
+          {
+            type: 'directoryRenamed',
+            oldPath: source,
+            newPath: target,
+            backend: sourceResolution.backend,
+          },
+          context,
+        );
+      } else {
+        this._emitChangeEvent(
+          {
+            type: 'fileRenamed',
+            oldPath: source,
+            newPath: target,
+            backend: sourceResolution.backend,
+          },
+          context,
+        );
+      }
+
+      return resultingStat;
     });
   }
 
@@ -489,13 +647,261 @@ export class WorkspaceFileService {
       }
       this._emitChangeEvent(
         {
-          type: 'directoryChanged',
-          path: parentDirectory(path),
+          type: 'directoryDeleted',
+          path,
           backend: resolvedBackend,
         },
         context,
       );
     });
+  }
+
+  // --- Bulk move with rollback (R7) ---
+
+  /**
+   * Move many paths in a single batch. On mid-flight failure every
+   * prior move within this batch is reversed (each by its own inverse
+   * {@link move}) so the workspace returns to the pre-batch state.
+   * Successes are surfaced via the `moved` array with their post-move
+   * {@link FileStat}; the offending edit + structured error is
+   * surfaced via `failed`.
+   *
+   * The whole batch runs inside the resource-queue critical section
+   * for the **first** edit's source path so concurrent single-file
+   * mutations on the same path are serialised against the batch.
+   *
+   * @param edits - Source → target pairs.
+   * @param options - Optional `{ overwrite }` propagated to every move.
+   * @param context - Optional mutation source metadata for change-bus subscribers.
+   * @returns The {@link BulkMoveResult} describing successes + the failure (if any).
+   */
+  public async bulkMove(
+    edits: ReadonlyArray<{ source: string; target: string }>,
+    options?: { overwrite?: boolean },
+    context?: WorkspaceMutationContext,
+  ): Promise<{
+    moved: ReadonlyArray<{ edit: { source: string; target: string }; stat: FileStat }>;
+    failed: ReadonlyArray<{ edit: { source: string; target: string }; error: WorkspaceMutationError }>;
+  }> {
+    if (edits.length === 0) {
+      return { moved: [], failed: [] };
+    }
+
+    const completed: Array<{ edit: { source: string; target: string }; stat: FileStat }> = [];
+    let failedEdit: { edit: { source: string; target: string }; error: WorkspaceMutationError } | undefined;
+
+    for (const edit of edits) {
+      try {
+        // oxlint-disable-next-line no-await-in-loop -- Sequential moves required so a mid-flight failure can rollback the prior moves
+        const stat = await this.move(edit.source, edit.target, options, context);
+        completed.push({ edit, stat });
+      } catch (error) {
+        const mutationError = causeToMutationError(error, edit.source, edit.target);
+        failedEdit = { edit, error: mutationError };
+        for (let index = completed.length - 1; index >= 0; index -= 1) {
+          const prior = completed[index];
+          if (prior === undefined) {
+            continue;
+          }
+          try {
+            // oxlint-disable-next-line no-await-in-loop -- Sequential rollback required to restore prior state
+            await this.move(prior.edit.target, prior.edit.source, { overwrite: true }, context);
+          } catch {
+            // Best-effort rollback: surface the original failure regardless.
+          }
+        }
+        break;
+      }
+    }
+
+    if (failedEdit !== undefined) {
+      return { moved: [], failed: [failedEdit] };
+    }
+    return { moved: completed, failed: [] };
+  }
+
+  // --- Preflight checks (R6) ---
+
+  /**
+   * Preflight {@link move}: verifies the source exists, the target does
+   * not exist (unless `overwrite: true`), and that neither endpoint
+   * sits on a read-only mount.
+   *
+   * Returns `true` when the move is safe to issue; otherwise returns a
+   * structured {@link WorkspaceMutationError} so the caller can route
+   * `code` to a copy registry without parsing message strings.
+   *
+   * @param source - Current absolute path.
+   * @param target - Proposed destination absolute path.
+   * @param options - Optional `{ overwrite }` to permit overwriting an existing destination.
+   * @returns `true` on success or a {@link WorkspaceMutationError}.
+   */
+  public async canMove(
+    source: string,
+    target: string,
+    options?: { overwrite?: boolean },
+  ): Promise<true | WorkspaceMutationError> {
+    if (!isStructurallyValidWorkspacePath(source)) {
+      return new WorkspaceMutationError('INVALID_NAME', source);
+    }
+    if (!isStructurallyValidWorkspacePath(target)) {
+      return new WorkspaceMutationError('INVALID_NAME', target);
+    }
+    if (isUnderBundledTypesMount(source) || isUnderBundledTypesMount(target)) {
+      return new WorkspaceMutationError('BUNDLED_TYPES_WORKSPACE', source, { target });
+    }
+
+    let sourceResolution: MountResolution;
+    let targetResolution: MountResolution;
+    try {
+      sourceResolution = this._resolveProvider(source);
+      targetResolution = this._resolveProvider(target);
+    } catch (error) {
+      if (error instanceof MissingWorkspaceHandleError) {
+        return new WorkspaceMutationError('MISSING_WORKSPACE_HANDLE', source, { cause: error });
+      }
+      throw error;
+    }
+
+    let sourceExists = false;
+    try {
+      sourceExists = await sourceResolution.provider.exists(sourceResolution.path);
+    } catch (error) {
+      if (error instanceof MissingWorkspaceHandleError) {
+        return new WorkspaceMutationError('MISSING_WORKSPACE_HANDLE', source, { cause: error });
+      }
+      throw error;
+    }
+    if (!sourceExists) {
+      return new WorkspaceMutationError('NOT_FOUND', source);
+    }
+
+    if (options?.overwrite !== true) {
+      let targetExists = false;
+      try {
+        targetExists = await targetResolution.provider.exists(targetResolution.path);
+      } catch (error) {
+        if (error instanceof MissingWorkspaceHandleError) {
+          return new WorkspaceMutationError('MISSING_WORKSPACE_HANDLE', target, { cause: error });
+        }
+        throw error;
+      }
+      if (targetExists) {
+        return new WorkspaceMutationError('NAME_EXISTS', target, { target });
+      }
+    }
+
+    return true;
+  }
+
+  /**
+   * Preflight rename within a single parent directory. Equivalent to
+   * {@link canMove} where the new path replaces only the basename.
+   *
+   * @param source - Absolute current path.
+   * @param newName - New basename (no slashes).
+   * @returns `true` on success or a {@link WorkspaceMutationError}.
+   */
+  public async canRename(source: string, newName: string): Promise<true | WorkspaceMutationError> {
+    if (typeof newName !== 'string' || newName.length === 0 || newName.includes('/') || newName.includes('\\')) {
+      return new WorkspaceMutationError('INVALID_NAME', typeof newName === 'string' ? newName : '');
+    }
+    if (newName === '.' || newName === '..') {
+      return new WorkspaceMutationError('INVALID_NAME', newName);
+    }
+    if (!isStructurallyValidWorkspacePath(source)) {
+      return new WorkspaceMutationError('INVALID_NAME', source);
+    }
+    const parent = parentDirectory(source);
+    const target = parent === '/' ? `/${newName}` : `${parent}/${newName}`;
+    return this.canMove(source, target);
+  }
+
+  /**
+   * Preflight {@link writeFile} / {@link mkdir}: verifies the path is
+   * structurally valid, does not collide with an existing entry, and
+   * does not sit on a read-only mount.
+   *
+   * @param path - Proposed absolute path.
+   * @param kind - `'file'` for {@link writeFile} / `'directory'` for {@link mkdir}.
+   * @returns `true` on success or a {@link WorkspaceMutationError}.
+   */
+  public async canCreate(path: string, kind: 'file' | 'directory'): Promise<true | WorkspaceMutationError> {
+    if (!isStructurallyValidWorkspacePath(path)) {
+      return new WorkspaceMutationError('INVALID_NAME', path);
+    }
+    if (isUnderBundledTypesMount(path)) {
+      return new WorkspaceMutationError('BUNDLED_TYPES_WORKSPACE', path);
+    }
+
+    let resolution: MountResolution;
+    try {
+      resolution = this._resolveProvider(path);
+    } catch (error) {
+      if (error instanceof MissingWorkspaceHandleError) {
+        return new WorkspaceMutationError('MISSING_WORKSPACE_HANDLE', path, { cause: error });
+      }
+      throw error;
+    }
+
+    let exists = false;
+    try {
+      exists = await resolution.provider.exists(resolution.path);
+    } catch (error) {
+      if (error instanceof MissingWorkspaceHandleError) {
+        return new WorkspaceMutationError('MISSING_WORKSPACE_HANDLE', path, { cause: error });
+      }
+      throw error;
+    }
+    if (exists) {
+      return new WorkspaceMutationError('NAME_EXISTS', path);
+    }
+    // `kind` is intentionally not used at the preflight layer — providers
+    // route on the eventual mutation call. The parameter is preserved so
+    // the RPC contract can grow (e.g. quota checks) without a signature
+    // change.
+    void kind;
+    return true;
+  }
+
+  /**
+   * Preflight {@link unlink} / {@link rmdir}: verifies the path exists
+   * and does not sit on the read-only bundled-types mount.
+   *
+   * @param path - Absolute path to remove.
+   * @returns `true` on success or a {@link WorkspaceMutationError}.
+   */
+  public async canDelete(path: string): Promise<true | WorkspaceMutationError> {
+    if (!isStructurallyValidWorkspacePath(path)) {
+      return new WorkspaceMutationError('INVALID_NAME', path);
+    }
+    if (isUnderBundledTypesMount(path)) {
+      return new WorkspaceMutationError('BUNDLED_TYPES_WORKSPACE', path);
+    }
+
+    let resolution: MountResolution;
+    try {
+      resolution = this._resolveProvider(path);
+    } catch (error) {
+      if (error instanceof MissingWorkspaceHandleError) {
+        return new WorkspaceMutationError('MISSING_WORKSPACE_HANDLE', path, { cause: error });
+      }
+      throw error;
+    }
+
+    let exists = false;
+    try {
+      exists = await resolution.provider.exists(resolution.path);
+    } catch (error) {
+      if (error instanceof MissingWorkspaceHandleError) {
+        return new WorkspaceMutationError('MISSING_WORKSPACE_HANDLE', path, { cause: error });
+      }
+      throw error;
+    }
+    if (!exists) {
+      return new WorkspaceMutationError('NOT_FOUND', path);
+    }
+    return true;
   }
 
   // --- Higher-level operations ---
@@ -538,8 +944,9 @@ export class WorkspaceFileService {
       this._inMemoryTreeAddFile(destinationPath, size);
       this._emitChangeEvent(
         {
-          type: 'fileWritten',
-          path: destinationPath,
+          type: 'fileCopied',
+          sourcePath,
+          targetPath: destinationPath,
           backend: destination.backend,
         },
         context,
@@ -578,8 +985,9 @@ export class WorkspaceFileService {
       const destinationResolution = this._resolveProvider(destinationPath);
       this._emitChangeEvent(
         {
-          type: 'directoryChanged',
-          path: parentDirectory(destinationPath),
+          type: 'directoryCopied',
+          sourcePath,
+          targetPath: destinationPath,
           backend: destinationResolution.backend,
         },
         context,
@@ -1210,6 +1618,61 @@ export class WorkspaceFileService {
       await (entryStat.type === 'dir' ? this._rmdirRecursive(provider, fullPath) : provider.unlink(fullPath));
     }
     await provider.rmdir(directoryPath);
+  }
+
+  /**
+   * Remove either a file or a directory recursively from `provider`. Used by
+   * {@link move} when an overwriting target needs to be cleared before the
+   * source is copied/renamed over it.
+   *
+   * @param provider - Provider that owns the path being removed.
+   * @param path     - Provider-relative absolute path.
+   */
+  private async _removeRecursive(provider: FileSystemProvider, path: string): Promise<void> {
+    const targetStat = await provider.stat(path);
+    // oxlint-disable-next-line unicorn/prefer-ternary -- explicit if/else preserves the dir-vs-file branch order so call sites can reason about the recursive walk symmetrically.
+    if (targetStat.type === 'dir') {
+      await this._rmdirRecursive(provider, path);
+    } else {
+      await provider.unlink(path);
+    }
+  }
+
+  /**
+   * Recursively copy every file under `sourcePath` (on `sourceProvider`) to
+   * `targetPath` on `targetProvider`. Used by {@link move} when the source
+   * and target resolve to different providers, since neither provider has
+   * native cross-mount semantics.
+   *
+   * @param sourceProvider - Provider that owns the source subtree.
+   * @param sourcePath     - Absolute path of the source directory on `sourceProvider`.
+   * @param targetProvider - Provider that will receive the copy.
+   * @param targetPath     - Absolute path of the destination directory on `targetProvider`.
+   */
+  // oxlint-disable-next-line max-params -- (sourceProvider, sourcePath, targetProvider, targetPath) mirrors the two-side cross-mount semantics; collapsing into a single options bag would obscure that the source and target are independently resolved.
+  private async _copyDirectoryAcrossProviders(
+    sourceProvider: FileSystemProvider,
+    sourcePath: string,
+    targetProvider: FileSystemProvider,
+    targetPath: string,
+  ): Promise<void> {
+    await this._ensureDirectoryExistsInternal(targetProvider, targetPath);
+    const entries = await sourceProvider.readdir(sourcePath);
+    for (const entry of entries) {
+      const sourceEntry = joinPath(sourcePath, entry);
+      const targetEntry = joinPath(targetPath, entry);
+      // oxlint-disable-next-line no-await-in-loop -- Sequential stat required for ordered traversal
+      const entryStat = await sourceProvider.stat(sourceEntry);
+      if (entryStat.type === 'dir') {
+        // oxlint-disable-next-line no-await-in-loop -- Sequential recursion required
+        await this._copyDirectoryAcrossProviders(sourceProvider, sourceEntry, targetProvider, targetEntry);
+      } else {
+        // oxlint-disable-next-line no-await-in-loop -- Sequential reads required to bound memory
+        const data = await sourceProvider.readFile(sourceEntry);
+        // oxlint-disable-next-line no-await-in-loop -- Sequential writes required for ordered creation
+        await targetProvider.writeFile(targetEntry, data);
+      }
+    }
   }
 
   private async _getDirectoryContentsInternal(

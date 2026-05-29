@@ -48,6 +48,9 @@ vi.mock('#machines/file-manager.worker.js?worker', () => ({
 const mockMount = vi.fn<(prefix: string, config: unknown) => Promise<void>>();
 const mockUnmount = vi.fn<(prefix: string) => void>();
 const mockInvalidateStandaloneProvider = vi.fn<(backend: string, workspaceId?: string) => void>();
+const mockProxyMkdir = vi.fn<(path: string, options?: { recursive?: boolean }) => Promise<void>>(async () => {});
+const mockProxyRmdir = vi.fn<(path: string, options?: { recursive?: boolean }) => Promise<void>>(async () => {});
+const mockProxyWriteFile = vi.fn<(path: string, data: unknown, options?: unknown) => Promise<void>>(async () => {});
 const mockWaitForWorkerReady = vi.fn<() => Promise<void>>();
 const mockCreateFileSystemBridge = vi.fn(() => ({
   port: {
@@ -68,6 +71,9 @@ vi.mock('@taucad/runtime/transport-internals', () => ({
     getDirectoryStat: vi.fn(async () => []),
     readShallowDirectory: vi.fn(async () => []),
     readDirectory: vi.fn(async () => []),
+    mkdir: mockProxyMkdir,
+    rmdir: mockProxyRmdir,
+    writeFile: mockProxyWriteFile,
     dispose: vi.fn(),
     listen: vi.fn(() => vi.fn()),
   })),
@@ -370,6 +376,27 @@ describe('FileManagerProvider — client + workspace facades', () => {
       await result.current.workspace.invalidateStandaloneProvider('webaccess', 'wsp_x');
     });
     expect(mockInvalidateStandaloneProvider).toHaveBeenCalledExactlyOnceWith('webaccess', 'wsp_x');
+  });
+
+  it('routes mkdir through the worker proxy without writing any .gitkeep placeholder', async () => {
+    const { result } = renderProvider();
+
+    await act(async () => {
+      await result.current.mkdir('newfolder', { recursive: true });
+    });
+
+    expect(mockProxyMkdir).toHaveBeenCalledExactlyOnceWith('newfolder', { recursive: true });
+    expect(mockProxyWriteFile).not.toHaveBeenCalled();
+  });
+
+  it('routes rmdir through the worker proxy with recursive: true and does not call unlink per file', async () => {
+    const { result } = renderProvider();
+
+    await act(async () => {
+      await result.current.rmdir('subtree', { recursive: true });
+    });
+
+    expect(mockProxyRmdir).toHaveBeenCalledExactlyOnceWith('subtree', { recursive: true });
   });
 
   it('does not expose the deleted scoped suffix or top-level admin callbacks on the context value', () => {

@@ -124,3 +124,72 @@ function messageForReason(reason: FileManagerNotReadyReason): string {
 export function isFileManagerNotReadyError(error: unknown): error is FileManagerNotReadyError {
   return error instanceof FileManagerNotReadyError;
 }
+
+/**
+ * Mirror of the worker-side `WorkspaceMutationErrorCode` discriminated
+ * union. Keep in lockstep with `packages/filesystem/src/workspace-errors.ts`.
+ * Surfaced via {@link workspaceMutationErrorCopy} so toast/banner UIs
+ * never re-parse `error.message`.
+ */
+export type WorkspaceMutationErrorCode =
+  | 'NAME_EXISTS'
+  | 'INVALID_NAME'
+  | 'READ_ONLY_MOUNT'
+  | 'BUNDLED_TYPES_WORKSPACE'
+  | 'MISSING_WORKSPACE_HANDLE'
+  | 'NOT_FOUND';
+
+/**
+ * Copy registry for the worker-side mutation-error codes. Used by
+ * `chat-editor-file-tree.tsx` to surface a toast on every failed
+ * preflight (`canMove` / `canRename` / `canCreate` / `canDelete`).
+ *
+ * The format function takes the offending path so messages stay
+ * actionable when more than one item is on screen (e.g. a multi-drag
+ * collision can name the specific item that already exists).
+ */
+/* eslint-disable @typescript-eslint/naming-convention -- keys mirror the worker-side `WorkspaceMutationErrorCode` discriminator; renaming to strict camelCase would force a translation layer on every consumer for no UX benefit. */
+export const workspaceMutationErrorCopy: Record<
+  WorkspaceMutationErrorCode,
+  (params: { path: string; target?: string }) => string
+> = {
+  NAME_EXISTS: ({ path, target }) => {
+    const display = target ?? path;
+    return `A file or folder already exists at '${display}'.`;
+  },
+  INVALID_NAME: ({ path }) => `'${path}' is not a valid name. Avoid '/', '\\', and reserved segments like '.' or '..'.`,
+  READ_ONLY_MOUNT: ({ path }) => `'${path}' is on a read-only mount and cannot be modified.`,
+  BUNDLED_TYPES_WORKSPACE: ({ path }) => `'${path}' is inside the bundled @types workspace, which is read-only.`,
+  MISSING_WORKSPACE_HANDLE: () => 'Connect a workspace folder before changing files.',
+  NOT_FOUND: ({ path }) => `'${path}' no longer exists.`,
+};
+/* eslint-enable @typescript-eslint/naming-convention -- restore default naming rule for the rest of the file. */
+
+/**
+ * Shape the cross-thread structured-clone copy of `WorkspaceMutationError`
+ * resolves to on the main thread. Recognised by
+ * {@link isWorkspaceMutationErrorLike}.
+ */
+export type WorkspaceMutationErrorLike = Readonly<{
+  __workspaceMutationError__: true;
+  code: WorkspaceMutationErrorCode;
+  path: string;
+  target?: string;
+  message?: string;
+}>;
+
+/**
+ * Type guard for cross-thread `WorkspaceMutationError` clones. The
+ * structured clone strips the prototype but preserves own properties,
+ * so we match on the `__workspaceMutationError__` marker + `code`.
+ *
+ * @param error - Value to test.
+ * @returns `true` when `error` carries a workspace-mutation discriminator.
+ */
+export function isWorkspaceMutationErrorLike(error: unknown): error is WorkspaceMutationErrorLike {
+  if (typeof error !== 'object' || error === null) {
+    return false;
+  }
+  const record = error as { __workspaceMutationError__?: unknown; code?: unknown };
+  return record.__workspaceMutationError__ === true && typeof record.code === 'string';
+}

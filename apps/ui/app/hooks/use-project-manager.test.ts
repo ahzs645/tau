@@ -8,6 +8,7 @@ import type { Project } from '@taucad/types';
 // ── Mock fns ──────────────────────────────────────────────────────────────────
 
 const mockWriteFiles = vi.fn<(files: Record<string, { content: Uint8Array<ArrayBuffer> }>) => Promise<void>>();
+const mockClientWriteFiles = vi.fn<(files: Record<string, { content: Uint8Array<ArrayBuffer> }>) => Promise<void>>();
 const mockMount = vi.fn<(prefix: string, backend: string, options?: unknown) => Promise<void>>();
 const mockUnmount = vi.fn<(prefix: string) => void>();
 let mockBackendType = 'indexeddb';
@@ -16,6 +17,9 @@ vi.mock('#hooks/use-file-manager.js', () => ({
   useFileManager: () => ({
     backendType: mockBackendType,
     writeFiles: mockWriteFiles,
+    client: {
+      writeFiles: mockClientWriteFiles,
+    },
     workspace: {
       mount: mockMount,
       unmount: mockUnmount,
@@ -182,6 +186,7 @@ describe('useProjectManager', () => {
     vi.clearAllMocks();
     mockBackendType = 'indexeddb';
     mockWriteFiles.mockResolvedValue(undefined);
+    mockClientWriteFiles.mockResolvedValue(undefined);
     mockMount.mockResolvedValue(undefined);
     mockUnmount.mockReturnValue(undefined);
     mockSetProjectFileSystemConfig.mockResolvedValue(undefined);
@@ -215,7 +220,7 @@ describe('useProjectManager', () => {
       mockMount.mockImplementation(async () => {
         callOrder.push('mount');
       });
-      mockWriteFiles.mockImplementation(async () => {
+      mockClientWriteFiles.mockImplementation(async () => {
         callOrder.push('writeFiles');
       });
       mockUnmount.mockImplementation(() => {
@@ -236,7 +241,7 @@ describe('useProjectManager', () => {
     });
 
     it('should call unmount even when writeFiles throws', async () => {
-      mockWriteFiles.mockRejectedValueOnce(new Error('write failed'));
+      mockClientWriteFiles.mockRejectedValueOnce(new Error('write failed'));
 
       const { result } = renderHook(() => useProjectManager(), { wrapper: createWrapper() });
 
@@ -550,10 +555,135 @@ describe('useProjectManager', () => {
         });
       });
 
-      const writtenFiles = mockWriteFiles.mock.calls[0]![0];
+      const writtenFiles = mockClientWriteFiles.mock.calls[0]![0];
       const paths = Object.keys(writtenFiles);
       expect(paths).toContain(`/projects/${fakeProject.id}/${sourceFile}`);
       expect(paths).toContain(`/projects/${fakeProject.id}/${packageFile}`);
+    });
+
+    // Regression: project bootstrap writes /projects/<id>/... keys that are
+    // foreign to the root FM's workspace ('/'). Going through
+    // `fileManager.writeFiles` (the scoped FileContentService) used to spam
+    // `WorkspacePathEscapeError` ~100 ms after every homepage submit because
+    // `batchWritten` carried those foreign keys to the root FM's
+    // FileTreeService. The cross-workspace bootstrap MUST route through
+    // `fileManager.client.writeFiles` (worker namespace, no resolver,
+    // dispatched by the mount table) for backend dispatch to land in the
+    // correct provider without tripping the workspace contract.
+    //
+    // See also: `use-cad-preview.test.tsx` — the same cross-workspace
+    // bootstrap pattern applies to `CadPreviewProvider` when its surrounding
+    // FM doesn't already own the preview's `/projects/<id>` mount (root-FM
+    // thumbnails on the homepage, import-route Review previews, cross-scope
+    // previews). Both bootstrap sites are discoverable as one class.
+    it('should route bootstrap writes through fileManager.client.writeFiles, not fileManager.writeFiles', async () => {
+      const { result } = renderHook(() => useProjectManager(), { wrapper: createWrapper() });
+
+      await act(async () => {
+        await result.current.createProject({
+          project: stubProjectData,
+          files: makeFiles({ [mainFile]: [1] }),
+          backend: 'opfs',
+        });
+      });
+
+      expect(mockClientWriteFiles).toHaveBeenCalledOnce();
+      expect(mockWriteFiles).not.toHaveBeenCalled();
+    });
+
+    it('should invoke client.writeFiles between workspace.mount and workspace.unmount for indexeddb', async () => {
+      const callOrder: string[] = [];
+      mockMount.mockImplementation(async () => {
+        callOrder.push('mount');
+      });
+      mockClientWriteFiles.mockImplementation(async () => {
+        callOrder.push('client.writeFiles');
+      });
+      mockUnmount.mockImplementation(() => {
+        callOrder.push('unmount');
+      });
+
+      const { result } = renderHook(() => useProjectManager(), { wrapper: createWrapper() });
+
+      await act(async () => {
+        await result.current.createProject({
+          project: stubProjectData,
+          files: makeFiles({ [mainFile]: [1] }),
+          backend: 'indexeddb',
+        });
+      });
+
+      expect(callOrder).toEqual(['mount', 'client.writeFiles', 'unmount']);
+      expect(mockMount).toHaveBeenCalledWith(`/projects/${fakeProject.id}`, {
+        backend: 'indexeddb',
+        preservePath: true,
+      });
+    });
+
+    it('should invoke client.writeFiles between workspace.mount and workspace.unmount for opfs', async () => {
+      const callOrder: string[] = [];
+      mockMount.mockImplementation(async () => {
+        callOrder.push('mount');
+      });
+      mockClientWriteFiles.mockImplementation(async () => {
+        callOrder.push('client.writeFiles');
+      });
+      mockUnmount.mockImplementation(() => {
+        callOrder.push('unmount');
+      });
+
+      const { result } = renderHook(() => useProjectManager(), { wrapper: createWrapper() });
+
+      await act(async () => {
+        await result.current.createProject({
+          project: stubProjectData,
+          files: makeFiles({ [mainFile]: [1] }),
+          backend: 'opfs',
+        });
+      });
+
+      expect(callOrder).toEqual(['mount', 'client.writeFiles', 'unmount']);
+      expect(mockMount).toHaveBeenCalledWith(`/projects/${fakeProject.id}`, {
+        backend: 'opfs',
+        preservePath: true,
+      });
+    });
+
+    it('should invoke client.writeFiles between workspace.mount and workspace.unmount for webaccess (with handle + workspaceId)', async () => {
+      mockIsFileSystemAccessSupported = true;
+      const entry = {
+        workspace: { workspaceId: 'wsp_test', name: 'Test' },
+        handle: { kind: 'directory', name: 'Test' } as unknown as FileSystemDirectoryHandle,
+      };
+      mockGetDefaultWorkspace.mockResolvedValue(entry);
+      const callOrder: string[] = [];
+      mockMount.mockImplementation(async () => {
+        callOrder.push('mount');
+      });
+      mockClientWriteFiles.mockImplementation(async () => {
+        callOrder.push('client.writeFiles');
+      });
+      mockUnmount.mockImplementation(() => {
+        callOrder.push('unmount');
+      });
+
+      const { result } = renderHook(() => useProjectManager(), { wrapper: createWrapper() });
+
+      await act(async () => {
+        await result.current.createProject({
+          project: stubProjectData,
+          files: makeFiles({ [mainFile]: [1] }),
+          backend: 'webaccess',
+        });
+      });
+
+      expect(callOrder).toEqual(['mount', 'client.writeFiles', 'unmount']);
+      expect(mockMount).toHaveBeenCalledWith(`/projects/${fakeProject.id}`, {
+        backend: 'webaccess',
+        directoryHandle: entry.handle,
+        workspaceId: 'wsp_test',
+        preservePath: true,
+      });
     });
   });
 });

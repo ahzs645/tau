@@ -437,6 +437,279 @@ describe('WorkspaceFileService', () => {
   });
 
   // ---------------------------------------------------------------------------
+  // move
+  // ---------------------------------------------------------------------------
+
+  describe('move', () => {
+    it('should return a stat for the resulting file', async () => {
+      await service.writeFile('/source.txt', 'data');
+      const stat = await service.move('/source.txt', '/target.txt');
+      expect(stat.type).toBe('file');
+      expect(stat.size).toBe(4);
+    });
+
+    it('should move an entire directory subtree', async () => {
+      await service.writeFile('/src/index.ts', 'export {}');
+      await service.writeFile('/src/utils/helpers.ts', 'export {}');
+      const stat = await service.move('/src', '/lib');
+      expect(stat.type).toBe('dir');
+      expect(await service.exists('/src')).toBe(false);
+      expect(await service.exists('/lib/index.ts')).toBe(true);
+      expect(await service.exists('/lib/utils/helpers.ts')).toBe(true);
+    });
+
+    it('should refuse to overwrite an existing target without overwrite: true', async () => {
+      await service.writeFile('/keep.txt', 'untouched');
+      await service.writeFile('/source.txt', 'replace');
+      await expect(service.move('/source.txt', '/keep.txt')).rejects.toThrow('EEXIST');
+      const content = await service.readFile('/keep.txt', 'utf8');
+      expect(content).toBe('untouched');
+    });
+
+    it('should overwrite an existing file target when overwrite: true', async () => {
+      await service.writeFile('/keep.txt', 'untouched');
+      await service.writeFile('/source.txt', 'replace');
+      await service.move('/source.txt', '/keep.txt', { overwrite: true });
+      const content = await service.readFile('/keep.txt', 'utf8');
+      expect(content).toBe('replace');
+      expect(await service.exists('/source.txt')).toBe(false);
+    });
+
+    it('should overwrite an existing directory target when overwrite: true', async () => {
+      await service.writeFile('/old/a.txt', 'old-a');
+      await service.writeFile('/old/b.txt', 'old-b');
+      await service.writeFile('/new/c.txt', 'new-c');
+      await service.move('/new', '/old', { overwrite: true });
+      expect(await service.exists('/old/a.txt')).toBe(false);
+      expect(await service.exists('/old/c.txt')).toBe(true);
+    });
+
+    it('should emit directoryRenamed for directory sources', async () => {
+      await service.writeFile('/src/a.txt', 'a');
+      const events: ChangeEvent[] = [];
+      eventBus.subscribe((event) => events.push(event));
+      await service.move('/src', '/lib');
+      expect(events).toContainEqual(
+        expect.objectContaining({ type: 'directoryRenamed', oldPath: '/src', newPath: '/lib' }),
+      );
+    });
+
+    it('should emit fileRenamed for file sources', async () => {
+      await service.writeFile('/a.txt', 'a');
+      const events: ChangeEvent[] = [];
+      eventBus.subscribe((event) => events.push(event));
+      await service.move('/a.txt', '/b.txt');
+      expect(events).toContainEqual(
+        expect.objectContaining({ type: 'fileRenamed', oldPath: '/a.txt', newPath: '/b.txt' }),
+      );
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // R6: canMove / canRename / canCreate / canDelete preflights
+  // ---------------------------------------------------------------------------
+
+  describe('canMove preflight', () => {
+    it('returns true when source exists and target is free', async () => {
+      await service.writeFile('/source.txt', 'data');
+      const result = await service.canMove('/source.txt', '/target.txt');
+      expect(result).toBe(true);
+    });
+
+    it('returns NOT_FOUND when the source does not exist', async () => {
+      const result = await service.canMove('/missing.txt', '/target.txt');
+      expect(result).not.toBe(true);
+      if (result === true) {
+        return;
+      }
+      expect(result.code).toBe('NOT_FOUND');
+      expect(result.path).toBe('/missing.txt');
+    });
+
+    it('returns NAME_EXISTS when the target already exists', async () => {
+      await service.writeFile('/source.txt', 'src');
+      await service.writeFile('/keep.txt', 'keep');
+      const result = await service.canMove('/source.txt', '/keep.txt');
+      expect(result).not.toBe(true);
+      if (result === true) {
+        return;
+      }
+      expect(result.code).toBe('NAME_EXISTS');
+      expect(result.target).toBe('/keep.txt');
+    });
+
+    it('returns true when target exists but overwrite is requested', async () => {
+      await service.writeFile('/source.txt', 'src');
+      await service.writeFile('/keep.txt', 'keep');
+      const result = await service.canMove('/source.txt', '/keep.txt', { overwrite: true });
+      expect(result).toBe(true);
+    });
+
+    it('returns INVALID_NAME for non-normalised paths', async () => {
+      await service.writeFile('/source.txt', 'src');
+      const result = await service.canMove('/source.txt', '/foo/../bar.txt');
+      expect(result).not.toBe(true);
+      if (result === true) {
+        return;
+      }
+      expect(result.code).toBe('INVALID_NAME');
+    });
+
+    it('returns BUNDLED_TYPES_WORKSPACE for /node_modules paths', async () => {
+      await service.writeFile('/source.txt', 'src');
+      const result = await service.canMove('/source.txt', '/node_modules/foo.ts');
+      expect(result).not.toBe(true);
+      if (result === true) {
+        return;
+      }
+      expect(result.code).toBe('BUNDLED_TYPES_WORKSPACE');
+    });
+  });
+
+  describe('canRename preflight', () => {
+    it('rejects newName containing a slash with INVALID_NAME', async () => {
+      await service.writeFile('/a.txt', 'a');
+      const result = await service.canRename('/a.txt', 'b/c.txt');
+      expect(result).not.toBe(true);
+      if (result === true) {
+        return;
+      }
+      expect(result.code).toBe('INVALID_NAME');
+    });
+
+    it('rejects rename onto a sibling that already exists with NAME_EXISTS', async () => {
+      await service.writeFile('/a.txt', 'a');
+      await service.writeFile('/b.txt', 'b');
+      const result = await service.canRename('/a.txt', 'b.txt');
+      expect(result).not.toBe(true);
+      if (result === true) {
+        return;
+      }
+      expect(result.code).toBe('NAME_EXISTS');
+    });
+
+    it('accepts a sibling rename to a free name', async () => {
+      await service.writeFile('/a.txt', 'a');
+      const result = await service.canRename('/a.txt', 'b.txt');
+      expect(result).toBe(true);
+    });
+  });
+
+  describe('canCreate preflight', () => {
+    it('returns true for a new file path', async () => {
+      const result = await service.canCreate('/new.txt', 'file');
+      expect(result).toBe(true);
+    });
+
+    it('returns NAME_EXISTS for an occupied path', async () => {
+      await service.writeFile('/existing.txt', 'x');
+      const result = await service.canCreate('/existing.txt', 'file');
+      expect(result).not.toBe(true);
+      if (result === true) {
+        return;
+      }
+      expect(result.code).toBe('NAME_EXISTS');
+    });
+
+    it('rejects /node_modules with BUNDLED_TYPES_WORKSPACE', async () => {
+      const result = await service.canCreate('/node_modules/new.ts', 'file');
+      expect(result).not.toBe(true);
+      if (result === true) {
+        return;
+      }
+      expect(result.code).toBe('BUNDLED_TYPES_WORKSPACE');
+    });
+
+    it('rejects relative paths with INVALID_NAME', async () => {
+      const result = await service.canCreate('relative.txt', 'file');
+      expect(result).not.toBe(true);
+      if (result === true) {
+        return;
+      }
+      expect(result.code).toBe('INVALID_NAME');
+    });
+  });
+
+  describe('canDelete preflight', () => {
+    it('returns true for an existing path', async () => {
+      await service.writeFile('/gone.txt', 'g');
+      const result = await service.canDelete('/gone.txt');
+      expect(result).toBe(true);
+    });
+
+    it('returns NOT_FOUND for a missing path', async () => {
+      const result = await service.canDelete('/never.txt');
+      expect(result).not.toBe(true);
+      if (result === true) {
+        return;
+      }
+      expect(result.code).toBe('NOT_FOUND');
+    });
+
+    it('rejects /node_modules with BUNDLED_TYPES_WORKSPACE', async () => {
+      const result = await service.canDelete('/node_modules/foo/index.d.ts');
+      expect(result).not.toBe(true);
+      if (result === true) {
+        return;
+      }
+      expect(result.code).toBe('BUNDLED_TYPES_WORKSPACE');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // R7: bulkMove transaction with rollback
+  // ---------------------------------------------------------------------------
+
+  describe('bulkMove', () => {
+    it('moves every edit when all succeed', async () => {
+      await service.writeFile('/a.txt', 'a');
+      await service.writeFile('/b.txt', 'b');
+      await service.writeFile('/c.txt', 'c');
+      const result = await service.bulkMove([
+        { source: '/a.txt', target: '/dst/a.txt' },
+        { source: '/b.txt', target: '/dst/b.txt' },
+        { source: '/c.txt', target: '/dst/c.txt' },
+      ]);
+      expect(result.moved.length).toBe(3);
+      expect(result.failed.length).toBe(0);
+      expect(await service.exists('/dst/a.txt')).toBe(true);
+      expect(await service.exists('/dst/b.txt')).toBe(true);
+      expect(await service.exists('/dst/c.txt')).toBe(true);
+    });
+
+    it('rolls back every prior move when a middle edit fails', async () => {
+      await service.writeFile('/a.txt', 'a');
+      await service.writeFile('/b.txt', 'b');
+      await service.writeFile('/c.txt', 'c');
+      await service.writeFile('/dst/b.txt', 'collision');
+
+      const result = await service.bulkMove([
+        { source: '/a.txt', target: '/dst/a.txt' },
+        { source: '/b.txt', target: '/dst/b.txt' },
+        { source: '/c.txt', target: '/dst/c.txt' },
+      ]);
+
+      expect(result.moved.length).toBe(0);
+      expect(result.failed.length).toBe(1);
+      expect(result.failed[0]?.edit.source).toBe('/b.txt');
+      expect(result.failed[0]?.error.code).toBe('NAME_EXISTS');
+
+      expect(await service.exists('/a.txt')).toBe(true);
+      expect(await service.exists('/b.txt')).toBe(true);
+      expect(await service.exists('/c.txt')).toBe(true);
+      expect(await service.exists('/dst/a.txt')).toBe(false);
+      expect(await service.exists('/dst/c.txt')).toBe(false);
+      expect(await service.readFile('/dst/b.txt', 'utf8')).toBe('collision');
+    });
+
+    it('returns an empty result for an empty edit list', async () => {
+      const result = await service.bulkMove([]);
+      expect(result.moved).toEqual([]);
+      expect(result.failed).toEqual([]);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // unlink
   // ---------------------------------------------------------------------------
 
@@ -902,14 +1175,15 @@ describe('WorkspaceFileService', () => {
       expect(directoryEvents.length).toBeGreaterThanOrEqual(1);
     });
 
-    it('should emit directoryChanged on mkdir', async () => {
+    it('should emit directoryCreated on mkdir', async () => {
       const events: ChangeEvent[] = [];
       eventBus.subscribe((event) => events.push(event));
 
       await service.mkdir('/evdir');
 
-      const directoryEvents = events.filter((event) => event.type === 'directoryChanged');
+      const directoryEvents = events.filter((event) => event.type === 'directoryCreated');
       expect(directoryEvents).toHaveLength(1);
+      expect(directoryEvents[0]).toMatchObject({ type: 'directoryCreated', path: '/evdir' });
     });
 
     it('should emit fileRenamed on rename', async () => {
@@ -938,27 +1212,32 @@ describe('WorkspaceFileService', () => {
       expect(deleteEvents[0]!.path).toBe('/gone.txt');
     });
 
-    it('should emit directoryChanged on rmdir', async () => {
+    it('should emit directoryDeleted on rmdir', async () => {
       await service.mkdir('/rmd');
       const events: ChangeEvent[] = [];
       eventBus.subscribe((event) => events.push(event));
 
       await service.rmdir('/rmd');
 
-      const directoryEvents = events.filter((event) => event.type === 'directoryChanged');
+      const directoryEvents = events.filter((event) => event.type === 'directoryDeleted');
       expect(directoryEvents).toHaveLength(1);
+      expect(directoryEvents[0]).toMatchObject({ type: 'directoryDeleted', path: '/rmd' });
     });
 
-    it('should emit fileWritten on duplicateFile', async () => {
+    it('should emit fileCopied on duplicateFile', async () => {
       await service.writeFile('/dup-src.txt', 'copy');
       const events: ChangeEvent[] = [];
       eventBus.subscribe((event) => events.push(event));
 
       await service.duplicateFile('/dup-src.txt', '/dup-dst.txt');
 
-      const writeEvents = events.filter((event) => event.type === 'fileWritten');
-      expect(writeEvents).toHaveLength(1);
-      expect(writeEvents[0]!.path).toBe('/dup-dst.txt');
+      const copyEvents = events.filter((event) => event.type === 'fileCopied');
+      expect(copyEvents).toHaveLength(1);
+      expect(copyEvents[0]).toMatchObject({
+        type: 'fileCopied',
+        sourcePath: '/dup-src.txt',
+        targetPath: '/dup-dst.txt',
+      });
     });
 
     it('should include backend in emitted events', async () => {

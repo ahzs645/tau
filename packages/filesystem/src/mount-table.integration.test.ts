@@ -349,5 +349,45 @@ describe('MountTable integration', () => {
       const entries = await service.readdir('/projects/proj_G');
       expect(entries).toContain('main.ts');
     });
+
+    // Project bootstrap contract pin: the cross-workspace `client.writeFiles`
+    // path used by `createProject` (apps/ui/app/hooks/use-project-manager.tsx)
+    // dispatches a bulk write keyed by absolute paths under sibling mount
+    // prefixes. Backend selection MUST be owned by the mount table's
+    // `_resolveProvider` longest-prefix match — the write call is purely
+    // namespace-typed, never a workspace-resolver call. Regression coverage
+    // for the WorkspacePathEscapeError class of bugs: switching `createProject`
+    // to `client.writeFiles` is correct only if this routing contract holds.
+    it('should route bulk writeFiles across sibling mount prefixes to the correct providers', async () => {
+      const providerRegistry = new ProviderRegistry();
+      const rootProvider = await providerRegistry.createMountProvider({ backend: 'memory' });
+      const siblingMountTable = new MountTable();
+      siblingMountTable.mount('/', rootProvider, { backend: 'memory' });
+      const siblingService = new WorkspaceFileService({
+        providerRegistry,
+        resourceQueue: new ResourceQueue(),
+        eventBus: new ChangeEventBus(),
+        mountTable: siblingMountTable,
+      });
+
+      await siblingService.mount('/projects/proj_A', { backend: 'memory', preservePath: true });
+      await siblingService.mount('/projects/proj_B', { backend: 'memory', preservePath: true });
+
+      const firstMain = '/projects/proj_A/main.ts';
+      const firstUtility = '/projects/proj_A/lib/util.ts';
+      const secondMain = '/projects/proj_B/main.ts';
+      await siblingService.writeFiles({
+        [firstMain]: { content: 'A main' },
+        [firstUtility]: { content: 'A util' },
+        [secondMain]: { content: 'B main' },
+      });
+
+      // Each file lands under its own mount prefix; cross-isolation holds.
+      expect(await siblingService.readFile('/projects/proj_A/main.ts', 'utf8')).toBe('A main');
+      expect(await siblingService.readFile('/projects/proj_A/lib/util.ts', 'utf8')).toBe('A util');
+      expect(await siblingService.readFile('/projects/proj_B/main.ts', 'utf8')).toBe('B main');
+      expect(await siblingService.exists('/projects/proj_A/B-main.ts')).toBe(false);
+      expect(await siblingService.exists('/projects/proj_B/lib/util.ts')).toBe(false);
+    });
   });
 });

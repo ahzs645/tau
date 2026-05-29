@@ -577,7 +577,7 @@ describe('chat session lifecycle wiring (via ChatSessionStore)', () => {
   // pending user message as `cancelled` so reload doesn't auto-regenerate.
   // ===========================================================================
 
-  it('marks the trailing pending user message as cancelled on a pure stop', () => {
+  it('marks the trailing pending user message as cancelled on a pure stop', async () => {
     const pending = makeUserMessage('msg_pending', 'in flight');
     const { result } = renderProvider();
 
@@ -600,6 +600,7 @@ describe('chat session lifecycle wiring (via ChatSessionStore)', () => {
     act(() => {
       fake.onFinish({ messages: [pending], isAbort: true, isError: false, isDisconnect: false });
     });
+    await Promise.resolve();
 
     // Store's `applyStoppedRequest` listener marks the trailing pending
     // user message as `cancelled` and writes back to chat.messages.

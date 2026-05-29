@@ -1,5 +1,7 @@
 import { assign, assertEvent, setup, enqueueActions, emit, raise } from 'xstate';
 import type { ActorRefFrom } from 'xstate';
+import { idPrefix } from '@taucad/types/constants';
+import { generatePrefixedId } from '@taucad/utils/id';
 import { fromSafeAsync } from '#lib/xstate.lib.js';
 import type { PartialDeep } from 'type-fest';
 import type { SerializedDockview } from 'dockview-react';
@@ -15,6 +17,28 @@ import type { GraphicsViewSettings } from '#constants/editor.constants.js';
 import { defaultPanelState } from '#constants/editor.constants.js';
 
 const maxOpenFiles = 200;
+
+/**
+ * Mint a fresh stable editor pane id.
+ */
+function mintPaneId(): string {
+  return generatePrefixedId(idPrefix.pane);
+}
+
+/**
+ * Selector: derive the path of the active pane from a context. Returns
+ * undefined when no pane is active or the active pane id no longer
+ * exists in `openFiles` (e.g. closed by a rapid sequence of events).
+ */
+export function selectActiveFilePath(
+  openFiles: readonly OpenFile[],
+  activePaneId: string | undefined,
+): string | undefined {
+  if (activePaneId === undefined) {
+    return undefined;
+  }
+  return openFiles.find((f) => f.paneId === activePaneId)?.path;
+}
 
 /**
  * Deep merge utility for panel state.
@@ -48,7 +72,13 @@ function deepMergePanelState(current: PanelState, update: PartialDeep<PanelState
 export type EditorStateContext = {
   projectId: string;
   openFiles: OpenFile[];
-  activeFilePath: string | undefined;
+  /**
+   * Stable pane identity of the currently-active tab. Path-based lookup
+   * (via {@link selectActiveFilePath}) is derived from `openFiles`, so
+   * renames update `openFiles[i].path` in place without churning the
+   * active-pane identity.
+   */
+  activePaneId: string | undefined;
   focusedChatId: string | undefined;
   /** Panel layout state (open/close, sizes, mobile tab) */
   panelState: PanelState;
@@ -257,9 +287,17 @@ export const editorMachine = setup({
         viewSettings = {};
       }
 
+      const openFiles: OpenFile[] = [...(loadedState?.openFiles ?? [])];
+      const knownPaneIds = new Set<string>(openFiles.map((f) => f.paneId));
+      const persistedActivePaneId = loadedState?.activePaneId;
+      const resolvedActivePaneId =
+        persistedActivePaneId !== undefined && knownPaneIds.has(persistedActivePaneId)
+          ? persistedActivePaneId
+          : undefined;
+
       enqueue.assign({
-        openFiles: loadedState?.openFiles ?? [],
-        activeFilePath: loadedState?.activeFilePath,
+        openFiles,
+        activePaneId: resolvedActivePaneId,
         // `focusedChatId` is hydrated from `loadedState` here as the
         // *candidate* — the subsequent `loading.ensuringFocusedChat`
         // substate validates it against the live chat list and reassigns
@@ -273,14 +311,13 @@ export const editorMachine = setup({
         isLoading: false,
       });
 
-      // Emit fileOpened for active file (for CAD, tabs, etc.)
-      if (loadedState?.activeFilePath) {
-        const activeMeta = loadedState.openFiles.find((f) => f.path === loadedState.activeFilePath);
+      const activeMeta = openFiles.find((f) => f.paneId === resolvedActivePaneId);
+      if (activeMeta) {
         enqueue.emit({
           type: 'fileOpened',
-          path: loadedState.activeFilePath,
+          path: activeMeta.path,
           source: 'machine',
-          readOnly: activeMeta?.readOnly,
+          readOnly: activeMeta.readOnly,
         });
       }
 
@@ -296,7 +333,7 @@ export const editorMachine = setup({
       return {
         projectId: event.projectId,
         openFiles: [],
-        activeFilePath: undefined,
+        activePaneId: undefined,
         focusedChatId: undefined,
         panelState: defaultPanelState,
         editorLayout: undefined,
@@ -339,6 +376,7 @@ export const editorMachine = setup({
 
       const now = Date.now();
       const newFile: OpenFile = {
+        paneId: mintPaneId(),
         path: pending.path,
         name: pending.path.split('/').pop() ?? pending.path,
         lastAccessedAt: now,
@@ -349,15 +387,15 @@ export const editorMachine = setup({
 
       if (updatedFiles.length > maxOpenFiles) {
         const sorted = [...updatedFiles].sort((a, b) => a.lastAccessedAt - b.lastAccessedAt);
-        const victim = sorted.find((f) => f.path !== newFile.path);
+        const victim = sorted.find((f) => f.paneId !== newFile.paneId);
         if (victim) {
-          updatedFiles = updatedFiles.filter((f) => f.path !== victim.path);
+          updatedFiles = updatedFiles.filter((f) => f.paneId !== victim.paneId);
         }
       }
 
       enqueue.assign({
         openFiles: updatedFiles,
-        activeFilePath: newFile.path,
+        activePaneId: newFile.paneId,
         pendingOpenFile: undefined,
       });
 
@@ -390,9 +428,11 @@ export const editorMachine = setup({
       if (existingFile) {
         enqueue.assign({
           openFiles: context.openFiles.map((f) =>
-            f.path === event.path ? { ...f, lastAccessedAt: now, readOnly: event.readOnly ?? f.readOnly } : f,
+            f.paneId === existingFile.paneId
+              ? { ...f, lastAccessedAt: now, readOnly: event.readOnly ?? f.readOnly }
+              : f,
           ),
-          activeFilePath: event.path,
+          activePaneId: existingFile.paneId,
         });
         enqueue.emit({
           type: 'fileOpened',
@@ -405,8 +445,8 @@ export const editorMachine = setup({
         return;
       }
 
-      // Open new file
       const newFile: OpenFile = {
+        paneId: mintPaneId(),
         path: event.path,
         name: event.path.split('/').pop() ?? event.path,
         lastAccessedAt: now,
@@ -415,18 +455,17 @@ export const editorMachine = setup({
 
       let updatedFiles = [...context.openFiles, newFile];
 
-      // LRU eviction: remove least-recently-accessed tab when at capacity
       if (updatedFiles.length > maxOpenFiles) {
         const sorted = [...updatedFiles].sort((a, b) => a.lastAccessedAt - b.lastAccessedAt);
-        const victim = sorted.find((f) => f.path !== newFile.path);
+        const victim = sorted.find((f) => f.paneId !== newFile.paneId);
         if (victim) {
-          updatedFiles = updatedFiles.filter((f) => f.path !== victim.path);
+          updatedFiles = updatedFiles.filter((f) => f.paneId !== victim.paneId);
         }
       }
 
       enqueue.assign({
         openFiles: updatedFiles,
-        activeFilePath: newFile.path,
+        activePaneId: newFile.paneId,
       });
 
       enqueue.emit({
@@ -442,45 +481,50 @@ export const editorMachine = setup({
     closeFile: enqueueActions(({ enqueue, event, context }) => {
       assertEvent(event, 'closeFile');
 
-      const updatedOpenFiles = context.openFiles.filter((file) => file.path !== event.path);
-      let newActiveFilePath = context.activeFilePath;
+      const closing = context.openFiles.find((file) => file.path === event.path);
+      if (!closing) {
+        return;
+      }
+      const updatedOpenFiles = context.openFiles.filter((file) => file.paneId !== closing.paneId);
+      let newActivePaneId = context.activePaneId;
 
-      // If closing the active file, set new active file
-      if (context.activeFilePath === event.path) {
-        newActiveFilePath = updatedOpenFiles.at(-1)?.path;
-
-        // Emit fileOpened for the new active file (if any)
-        if (newActiveFilePath) {
-          enqueue.emit({
-            type: 'fileOpened',
-            path: newActiveFilePath,
-          });
+      if (context.activePaneId === closing.paneId) {
+        newActivePaneId = updatedOpenFiles.at(-1)?.paneId;
+        if (newActivePaneId !== undefined) {
+          const newActive = updatedOpenFiles.find((f) => f.paneId === newActivePaneId);
+          if (newActive) {
+            enqueue.emit({
+              type: 'fileOpened',
+              path: newActive.path,
+            });
+          }
         }
       }
 
       enqueue.assign({
         openFiles: updatedOpenFiles,
-        activeFilePath: newActiveFilePath,
+        activePaneId: newActivePaneId,
       });
     }),
 
     setActiveFile: enqueueActions(({ enqueue, event, context }) => {
       assertEvent(event, 'setActiveFile');
 
-      // Already active - nothing to do
-      if (context.activeFilePath === event.path) {
+      const target = context.openFiles.find((f) => f.path === event.path);
+      if (!target || context.activePaneId === target.paneId) {
         return;
       }
 
       enqueue.assign({
-        openFiles: context.openFiles.map((f) => (f.path === event.path ? { ...f, lastAccessedAt: Date.now() } : f)),
-        activeFilePath: event.path,
+        openFiles: context.openFiles.map((f) =>
+          f.paneId === target.paneId ? { ...f, lastAccessedAt: Date.now() } : f,
+        ),
+        activePaneId: target.paneId,
       });
 
-      // Emit fileOpened for the new active file
       enqueue.emit({
         type: 'fileOpened',
-        path: event.path,
+        path: target.path,
       });
     }),
 
@@ -497,7 +541,7 @@ export const editorMachine = setup({
     closeAll: enqueueActions(({ enqueue }) => {
       enqueue.assign({
         openFiles: [],
-        activeFilePath: undefined,
+        activePaneId: undefined,
       });
     }),
 
@@ -506,7 +550,10 @@ export const editorMachine = setup({
 
       const { oldPath, newPath } = event;
 
-      // Update the path in openFiles
+      // Rewrite path in place on each affected pane. Pane identity
+      // (paneId) is preserved — only the `path` and `name` properties
+      // mutate. This is the key invariant that lets the editor + viewer
+      // surfaces survive a rename without React unmount.
       const updatedOpenFiles = context.openFiles.map((file) => {
         if (file.path === oldPath) {
           return {
@@ -515,8 +562,6 @@ export const editorMachine = setup({
             name: newPath.split('/').pop() ?? newPath,
           };
         }
-
-        // Also handle nested files (for directory renames)
         if (file.path.startsWith(`${oldPath}/`)) {
           const relativePath = file.path.slice(oldPath.length);
           const newFilePath = `${newPath}${relativePath}`;
@@ -526,32 +571,20 @@ export const editorMachine = setup({
             name: newFilePath.split('/').pop() ?? newFilePath,
           };
         }
-
         return file;
       });
 
-      // Update activeFilePath if it was the renamed file or a nested file
-      let newActiveFilePath = context.activeFilePath;
-      if (context.activeFilePath === oldPath) {
-        newActiveFilePath = newPath;
-      } else if (context.activeFilePath?.startsWith(`${oldPath}/`)) {
-        const relativePath = context.activeFilePath.slice(oldPath.length);
-        newActiveFilePath = `${newPath}${relativePath}`;
-      }
-
       enqueue.assign({
         openFiles: updatedOpenFiles,
-        activeFilePath: newActiveFilePath,
       });
 
-      // Emit fileOpened for the renamed file so CAD machine updates its reference
-      if (
-        newActiveFilePath &&
-        (context.activeFilePath === oldPath || context.activeFilePath?.startsWith(`${oldPath}/`))
-      ) {
+      const activePath = selectActiveFilePath(context.openFiles, context.activePaneId);
+      const activeWasAffected = activePath === oldPath || activePath?.startsWith(`${oldPath}/`);
+      if (activeWasAffected) {
+        const newActivePath = activePath === oldPath ? newPath : `${newPath}${activePath?.slice(oldPath.length) ?? ''}`;
         enqueue.emit({
           type: 'fileOpened',
-          path: newActiveFilePath,
+          path: newActivePath,
         });
       }
     }),
@@ -697,7 +730,7 @@ export const editorMachine = setup({
     return {
       projectId: input.projectId,
       openFiles: [],
-      activeFilePath: undefined,
+      activePaneId: undefined,
       focusedChatId: undefined,
       panelState: defaultPanelState,
       editorLayout: undefined,
@@ -946,7 +979,7 @@ export const editorMachine = setup({
                     editorState: {
                       projectId: context.projectId,
                       openFiles: context.openFiles,
-                      activeFilePath: context.activeFilePath,
+                      activePaneId: context.activePaneId,
                       focusedChatId: context.focusedChatId,
                       panelState: context.panelState,
                       editorLayout: context.editorLayout,

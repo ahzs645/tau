@@ -9,13 +9,16 @@ import { fromSafeAsync } from '#lib/xstate.lib.js';
 // Stubs
 // ---------------------------------------------------------------------------
 
+const stubPaneIdMain = 'pane-main';
+const stubPaneIdUtils = 'pane-utils';
+
 const stubEditorState: EditorState = {
   projectId: 'test-build',
   openFiles: [
-    { path: 'src/main.ts', name: 'main.ts', lastAccessedAt: 1000 },
-    { path: 'src/utils.ts', name: 'utils.ts', lastAccessedAt: 2000 },
+    { paneId: stubPaneIdMain, path: 'src/main.ts', name: 'main.ts', lastAccessedAt: 1000 },
+    { paneId: stubPaneIdUtils, path: 'src/utils.ts', name: 'utils.ts', lastAccessedAt: 2000 },
   ],
-  activeFilePath: 'src/main.ts',
+  activePaneId: stubPaneIdMain,
   focusedChatId: 'chat-1',
   panelState: defaultPanelState,
   editorLayout: undefined,
@@ -23,6 +26,16 @@ const stubEditorState: EditorState = {
   viewSettings: {},
   updatedAt: Date.now(),
 };
+
+function selectActivePath(context: {
+  openFiles: ReadonlyArray<{ paneId: string; path: string }>;
+  activePaneId: string | undefined;
+}): string | undefined {
+  if (context.activePaneId === undefined) {
+    return undefined;
+  }
+  return context.openFiles.find((f) => f.paneId === context.activePaneId)?.path;
+}
 
 // ---------------------------------------------------------------------------
 // Factory helpers
@@ -128,7 +141,8 @@ describe('editorMachine', () => {
       const actor = await startAndLoad({ loadResult: stubEditorState });
       const { context } = actor.getSnapshot();
       expect(context.openFiles).toEqual(stubEditorState.openFiles);
-      expect(context.activeFilePath).toBe('src/main.ts');
+      expect(selectActivePath(context)).toBe('src/main.ts');
+      expect(context.activePaneId).toBe(stubPaneIdMain);
       expect(context.panelState).toEqual(defaultPanelState);
       actor.stop();
     });
@@ -137,7 +151,8 @@ describe('editorMachine', () => {
       const actor = await startAndLoad({ loadResult: undefined });
       const { context } = actor.getSnapshot();
       expect(context.openFiles).toEqual([]);
-      expect(context.activeFilePath).toBeUndefined();
+      expect(context.activePaneId).toBeUndefined();
+      expect(selectActivePath(context)).toBeUndefined();
       expect(context.panelState).toEqual(defaultPanelState);
       actor.stop();
     });
@@ -187,7 +202,7 @@ describe('editorMachine', () => {
     it('should set active file on open', async () => {
       const actor = await startAndLoad({ loadResult: undefined });
       actor.send({ type: 'openFile', path: 'src/new.ts', source: 'user' });
-      expect(actor.getSnapshot().context.activeFilePath).toBe('src/new.ts');
+      expect(selectActivePath(actor.getSnapshot().context)).toBe('src/new.ts');
       actor.stop();
     });
 
@@ -198,7 +213,7 @@ describe('editorMachine', () => {
       actor.send({ type: 'closeFile', path: 'src/main.ts' });
       const { context } = actor.getSnapshot();
       expect(context.openFiles).toHaveLength(1);
-      expect(context.activeFilePath).toBe('src/utils.ts');
+      expect(selectActivePath(context)).toBe('src/utils.ts');
       actor.stop();
     });
 
@@ -207,18 +222,21 @@ describe('editorMachine', () => {
       actor.send({ type: 'closeAll' });
       const { context } = actor.getSnapshot();
       expect(context.openFiles).toHaveLength(0);
-      expect(context.activeFilePath).toBeUndefined();
+      expect(context.activePaneId).toBeUndefined();
       actor.stop();
     });
 
-    it('should rename a file in openFiles', async () => {
+    it('should rename a file in openFiles while preserving the tab identity', async () => {
       const actor = await startAndLoad({ loadResult: stubEditorState });
+      const paneIdBefore = actor.getSnapshot().context.activePaneId;
       actor.send({ type: 'renameFile', oldPath: 'src/main.ts', newPath: 'src/index.ts' });
       const { context } = actor.getSnapshot();
       const renamed = context.openFiles.find((f) => f.path === 'src/index.ts');
       expect(renamed).toBeDefined();
       expect(renamed!.name).toBe('index.ts');
-      expect(context.activeFilePath).toBe('src/index.ts');
+      expect(renamed!.paneId).toBe(paneIdBefore);
+      expect(context.activePaneId).toBe(paneIdBefore);
+      expect(selectActivePath(context)).toBe('src/index.ts');
       actor.stop();
     });
 
@@ -230,6 +248,56 @@ describe('editorMachine', () => {
       actor.send({ type: 'openFile', path: 'src/test.ts', source: 'user' });
       expect(emitted).toHaveLength(1);
       expect(emitted[0]).toMatchObject({ type: 'fileOpened', path: 'src/test.ts' });
+      actor.stop();
+    });
+
+    it('should rewrite every nested tab in place on a directory rename, preserving tab identities', async () => {
+      // Reproduces F22 / R3 — folder rename must move ALL open
+      // tabs under that folder without remounting them. Identity is
+      // captured via `paneId`; the test asserts both the path
+      // migration and the stable paneId set.
+      const nestedState: EditorState = {
+        ...stubEditorState,
+        openFiles: [
+          { paneId: 'pane-a', path: 'src/foo/a.ts', name: 'a.ts', lastAccessedAt: 1000 },
+          { paneId: 'pane-b', path: 'src/foo/nested/b.ts', name: 'b.ts', lastAccessedAt: 2000 },
+          { paneId: 'pane-keep', path: 'src/keep.ts', name: 'keep.ts', lastAccessedAt: 3000 },
+        ],
+        activePaneId: 'pane-b',
+      };
+      const actor = await startAndLoad({ loadResult: nestedState });
+      const paneIdsBefore = new Set(actor.getSnapshot().context.openFiles.map((f) => f.paneId));
+
+      actor.send({ type: 'renameFile', oldPath: 'src/foo', newPath: 'src/bar' });
+
+      const { context } = actor.getSnapshot();
+      const byTab = new Map(context.openFiles.map((f) => [f.paneId, f]));
+      expect(byTab.get('pane-a')?.path).toBe('src/bar/a.ts');
+      expect(byTab.get('pane-a')?.name).toBe('a.ts');
+      expect(byTab.get('pane-b')?.path).toBe('src/bar/nested/b.ts');
+      expect(byTab.get('pane-b')?.name).toBe('b.ts');
+      expect(byTab.get('pane-keep')?.path).toBe('src/keep.ts');
+      const paneIdsAfter = new Set(context.openFiles.map((f) => f.paneId));
+      expect(paneIdsAfter).toEqual(paneIdsBefore);
+      expect(context.activePaneId).toBe('pane-b');
+      expect(selectActivePath(context)).toBe('src/bar/nested/b.ts');
+      actor.stop();
+    });
+
+    it('should close the active tab and pick a new active tab on closeFile', async () => {
+      const nestedState: EditorState = {
+        ...stubEditorState,
+        openFiles: [
+          { paneId: 'pane-x', path: 'a.ts', name: 'a.ts', lastAccessedAt: 1000 },
+          { paneId: 'pane-y', path: 'b.ts', name: 'b.ts', lastAccessedAt: 2000 },
+        ],
+        activePaneId: 'pane-x',
+      };
+      const actor = await startAndLoad({ loadResult: nestedState });
+      actor.send({ type: 'closeFile', path: 'a.ts' });
+      const { context } = actor.getSnapshot();
+      expect(context.openFiles).toHaveLength(1);
+      expect(context.activePaneId).toBe('pane-y');
       actor.stop();
     });
   });
@@ -478,6 +546,7 @@ describe('editorMachine', () => {
   describe('ready – LRU eviction', () => {
     it('should evict least-recently-accessed tab when opening 201st file', async () => {
       const files = Array.from({ length: 200 }, (_, i) => ({
+        paneId: `pane-${i}`,
         path: `src/file-${i}.ts`,
         name: `file-${i}.ts`,
         lastAccessedAt: i,
@@ -485,7 +554,7 @@ describe('editorMachine', () => {
       const fullState: EditorState = {
         ...stubEditorState,
         openFiles: files,
-        activeFilePath: files.at(-1)!.path,
+        activePaneId: files.at(-1)!.paneId,
       };
       const actor = await startAndLoad({ loadResult: fullState });
 

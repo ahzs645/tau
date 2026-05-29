@@ -6,9 +6,9 @@ import type { SnapshotFrom } from 'xstate';
 import type { FileTreeEntry, FileSystemBackend, FileStatEntry, FileStat } from '@taucad/types';
 import { fileManagerMachine } from '#machines/file-manager.machine.js';
 import type { FileWriteSource } from '@taucad/fs-client/file-write-source';
-import type { FileSystemClient } from '@taucad/fs-client/file-system-client';
+import type { BulkMoveEdit, BulkMoveResult, FileSystemClient } from '@taucad/fs-client/file-system-client';
 import type { FileManagerRef, FileManagerProxy } from '#machines/file-manager.machine.types.js';
-import type { MountConfig } from '@taucad/filesystem';
+import type { MountConfig, WorkspaceMutationError } from '@taucad/filesystem';
 import { setProjectFileSystemConfig } from '#filesystem/handle-store.js';
 import type { WorkspaceUnavailableReason } from '#machines/file-manager.machine.js';
 import { useWorkspaceTelemetry } from '#utils/workspace-telemetry.utils.js';
@@ -116,10 +116,26 @@ type DeleteFileOptions = {
  * Typed proxy dispatch facade. Mirrors the worker {@link FileSystemClient}
  * one-to-one. Each method gates on the FM machine becoming `ready`
  * before forwarding to the worker — no per-method `useCallback`
- * ceremony. Use this surface for cache-free or scope-routed operations
- * (`/files`-style cross-workspace dispatch, admin reads); the cache-
- * bound editor flows continue to use the dedicated `readFile` /
- * `writeFile` / `renameFile` callbacks below.
+ * ceremony.
+ *
+ * Use this surface for:
+ *
+ * - **Cross-workspace writes** that target prefixes outside this provider's
+ *   `rootDirectory`. Keys are interpreted in the worker's filesystem
+ *   namespace and routed by the mount table (longest-prefix match), so
+ *   absolute paths like `/projects/<id>/main.scad` land in the matching
+ *   mounted backend regardless of the FM provider's scope. This is the
+ *   documented escape hatch for the project bootstrap mount-write-unmount
+ *   transaction in `use-project-manager.tsx` — passing absolute keys
+ *   through the cache-bound `writeFile`/`writeFiles` callbacks below would
+ *   trip `WorkspaceScopeViolationError` (and previously spammed the tree
+ *   service with `WorkspacePathEscapeError`).
+ * - **Cache-free / scope-routed reads** for `/files`-style cross-workspace
+ *   dispatch and admin tooling.
+ *
+ * The cache-bound editor flows continue to use the dedicated `readFile` /
+ * `writeFile` / `renameFile` callbacks below; those enforce workspace-
+ * relative keys at the boundary.
  *
  * @public
  */
@@ -134,6 +150,12 @@ export type FileSystemClientFacade = Pick<
   | 'stat'
   | 'lstat'
   | 'rename'
+  | 'move'
+  | 'bulkMove'
+  | 'canMove'
+  | 'canRename'
+  | 'canCreate'
+  | 'canDelete'
   | 'unlink'
   | 'rmdir'
   | 'exists'
@@ -176,10 +198,76 @@ type FileManagerContextType = {
   treeService: FileTreeService | undefined;
   /** Resolves once both content and tree facades are bound (or rejects if the machine enters `error`). */
   whenServicesReady: () => Promise<{ contentService: FileContentService; treeService: FileTreeService }>;
+  /**
+   * Write a single file through the per-FM `FileContentService` cache.
+   *
+   * `path` **MUST** be workspace-relative to this provider's
+   * `rootDirectory`; absolute keys that escape the workspace root throw
+   * `WorkspaceScopeViolationError` synchronously. Use `client.writeFile`
+   * for cross-workspace writes (worker namespace, no resolver).
+   */
   writeFile: (path: string, data: Uint8Array<ArrayBuffer>, options: WriteFileOptions) => Promise<void>;
+  /**
+   * Write multiple files through the per-FM `FileContentService` cache.
+   *
+   * Map keys **MUST** be workspace-relative to this provider's
+   * `rootDirectory`; absolute keys that escape the workspace root throw
+   * `WorkspaceScopeViolationError` synchronously. Use `client.writeFiles`
+   * for cross-workspace bootstrap (mount-write-unmount transactions).
+   */
   writeFiles: (files: Record<string, { content: Uint8Array<ArrayBuffer> }>) => Promise<void>;
   readFile: (path: string) => Promise<Uint8Array<ArrayBuffer>>;
   renameFile: (oldPath: string, newPath: string) => Promise<void>;
+  /**
+   * Move a file or directory through the per-FM `FileContentService` cache.
+   * Directory-aware: every cached descendant is re-keyed and republished as a
+   * single batch so editor surfaces never observe an inconsistent view.
+   *
+   * Both arguments **MUST** be workspace-relative to this provider's
+   * `rootDirectory`; absolute keys that escape the workspace root throw
+   * `WorkspaceScopeViolationError` synchronously.
+   */
+  moveFile: (source: string, target: string, options?: { overwrite?: boolean }) => Promise<void>;
+  /**
+   * Move many paths in a single batch. On mid-flight failure every prior
+   * move within this batch is reversed by the worker so the workspace
+   * returns to the pre-batch state. See {@link BulkMoveResult}.
+   */
+  bulkMove: (edits: readonly BulkMoveEdit[], options?: { overwrite?: boolean }) => Promise<BulkMoveResult>;
+  /**
+   * Preflight {@link moveFile}. Returns `true` if safe to issue, or a
+   * structured {@link WorkspaceMutationError} otherwise. Use to gate UI
+   * actions (drag/drop, rename) on a typed error code rather than
+   * letting the mutation fail with a less actionable message.
+   */
+  canMove: (
+    source: string,
+    target: string,
+    options?: { overwrite?: boolean },
+  ) => Promise<true | WorkspaceMutationError>;
+  /**
+   * Preflight rename within a single parent directory.
+   */
+  canRename: (source: string, newName: string) => Promise<true | WorkspaceMutationError>;
+  /**
+   * Preflight create (`'file'` for `writeFile`, `'directory'` for `mkdir`).
+   */
+  canCreate: (path: string, kind: 'file' | 'directory') => Promise<true | WorkspaceMutationError>;
+  /**
+   * Preflight delete (`unlink` for files, `rmdir` for directories).
+   */
+  canDelete: (path: string) => Promise<true | WorkspaceMutationError>;
+  /**
+   * Create a directory through the worker mount. Pass `{ recursive: true }`
+   * to create intermediate directories.
+   */
+  mkdir: (path: string, options?: { recursive?: boolean }) => Promise<void>;
+  /**
+   * Remove a directory through the worker mount. Pass `{ recursive: true }`
+   * to drop a non-empty subtree (mount-routed; no scope required for the
+   * default workspace).
+   */
+  rmdir: (path: string, options?: { recursive?: boolean }) => Promise<void>;
   duplicateFile: (sourcePath: string, destinationPath: string) => Promise<void>;
   deleteFile: (path: string, options: DeleteFileOptions) => Promise<void>;
   stat: (path: string) => Promise<FileStat>;
@@ -189,9 +277,14 @@ type FileManagerContextType = {
   getZippedDirectory: (path: string) => Promise<Blob>;
   copyDirectory: (sourcePath: string, destinationPath: string) => Promise<void>;
   /**
-   * Typed proxy dispatch facade. Use for cache-free reads/writes,
-   * scope-routed calls against any workspace, and other operations
-   * that should bypass the per-project `FileContentService` cache.
+   * Typed proxy dispatch facade. Use for cache-free reads/writes and
+   * cross-workspace operations whose keys lie outside this provider's
+   * `rootDirectory` (e.g. the project bootstrap mount-write-unmount
+   * transaction in `use-project-manager.tsx`, which writes
+   * `/projects/<id>/...` keys through the root FM at `/`). Routes through
+   * the worker mount table by absolute path prefix — backend selection
+   * (indexeddb / webaccess with handle+workspaceId / opfs / memory) is
+   * owned by the mount registration, never by the write call.
    */
   client: FileSystemClientFacade;
   /**
@@ -419,9 +512,83 @@ export function FileManagerProvider({
         return;
       }
       const { contentService } = await whenServicesReady();
-      await contentService.rename(oldPath, newPath);
+      await contentService.move(oldPath, newPath);
     },
     [whenServicesReady],
+  );
+
+  const moveFile = useCallback(
+    async (source: string, target: string, options?: { overwrite?: boolean }): Promise<void> => {
+      if (source === target) {
+        return;
+      }
+      const { contentService } = await whenServicesReady();
+      await contentService.move(source, target, options);
+    },
+    [whenServicesReady],
+  );
+
+  const bulkMove = useCallback(
+    async (edits: readonly BulkMoveEdit[], options?: { overwrite?: boolean }): Promise<BulkMoveResult> => {
+      if (edits.length === 0) {
+        return { moved: [], failed: [] };
+      }
+      const { contentService } = await whenServicesReady();
+      return contentService.bulkMove(edits, options);
+    },
+    [whenServicesReady],
+  );
+
+  const canMove = useCallback(
+    async (
+      source: string,
+      target: string,
+      options?: { overwrite?: boolean },
+    ): Promise<true | WorkspaceMutationError> => {
+      const { contentService } = await whenServicesReady();
+      return contentService.canMove(source, target, options);
+    },
+    [whenServicesReady],
+  );
+
+  const canRename = useCallback(
+    async (source: string, newName: string): Promise<true | WorkspaceMutationError> => {
+      const { contentService } = await whenServicesReady();
+      return contentService.canRename(source, newName);
+    },
+    [whenServicesReady],
+  );
+
+  const canCreate = useCallback(
+    async (path: string, kind: 'file' | 'directory'): Promise<true | WorkspaceMutationError> => {
+      const { contentService } = await whenServicesReady();
+      return contentService.canCreate(path, kind);
+    },
+    [whenServicesReady],
+  );
+
+  const canDelete = useCallback(
+    async (path: string): Promise<true | WorkspaceMutationError> => {
+      const { contentService } = await whenServicesReady();
+      return contentService.canDelete(path);
+    },
+    [whenServicesReady],
+  );
+
+  const mkdir = useCallback(
+    async (path: string, options?: { recursive?: boolean }): Promise<void> => {
+      const proxy = await getReadiedProxy();
+      await proxy.mkdir(path, options);
+    },
+    [getReadiedProxy],
+  );
+
+  const rmdir = useCallback(
+    async (path: string, options?: { recursive?: boolean }): Promise<void> => {
+      const proxy = await getReadiedProxy();
+      await proxy.rmdir(path, options);
+    },
+    [getReadiedProxy],
   );
 
   const duplicateFile = useCallback(
@@ -508,6 +675,12 @@ export function FileManagerProvider({
       stat: gated('stat'),
       lstat: gated('lstat'),
       rename: gated('rename'),
+      move: gated('move'),
+      bulkMove: gated('bulkMove'),
+      canMove: gated('canMove'),
+      canRename: gated('canRename'),
+      canCreate: gated('canCreate'),
+      canDelete: gated('canDelete'),
       unlink: gated('unlink'),
       rmdir: gated('rmdir'),
       exists: gated('exists'),
@@ -568,6 +741,14 @@ export function FileManagerProvider({
       writeFiles,
       readFile,
       renameFile,
+      moveFile,
+      bulkMove,
+      canMove,
+      canRename,
+      canCreate,
+      canDelete,
+      mkdir,
+      rmdir,
       duplicateFile,
       deleteFile,
       stat,
@@ -593,6 +774,14 @@ export function FileManagerProvider({
       writeFiles,
       readFile,
       renameFile,
+      moveFile,
+      bulkMove,
+      canMove,
+      canRename,
+      canCreate,
+      canDelete,
+      mkdir,
+      rmdir,
       duplicateFile,
       deleteFile,
       stat,

@@ -111,7 +111,7 @@ describe('WorkspaceFileService — unified scope routing', () => {
     expect(standaloneUnlink).toHaveBeenCalledWith('/scope/dir/nested.txt');
     expect(standaloneRmdir).toHaveBeenCalledWith('/scope/dir');
     expect(events).toContainEqual(
-      expect.objectContaining({ type: 'directoryChanged', path: '/scope', backend: 'indexeddb' }),
+      expect.objectContaining({ type: 'directoryDeleted', path: '/scope/dir', backend: 'indexeddb' }),
     );
   });
 

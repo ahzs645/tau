@@ -29,6 +29,8 @@ type MutationMethodName =
   | 'writeFiles'
   | 'mkdir'
   | 'rename'
+  | 'move'
+  | 'bulkMove'
   | 'unlink'
   | 'rmdir'
   | 'duplicateFile'
@@ -96,6 +98,9 @@ export function bindMutationContextForPort<T extends StringKeyedObject>(
     writeFiles: async (files) => (service as unknown as MutatingMethods).writeFiles(files, context),
     mkdir: async (path, options) => (service as unknown as MutatingMethods).mkdir(path, options, context),
     rename: async (from, to) => (service as unknown as MutatingMethods).rename(from, to, context),
+    move: async (source, target, options) =>
+      (service as unknown as MutatingMethods).move(source, target, options, context),
+    bulkMove: async (edits, options) => (service as unknown as MutatingMethods).bulkMove(edits, options, context),
     unlink: async (path, options) => (service as unknown as MutatingMethods).unlink(path, options, context),
     rmdir: async (path, options) => (service as unknown as MutatingMethods).rmdir(path, options, context),
     duplicateFile: async (sourcePath, destinationPath) =>

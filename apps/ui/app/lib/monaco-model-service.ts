@@ -330,9 +330,58 @@ export class MonacoModelService {
         this.markerService?.migrateUri(oldUri.toString(), newUri.toString());
         break;
       }
+      case 'directoryDeleted': {
+        this.disposeModelsUnderPrefix(event.path);
+        break;
+      }
+      case 'directoryRenamed': {
+        this.migrateModelsUnderPrefix(event.oldPath, event.newPath);
+        break;
+      }
+      case 'directoryCreated':
       case 'read': {
         break;
       }
+    }
+  }
+
+  private disposeModelsUnderPrefix(directoryPath: string): void {
+    if (!this.monaco) {
+      return;
+    }
+    const prefix = directoryPath === '' ? '' : `${directoryPath}/`;
+    const paths: string[] = [];
+    for (const path of this.syncedPaths) {
+      if (path === directoryPath || path.startsWith(prefix)) {
+        paths.push(path);
+      }
+    }
+    for (const path of paths) {
+      const uri = this.createUri(path);
+      this.monaco.editor.getModel(uri)?.dispose();
+      this.editorHolds.delete(path);
+      this.backgroundAccessTimes.delete(path);
+      this.syncedPaths.delete(path);
+      this.markerService?.removeUri(uri.toString());
+    }
+  }
+
+  private migrateModelsUnderPrefix(oldDirectoryPath: string, newDirectoryPath: string): void {
+    if (!this.monaco) {
+      return;
+    }
+    const oldPrefix = oldDirectoryPath === '' ? '' : `${oldDirectoryPath}/`;
+    const newPrefix = newDirectoryPath === '' ? '' : `${newDirectoryPath}/`;
+    const affected: string[] = [];
+    for (const path of this.syncedPaths) {
+      if (path === oldDirectoryPath || path.startsWith(oldPrefix)) {
+        affected.push(path);
+      }
+    }
+    for (const oldPath of affected) {
+      const newPath =
+        oldPath === oldDirectoryPath ? newDirectoryPath : `${newPrefix}${oldPath.slice(oldPrefix.length)}`;
+      this.handleContentChange({ type: 'renamed', oldPath, newPath });
     }
   }
 

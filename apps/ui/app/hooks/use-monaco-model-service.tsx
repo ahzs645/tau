@@ -19,6 +19,7 @@ import { MonacoMarkerService } from '#lib/monaco-marker-service.js';
 import { MonacoModelService } from '#lib/monaco-model-service.js';
 import { registry } from '#lib/monaco-language-registry.js';
 import { registerMonacoNavigation } from '#lib/monaco-navigation-service.js';
+import { registerTsFileRenameParticipant } from '#lib/monaco-typescript-extras/register-materializing-typescript-providers.client.js';
 import {
   createMonacoWorkspaceFs,
   createExtraLibsFileSystemProvider,
@@ -93,6 +94,16 @@ export function MonacoModelServiceProvider({ children }: { readonly children: Re
       modelService.applyContentChange(event);
     });
 
+    // R17: family-global TS file-rename participant. Listens on the same
+    // `onDidContentChange` channel as `MonacoModelService` and applies
+    // tsserver's `getEditsForFileRename` cascade so renaming `a.ts → lib/a.ts`
+    // updates every `import './a'` consumer in one undo step.
+    const tsRenameParticipant = registerTsFileRenameParticipant({
+      monaco,
+      workspaceFs,
+      contentService,
+    });
+
     // Surface deferred activation failures via toast (deduped per language id
     // for the lifetime of this activation cycle) so silent failures stop looking
     // identical to "no LSP available".
@@ -130,6 +141,7 @@ export function MonacoModelServiceProvider({ children }: { readonly children: Re
     return () => {
       clearTauLanguageHostPortFactory();
       openerDisposable.dispose();
+      tsRenameParticipant.dispose();
       workspaceContentDispatch.dispose();
       registry.setActivationErrorHandler(undefined);
       registry.dispose();

@@ -341,8 +341,15 @@ export function ProjectManagerProvider({ children }: { readonly children: ReactN
         projectFiles[`${projectPrefix}/${path}`] = file;
       }
 
+      // Cross-workspace bootstrap: keys are filesystem-absolute paths under
+      // `/projects/<id>` that the worker mount table routes to the freshly
+      // mounted backend. The root FileManagerProvider is scoped to `/`, so
+      // routing through its `FileContentService` would emit a `batchWritten`
+      // event with foreign keys and trip `WorkspacePathEscapeError` in the
+      // root FM's tree service. `client.writeFiles` is the documented escape
+      // hatch for worker-namespace writes.
       try {
-        await fileManager.writeFiles(projectFiles);
+        await fileManager.client.writeFiles(projectFiles);
       } finally {
         fileManager.workspace.unmount(projectPrefix);
       }

@@ -49,4 +49,10 @@ export { CrossTabCoordinator, isNavigatorLocksSupported } from '#cross-tab-coord
 export { MountTable } from '#mount-table.js';
 export type { MountConfig, MountConfigCommon, MountEntry, MountResolution, WorkspaceScope } from '#mount-table.js';
 
-export { MissingWorkspaceHandleError, isMissingWorkspaceHandleError } from '#workspace-errors.js';
+export {
+  MissingWorkspaceHandleError,
+  isMissingWorkspaceHandleError,
+  WorkspaceMutationError,
+  isWorkspaceMutationError,
+} from '#workspace-errors.js';
+export type { WorkspaceMutationErrorCode } from '#workspace-errors.js';

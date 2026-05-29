@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { WorkspacePathEscapeError, WorkspacePathResolver } from '#workspace-path-resolver.js';
+import {
+  WorkspacePathEscapeError,
+  WorkspacePathResolver,
+  WorkspaceScopeViolationError,
+} from '#workspace-path-resolver.js';
 
 const projectRoot = '/projects/abc';
 
@@ -120,5 +124,61 @@ describe('WorkspacePathResolver global node_modules', () => {
     expect(paths.toAbsoluteWorkspacePath('/node_modules/replicad/index.d.ts')).toBe(
       '/node_modules/replicad/index.d.ts',
     );
+  });
+});
+
+describe('WorkspacePathResolver.toWorkspaceRelativeKey', () => {
+  it('normalizes relative inputs to themselves under a project root', () => {
+    const paths = new WorkspacePathResolver(projectRoot);
+    expect(paths.toWorkspaceRelativeKey('write', 'main.ts')).toBe('main.ts');
+    expect(paths.toWorkspaceRelativeKey('write', 'lib/util.ts')).toBe('lib/util.ts');
+  });
+
+  it('normalizes absolute-but-in-scope inputs to their workspace-relative form', () => {
+    const paths = new WorkspacePathResolver(projectRoot);
+    expect(paths.toWorkspaceRelativeKey('writeFiles', '/projects/abc/main.ts')).toBe('main.ts');
+    expect(paths.toWorkspaceRelativeKey('writeFiles', '/projects/abc/lib/util.ts')).toBe('lib/util.ts');
+  });
+
+  it('throws WorkspaceScopeViolationError for absolute multi-segment paths foreign to root "/"', () => {
+    const paths = new WorkspacePathResolver('/');
+    expect(() => paths.toWorkspaceRelativeKey('writeFiles', '/projects/abc/main.ts')).toThrow(
+      WorkspaceScopeViolationError,
+    );
+    try {
+      paths.toWorkspaceRelativeKey('writeFiles', '/projects/abc/main.ts');
+      expect.fail('should have thrown');
+    } catch (error) {
+      expect(error).toBeInstanceOf(WorkspaceScopeViolationError);
+      const violation = error as WorkspaceScopeViolationError;
+      expect(violation.method).toBe('writeFiles');
+      expect(violation.input).toBe('/projects/abc/main.ts');
+      expect(violation.name).toBe('WorkspaceScopeViolationError');
+    }
+  });
+
+  it('throws WorkspaceScopeViolationError for absolute paths foreign to a project root', () => {
+    const paths = new WorkspacePathResolver(projectRoot);
+    expect(() => paths.toWorkspaceRelativeKey('write', '/projects/other/main.ts')).toThrow(
+      WorkspaceScopeViolationError,
+    );
+  });
+
+  it('throws WorkspaceScopeViolationError when ".." traversal escapes above root', () => {
+    const paths = new WorkspacePathResolver(projectRoot);
+    expect(() => paths.toWorkspaceRelativeKey('write', '../sibling.ts')).toThrow(WorkspaceScopeViolationError);
+  });
+
+  it('returns single-segment relative form for root-relative keys at root "/"', () => {
+    const paths = new WorkspacePathResolver('/');
+    expect(paths.toWorkspaceRelativeKey('write', 'a.ts')).toBe('a.ts');
+    expect(paths.toWorkspaceRelativeKey('write', '/a.ts')).toBe('a.ts');
+  });
+
+  it('returns empty string for the workspace root itself', () => {
+    const paths = new WorkspacePathResolver(projectRoot);
+    expect(paths.toWorkspaceRelativeKey('write', '')).toBe('');
+    expect(paths.toWorkspaceRelativeKey('write', '/')).toBe('');
+    expect(paths.toWorkspaceRelativeKey('write', '.')).toBe('');
   });
 });

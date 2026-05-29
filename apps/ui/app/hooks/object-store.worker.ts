@@ -1,9 +1,11 @@
 import { expose } from 'comlink';
 import type { PartialDeep } from 'type-fest';
 import type { Project } from '@taucad/types';
+import { idPrefix } from '@taucad/types/constants';
 import type { Chat } from '@taucad/chat';
+import { generatePrefixedId } from '@taucad/utils/id';
 import { IndexedDbStorageProvider } from '#db/indexeddb-storage.js';
-import type { EditorState, EditorStateInput, PanelState } from '#types/editor.types.js';
+import type { EditorState, EditorStateInput, OpenFile, PanelState } from '#types/editor.types.js';
 import { defaultPanelState } from '#constants/editor.constants.js';
 
 /**
@@ -102,14 +104,24 @@ const objectStoreWorker = {
       // Derive main file from project assets for auto-populating editor state
       const mainFile = options.project.assets.mechanical?.main;
 
-      // Auto-populate activeFilePath and openFiles from main file if not provided
-      const activeFilePath = options.editorState?.activeFilePath ?? mainFile;
-      const openFiles =
+      // Auto-populate openFiles + activePaneId from main file if not provided.
+      // New panes always mint a stable paneId so persistence carries the
+      // identity forward and downstream consumers can key off it.
+      const seedPaneId = mainFile ? generatePrefixedId(idPrefix.pane) : undefined;
+      const openFiles: OpenFile[] =
         options.editorState?.openFiles && options.editorState.openFiles.length > 0
           ? options.editorState.openFiles
-          : mainFile
-            ? [{ path: mainFile, name: mainFile.split('/').pop() ?? mainFile, lastAccessedAt: Date.now() }]
+          : mainFile && seedPaneId
+            ? [
+                {
+                  paneId: seedPaneId,
+                  path: mainFile,
+                  name: mainFile.split('/').pop() ?? mainFile,
+                  lastAccessedAt: Date.now(),
+                },
+              ]
             : [];
+      const activePaneId = options.editorState?.activePaneId ?? seedPaneId;
 
       // Merge provided panelState with defaults
       const mergedPanelState: PanelState = {
@@ -135,7 +147,7 @@ const objectStoreWorker = {
       await storage.updateEditorState({
         projectId: project.id,
         openFiles,
-        activeFilePath,
+        activePaneId,
         focusedChatId: chat.id,
         panelState: mergedPanelState,
         editorLayout: undefined,
@@ -195,7 +207,7 @@ const objectStoreWorker = {
       await storage.updateEditorState({
         projectId: newProject.id,
         openFiles: sourceEditorState?.openFiles ?? [],
-        activeFilePath: sourceEditorState?.activeFilePath,
+        activePaneId: sourceEditorState?.activePaneId,
         focusedChatId: mappedFocusedChatId,
         panelState: sourceEditorState?.panelState ?? defaultPanelState,
         editorLayout: sourceEditorState?.editorLayout,
