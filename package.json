@@ -210,7 +210,7 @@
     "nestjs-zod": "^5.4.0",
     "ollama": "^0.5.18",
     "openai": "^4.104.0",
-    "opencascade.js": "file:tarballs/opencascade-fork/taucad-opencascade.js-3.0.0-beta.2.tgz",
+    "opencascade.js": "npm:@taucad/opencascade.js@3.0.0-beta.2",
     "openscad-wasm-prebuilt": "catalog:",
     "oxlint": "catalog:",
     "oxlint-tsgolint": "catalog:",
@@ -241,8 +241,8 @@
     "remark-parse": "catalog:",
     "remark-rehype": "catalog:",
     "remix-themes": "^2.0.4",
-    "replicad": "file:tarballs/replicad-fork/taucad-replicad-0.21.0-v8.57.2-jsdoc.tgz",
-    "replicad-opencascadejs": "file:tarballs/replicad-fork/taucad-replicad-opencascadejs-0.21.0-v8.58.tgz",
+    "replicad": "npm:@taucad/replicad@0.23.3-beta.1",
+    "replicad-opencascadejs": "npm:@taucad/replicad-opencascadejs@0.23.0-beta.0",
     "rxjs": "^7.8.2",
     "safe-regex": "^2.1.1",
     "shiki": "^3.23.0",
@@ -382,7 +382,6 @@
     "patchedDependencies": {
       "@ai-sdk/langchain@2.0.181": "patches/@ai-sdk__langchain@2.0.181.patch",
       "@kittycad/lib@2.0.48": "patches/@kittycad__lib@2.0.48.patch",
-      "@taucad/replicad@0.21.0-v8.57.2-jsdoc": "patches/replicad.patch",
       "vite-plugin-mkcert@2.0.0": "patches/vite-plugin-mkcert@2.0.0.patch"
     },
     "overrides": {
@@ -390,7 +389,7 @@
       "@langchain/google-gauth": "2.1.30",
       "@langchain/google-vertexai": "file:tarballs/langchain-fork/langchain-google-vertexai-2.1.33.tgz",
       "@types/express": "catalog:",
-      "replicad-opencascadejs": "file:./tarballs/replicad-fork/taucad-replicad-opencascadejs-0.21.0-v8.58.tgz",
+      "replicad-opencascadejs": "npm:@taucad/replicad-opencascadejs@0.23.0-beta.0",
       "vitest": "catalog:"
     },
     "onlyBuiltDependencies": [
