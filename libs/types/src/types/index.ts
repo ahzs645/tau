@@ -13,4 +13,5 @@ export type * from '#types/logger.types.js';
 export type * from '#types/manufacturing.types.js';
 export type * from '#types/mime-types.types.js';
 export type * from '#types/project.types.js';
+export type * from '#types/publication.types.js';
 export type * from '#types/schema.types.js';
