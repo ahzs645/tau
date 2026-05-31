@@ -5,18 +5,13 @@ import { LineSegments2, LineSegmentsGeometry, LineMaterial } from 'three/addons'
 import { LineSegments2 as WebGpuFatLineSegments2 } from 'three/addons/lines/webgpu/LineSegments2.js';
 import { Line2NodeMaterial } from '#components/geometry/graphics/three/materials/line2.material.js';
 import type { ResolvedGraphicsBackend } from '#constants/editor.constants.js';
+import { gltfEdgeColorLightMode } from '#components/geometry/graphics/three/overlay-colors.constants.js';
 
 /**
  * Default line width in pixels for edge rendering.
  * This is screen-space width, not world units.
  */
 const defaultLineWidth = 1;
-
-/**
- * Edge color for fat line materials.
- * Default: black (matching middleware)
- */
-const defaultEdgeColor = 0x00_00_00;
 
 /**
  * Depth bias multiplier shared by WebGL (`LineMaterial`) and WebGPU (`Line2NodeMaterial.depthBias`).
@@ -219,11 +214,15 @@ function extractPositions(lineSegments: LineSegments): Float32Array | undefined 
  * `customProgramCacheKey` derived from the material identity rather than the shader text.
  *
  * @param resolution - The viewport resolution for line width calculation.
+ * @param edgeColor - sRGB hex edge tint (defaults to {@link gltfEdgeColorLightMode}).
  * @returns A configured LineMaterial with FOV-adaptive depth bias (perspective only).
  */
-export function createWebGlGltfFatLineMaterial(resolution: Vector2): LineMaterial {
+export function createWebGlGltfFatLineMaterial(
+  resolution: Vector2,
+  edgeColor: number = gltfEdgeColorLightMode,
+): LineMaterial {
   const material = new LineMaterial({
-    color: defaultEdgeColor,
+    color: edgeColor,
     linewidth: defaultLineWidth,
     worldUnits: false,
     resolution: resolution.clone(),
@@ -281,10 +280,12 @@ export function createWebGlGltfFatLineMaterial(resolution: Vector2): LineMateria
  * dispatch lives inside {@link Line2NodeMaterial.setupDepth}, so the same material
  * instance can be rendered correctly by either the reversed-Z viewport renderer or the
  * log-depth screenshot/offscreen renderer in the same frame budget.
+ *
+ * @param edgeColor - sRGB hex edge tint (defaults to {@link gltfEdgeColorLightMode}).
  */
-export function createWebGpuGltfFatLineMaterial(): Line2NodeMaterial {
+export function createWebGpuGltfFatLineMaterial(edgeColor: number = gltfEdgeColorLightMode): Line2NodeMaterial {
   const material = new Line2NodeMaterial({
-    color: defaultEdgeColor,
+    color: edgeColor,
     linewidth: defaultLineWidth,
     worldUnits: false,
   });
@@ -358,8 +359,14 @@ function wrapAsFatLineSegments(
  * @param gltf - The GLTF scene to process
  * @param resolution - The viewport resolution for line width calculation
  * @param backend - Active rendering backend for the host viewer
+ * @param edgeColor - sRGB hex edge tint (defaults to {@link gltfEdgeColorLightMode}).
  */
-export function applyFatLineSegments(gltf: GLTF, resolution: Vector2, backend: ResolvedGraphicsBackend): void {
+export function applyFatLineSegments(
+  gltf: GLTF,
+  resolution: Vector2,
+  backend: ResolvedGraphicsBackend,
+  edgeColor: number = gltfEdgeColorLightMode,
+): void {
   const sources: Array<{ parent: Group; lineSegments: LineSegments }> = [];
 
   gltf.scene.traverse((object) => {
@@ -378,7 +385,9 @@ export function applyFatLineSegments(gltf: GLTF, resolution: Vector2, backend: R
 
   // Single material instance shared across every wrapped fat line — the R1 perf win.
   const sharedMaterial: Line2NodeMaterial | LineMaterial =
-    backend === 'webgpu' ? createWebGpuGltfFatLineMaterial() : createWebGlGltfFatLineMaterial(resolution);
+    backend === 'webgpu'
+      ? createWebGpuGltfFatLineMaterial(edgeColor)
+      : createWebGlGltfFatLineMaterial(resolution, edgeColor);
 
   for (const { parent, lineSegments } of sources) {
     const fatLine = wrapAsFatLineSegments(lineSegments, sharedMaterial, backend);
@@ -486,6 +495,28 @@ export function updateLineMaterialResolution(scene: Group, resolution: Vector2):
     const { material } = object as LineSegments2;
     if ('resolution' in material) {
       (material as { resolution: Vector2 }).resolution.copy(resolution);
+    }
+  });
+}
+
+/**
+ * Update the edge tint on every `LineSegments2` in a scene.
+ *
+ * Shared materials mean one `setHex` updates all edge meshes (including screenshot
+ * clones that copied the viewport color via {@link applyEdgeMaterialsToClonedScene}).
+ *
+ * @param scene - Scene group containing fat-line edge meshes
+ * @param edgeColor - sRGB hex edge tint
+ */
+export function updateGltfEdgeColor(scene: Group, edgeColor: number): void {
+  scene.traverse((object) => {
+    if (object.type !== 'LineSegments2') {
+      return;
+    }
+
+    const { material } = object as LineSegments2;
+    if ('color' in material && material.color) {
+      (material as { color: { setHex(hex: number): void } }).color.setHex(edgeColor);
     }
   });
 }

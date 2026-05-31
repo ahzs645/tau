@@ -7,8 +7,13 @@ import { useThree } from '@react-three/fiber';
 import { applyMatcap } from '#components/geometry/graphics/three/materials/gltf-matcap.js';
 import {
   applyFatLineSegments,
+  updateGltfEdgeColor,
   updateLineMaterialResolution,
 } from '#components/geometry/graphics/three/materials/gltf-edges.js';
+import {
+  gltfEdgeColorDarkMode,
+  gltfEdgeColorLightMode,
+} from '#components/geometry/graphics/three/overlay-colors.constants.js';
 import { Theme, useTheme } from '#hooks/use-theme.js';
 import { darkModeIntensityScale } from '#components/geometry/graphics/three/utils/lights.utils.js';
 import { useThreeGraphicsBackend } from '#components/geometry/graphics/three/three-graphics-backend-context.js';
@@ -361,7 +366,8 @@ export function GltfMesh({
         probeGltfScene(gltf, gltfFile.byteLength);
 
         // Convert LineSegments to LineSegments2 for fat line rendering
-        applyFatLineSegments(gltf, resolutionRef.current, graphicsBackendThree);
+        const edgeColor = theme === Theme.DARK ? gltfEdgeColorDarkMode : gltfEdgeColorLightMode;
+        applyFatLineSegments(gltf, resolutionRef.current, graphicsBackendThree, edgeColor);
 
         // Save clones of the original materials before any overrides
         disposeSavedMaterials(originalMaterialsRef.current);
@@ -416,6 +422,17 @@ export function GltfMesh({
       cancellation.cancelled = true;
     };
   }, [gltfFile, graphicsBackendThree, invalidate, gl, camera]);
+
+  // Theme-aware edge tint without re-parsing the GLTF binary.
+  useEffect(() => {
+    if (!scene) {
+      return;
+    }
+
+    const edgeColor = theme === Theme.DARK ? gltfEdgeColorDarkMode : gltfEdgeColorLightMode;
+    updateGltfEdgeColor(scene, edgeColor);
+    invalidate();
+  }, [scene, theme, invalidate]);
 
   // Cleanup on unmount: dispose base scene and saved materials
   useEffect(

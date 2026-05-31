@@ -46,6 +46,23 @@ export const infiniteGridColorLightMode = 0x73_73_73;
 export const infiniteGridColorDarkMode = 0x55_55_55;
 
 /**
+ * GLTF characteristic-edge tint, **light theme**. sRGB hex.
+ *
+ * Black matches the runtime edge middleware default and reads clearly over
+ * matcap-lit surfaces on light viewport backgrounds.
+ */
+export const gltfEdgeColorLightMode = 0x00_00_00;
+
+/**
+ * GLTF characteristic-edge tint, **dark theme**. sRGB hex.
+ *
+ * Neutral gray only (no brand chroma): `oklch(0.62 0 0deg)` → `#868686`. Sits above
+ * {@link infiniteGridColorDarkMode} (`#555555`) for readability on dimmed matcap faces,
+ * but well below near-white so characteristic edges do not glare against `#171717`.
+ */
+export const gltfEdgeColorDarkMode = 0x86_86_86;
+
+/**
  * Default tints for the {@link AxesHelper} XYZ axis lines. Stock Three.js axis hues,
  * desaturated slightly so they read as orientation cues rather than primary geometry.
  * Consumed verbatim by `THREE.Color`; valid in any {@linkcode @react-three/drei} `<Line>`,
