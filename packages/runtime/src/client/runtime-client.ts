@@ -862,6 +862,15 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
   };
   let pendingRender: PendingRender | undefined;
   let hasSettledRender = false;
+  /**
+   * Per-shape hash list of the last result emitted to the `geometry`
+   * Topic. Drives redundant-emission suppression for UI subscribers
+   * WITHOUT affecting render settlement — settlement happens in the
+   * `onGeometry` callback before {@link emitGeometry} is consulted, so a
+   * repeated identical render still settles its awaiting Promise even
+   * when the byte-identical geometry is suppressed for UI consumers.
+   */
+  let lastEmittedGeometryHashKey: string | undefined;
 
   /**
    * Tracks an in-flight `connect()` so `terminate()` can reject it on the next
@@ -1075,7 +1084,27 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
     return workerClient;
   }
 
+  /**
+   * Emit a resolved geometry result to the `geometry` Topic, suppressing
+   * back-to-back emissions whose per-shape hash list is byte-identical to
+   * the previous successful emission. This is purely a UI re-render
+   * optimisation — it runs AFTER render settlement (see the `onGeometry`
+   * wiring) so deduping a redundant emission never blocks an awaited
+   * render Promise. Failures always emit and reset the dedupe key so a
+   * subsequent successful render is never swallowed.
+   */
   function emitGeometry(result: HashedGeometryResult): void {
+    if (!result.success) {
+      lastEmittedGeometryHashKey = undefined;
+      handlers.geometry.emit(result);
+      return;
+    }
+
+    const hashKey = result.data.map((shape) => shape.hash).join('|');
+    if (hashKey === lastEmittedGeometryHashKey) {
+      return;
+    }
+    lastEmittedGeometryHashKey = hashKey;
     handlers.geometry.emit(result);
   }
 
@@ -1556,6 +1585,7 @@ export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClien
       workerClient = undefined;
       lifecycleState = 'terminated';
       hasSettledRender = false;
+      lastEmittedGeometryHashKey = undefined;
     },
   };
 }
