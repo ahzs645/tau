@@ -9,16 +9,16 @@ packages:
 
 catalog:
   '@ai-sdk/provider-utils': ^4.0.15
-  '@arethetypeswrong/cli': ^0.18.2
-  '@aws-sdk/client-s3': ^3.1053.0
-  '@aws-sdk/lib-storage': ^3.1053.0
-  '@aws-sdk/s3-request-presigner': ^3.1053.0
+  '@arethetypeswrong/cli': ^0.18.3
+  '@aws-sdk/client-s3': ^3.1057.0
+  '@aws-sdk/lib-storage': ^3.1057.0
+  '@aws-sdk/s3-request-presigner': ^3.1057.0
   '@axe-core/playwright': ^4.11.3
   '@base-ui/react': ^1.5.0
   '@better-auth-ui/core': ^1.6.8
   '@better-auth-ui/react': ^1.6.8
-  '@better-auth/api-key': ^1.6.11
-  '@eslint-community/eslint-plugin-eslint-comments': ^4.7.1
+  '@better-auth/api-key': ^1.6.12
+  '@eslint-community/eslint-plugin-eslint-comments': ^4.7.2
   '@fastify/cookie': ^11.0.2
   '@fastify/multipart': ^10.0.0
   '@fastify/otel': ^0.17.1
@@ -87,17 +87,17 @@ catalog:
   '@testing-library/dom': ^10.4.1
   '@testing-library/jest-dom': 6.6.3
   '@testing-library/react': 16.2.0
-  '@tiptap/core': ^3.23.6
-  '@tiptap/extension-document': ^3.23.6
-  '@tiptap/extension-hard-break': ^3.23.6
-  '@tiptap/extension-history': ^3.23.6
-  '@tiptap/extension-mention': ^3.23.6
-  '@tiptap/extension-paragraph': ^3.23.6
-  '@tiptap/extension-placeholder': ^3.23.6
-  '@tiptap/extension-text': ^3.23.6
-  '@tiptap/pm': ^3.23.6
-  '@tiptap/react': ^3.23.6
-  '@tiptap/suggestion': ^3.23.6
+  '@tiptap/core': ^3.24.0
+  '@tiptap/extension-document': ^3.24.0
+  '@tiptap/extension-hard-break': ^3.24.0
+  '@tiptap/extension-history': ^3.24.0
+  '@tiptap/extension-mention': ^3.24.0
+  '@tiptap/extension-paragraph': ^3.24.0
+  '@tiptap/extension-placeholder': ^3.24.0
+  '@tiptap/extension-text': ^3.24.0
+  '@tiptap/pm': ^3.24.0
+  '@tiptap/react': ^3.24.0
+  '@tiptap/suggestion': ^3.24.0
   '@traceloop/instrumentation-langchain': ^0.22.6
   '@types/express': ^5.0.0
   '@types/ioredis-mock': ^8.2.7
@@ -114,7 +114,7 @@ catalog:
   '@vitest/coverage-v8': 4.1.5
   '@vitest/ui': 4.1.5
   '@xyflow/react': ^12.10.2
-  better-auth: ^1.6.11
+  better-auth: ^1.6.12
   bowser: ^2.14.1
   cdn-resolve: ^2.1.2
   chrome-launcher: ^1.2.1
@@ -123,7 +123,7 @@ catalog:
   comlink: ^4.4.2
   consola: ^3.4.2
   culori: ^4.0.2
-  date-fns: ^4.3.0
+  date-fns: ^4.4.0
   deepagents: ^1.10.2
   deepmerge: ^4.3.1
   dotenv: ^17.4.2
@@ -206,9 +206,9 @@ catalog:
   vitest: 4.1.5
   vitest-mock-extended: ^3.1.1
   vscode-uri: 3.1.0
-  web-vitals: ^5.2.0
+  web-vitals: ^5.3.0
   ws: ^8.21.0
-  xstate: ^5.31.1
+  xstate: ^5.32.0
   zod: ^4.4.3
 
 catalogMode: prefer
