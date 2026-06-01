@@ -3,9 +3,11 @@ title: 'Spatial Test Feedback Architecture — Identity, Geometry, Causality'
 description: 'test_model failures return aggregate scalars that force the LLM to mentally simulate geometry. Identifies the eigenquestion and prescribes a structured per-failure contract for connectedComponents, boundingBox, and watertight.'
 status: draft
 created: '2026-05-06'
-updated: '2026-05-06'
+updated: '2026-06-01'
 category: architecture
 related:
+  - docs/research/geospec-standalone-cad-testing-blueprint.md
+  - docs/research/vitest-style-parameter-geometry-testing-blueprint.md
   - docs/research/mesh-continuity-test-semantics.md
   - docs/research/multi-file-test-json-migration.md
   - docs/research/browser-first-parameter-aware-testing.md
@@ -31,6 +33,17 @@ The single piece of information that would have ended the loop on turn 2 — _wh
 The same pattern applies to `boundingBox` (fails with the wrong total size, no clue which named part is responsible for the extreme min/max on the failing axis) and `watertight` (fails with no clue which primitive's boundary edges broke the manifold).
 
 This document proposes a per-check structured failure contract that preserves shape **identity** (the `ShapeConfig.name` already flows through the GLB as a node name), surfaces minimal **geometry** (per-cluster AABB, centroid, gap to nearest neighbour, dominant colour), and names the **causal candidate** (the smallest cluster, the part dominating the extreme axis, the primitive owning the boundary loop) inside `suggestion`. The contract is purely additive over the existing `MeasurementTestRequirement` schema and runs entirely on the GLB the test already analyses — no kernel cooperation, no extra runtime work.
+
+## 2026-06-01 Target-State Alignment
+
+This document remains the diagnostic-contract source of truth. The target package home changes:
+
+- GeoSpec owns the generic `GeometryDiagnostic` result model and must emit spatially descriptive diagnostics for mesh, BRep, STEP, assembly, mate, and distance matchers.
+- `@taucad/testing` maps those diagnostics into Tau chat-tool responses, legacy `test_model` compatibility, and editor overlays.
+- The pure-mesh rule still stands: connected-components, watertight, bounding-box, and mesh-distance diagnostics derive from geometry buffers, not glTF `extras` or kernel metadata.
+- The same diagnostic payload should be consumable by Node/Vitest, browser worker tests, Tau chat cards, and future 3D overlay tools.
+
+The older `test_model`-specific language below should be read as the first Tau consumer of a broader GeoSpec diagnostic contract.
 
 ## Problem Statement
 

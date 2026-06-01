@@ -53,7 +53,7 @@ Tau is the AI-native CAD platform for the web (`tau.new`), built as an Nx monore
 
 ## Skills
 
-Project skills in `.cursor/skills/` provide guided workflows. Read the relevant `SKILL.md` when performing these tasks:
+Project skills in `.agent/skills/` provide guided workflows. Read the relevant `SKILL.md` when performing these tasks:
 
 | Skill                   | When to use                                                                                |
 | ----------------------- | ------------------------------------------------------------------------------------------ |

@@ -14,6 +14,7 @@ cleanup; they may exceed the 200-char cap.
 
 ## Learned User Preferences
 
+- Source-context Share dialogs own publication recipient management; published viewer pages stay consumption-focused and should not carry redundant owner share controls.
 - State machines own lifecycle and state logic; UI clients send events only and never decide open/close; avoid ref/state for sync guards
 - Folder icons in `chat-message-tool-list-directory` open the file explorer pane on desktop and no-op on mobile, mirroring the file-icon → editor-open pattern.
 - User chat-message bubble height matches the focused textarea variant — overflow text stays invisible/unreachable until focus; never add an inner scrollbar in the collapsed state.

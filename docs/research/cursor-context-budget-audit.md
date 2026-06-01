@@ -6,7 +6,7 @@ created: '2026-05-13'
 updated: '2026-05-13'
 category: audit
 related:
-  - .cursor/skills/audit-cursor-context/SKILL.md
+  - .agent/skills/audit-cursor-context/SKILL.md
 ---
 
 # Cursor Context Budget Audit
@@ -41,7 +41,7 @@ The user perceives "rules and tools are taking way too much context" and wants a
 2. Static inspection of the workspace:
    - `.cursor/rules/*.mdc` frontmatter (`alwaysApply`, `globs`, `description`).
    - `AGENTS.md` size in bytes (`wc -c`) and line count.
-   - `.cursor/skills/*/SKILL.md` count and `disable-model-invocation` settings.
+   - `.agent/skills/*/SKILL.md` count and `disable-model-invocation` settings.
    - `.cursor/mcp.json` server count and inferred tool count.
 3. Mapping each context-bar layer to its file-system origin so the audit can be re-run programmatically.
 
@@ -86,7 +86,7 @@ Cursor enforces a hard ceiling of **40 MCP tools per session** (May 2026). Each 
 
 ### Finding 4: Skills are correctly progressive-disclosure
 
-The 16 skills under `.cursor/skills/` plus ~14 personal skills under `~/.cursor/skills*/` together cost only 4.4K tokens — Cursor loads only each skill's frontmatter (`name`, `description`, ~50–250 tokens) until invoked. Setting `disable-model-invocation: true` on a skill makes the agent ignore it for ambient routing without removing the description, which is a small additional win (~10% of a skill's metadata footprint).
+The 16 skills under `.agent/skills/` plus ~14 personal skills under `~/.agent/skills*/` together cost only 4.4K tokens — Cursor loads only each skill's frontmatter (`name`, `description`, ~50–250 tokens) until invoked. Setting `disable-model-invocation: true` on a skill makes the agent ignore it for ambient routing without removing the description, which is a small additional win (~10% of a skill's metadata footprint).
 
 ### Finding 5: `Conversation` + `Summarized conversation` reflect normal session growth
 
@@ -189,15 +189,15 @@ echo "AGENTS.md: ~$(($(wc -c < AGENTS.md) / 4)) tokens"
 - Forum: [About limitation of the number of MCP tools](https://forum.cursor.com/t/about-limitation-of-the-number-of-mcp-tools/107844) — 40-tool ceiling
 - Analysis: [MCP tool token overhead](https://fazm.ai/blog/mcp-tool-token-overhead-optimization) — 31 tools ≈ 3–5K tokens
 - Comparison: [Cursor Rules vs AGENTS.md](https://thepromptshelf.dev/blog/cursorrules-vs-claude-md/) — layer both
-- Related skill: `.cursor/skills/audit-cursor-context/SKILL.md`
+- Related skill: `.agent/skills/audit-cursor-context/SKILL.md`
 
 ## Appendix: Tau workspace inventory snapshot (2026-05-13)
 
-| Asset                                  | Count         | Notes                                                                                                                                                 |
-| -------------------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AGENTS.md` size                       | 147,877 bytes | ≈37–40K tokens always-loaded                                                                                                                          |
-| `.cursor/rules/*.mdc`                  | 10            | 1 with `alwaysApply: true` (`package-manager.mdc`, 42 lines)                                                                                          |
-| `.cursor/skills/*`                     | 16            | Progressive-disclosure (frontmatter only loaded)                                                                                                      |
-| Personal skills (`~/.cursor/skills*/`) | 14            | Same progressive-disclosure model                                                                                                                     |
-| Active MCP servers                     | 5             | `cursor-ide-browser`, `plugin-stripe-stripe`, `user-nrwl.angular-console-extension-nx-mcp`, `user-eamodio.gitlens-extension-GitKraken`, `user-github` |
-| Estimated MCP tool count               | ≈100+         | Above the 40-tool ceiling — needs trim                                                                                                                |
+| Asset                                 | Count         | Notes                                                                                                                                                 |
+| ------------------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AGENTS.md` size                      | 147,877 bytes | ≈37–40K tokens always-loaded                                                                                                                          |
+| `.cursor/rules/*.mdc`                 | 10            | 1 with `alwaysApply: true` (`package-manager.mdc`, 42 lines)                                                                                          |
+| `.agent/skills/*`                     | 16            | Progressive-disclosure (frontmatter only loaded)                                                                                                      |
+| Personal skills (`~/.agent/skills*/`) | 14            | Same progressive-disclosure model                                                                                                                     |
+| Active MCP servers                    | 5             | `cursor-ide-browser`, `plugin-stripe-stripe`, `user-nrwl.angular-console-extension-nx-mcp`, `user-eamodio.gitlens-extension-GitKraken`, `user-github` |
+| Estimated MCP tool count              | ≈100+         | Above the 40-tool ceiling — needs trim                                                                                                                |

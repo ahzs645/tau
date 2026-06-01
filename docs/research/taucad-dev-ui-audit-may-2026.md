@@ -51,9 +51,9 @@ All artifacts colocate in `tmp/audit-2026-05-15/`:
 - `lh-docs-mobile.report.json`
 - `axe-violations.json` (831 KB, full node list)
 - `axe-summary.json`
-- `axe-audit.mjs` (driver — also installed as the reusable skill at `.cursor/skills/audit-ui/scripts/axe-audit.mjs`)
+- `axe-audit.mjs` (driver — also installed as the reusable skill at `.agent/skills/audit-ui/scripts/axe-audit.mjs`)
 
-The reusable audit recipe lives in `.cursor/skills/audit-ui/SKILL.md`.
+The reusable audit recipe lives in `.agent/skills/audit-ui/SKILL.md`.
 
 ## Findings
 
@@ -284,11 +284,11 @@ axe-audit.log
 axe-audit.mjs
 ```
 
-The reusable audit recipe is at `.cursor/skills/audit-ui/SKILL.md` with helper scripts under `.cursor/skills/audit-ui/scripts/`.
+The reusable audit recipe is at `.agent/skills/audit-ui/SKILL.md` with helper scripts under `.agent/skills/audit-ui/scripts/`.
 
 ## References
 
-- Skill: `.cursor/skills/audit-ui/SKILL.md`
+- Skill: `.agent/skills/audit-ui/SKILL.md`
 - Earlier perf work: `docs/research/netlify-production-performance-audit.md`
 - Earlier TTI analysis: `docs/research/homepage-time-to-interactive-analysis.md`
 - Editor route prefetch follow-up: `docs/research/editor-route-prefetch-and-cache-audit.md`

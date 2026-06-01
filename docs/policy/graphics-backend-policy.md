@@ -3,7 +3,7 @@ title: 'Graphics Backend Policy'
 description: 'Dual WebGL/WebGPU Three.js stacks, TSL materials, snapshots, and e2e parity'
 status: active
 created: '2026-05-07'
-updated: '2026-05-15'
+updated: '2026-05-27'
 related:
   - docs/research/webgpu-migration-graphics-stack.md
   - docs/research/screenshot-viewport-shared-material-state-bleed.md
@@ -172,6 +172,57 @@ screenshotRenderer.render(screenshotScene, screenshotCamera);
 
 **Why**: Sharing a TSL-graph-baked material across renderers with divergent flags causes the secondary renderer to inherit the primary's depth-encoder choice, color-attachment expectations, and PassNode-level filtering assumptions — the canonical reason for grainy fat-line edges in WebGPU screenshot output documented in `docs/research/screenshot-viewport-shared-material-state-bleed.md`. Guards: **`apps/ui/app/machines/screenshot-capability.utils.test.ts`** (`R6 (WebGL/WebGPU): applyEdgeMaterialsToClonedScene replaces the LineSegments2's material with a fresh allocation`).
 
+### 7b. Interactive overlay tools must `invalidate()` after every user-driven state change
+
+When the viewport runs with `frameloop="demand"`, React state updates inside overlay tools (measure, section pickers, gizmos) do not schedule a frame by themselves. Every pointer-driven dispatch that changes visible overlay geometry **must** call `useThree((s) => s.invalidate)` immediately after the state commit.
+
+CORRECT:
+
+```typescript
+dispatchSnapState({ type: 'pointerFrame', payload: next });
+invalidate();
+```
+
+INCORRECT:
+
+```typescript
+setHoveredSnapPoints(points); // no invalidate — canvas stays stale under demand frameloop
+```
+
+### 12. Factory-produced derived geometry uses module-scope LRU caching with `dispose()` on evict
+
+`FontGeometry`, `RoundedRectangleGeometry`, and similar CPU-heavy factories **must** consult a bounded module-scope LRU (`createGeometryLru`) keyed by stable parameter tuples. Returned `BufferGeometry` instances are **non-owned** — callers must never call `.dispose()` or mutate them in place. Eviction calls `.dispose()` on the evicted entry.
+
+Guards: **`geometry-lru.test.ts`**, **`font-geometry.test.ts`**, **`rounded-rectangle-geometry.test.ts`**.
+
+### 13. `useMemo`-allocated geometry/materials require `useEffect` dispose cleanup with caller-vs-internal discriminator
+
+When a component allocates `THREE.Material` or `BufferGeometry` in `useMemo`, a matching `useEffect` teardown **must** call `.dispose()` only when the bundle is marked `ownsMaterials: true` (or equivalent). Caller-supplied materials are never disposed by the component.
+
+Guards: **`measurement-line-materials.test.ts`**.
+
+### 14. Interactive raycasting routes through `bvhRaycastFirst`; `Mesh.prototype.raycast` monkey-patch banned
+
+Pointer-event-rate picking (measure tool, future overlays) **must** use **`bvhRaycastFirst(raycaster, meshes)`** in **`apps/ui/app/components/geometry/graphics/three/utils/bvh-raycast.ts`**, which consults `getOrBuildBvh` per mesh. Patching `Mesh.prototype.raycast` with `acceleratedRaycast` is forbidden — it affects every mesh in the process globally.
+
+Exempt: transform-controls gizmo picking may continue using stock `raycaster.intersectObject` on the gizmo subtree only.
+
+Guards: **`bvh-raycast.test.ts`**.
+
+### 15. High-frequency pointer events are rAF-coalesced; camera-drag suppression delegated to §16
+
+`mousemove` handlers that run BVH raycasts and snap detection **must** schedule work through **`createRafCoalescer`** so at most one pipeline pass runs per animation frame (latest event wins). Camera-orbit suppression during drags is **not** implemented via quaternion/position delta heuristics — see §16.
+
+Guards: **`raf-coalesce.test.ts`**, **`measure-tool-pointer-pipeline.test.tsx`**.
+
+### 16. Tool overlays model pointer lifecycle as a state machine; `cameraInteracting` from drei `OrbitControls` `'start'`/`'end'`
+
+Measure and future overlay tools **must** dispatch pointer lifecycle events into a dedicated XState machine (`measureInputMachine` today). `graphics.machine` exposes `cameraInteracting: boolean`, flipped by `controlsInteractionStart` / `controlsInteractionEnd` forwarded from `controlsListenerMachine` (drei `OrbitControls` `'start'`/`'end'`). Handlers gate on `cameraInteracting` and the input machine sets `discardGesture` when interaction starts mid-pointer-hold.
+
+Quaternion-delta or camera-position-delta heuristics to distinguish orbit drags from clicks are **banned**.
+
+Guards: **`measure-input.machine.test.ts`**, **`graphics.machine.test.ts`**.
+
 ## Color & Blending Parity
 
 Dual-stack visuals must look the same when fed the same source `THREE.Color`. Eight seams between source color and on-screen pixel ("S1-S8" below) determine whether parity holds; misaligning any of them produces backend-specific drift even when shader logic is identical. The §9 rule covers only S3 (manual `gl_FragColor` color-space encode). The rules in this section close the remaining alpha-blend and source-color seams.
@@ -260,6 +311,11 @@ S1-S4 are unconditional rules (pixels match within ~10-15 sRGB/channel once alig
 - **Named `.toVar('…')` inside reusable `Fn` bodies** invoked more than once per shader stage — see §3.
 - **Disposing materials inferred from `isMesh` / scene traversal** in any clone-and-render surface — `LineSegments2 extends Mesh` and shared viewport materials are silently freed (§10).
 - **Sharing a TSL-graph-baked or `onBeforeCompile`-hooked material across renderer instances** with differing `reversedDepthBuffer`, `logarithmicDepthBuffer`, `samples`, or `outputColorSpace` — the secondary renderer inherits the primary's flag-baked graph (§11).
+- **Skipping `invalidate()`** after overlay tool state updates under `frameloop="demand"` — stale canvas until an unrelated interaction (§7b).
+- **Per-call `FontLoader` / `JSON.parse` / `ExtrudeGeometry`** for label text without module-scope LRU — multi-ms stalls on every preview frame (§12).
+- **`Mesh.prototype.raycast = acceleratedRaycast`** global monkey-patch — use `bvhRaycastFirst` instead (§14).
+- **Camera quaternion/position delta heuristics** to detect orbit drags — use `cameraInteracting` from OrbitControls events (§16).
+- **Three separate `setState` calls** per pointer frame for related snap UI state — batch via `useReducer` + rAF coalescing (§15).
 
 ## Summary Checklist
 
@@ -273,10 +329,18 @@ S1-S4 are unconditional rules (pixels match within ~10-15 sRGB/channel once alig
 - [ ] Saturated transparent fat-line overlay: routed through Tau **`Line2NodeMaterial`** (NOT stock `three/webgpu`) so CB-4's in-shader sRGB blend closes S7
 - [ ] Clone-and-render surface (screenshot, offscreen, exporter): allocator returns **`Set<Material>`**, teardown calls **`disposeCloneOwnedMaterials(set)`** — never traverses by **`isMesh`** (§10)
 - [ ] Material that branches on **`reversedDepthBuffer`** / **`logarithmicDepthBuffer`** / **`samples`** / **`outputColorSpace`**: fresh-allocated per renderer instance via the §10 allocator pattern, never reference-shared (§11)
+- [ ] Interactive overlay under demand frameloop: **`invalidate()`** after every user-driven state change (§7b)
+- [ ] Derived label/background geometry: module-scope LRU + dispose-on-evict; callers treat outputs as non-owned (§12)
+- [ ] Internal `useMemo` materials/geometries: `useEffect` dispose with caller-vs-internal discriminator (§13)
+- [ ] Pointer-rate picking: **`bvhRaycastFirst`** only — no `Mesh.prototype.raycast` patch (§14)
+- [ ] High-frequency pointer pipeline: **`createRafCoalescer`** + batched reducer state (§15)
+- [ ] Overlay pointer lifecycle: XState input machine + **`cameraInteracting`** from OrbitControls — no quaternion heuristics (§16)
+- [ ] Scene-composition changes bump **`pickableMeshesVersion`** on `graphics.machine` for tool mesh caches (measure tool)
 
 ## References
 
 - Research: **`docs/research/webgpu-migration-graphics-stack.md`**
+- Research: **`docs/research/measure-tool-performance-audit.md`**
 - Research: **`docs/research/screenshot-viewport-shared-material-state-bleed.md`** (§10 + §11 root cause and architectural fix)
 - E2e harness route: **`apps/ui/app/routes/e2e.graphics-backend/route.tsx`**
 - Stability helper: **`apps/ui/app/components/geometry/graphics/three/utils/tsl-node-graph-snapshot.ts`**

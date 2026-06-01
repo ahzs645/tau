@@ -71,7 +71,7 @@ The interesting parts of this research are: the SDK's wire-format documentation 
 
 ### Finding 1: The SDK is two distinct runtimes behind one façade
 
-`Agent.create({ local: { cwd } })` returns an `agent-…` ID. `Agent.create({ cloud: { repos } })` returns a `bc-…` ID. The id prefix is the _only_ runtime discriminator at the call site — `Agent.resume(id)`, `Agent.get(id)`, `Agent.getRun(id)` all dispatch on `id.startsWith("bc-")` (`agent.d.ts` L121–L122; SDK skill at `.cursor/skills-cursor/cursor-sdk/SKILL.md` warns that omitting both `local` and `cloud` silently defaults to local). That single dispatch decision drives:
+`Agent.create({ local: { cwd } })` returns an `agent-…` ID. `Agent.create({ cloud: { repos } })` returns a `bc-…` ID. The id prefix is the _only_ runtime discriminator at the call site — `Agent.resume(id)`, `Agent.get(id)`, `Agent.getRun(id)` all dispatch on `id.startsWith("bc-")` (`agent.d.ts` L121–L122; SDK skill at `.agent/skills-cursor/cursor-sdk/SKILL.md` warns that omitting both `local` and `cloud` silently defaults to local). That single dispatch decision drives:
 
 | Aspect                 | Local                                                                                 | Cloud                                                                                     |
 | ---------------------- | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
@@ -500,7 +500,7 @@ There is no point of integration where Cursor's value is additive to Tau's pipel
 - [`anyrobert/cursor-api-proxy`](https://github.com/anyrobert/cursor-api-proxy) — most-actively-maintained community OpenAI-shim
 - [DeepSeek `reasoning_content` precedent](https://api-docs.deepseek.com/guides/reasoning_model) — for thinking-block surfacing in OpenAI-compat clients
 - Local extracted SDK: `tmp/cursor-sdk-mine/package/` (gitignored)
-- Cursor SDK skill: `.cursor/skills-cursor/cursor-sdk/SKILL.md` (in-tree workflow guide)
+- Cursor SDK skill: `.agent/skills-cursor/cursor-sdk/SKILL.md` (in-tree workflow guide)
 
 ## Appendix: SDK File Inventory
 
