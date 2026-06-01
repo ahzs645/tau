@@ -1,6 +1,6 @@
 {
   "name": "@taucad/testing",
-  "version": "0.0.1",
+  "version": "0.1.0-beta.0",
   "description": "Geometry analysis, grading, and test utilities for @taucad packages",
   "type": "module",
   "private": false,
