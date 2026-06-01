@@ -1,7 +1,7 @@
 {
-  "name": "types",
+  "name": "billing",
   "$schema": "../../node_modules/nx/schemas/project-schema.json",
-  "sourceRoot": "libs/types",
+  "sourceRoot": "libs/billing",
   "projectType": "library",
   "tags": ["scope:shared", "type:lib"]
 }

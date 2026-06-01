@@ -14,9 +14,15 @@ export default defineConfig({
     reporters: ['verbose'],
     coverage: {
       provider: 'v8',
-      reportsDirectory: '../../coverage/libs/units',
+      reportsDirectory: '../../coverage/libs/billing',
       include: ['src/**/*'],
-      exclude: ['src/**/*.{test,spec}.ts'],
+      exclude: ['src/**/*.{test,spec,test-d}.ts'],
+      thresholds: {
+        statements: 100,
+        branches: 100,
+        functions: 100,
+        lines: 100,
+      },
     },
   },
 });

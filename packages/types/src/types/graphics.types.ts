@@ -101,7 +101,7 @@ export type ScreenshotOptions = {
 /**
  * Identifies what to stamp in the top-left of a captured screenshot.
  *
- * `iconKey` is `string` at the libs/types boundary so this lib does not
+ * `iconKey` is `string` at the packages/types boundary so this lib does not
  * depend on the apps/ui icon enum; consumers narrow it to their concrete
  * icon-id union (e.g. `IconId` in `apps/ui`).
  */
