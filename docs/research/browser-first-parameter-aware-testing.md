@@ -218,7 +218,7 @@ CADSmith (arXiv 2603.26512) defines an explicit "Validator" agent that runs Open
 
 ## Target Architecture
 
-GeoSpec hosts the standalone runner, custom matchers, mesh/BRep/STEP evidence loaders, and native analyzer boundary. `@taucad/testing` hosts the Tau bridge to the existing `RuntimeClient`, parameter system, and chat tools. Tests are `*.test.ts` files alongside source, evaluated through the shared `@taucad/vm` substrate extracted from the runtime esbuild path. The first package cut exposes `@taucad/geospec` root `runGeoSpecModule` as a POC; richer `geospec/runner` Node/browser drivers can layer config, reporters, and isolation on top of the same VM contract.
+GeoSpec hosts the standalone runner, custom matchers, mesh/BRep/STEP evidence loaders, and native analyzer boundary. `@taucad/testing` hosts the Tau bridge to the existing `RuntimeClient`, parameter system, and chat tools. Tests are `*.test.ts` files alongside source, evaluated through the shared `@taucad/vm` substrate extracted from the runtime esbuild path. The first package cut exposes `geospec` root `runGeoSpecModule` as a POC; richer `geospec/runner` Node/browser drivers can layer config, reporters, and isolation on top of the same VM contract.
 
 | Layer                         | Module                                                                   | Runs in                    | Responsibility                                                           |
 | ----------------------------- | ------------------------------------------------------------------------ | -------------------------- | ------------------------------------------------------------------------ |
