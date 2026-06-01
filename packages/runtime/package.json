@@ -1,6 +1,6 @@
 {
   "name": "@taucad/runtime",
-  "version": "0.1.0-beta.0",
+  "version": "0.1.0-beta.1",
   "description": "Multi-kernel CAD runtime framework for browser and Node.js",
   "type": "module",
   "private": false,
@@ -500,7 +500,7 @@
     "esbuild-wasm": "catalog:",
     "json-schema-default": "catalog:",
     "manifold-3d": "catalog:",
-    "opencascade.js": "npm:@taucad/opencascade.js@3.0.0-beta.2",
+    "opencascade.js": "npm:@taucad/opencascade.js@3.0.0-beta.3",
     "replicad": "npm:@taucad/replicad@0.23.3-beta.1",
     "replicad-opencascadejs": "npm:@taucad/replicad-opencascadejs@0.23.0-beta.0",
     "source-map-js": "catalog:",
