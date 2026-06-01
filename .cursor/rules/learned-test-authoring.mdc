@@ -19,4 +19,5 @@ cleanup; they may exceed the 200-char cap.
 ## Learned User Preferences
 
 - Write failing tests first (TDD), then fix to pass; preserve existing tests; make minimal, targeted changes and run typecheck before considering done; remove tests for non-shipped APIs/behaviors rather than skipping them; do not mock Radix `Collapsible`/portal-rendered components in jsdom — find and fix the real reason the test sees the wrong initial state instead of mocking around it
+- In negative type tests, pass a deliberately wrong-typed value via `// @ts-expect-error`, not `as unknown as`; positive cases call the method directly on a real fixture so typechecking stays intact.
 
