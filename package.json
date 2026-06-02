@@ -382,6 +382,7 @@
     "patchedDependencies": {
       "@ai-sdk/langchain@2.0.181": "patches/@ai-sdk__langchain@2.0.181.patch",
       "@kittycad/lib@2.0.48": "patches/@kittycad__lib@2.0.48.patch",
+      "@taucad/replicad@0.23.3-beta.1": "patches/replicad.patch",
       "vite-plugin-mkcert@2.0.0": "patches/vite-plugin-mkcert@2.0.0.patch"
     },
     "overrides": {
