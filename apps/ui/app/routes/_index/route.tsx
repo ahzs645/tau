@@ -1,17 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
-import {
-  Box,
-  Braces,
-  Download,
-  FileCode2,
-  LayoutGrid,
-  Play,
-  RotateCcw,
-  Search,
-  Share2,
-  SlidersHorizontal,
-} from 'lucide-react';
+import { Box, Braces, Download, Eye, LayoutGrid, Play, RotateCcw, Share2, SlidersHorizontal } from 'lucide-react';
 import type { FileExtension } from '@taucad/types';
 import { downloadBlob } from '@taucad/utils/file';
 import { toast } from '#components/ui/sonner.js';
@@ -24,7 +13,6 @@ import { playgroundExamples } from '#routes/_index/playground-examples.js';
 import type { PlaygroundExample, PlaygroundPreset } from '#routes/_index/playground-examples.js';
 import { PreviewParameters } from '#routes/projects_.$id_.preview/preview-parameters.js';
 import { encodeTextFile } from '#utils/filesystem.utils.js';
-import { cn } from '#utils/ui.utils.js';
 import type { Handle } from '#types/matches.types.js';
 
 const CodeEditorLazy = lazy(async () => {
@@ -38,45 +26,23 @@ type EditorFallbackProps = {
 };
 
 const defaultExample: PlaygroundExample = playgroundExamples[0]!;
-const engineFilters = ['All', 'OpenSCAD', 'Replicad', 'OpenCascade'] as const;
-
-type EngineFilter = (typeof engineFilters)[number];
 
 export const handle: Handle = {
   enablePageWrapper: false,
 };
 
 export default function PlaygroundRoot(): React.JSX.Element {
-  const [activeExampleId, setActiveExampleId] = useState(readInitialExampleId);
+  const [activeExampleId] = useState(readInitialExampleId);
   const initialExample = playgroundExamples.find((example) => example.id === activeExampleId) ?? defaultExample;
   const [editorValue, setEditorValue] = useState(initialExample.code);
   const [previewValue, setPreviewValue] = useState(initialExample.code);
   const [previewVersion, setPreviewVersion] = useState(0);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [engineFilter, setEngineFilter] = useState<EngineFilter>('All');
+  const [isCodeVisible, setIsCodeVisible] = useState(false);
 
   const activeExample = playgroundExamples.find((example) => example.id === activeExampleId) ?? defaultExample;
   const previewProjectId = `root-playground-${activeExample.id}-${previewVersion}`;
   const isDirty = editorValue !== activeExample.code;
   const hasUnrunChanges = editorValue !== previewValue;
-
-  const filteredExamples = useMemo(() => {
-    const term = searchTerm.trim().toLowerCase();
-    return playgroundExamples.filter((example) => {
-      if (engineFilter !== 'All' && example.kernel !== engineFilter) {
-        return false;
-      }
-
-      if (!term) {
-        return true;
-      }
-
-      return [example.name, example.description, example.kernel, example.mainFile]
-        .join(' ')
-        .toLowerCase()
-        .includes(term);
-    });
-  }, [engineFilter, searchTerm]);
 
   const files = useMemo(
     () => ({
@@ -86,16 +52,6 @@ export default function PlaygroundRoot(): React.JSX.Element {
     }),
     [activeExample.mainFile, previewValue],
   );
-
-  const selectExample = useCallback((example: PlaygroundExample, options: { readonly updateUrl?: boolean } = {}) => {
-    setActiveExampleId(example.id);
-    setEditorValue(example.code);
-    setPreviewValue(example.code);
-    setPreviewVersion((version) => version + 1);
-    if (options.updateUrl ?? true) {
-      writeExampleToUrl(example.id);
-    }
-  }, []);
 
   const runPreview = useCallback(() => {
     setPreviewValue(editorValue);
@@ -153,7 +109,7 @@ export default function PlaygroundRoot(): React.JSX.Element {
           <div className='min-w-0'>
             <h1 className='truncate text-base font-semibold'>Tau CAD Playground</h1>
             <p className='truncate text-xs text-muted-foreground'>
-              OpenSCAD, Replicad, and OpenCascade in one workspace
+              {activeExample.name} · {activeExample.kernel}
             </p>
           </div>
         </div>
@@ -162,6 +118,17 @@ export default function PlaygroundRoot(): React.JSX.Element {
             <LayoutGrid className='size-3.5' />
             Gallery
           </Link>
+          <Button
+            variant={isCodeVisible ? 'default' : 'outline'}
+            size='sm'
+            aria-pressed={isCodeVisible}
+            onClick={() => {
+              setIsCodeVisible((visible) => !visible);
+            }}
+          >
+            <Eye className='size-3.5' />
+            Code
+          </Button>
           <Button variant='outline' size='sm' onClick={copyShareLink}>
             <Share2 className='size-3.5' />
             Share
@@ -177,122 +144,54 @@ export default function PlaygroundRoot(): React.JSX.Element {
         </div>
       </header>
 
-      <div className='grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[280px_minmax(360px,0.9fr)_minmax(420px,1.1fr)]'>
-        <aside className='border-b bg-muted/35 lg:border-r lg:border-b-0'>
-          <div className='flex h-full flex-col'>
-            <div className='border-b p-4'>
-              <div className='flex items-center gap-2 text-sm font-medium'>
-                <FileCode2 className='size-4' />
-                Examples
+      <div className='grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[minmax(520px,1fr)_360px]'>
+        {isCodeVisible ? (
+          <section className='flex min-h-[42dvh] min-w-0 flex-col border-b xl:col-span-2 xl:min-h-[34dvh]'>
+            <div className='flex h-11 items-center justify-between border-b px-3'>
+              <div className='flex min-w-0 items-center gap-2'>
+                <Braces className='size-4 text-muted-foreground' />
+                <span className='truncate font-mono text-xs'>{activeExample.mainFile}</span>
               </div>
-              <label className='mt-3 flex items-center gap-2 rounded-md border bg-background px-2.5 py-2 text-sm'>
-                <Search className='size-3.5 text-muted-foreground' />
-                <input
-                  className='min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground'
-                  type='search'
-                  aria-label='Search examples'
-                  placeholder='Search examples'
-                  value={searchTerm}
-                  onChange={(event) => {
-                    setSearchTerm(event.target.value);
-                  }}
-                />
-              </label>
-              <div className='mt-3 flex flex-wrap gap-1.5'>
-                {engineFilters.map((filter) => (
-                  <button
-                    key={filter}
-                    type='button'
-                    className={cn(
-                      'rounded-sm border px-2 py-1 text-xs transition-colors hover:border-primary/50',
-                      filter === engineFilter ? 'border-primary bg-primary text-primary-foreground' : 'bg-background',
-                    )}
-                    onClick={() => {
-                      setEngineFilter(filter);
+              <div className='flex items-center gap-1.5'>
+                {isDirty ? (
+                  <span className='bg-amber-500/15 text-amber-700 rounded-sm px-2 py-1 text-xs'>edited</span>
+                ) : null}
+                {hasUnrunChanges ? (
+                  <span className='rounded-sm bg-muted px-2 py-1 text-xs text-muted-foreground'>unrun</span>
+                ) : null}
+                <span className='rounded-sm bg-muted px-2 py-1 text-xs text-muted-foreground'>
+                  {activeExample.kernel}
+                </span>
+              </div>
+            </div>
+            <div className='min-h-0 flex-1'>
+              <ClientOnly fallback={<EditorFallback value={editorValue} onChange={setEditorValue} />}>
+                <Suspense fallback={<EditorFallback value={editorValue} onChange={setEditorValue} />}>
+                  <CodeEditorLazy
+                    className='h-full'
+                    height='100%'
+                    path={activeExample.mainFile}
+                    language={activeExample.language}
+                    value={editorValue}
+                    onChange={(value) => {
+                      setEditorValue(value ?? '');
                     }}
-                  >
-                    {filter}
-                  </button>
-                ))}
-              </div>
+                  />
+                </Suspense>
+              </ClientOnly>
             </div>
-            <div className='grid gap-2 p-3 sm:grid-cols-3 lg:grid-cols-1'>
-              {filteredExamples.map((example) => (
-                <button
-                  key={example.id}
-                  type='button'
-                  className={cn(
-                    'rounded-md border bg-background p-3 text-left transition-colors hover:border-primary/50 hover:bg-accent',
-                    example.id === activeExample.id && 'border-primary bg-accent',
-                  )}
-                  aria-pressed={example.id === activeExample.id}
-                  onClick={() => {
-                    selectExample(example);
-                  }}
-                >
-                  <div className='mb-2 flex items-center justify-between gap-2'>
-                    <span className='truncate text-sm font-medium'>{example.name}</span>
-                    <span className='shrink-0 rounded-sm bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground'>
-                      {example.kernel}
-                    </span>
-                  </div>
-                  <p className='line-clamp-2 text-xs text-muted-foreground'>{example.description}</p>
-                </button>
-              ))}
-              {filteredExamples.length === 0 ? (
-                <div className='rounded-md border border-dashed bg-background p-3 text-xs text-muted-foreground'>
-                  No examples match the current filters.
-                </div>
-              ) : null}
-            </div>
-          </div>
-        </aside>
+          </section>
+        ) : null}
 
-        <section className='flex min-h-[48dvh] min-w-0 flex-col border-b lg:min-h-0 lg:border-r lg:border-b-0'>
-          <div className='flex h-11 items-center justify-between border-b px-3'>
-            <div className='flex min-w-0 items-center gap-2'>
-              <Braces className='size-4 text-muted-foreground' />
-              <span className='truncate font-mono text-xs'>{activeExample.mainFile}</span>
-            </div>
-            <div className='flex items-center gap-1.5'>
-              {isDirty ? (
-                <span className='bg-amber-500/15 text-amber-700 rounded-sm px-2 py-1 text-xs'>edited</span>
-              ) : null}
-              {hasUnrunChanges ? (
-                <span className='rounded-sm bg-muted px-2 py-1 text-xs text-muted-foreground'>unrun</span>
-              ) : null}
-              <span className='rounded-sm bg-muted px-2 py-1 text-xs text-muted-foreground'>
-                {activeExample.kernel}
-              </span>
-            </div>
-          </div>
-          <div className='min-h-0 flex-1'>
-            <ClientOnly fallback={<EditorFallback value={editorValue} onChange={setEditorValue} />}>
-              <Suspense fallback={<EditorFallback value={editorValue} onChange={setEditorValue} />}>
-                <CodeEditorLazy
-                  className='h-full'
-                  height='100%'
-                  path={activeExample.mainFile}
-                  language={activeExample.language}
-                  value={editorValue}
-                  onChange={(value) => {
-                    setEditorValue(value ?? '');
-                  }}
-                />
-              </Suspense>
-            </ClientOnly>
-          </div>
-        </section>
-
-        <section className='flex min-h-[48dvh] min-w-0 flex-col lg:min-h-0'>
-          <SharedWorkerGate>
-            <FileManagerProvider
-              key={previewProjectId}
-              projectId={previewProjectId}
-              rootDirectory={`/projects/${previewProjectId}`}
-              initialBackend='indexeddb'
-            >
-              <CadPreviewProvider projectId={previewProjectId} mainFile={activeExample.mainFile} files={files}>
+        <SharedWorkerGate>
+          <FileManagerProvider
+            key={previewProjectId}
+            projectId={previewProjectId}
+            rootDirectory={`/projects/${previewProjectId}`}
+            initialBackend='indexeddb'
+          >
+            <CadPreviewProvider projectId={previewProjectId} mainFile={activeExample.mainFile} files={files}>
+              <section className='flex min-h-[56dvh] min-w-0 flex-col xl:min-h-0 xl:border-r'>
                 <div className='flex h-11 items-center justify-between border-b px-3'>
                   <div className='flex items-center gap-2'>
                     <SlidersHorizontal className='size-4 text-muted-foreground' />
@@ -302,28 +201,27 @@ export default function PlaygroundRoot(): React.JSX.Element {
                     <PlaygroundExportControls exampleId={activeExample.id} formats={activeExample.exportFormats} />
                   </div>
                 </div>
-                <div className='grid min-h-0 flex-1 grid-rows-[minmax(260px,1fr)_minmax(190px,0.42fr)]'>
-                  <div className='relative min-h-0 bg-muted/30'>
-                    <CadPreviewViewer
-                      className='size-full'
-                      enablePan
-                      enableZoom
-                      stageOptions={{ zoomLevel: 1.25 }}
-                      graphicsOptions={{
-                        enableLines: true,
-                        viewerClassName: 'bg-muted/30',
-                      }}
-                    />
-                    <CadPreviewStatus className='absolute top-3 left-3' />
-                  </div>
-                  <div className='min-h-0 border-t bg-background'>
-                    <PlaygroundParameters presets={activeExample.presets ?? []} />
-                  </div>
+                <div className='relative min-h-0 flex-1 bg-muted/30'>
+                  <CadPreviewViewer
+                    className='size-full'
+                    enablePan
+                    enableZoom
+                    stageOptions={{ zoomLevel: 1.25 }}
+                    graphicsOptions={{
+                      enableLines: true,
+                      viewerClassName: 'bg-muted/30',
+                    }}
+                  />
+                  <CadPreviewStatus className='absolute top-3 left-3' />
                 </div>
-              </CadPreviewProvider>
-            </FileManagerProvider>
-          </SharedWorkerGate>
-        </section>
+              </section>
+
+              <section className='flex min-h-[260px] min-w-0 flex-col border-t bg-background xl:min-h-0 xl:border-t-0'>
+                <PlaygroundParameters presets={activeExample.presets ?? []} />
+              </section>
+            </CadPreviewProvider>
+          </FileManagerProvider>
+        </SharedWorkerGate>
       </div>
     </main>
   );
@@ -560,7 +458,9 @@ function writeExampleToUrl(exampleId: string, options: { readonly replace?: bool
 }
 
 function getBrowserWindow(): Window | undefined {
-  const maybeGlobal = globalThis as typeof globalThis & { readonly window?: Window };
+  const maybeGlobal = globalThis as typeof globalThis & {
+    readonly window?: Window;
+  };
   return maybeGlobal.window;
 }
 

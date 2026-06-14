@@ -1,4 +1,5 @@
 import type { FileExtension } from '@taucad/types';
+import { legacyPlaygroundExamples } from '#routes/_index/legacy-playground-examples.js';
 
 export type PlaygroundPreset = {
   readonly name: string;
@@ -74,11 +75,21 @@ difference() {
     presets: [
       {
         name: 'Dense',
-        parameters: { tooth_count: 36, tooth_width: 2.4, tooth_gap: 1.1, show_side_hooks: true },
+        parameters: {
+          tooth_count: 36,
+          tooth_width: 2.4,
+          tooth_gap: 1.1,
+          show_side_hooks: true,
+        },
       },
       {
         name: 'Wide teeth',
-        parameters: { tooth_count: 20, tooth_width: 4, tooth_gap: 2, show_side_hooks: false },
+        parameters: {
+          tooth_count: 20,
+          tooth_width: 4,
+          tooth_gap: 2,
+          show_side_hooks: false,
+        },
       },
     ],
     code: `$fn = 48;
@@ -163,11 +174,25 @@ union() {
     presets: [
       {
         name: 'Desk tray',
-        parameters: { width: 140, depth: 85, height: 16, wall: 3, radius: 8, style: 'open' },
+        parameters: {
+          width: 140,
+          depth: 85,
+          height: 16,
+          wall: 3,
+          radius: 8,
+          style: 'open',
+        },
       },
       {
         name: 'Solid block',
-        parameters: { width: 70, depth: 45, height: 18, wall: 3, radius: 5, style: 'solid' },
+        parameters: {
+          width: 70,
+          depth: 45,
+          height: 18,
+          wall: 3,
+          radius: 5,
+          style: 'solid',
+        },
       },
     ],
     code: `import { drawRoundedRectangle } from 'replicad';
@@ -239,7 +264,12 @@ export default function main(params = {}): Shape3D {
       },
       {
         name: 'Mini rack',
-        parameters: { rack_width: 90, rack_depth: 65, rack_height: 72, vent_spacing: 10 },
+        parameters: {
+          rack_width: 90,
+          rack_depth: 65,
+          rack_height: 72,
+          vent_spacing: 10,
+        },
       },
     ],
     code: `$fn = 32;
@@ -310,11 +340,23 @@ networking_rack();`,
     presets: [
       {
         name: 'Sharp',
-        parameters: { width: 52, depth: 34, height: 20, fillet: 0, profile: 'sharp' },
+        parameters: {
+          width: 52,
+          depth: 34,
+          height: 20,
+          fillet: 0,
+          profile: 'sharp',
+        },
       },
       {
         name: 'Tall soft',
-        parameters: { width: 42, depth: 30, height: 42, fillet: 4, profile: 'soft' },
+        parameters: {
+          width: 42,
+          depth: 30,
+          height: 42,
+          fillet: 4,
+          profile: 'soft',
+        },
       },
     ],
     code: `import {
@@ -372,4 +414,5 @@ export default function main(params = {}) {
   return result;
 }`,
   },
+  ...legacyPlaygroundExamples,
 ] as const;

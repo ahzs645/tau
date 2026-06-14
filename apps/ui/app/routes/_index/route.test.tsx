@@ -36,7 +36,9 @@ const {
     cadEventHandlers: handlers,
     mockCadSend: vi.fn((event: { readonly type: string; readonly format?: FileExtension }) => {
       if (event.type === 'exportGeometry' && event.format) {
-        const blob = new Blob([`export:${event.format}`], { type: 'model/mock' });
+        const blob = new Blob([`export:${event.format}`], {
+          type: 'model/mock',
+        });
         for (const handler of handlers.geometryExported) {
           handler({ blob, format: event.format });
         }
@@ -109,14 +111,16 @@ vi.mock('#components/ui/button.js', () => ({
     disabled,
     onClick,
     title,
+    ...props
   }: {
     readonly children: React.ReactNode;
     readonly disabled?: boolean;
     readonly onClick?: () => void;
     readonly title?: string;
+    readonly [key: string]: unknown;
   }) {
     return (
-      <button type='button' disabled={disabled} title={title} onClick={onClick}>
+      <button type='button' disabled={disabled} title={title} onClick={onClick} {...props}>
         {children}
       </button>
     );
@@ -204,60 +208,39 @@ describe('PlaygroundRoot', () => {
     cleanup();
   });
 
-  it('renders the production playground shell with multiple CAD engines and parameters', async () => {
+  it('renders the production playground shell with gallery navigation and parameters', async () => {
     renderPlaygroundRoot();
 
     expect(screen.getByRole('heading', { name: 'Tau CAD Playground' })).toBeDefined();
     expect(screen.getByRole('link', { name: 'Gallery' }).getAttribute('href')).toBe('/gallery');
-    expect(screen.getByRole('button', { name: /OpenSCAD bracket/ })).toBeDefined();
-    expect(screen.getByRole('button', { name: /Replicad tray/ })).toBeDefined();
-    expect(screen.getByRole('button', { name: /OpenCascade direct/ })).toBeDefined();
-    expect(screen.getByRole('button', { name: /Gel comb SCAD/ })).toBeDefined();
-    expect(screen.getByRole('button', { name: /Networking rack/ })).toBeDefined();
+    expect(screen.getByText('OpenSCAD bracket · OpenSCAD')).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Code' }).getAttribute('aria-pressed')).toBe('false');
+    expect(screen.queryByLabelText('Code editor')).toBeNull();
     expect(screen.getByTestId('cad-preview-viewer')).toBeDefined();
     expect(screen.getByTestId('preview-parameters')).toBeDefined();
     expect(screen.getByRole('button', { name: 'Wide' })).toBeDefined();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Code' }));
     expect(await screen.findByLabelText('Code editor')).toBeDefined();
   });
 
-  it('switches examples by replacing the preview project and main file', async () => {
-    renderPlaygroundRoot();
-
-    fireEvent.click(screen.getByRole('button', { name: /Replicad tray/ }));
-
-    await waitFor(() => {
-      expect(providerCalls.at(-1)?.mainFile).toBe('main.ts');
-    });
-    expect(providerCalls.at(-1)?.projectId).toContain('root-playground-replicad-tray');
-    expect(providerCalls.at(-1)?.files['main.ts']).toBeDefined();
-    expect(globalThis.location.search).toBe('?model=replicad-tray');
-  });
-
-  it('opens a model from the URL and filters the gallery like the source app', async () => {
+  it('opens a model from the URL and replaces the preview project and main file', async () => {
     globalThis.history.replaceState({}, '', '/?model=opencascade-box');
 
     renderPlaygroundRoot();
 
-    expect(await screen.findByText('OpenCascade direct')).toBeDefined();
+    expect(await screen.findByText('OpenCascade direct · OpenCascade')).toBeDefined();
     await waitFor(() => {
       expect(providerCalls.at(-1)?.projectId).toContain('root-playground-opencascade-box');
     });
-
-    fireEvent.change(screen.getByLabelText('Search examples'), { target: { value: 'gel' } });
-
-    expect(screen.getByRole('button', { name: /Gel comb SCAD/ })).toBeDefined();
-    expect(screen.queryByRole('button', { name: /Replicad tray/ })).toBeNull();
-
-    fireEvent.click(screen.getByRole('button', { name: 'OpenSCAD' }));
-    expect(screen.getByRole('button', { name: /Gel comb SCAD/ })).toBeDefined();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Replicad' }));
-    expect(screen.getByText('No examples match the current filters.')).toBeDefined();
+    expect(providerCalls.at(-1)?.mainFile).toBe('main.ts');
+    expect(providerCalls.at(-1)?.files['main.ts']).toBeDefined();
   });
 
   it('runs edited code through the preview provider', async () => {
     renderPlaygroundRoot();
 
+    fireEvent.click(screen.getByRole('button', { name: 'Code' }));
     const editor = await screen.findByLabelText('Code editor');
     fireEvent.change(editor, { target: { value: 'cube([10, 10, 10]);' } });
     expect(screen.getByText('edited')).toBeDefined();
@@ -274,6 +257,7 @@ describe('PlaygroundRoot', () => {
   it('supports source-style keyboard shortcuts for preview and export', async () => {
     renderPlaygroundRoot();
 
+    fireEvent.click(screen.getByRole('button', { name: 'Code' }));
     const editor = await screen.findByLabelText('Code editor');
     fireEvent.change(editor, { target: { value: 'sphere(10);' } });
     fireEvent.keyDown(globalThis.window, { key: 'F5' });
@@ -285,7 +269,10 @@ describe('PlaygroundRoot', () => {
     fireEvent.keyDown(globalThis.window, { key: 'F7' });
 
     await waitFor(() => {
-      expect(mockCadSend).toHaveBeenCalledWith({ type: 'exportGeometry', format: 'glb' });
+      expect(mockCadSend).toHaveBeenCalledWith({
+        type: 'exportGeometry',
+        format: 'glb',
+      });
       expect(mockDownloadBlob).toHaveBeenCalledWith(expect.any(Blob), 'openscad-bracket.glb');
     });
   });
@@ -302,9 +289,9 @@ describe('PlaygroundRoot', () => {
   });
 
   it('applies model presets through Tau preview parameters', async () => {
-    renderPlaygroundRoot();
+    globalThis.history.replaceState({}, '', '/?model=replicad-tray');
 
-    fireEvent.click(screen.getByRole('button', { name: /Replicad tray/ }));
+    renderPlaygroundRoot();
     fireEvent.click(screen.getByRole('button', { name: 'Solid block' }));
 
     expect(mockSetParameters).toHaveBeenCalledWith({
@@ -324,20 +311,26 @@ describe('PlaygroundRoot', () => {
     fireEvent.click(screen.getByRole('button', { name: 'GLB' }));
 
     await waitFor(() => {
-      expect(mockCadSend).toHaveBeenCalledWith({ type: 'exportGeometry', format: 'glb' });
+      expect(mockCadSend).toHaveBeenCalledWith({
+        type: 'exportGeometry',
+        format: 'glb',
+      });
       expect(mockDownloadBlob).toHaveBeenCalledWith(expect.any(Blob), 'openscad-bracket.glb');
     });
     expect(mockToastSuccess).toHaveBeenCalledWith('Downloaded openscad-bracket.glb');
   });
 
   it('dispatches direct OpenCascade exports through the same preview actor', async () => {
-    renderPlaygroundRoot();
+    globalThis.history.replaceState({}, '', '/?model=opencascade-box');
 
-    fireEvent.click(screen.getByRole('button', { name: /OpenCascade direct/ }));
+    renderPlaygroundRoot();
     fireEvent.click(screen.getByRole('button', { name: 'STEP' }));
 
     await waitFor(() => {
-      expect(mockCadSend).toHaveBeenCalledWith({ type: 'exportGeometry', format: 'step' });
+      expect(mockCadSend).toHaveBeenCalledWith({
+        type: 'exportGeometry',
+        format: 'step',
+      });
       expect(mockDownloadBlob).toHaveBeenCalledWith(expect.any(Blob), 'opencascade-box.step');
     });
   });

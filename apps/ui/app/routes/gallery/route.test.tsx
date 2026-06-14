@@ -15,6 +15,7 @@ describe('PlaygroundGallery', () => {
     expect(screen.getByRole('heading', { name: 'Tau CAD Gallery' })).toBeDefined();
     expect(screen.getByRole('heading', { name: 'OpenSCAD bracket' })).toBeDefined();
     expect(screen.getByRole('heading', { name: 'Replicad tray' })).toBeDefined();
+    expect(screen.getByRole('heading', { name: 'Interlocking Boxes System' })).toBeDefined();
     expect(screen.getAllByRole('link', { name: 'Open' })[0]?.getAttribute('href')).toBe('/?model=openscad-bracket');
   });
 
