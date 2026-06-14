@@ -438,7 +438,10 @@ export default defineKernel({
       entryUrl = executeResult.entryUrl;
 
       const defaultParameters = extractDefaultParameters(executeResult.value);
-      const jsonSchema = await jsonSchemaFromJson(defaultParameters);
+      const jsonSchema =
+        isRecordObject(executeResult.value) && isRecordObject(executeResult.value['jsonSchema'])
+          ? executeResult.value['jsonSchema']
+          : await jsonSchemaFromJson(defaultParameters);
 
       return createKernelSuccess({ defaultParameters, jsonSchema });
     } catch (error) {

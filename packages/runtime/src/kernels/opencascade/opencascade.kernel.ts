@@ -1,3 +1,4 @@
+/* eslint-disable new-cap -- OpenCascade API uses PascalCase method names */
 /* oxlint-disable eslint(new-cap) -- OpenCascade API uses PascalCase method names */
 /**
  * OpenCascade Kernel Module
@@ -430,7 +431,10 @@ export default defineKernel({
       entryUrl = executeResult.entryUrl;
 
       const defaultParameters = extractDefaultParameters(executeResult.value);
-      const jsonSchema = await jsonSchemaFromJson(defaultParameters);
+      const jsonSchema =
+        isRecordObject(executeResult.value) && isRecordObject(executeResult.value['jsonSchema'])
+          ? executeResult.value['jsonSchema']
+          : await jsonSchemaFromJson(defaultParameters);
 
       return createKernelSuccess({ defaultParameters, jsonSchema });
     } catch (error) {

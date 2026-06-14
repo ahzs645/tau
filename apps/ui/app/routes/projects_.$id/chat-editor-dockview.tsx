@@ -68,6 +68,11 @@ type EditorPanelParameters = {
   readOnly?: boolean;
 };
 
+function getNativeDataTransfer(event: { readonly nativeEvent: DragEvent | PointerEvent }): DataTransfer | undefined {
+  const { nativeEvent } = event;
+  return 'dataTransfer' in nativeEvent ? (nativeEvent.dataTransfer ?? undefined) : undefined;
+}
+
 /**
  * Single file editor panel rendered inside each Dockview panel.
  */
@@ -529,7 +534,7 @@ export const EditorDockview = memo(function (): React.JSX.Element {
     const disposable = api.onWillDragPanel((event) => {
       const filePath = (event.panel.params as EditorPanelParameters | undefined)?.filePath;
       if (filePath) {
-        event.nativeEvent.dataTransfer?.setData(tauEditorPanelDragMime, JSON.stringify({ filePath }));
+        getNativeDataTransfer(event)?.setData(tauEditorPanelDragMime, JSON.stringify({ filePath }));
       }
     });
 
@@ -545,7 +550,7 @@ export const EditorDockview = memo(function (): React.JSX.Element {
     }
 
     const disposable = api.onUnhandledDragOverEvent((event) => {
-      const types = event.nativeEvent.dataTransfer?.types;
+      const types = getNativeDataTransfer(event)?.types;
 
       if (types?.includes(tauFileDragMime)) {
         event.accept();
@@ -613,7 +618,8 @@ export const EditorDockview = memo(function (): React.JSX.Element {
   const onDidDrop = useCallback(
     (event: DockviewDidDropEvent) => {
       // Handle viewer panel drag → open its entry file in the editor
-      const viewerData = event.nativeEvent.dataTransfer?.getData(tauViewerPanelDragMime);
+      const dataTransfer = getNativeDataTransfer(event);
+      const viewerData = dataTransfer?.getData(tauViewerPanelDragMime);
       if (viewerData) {
         try {
           const { entryFile } = JSON.parse(viewerData) as {
@@ -634,7 +640,7 @@ export const EditorDockview = memo(function (): React.JSX.Element {
       }
 
       // Handle file tree drags
-      const data = event.nativeEvent.dataTransfer?.getData(tauFileDragMime);
+      const data = dataTransfer?.getData(tauFileDragMime);
       if (!data) {
         return;
       }

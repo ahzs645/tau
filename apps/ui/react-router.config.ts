@@ -13,6 +13,7 @@ import type { Config } from '@react-router/dev/config';
  * CI runners. Bump cautiously — N > 8 has produced OOMs in similar setups.
  */
 const prerenderConcurrency = 4;
+const githubPagesBasename = process.env['GITHUB_PAGES'] === 'true' ? '/tau' : undefined;
 
 /**
  * Pre-render docs URLs by walking the Fumadocs MDX content tree directly
@@ -35,6 +36,7 @@ const prerenderConcurrency = 4;
  * extensionless TS specifier as a filesystem path missing the `.ts` suffix.
  */
 export default {
+  basename: githubPagesBasename,
   ssr: true,
   prerender: {
     async paths() {

@@ -29,6 +29,8 @@ export const cookieName = {
   /* CAD */
   // The last selected kernel.
   cadKernel: 'cad-kernel',
+  // Whether Monaco inlay hints are enabled.
+  codeInlayHints: 'code-inlay-hints',
 
   /* Chat */
   // Whether to enable web search in the chat.

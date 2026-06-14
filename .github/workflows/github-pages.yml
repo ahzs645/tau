@@ -1,0 +1,78 @@
+name: GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  pages: write
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build static UI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup workspace
+        uses: ./.github/actions/setup-nx
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Copy CAD runtime assets
+        run: |
+          pnpm nx run openscad:copy-assets
+          pnpm nx run converter:copy-assets
+          pnpm nx run runtime:copy-assets
+          pnpm nx run ui:copy-assets
+
+      - name: Build React Router app
+        working-directory: apps/ui
+        env:
+          GITHUB_PAGES: 'true'
+          TAU_API_URL: https://api.taucad.dev
+          TAU_FRONTEND_URL: https://ahzs645.github.io/tau
+          TAU_WEBSOCKET_URL: wss://api.taucad.dev
+        run: pnpm exec react-router build
+
+      - name: Flatten project-site routes
+        working-directory: apps/ui
+        run: |
+          cp -R build/client/tau/. build/client/
+          rm -rf build/client/tau
+
+      - name: Prefix static asset links
+        working-directory: apps/ui
+        run: |
+          find build/client -name '*.html' -type f -print0 \
+            | xargs -0 perl -0pi -e 's#(href|src)="/(assets|fonts|textures|favicon|apple-touch-icon|manifest\.webmanifest)#${1}="/tau/${2}#g'
+
+      - name: Prepare Pages artifact
+        run: touch apps/ui/build/client/.nojekyll
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/ui/build/client
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -23,6 +23,8 @@ export async function listStaticPrerenderPaths(): Promise<string[]> {
   }
 
   return [
+    '/',
+    '/gallery',
     '/manifest.webmanifest',
     '/robots.txt',
     '/sitemap.xml',
