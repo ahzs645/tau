@@ -47,10 +47,30 @@ jobs:
       - name: Build React Router app
         working-directory: apps/ui
         env:
+          GITHUB_PAGES: 'true'
           TAU_API_URL: https://api.taucad.dev
-          TAU_FRONTEND_URL: https://3dd.ahmadjalil.com
+          TAU_FRONTEND_URL: https://3dd.ahmadjalil.com/tau
           TAU_WEBSOCKET_URL: wss://api.taucad.dev
         run: pnpm exec react-router build
+
+      - name: Add custom-domain root redirect
+        working-directory: apps/ui
+        run: |
+          cat > build/client/index.html <<'HTML'
+          <!doctype html>
+          <html lang="en">
+            <head>
+              <meta charset="utf-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1">
+              <meta http-equiv="refresh" content="0; url=/tau/">
+              <title>Tau CAD Playground</title>
+              <script>globalThis.location.replace('/tau/' + globalThis.location.search + globalThis.location.hash);</script>
+            </head>
+            <body>
+              <a href="/tau/">Open Tau CAD Playground</a>
+            </body>
+          </html>
+          HTML
 
       - name: Prepare Pages artifact
         run: |
