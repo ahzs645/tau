@@ -12,6 +12,10 @@ const baseConfig: Options = {
       from: 'src/fonts',
       to: `${options.outDir}/fonts`,
     },
+    {
+      from: 'src/bosl2-library.generated.json.gz',
+      to: `${options.outDir}/bosl2-library.generated.json.gz`,
+    },
   ],
   tsconfig: 'tsconfig.build.json',
   unbundle: true,

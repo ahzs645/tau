@@ -4,6 +4,7 @@ import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile as execFileCallback } from 'node:child_process';
 import { promisify } from 'node:util';
+import { gzipSync } from 'node:zlib';
 
 const execFile = promisify(execFileCallback);
 const bosl2Version = 'v2.0.744';
@@ -11,6 +12,7 @@ const bosl2ArchiveUrl = `https://github.com/BelfrySCAD/BOSL2/archive/refs/tags/$
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const packageDirectory = dirname(scriptDirectory);
 const outputPath = join(packageDirectory, 'src/bosl2-library.generated.ts');
+const assetPath = join(packageDirectory, 'src/bosl2-library.generated.json.gz');
 
 async function download(url, destination) {
   const response = await fetch(url);
@@ -52,13 +54,18 @@ try {
     entries.push([libraryPath, content]);
   }
 
-  const fileMap = entries.map(([path, content]) => `  ${JSON.stringify(path)}: ${JSON.stringify(content)},`).join('\n');
+  const jsonPayload = JSON.stringify(Object.fromEntries(entries));
+  const compressedPayload = gzipSync(jsonPayload, { level: 9 });
+  await writeFile(assetPath, compressedPayload);
+
   await writeFile(
     outputPath,
-    `// Generated from BelfrySCAD/BOSL2 ${bosl2Version}.\n// Run scripts/update-bosl2-library.mjs to refresh.\n\nexport const bosl2Version = '${bosl2Version}';\n\nexport const bosl2LibraryFiles: Readonly<Record<string, string>> = {\n${fileMap}\n};\n`,
+    `// Generated from BelfrySCAD/BOSL2 ${bosl2Version}.\n// Run scripts/update-bosl2-library.mjs to refresh.\n\nexport const bosl2Version = '${bosl2Version}';\nexport const bosl2LibraryUrl = new URL('bosl2-library.generated.json.gz', import.meta.url).href;\n`,
   );
 
-  console.log(`Wrote ${entries.length} BOSL2 files to ${outputPath}`);
+  console.log(`Wrote ${entries.length} BOSL2 files to ${assetPath}`);
+  console.log(`Wrote BOSL2 asset metadata to ${outputPath}`);
+  console.log(`BOSL2 JSON: ${jsonPayload.length} bytes, gzip: ${compressedPayload.length} bytes`);
 } finally {
   await rm(temporaryDirectory, { recursive: true, force: true });
 }

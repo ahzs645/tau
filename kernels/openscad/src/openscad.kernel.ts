@@ -32,7 +32,7 @@ import { processOpenScadParameters, flattenParametersForInjection } from '#parse
 import { openscadRenderSchema, openscadExportSchemas } from '#openscad.schemas.js';
 import type { AddErrorFunction, GetFileContentsFunction } from '#parse-output.js';
 import { OpenScadStderrParser } from '#parse-output.js';
-import { bosl2LibraryFiles, bosl2Version } from '#bosl2-library.generated.js';
+import { bosl2LibraryUrl, bosl2Version } from '#bosl2-library.generated.js';
 
 const geistRegularUrl = new URL('fonts/Geist-Regular.ttf', import.meta.url).href;
 const geistBoldUrl = new URL('fonts/Geist-Bold.ttf', import.meta.url).href;
@@ -62,6 +62,8 @@ const fontFiles = [
   { url: geistRegularUrl, filename: 'Geist-Regular.ttf' },
   { url: geistBoldUrl, filename: 'Geist-Bold.ttf' },
 ] as const;
+
+let bosl2LibraryPromise: Promise<Readonly<Record<string, string>>> | undefined;
 
 // =============================================================================
 // Path helpers
@@ -111,8 +113,44 @@ function resolveIncludePath(baseFilePath: string, relativePath: string): string 
   return resolved.join('/');
 }
 
-function readBundledOpenScadLibraryFile(filePath: string): string | undefined {
-  return filePath.startsWith('BOSL2/') ? bosl2LibraryFiles[filePath] : undefined;
+function isGzipPayload(payload: Uint8Array): boolean {
+  return payload[0] === 0x1f && payload[1] === 0x8b;
+}
+
+async function decodeBundledLibraryPayload(payload: Uint8Array): Promise<string> {
+  if (!isGzipPayload(payload)) {
+    return new TextDecoder().decode(payload);
+  }
+
+  if (typeof DecompressionStream === 'undefined') {
+    throw new Error('This runtime cannot decompress the bundled BOSL2 library asset');
+  }
+
+  const stream = new Blob([payload]).stream().pipeThrough(new DecompressionStream('gzip'));
+  return new Response(stream).text();
+}
+
+async function loadBundledOpenScadLibraryFiles(): Promise<Readonly<Record<string, string>>> {
+  bosl2LibraryPromise ??= (async () => {
+    const arrayBuffer = await loadBinaryFile(bosl2LibraryUrl);
+    if (!arrayBuffer) {
+      throw new Error(`Failed to load bundled BOSL2 ${bosl2Version} library`);
+    }
+
+    const json = await decodeBundledLibraryPayload(new Uint8Array(arrayBuffer));
+    return JSON.parse(json) as Readonly<Record<string, string>>;
+  })();
+
+  return bosl2LibraryPromise;
+}
+
+async function readBundledOpenScadLibraryFile(filePath: string): Promise<string | undefined> {
+  if (!filePath.startsWith('BOSL2/')) {
+    return undefined;
+  }
+
+  const libraryFiles = await loadBundledOpenScadLibraryFiles();
+  return libraryFiles[filePath];
 }
 
 async function getReferencedScadFiles(options: {
@@ -140,7 +178,7 @@ async function getReferencedScadFiles(options: {
 
     visited.add(normalizedPath);
 
-    let code = readBundledOpenScadLibraryFile(normalizedPath);
+    let code = await readBundledOpenScadLibraryFile(normalizedPath);
     let source: 'project' | 'library' = code === undefined ? 'project' : 'library';
 
     if (code === undefined) {
@@ -287,8 +325,9 @@ async function mountFileSystem(
     }
   }
 
+  const bundledLibraryFiles = libraryFiles.length > 0 ? await loadBundledOpenScadLibraryFiles() : undefined;
   for (const relativePath of libraryFiles) {
-    const content = bosl2LibraryFiles[relativePath];
+    const content = bundledLibraryFiles?.[relativePath];
     if (content === undefined) {
       continue;
     }
