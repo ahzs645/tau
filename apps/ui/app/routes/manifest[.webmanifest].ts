@@ -1,18 +1,21 @@
 /* eslint-disable @typescript-eslint/naming-convention -- snake_case is expected for webmanifest */
 import type { WebAppManifest } from '@remix-pwa/dev';
-import type { LinkDescriptor, LoaderFunction } from 'react-router';
+import type { LinkDescriptor, LoaderFunctionArgs } from 'react-router';
 import { metaConfig } from '#constants/meta.constants.js';
 
-export const webManifestLinks: LinkDescriptor[] = [{ rel: 'manifest', href: '/manifest.webmanifest' }];
+export const webManifestHref = '/manifest.webmanifest';
+export const webManifestLinks: LinkDescriptor[] = [{ rel: 'manifest', href: webManifestHref }];
 
-export const loader: LoaderFunction = () => {
+export function loader({ request }: LoaderFunctionArgs): Response {
+  const publicBasePath = getPublicBasePath(request.url);
+
   return Response.json(
     {
       short_name: metaConfig.name,
       name: metaConfig.name,
       description: metaConfig.description,
       orientation: 'portrait',
-      start_url: '/',
+      start_url: publicBasePath === '' ? '/' : `${publicBasePath}/`,
       display: 'standalone',
       // @see https://developer.mozilla.org/en-US/docs/Web/Manifest/Reference/display_override
       // @ts-expect-error - fullscreen and minimal-ui are available in types, but are legitimate values
@@ -21,12 +24,12 @@ export const loader: LoaderFunction = () => {
       theme_color: '#ffffff',
       icons: [
         {
-          src: '/android-chrome-192x192.png',
+          src: `${publicBasePath}/android-chrome-192x192.png`,
           sizes: '192x192',
           type: 'image/png',
         },
         {
-          src: '/android-chrome-512x512.png',
+          src: `${publicBasePath}/android-chrome-512x512.png`,
           sizes: '512x512',
           type: 'image/png',
         },
@@ -39,4 +42,10 @@ export const loader: LoaderFunction = () => {
       },
     },
   );
-};
+}
+
+function getPublicBasePath(requestUrl: string): string {
+  const { pathname } = new URL(requestUrl);
+  const suffix = '/manifest.webmanifest';
+  return pathname.endsWith(suffix) ? pathname.slice(0, -suffix.length) : '';
+}

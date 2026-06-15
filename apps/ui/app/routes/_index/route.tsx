@@ -190,7 +190,12 @@ export default function PlaygroundRoot(): React.JSX.Element {
             rootDirectory={`/projects/${previewProjectId}`}
             initialBackend='indexeddb'
           >
-            <CadPreviewProvider projectId={previewProjectId} mainFile={activeExample.mainFile} files={files}>
+            <CadPreviewProvider
+              projectId={previewProjectId}
+              mainFile={activeExample.mainFile}
+              files={files}
+              parameters={activeExample.initialParameters}
+            >
               <section className='flex min-h-[56dvh] min-w-0 flex-col xl:min-h-0 xl:border-r'>
                 <div className='flex h-11 items-center justify-between border-b px-3'>
                   <div className='flex items-center gap-2'>

@@ -14,6 +14,7 @@ export type PlaygroundExample = {
   readonly language: string;
   readonly description: string;
   readonly exportFormats: readonly FileExtension[];
+  readonly initialParameters?: Record<string, unknown>;
   readonly presets?: readonly PlaygroundPreset[];
   readonly code: string;
 };

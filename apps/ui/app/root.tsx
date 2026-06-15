@@ -14,7 +14,7 @@ import { Page } from '#components/layout/page.js';
 import { themeSessionResolver } from '#sessions.server.js';
 import { cn } from '#utils/ui.utils.js';
 import { Toaster } from '#components/ui/sonner.js';
-import { webManifestLinks } from '#routes/manifest[.webmanifest].js';
+import { webManifestHref } from '#routes/manifest[.webmanifest].js';
 import { ColorProvider, useColor } from '#hooks/use-color.js';
 import { useFavicon } from '#hooks/use-favicon.js';
 import { TooltipProvider } from '#components/ui/tooltip.js';
@@ -33,7 +33,7 @@ import { GlobalChatFlushGuard } from '#components/global-chat-flush-guard.js';
 import { ProjectActivityTracker } from '#hooks/project-activity-tracker.js';
 import { SvgSpriteMount } from '#components/icons/svg-sprite-mount.js';
 
-export const links: LinksFunction = () => [...globalStylesLinks, ...webManifestLinks];
+export const links: LinksFunction = () => [...globalStylesLinks];
 
 export const meta: MetaFunction = () => [
   { title: metaConfig.name },
@@ -178,6 +178,8 @@ function LayoutDocument({
     setFaviconColor(color.serialized.hex);
   }, [setFaviconColor, color]);
 
+  const publicBasePath = getPublicBasePath(env['TAU_FRONTEND_URL']);
+
   return (
     <html
       lang='en'
@@ -195,6 +197,7 @@ function LayoutDocument({
         <Meta />
         <PreventFlashOnWrongTheme ssrTheme={ssrTheme !== null} />
         <Links />
+        <link rel='manifest' href={`${publicBasePath}${webManifestHref}`} />
       </head>
       <body>
         <script
@@ -211,6 +214,19 @@ function LayoutDocument({
       </body>
     </html>
   );
+}
+
+function getPublicBasePath(frontendUrl: string | boolean | undefined): string {
+  if (typeof frontendUrl !== 'string') {
+    return '';
+  }
+
+  try {
+    const { pathname } = new URL(frontendUrl);
+    return pathname === '/' ? '' : pathname.replace(/\/$/, '');
+  } catch {
+    return '';
+  }
 }
 
 export default function App(): React.JSX.Element {

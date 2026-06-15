@@ -37,7 +37,7 @@ export default function PlaygroundGallery(): React.JSX.Element {
   }, [engineFilter, searchTerm]);
 
   return (
-    <main className='min-h-dvh bg-background text-foreground'>
+    <main className='h-dvh overflow-y-auto bg-background text-foreground'>
       <header className='flex min-h-14 flex-wrap items-center justify-between gap-3 border-b px-4 py-3 md:px-6'>
         <div className='flex min-w-0 items-center gap-3'>
           <div className='flex size-8 shrink-0 items-center justify-center rounded-md border bg-muted'>
