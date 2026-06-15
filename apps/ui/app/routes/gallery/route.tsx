@@ -8,14 +8,7 @@ import type { AppVersion } from '#routes/version[.]json.js';
 import { cn } from '#utils/ui.utils.js';
 import type { Handle } from '#types/matches.types.js';
 
-const renderVerifiedProjectIds = new Set([
-  '3d-rack-scad',
-  'networking',
-  'parametric-gel-comb',
-  'pre-chamber-nozzle-insert',
-  'vane-trap',
-]);
-const galleryExamples = projectExamples.filter((example) => renderVerifiedProjectIds.has(example.id));
+const galleryExamples = projectExamples;
 const engineFilters = ['All', 'OpenSCAD'] as const;
 const updateCheckIntervalMs = 60_000;
 const updateToastId = 'app-version-update-available';

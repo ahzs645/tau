@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router';
 import { Box, Braces, Download, Eye, LayoutGrid, Play, RotateCcw, Share2, SlidersHorizontal } from 'lucide-react';
 import type { FileExtension } from '@taucad/types';
@@ -100,6 +100,22 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
     const searchExampleId = readInitialExampleIdFromSearch(new URLSearchParams(location.search));
     setActiveExampleId(searchExampleId);
   }, [loaderExampleId, location.search]);
+
+  // The static prerender bakes the default example into the loader data, so the editor and
+  // preview start on the default code regardless of the `?model=` param. When the active
+  // example changes (e.g. opening a project from the gallery), load its code into the editor
+  // and preview so the rendered model matches the selected example.
+  const loadedExampleIdRef = useRef(activeExample.id);
+  useEffect(() => {
+    if (loadedExampleIdRef.current === activeExample.id) {
+      return;
+    }
+
+    loadedExampleIdRef.current = activeExample.id;
+    setEditorValue(activeExample.code);
+    setPreviewValue(activeExample.code);
+    setPreviewVersion((version) => version + 1);
+  }, [activeExample]);
 
   useEffect(() => {
     const currentExampleId = readInitialExampleIdFromSearch(new URLSearchParams(location.search));
