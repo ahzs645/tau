@@ -463,6 +463,32 @@ describe('OpenSCAD Kernel', () => {
         expect(defaultParameters).not.toHaveProperty('Not_included');
       });
 
+      it('should use bundled BOSL2 includes without extracting library parameters', async () => {
+        const { jsonSchema, defaultParameters } = await getParameters(
+          {
+            'main.scad': `
+              include <BOSL2/std.scad>
+              width = 10; // [1:20]
+              cuboid([width, 10, 10]);
+            `,
+          },
+          'main.scad',
+        );
+
+        expect(defaultParameters).toEqual({ width: 10 });
+        expect(jsonSchema).toMatchObject({
+          type: 'object',
+          properties: {
+            width: {
+              type: 'number',
+              default: 10,
+              minimum: 1,
+              maximum: 20,
+            },
+          },
+        });
+      });
+
       it('should handle mixed use and include statements', async () => {
         const { defaultParameters } = await getParameters(
           {
@@ -956,6 +982,23 @@ describe('OpenSCAD Kernel', () => {
 
         expect(success).toBe(true);
         expect(offData).toBeDefined();
+      });
+
+      it('should resolve bundled BOSL2 includes without project copies', async () => {
+        const result = await createGeometry(
+          {
+            'main.scad': `
+              include <BOSL2/std.scad>
+              cuboid([10, 12, 14]);
+            `,
+          },
+          'main.scad',
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+        await geometryHelpers.expectBoundingBoxSize(result, [0.01, 0.014, 0.012], 0.001);
       });
     });
 

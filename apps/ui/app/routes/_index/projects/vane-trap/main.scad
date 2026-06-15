@@ -15,7 +15,7 @@
 
 // =====================[  Libraries  ]=====================
 include <BOSL2/std.scad>;          // solids, hull(), etc.
-include <BOSL2/threading.scad>;    // screw_thread() helper
+include <BOSL2/threading.scad>;    // thread_helix() helper
 
 // ====================[  Configuration  ]==================
 PART               = "assembly"; // "vanes", "funnel", "assembly"
@@ -57,10 +57,13 @@ else                                    complete_assembly();
 // Generates an *internal* (female) triangular thread mask that will be
 // removed from the funnel so it can screw onto a jar.
 module make_jar_threads() {
-    screw_thread(
+    thread_helix(
         d       = jar_thread_od + 0.3,      // little extra room
-        l       = jar_thread_len + 2,       // poke through for difference()
         pitch   = jar_thread_pitch,
+        thread_depth = jar_thread_pitch * 0.35,
+        flank_angle  = 15,
+        turns   = (jar_thread_len + 2) / jar_thread_pitch,
+        lead_in = -jar_thread_pitch * 0.35,
         internal= true,
         anchor  = BOTTOM
     );

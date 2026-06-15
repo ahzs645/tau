@@ -24,6 +24,9 @@
     "wasm",
     "gpl"
   ],
+  "scripts": {
+    "update:bosl2": "node scripts/update-bosl2-library.mjs"
+  },
   "author": "Richard Fontein",
   "license": "GPL-2.0-or-later",
   "exports": {

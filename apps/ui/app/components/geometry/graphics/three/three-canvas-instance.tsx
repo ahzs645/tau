@@ -84,7 +84,7 @@ export function ThreeCanvasInstance({
       gl={glProperty}
       dpr={dpr}
       frameloop='demand'
-      className={cn('bg-background', className)}
+      className={cn('size-full bg-background', className)}
       onCreated={onCanvasCreated}
     >
       <ThreeGraphicsBackendProvider value={graphicsBackend}>

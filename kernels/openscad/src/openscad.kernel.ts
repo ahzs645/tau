@@ -32,6 +32,7 @@ import { processOpenScadParameters, flattenParametersForInjection } from '#parse
 import { openscadRenderSchema, openscadExportSchemas } from '#openscad.schemas.js';
 import type { AddErrorFunction, GetFileContentsFunction } from '#parse-output.js';
 import { OpenScadStderrParser } from '#parse-output.js';
+import { bosl2LibraryFiles, bosl2Version } from '#bosl2-library.generated.js';
 
 const geistRegularUrl = new URL('fonts/Geist-Regular.ttf', import.meta.url).href;
 const geistBoldUrl = new URL('fonts/Geist-Bold.ttf', import.meta.url).href;
@@ -110,15 +111,20 @@ function resolveIncludePath(baseFilePath: string, relativePath: string): string 
   return resolved.join('/');
 }
 
+function readBundledOpenScadLibraryFile(filePath: string): string | undefined {
+  return filePath.startsWith('BOSL2/') ? bosl2LibraryFiles[filePath] : undefined;
+}
+
 async function getReferencedScadFiles(options: {
   mainFile: string;
   basePath: string;
   filesystem: KernelFileSystem;
   logger: RuntimeLogger;
-}): Promise<{ resolved: string[]; unresolved: string[] }> {
+}): Promise<{ projectFiles: string[]; libraryFiles: string[]; unresolved: string[] }> {
   const { mainFile, basePath, filesystem, logger } = options;
   const visited = new Set<string>();
-  const resolved: string[] = [];
+  const projectFiles: string[] = [];
+  const libraryFiles: string[] = [];
   const unresolved: string[] = [];
 
   const resolveFile = async (filePath: string, depth: number): Promise<void> => {
@@ -134,16 +140,24 @@ async function getReferencedScadFiles(options: {
 
     visited.add(normalizedPath);
 
-    let code: string;
-    try {
-      code = await filesystem.readFile(resolveFromRoot(normalizedPath, basePath), 'utf8');
-    } catch {
-      logger.debug(`Could not read file ${normalizedPath} for dependency resolution`);
-      unresolved.push(normalizedPath);
-      return;
+    let code = readBundledOpenScadLibraryFile(normalizedPath);
+    let source: 'project' | 'library' = code === undefined ? 'project' : 'library';
+
+    if (code === undefined) {
+      try {
+        code = await filesystem.readFile(resolveFromRoot(normalizedPath, basePath), 'utf8');
+      } catch {
+        logger.debug(`Could not read file ${normalizedPath} for dependency resolution`);
+        unresolved.push(normalizedPath);
+        return;
+      }
     }
 
-    resolved.push(normalizedPath);
+    if (source === 'library') {
+      libraryFiles.push(normalizedPath);
+    } else {
+      projectFiles.push(normalizedPath);
+    }
 
     const dependencies = parseUseIncludeStatements(code);
     for (const depPath of dependencies) {
@@ -154,7 +168,7 @@ async function getReferencedScadFiles(options: {
   };
 
   await resolveFile(mainFile, 0);
-  return { resolved, unresolved };
+  return { projectFiles, libraryFiles, unresolved };
 }
 
 // =============================================================================
@@ -240,15 +254,15 @@ async function mountFileSystem(
   (instance.FS as unknown as { chdir(path: string): void }).chdir('/');
   instance.FS.mkdir('/locale');
 
-  const { resolved: referencedFiles } = await getReferencedScadFiles({
+  const { projectFiles, libraryFiles } = await getReferencedScadFiles({
     mainFile,
     basePath,
     filesystem,
     logger,
   });
-  logger.debug(`Mounting ${referencedFiles.length} referenced files`);
+  logger.debug(`Mounting ${projectFiles.length} project files and ${libraryFiles.length} BOSL2 ${bosl2Version} files`);
 
-  const uncachedAbsolutePaths = referencedFiles
+  const uncachedAbsolutePaths = projectFiles
     .map((relativePath) => resolveFromRoot(relativePath, basePath))
     .filter((abs) => !fileContentCache.has(abs));
 
@@ -257,7 +271,7 @@ async function mountFileSystem(
     await filesystem.readFiles(uncachedAbsolutePaths);
   }
 
-  for (const relativePath of referencedFiles) {
+  for (const relativePath of projectFiles) {
     const absolutePath = resolveFromRoot(relativePath, basePath);
     const content =
       fileContentCache.get(absolutePath) ??
@@ -270,6 +284,20 @@ async function mountFileSystem(
     if (fileContentsCache && relativePath.endsWith('.scad')) {
       const textContent = typeof content === 'string' ? content : new TextDecoder().decode(content);
       fileContentsCache.set(relativePath, textContent);
+    }
+  }
+
+  for (const relativePath of libraryFiles) {
+    const content = bosl2LibraryFiles[relativePath];
+    if (content === undefined) {
+      continue;
+    }
+
+    ensureDirectoryForFile(instance, relativePath);
+    instance.FS.writeFile(relativePath, content);
+
+    if (fileContentsCache) {
+      fileContentsCache.set(relativePath, content);
     }
   }
 }
@@ -490,14 +518,14 @@ export default defineKernel({
 
   async getDependencies({ filePath, basePath }, { filesystem, logger }) {
     const relativeFilePath = resolveToRelative(filePath, basePath);
-    const { resolved, unresolved } = await getReferencedScadFiles({
+    const { projectFiles, unresolved } = await getReferencedScadFiles({
       mainFile: relativeFilePath,
       basePath,
       filesystem,
       logger,
     });
     return {
-      resolved: resolved.map((relativePath) => resolveFromRoot(relativePath, basePath)),
+      resolved: projectFiles.map((relativePath) => resolveFromRoot(relativePath, basePath)),
       unresolved: unresolved.map((relativePath) => resolveFromRoot(relativePath, basePath)),
     };
   },
@@ -505,7 +533,7 @@ export default defineKernel({
   async getParameters({ filePath, basePath }, { filesystem, logger, fileContentCache }, context) {
     try {
       const mainFilePath = resolveToRelative(filePath, basePath);
-      const { resolved: referencedFiles } = await getReferencedScadFiles({
+      const { projectFiles: referencedFiles } = await getReferencedScadFiles({
         mainFile: mainFilePath,
         basePath,
         filesystem,
