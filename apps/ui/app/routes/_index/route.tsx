@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router';
+import { Link, useLocation } from 'react-router';
 import { Box, Braces, Download, Eye, LayoutGrid, Play, RotateCcw, Share2, SlidersHorizontal } from 'lucide-react';
 import type { FileExtension } from '@taucad/types';
 import { downloadBlob } from '@taucad/utils/file';
@@ -39,7 +39,9 @@ export function loader({ request }: Route.LoaderArgs): { activeExampleId: string
 }
 
 export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}): React.JSX.Element {
-  const [activeExampleId] = useState(props.loaderData?.activeExampleId ?? defaultExample.id);
+  const location = useLocation();
+  const loaderExampleId = props.loaderData?.activeExampleId ?? defaultExample.id;
+  const [activeExampleId, setActiveExampleId] = useState(loaderExampleId);
   const initialExample = playgroundExamples.find((example) => example.id === activeExampleId) ?? defaultExample;
   const [editorValue, setEditorValue] = useState(initialExample.code);
   const [previewValue, setPreviewValue] = useState(initialExample.code);
@@ -95,8 +97,18 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
   }, [activeExample.id]);
 
   useEffect(() => {
+    const searchExampleId = readInitialExampleIdFromSearch(new URLSearchParams(location.search));
+    setActiveExampleId(searchExampleId);
+  }, [loaderExampleId, location.search]);
+
+  useEffect(() => {
+    const currentExampleId = readInitialExampleIdFromSearch(new URLSearchParams(location.search));
+    if (currentExampleId !== activeExample.id) {
+      return;
+    }
+
     writeExampleToUrl(activeExample.id, { replace: true });
-  }, [activeExample.id]);
+  }, [activeExample.id, location.search]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {

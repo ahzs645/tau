@@ -237,6 +237,43 @@ describe('PlaygroundRoot', () => {
     expect(providerCalls.at(-1)?.files['main.ts']).toBeDefined();
   });
 
+  it('updates the active model when route loader data changes on client navigation', async () => {
+    const { rerender } = render(
+      <MemoryRouter key='3d-rack-scad' initialEntries={['/?model=3d-rack-scad']}>
+        <PlaygroundRoot loaderData={{ activeExampleId: '3d-rack-scad' }} />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('3D Rack System (Original) · OpenSCAD')).toBeDefined();
+    await waitFor(() => {
+      expect(providerCalls.at(-1)?.projectId).toContain('root-playground-3d-rack-scad');
+    });
+
+    rerender(
+      <MemoryRouter key='networking' initialEntries={['/?model=networking']}>
+        <PlaygroundRoot loaderData={{ activeExampleId: 'networking' }} />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Network Equipment Rack (Original) · OpenSCAD')).toBeDefined();
+    await waitFor(() => {
+      expect(providerCalls.at(-1)?.projectId).toContain('root-playground-networking');
+    });
+  });
+
+  it('uses the browser location search when static prerender loader data is the default model', async () => {
+    render(
+      <MemoryRouter initialEntries={['/?model=networking']}>
+        <PlaygroundRoot loaderData={{ activeExampleId: 'openscad-bracket' }} />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByText('Network Equipment Rack (Original) · OpenSCAD')).toBeDefined();
+    await waitFor(() => {
+      expect(providerCalls.at(-1)?.projectId).toContain('root-playground-networking');
+    });
+  });
+
   it('runs edited code through the preview provider', async () => {
     renderPlaygroundRoot();
 
@@ -343,7 +380,7 @@ function renderPlaygroundRoot(): ReturnType<typeof render> {
   } as Parameters<typeof playgroundRootLoader>[0]);
 
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[`${globalThis.location.pathname}${globalThis.location.search}`]}>
       <PlaygroundRoot loaderData={loaderData} />
     </MemoryRouter>,
   );
