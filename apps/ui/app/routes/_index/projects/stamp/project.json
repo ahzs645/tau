@@ -1,0 +1,8 @@
+{
+  "title": "Stamp",
+  "entry": "Main.scad",
+  "description": "SVG-driven stamp generator using uploaded artwork",
+  "category": "Personalization",
+  "tags": ["stamp", "svg", "text"],
+  "hidden": false
+}

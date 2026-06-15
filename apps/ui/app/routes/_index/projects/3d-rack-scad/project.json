@@ -1,0 +1,9 @@
+{
+  "title": "3D Rack System",
+  "entry": "main.scad",
+  "description": "Customizable modular rack system for organizing components and tools",
+  "category": "Organization",
+  "tags": ["rack", "organization", "modular", "storage"],
+  "created": "2024-01-01",
+  "author": "OpenSCAD Playground"
+}

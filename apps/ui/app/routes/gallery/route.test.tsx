@@ -13,10 +13,11 @@ describe('PlaygroundGallery', () => {
     renderGallery();
 
     expect(screen.getByRole('heading', { name: 'Tau CAD Gallery' })).toBeDefined();
-    expect(screen.getByRole('heading', { name: 'OpenSCAD bracket' })).toBeDefined();
-    expect(screen.getByRole('heading', { name: 'Replicad tray' })).toBeDefined();
+    expect(screen.getByRole('heading', { name: '3D Rack System (Original)' })).toBeDefined();
     expect(screen.getByRole('heading', { name: 'Interlocking Boxes System (Original)' })).toBeDefined();
-    expect(screen.getAllByRole('link', { name: 'Open' })[0]?.getAttribute('href')).toBe('/?model=openscad-bracket');
+    expect(screen.queryByRole('heading', { name: 'Replicad tray' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'OpenCascade direct' })).toBeNull();
+    expect(screen.getAllByRole('link', { name: 'Open' })[0]?.getAttribute('href')).toBe('/?model=3d-rack-scad');
   });
 
   it('filters gallery models by search and engine', () => {
@@ -24,7 +25,7 @@ describe('PlaygroundGallery', () => {
 
     fireEvent.change(screen.getByLabelText('Search gallery'), { target: { value: 'tray' } });
 
-    expect(screen.getByRole('heading', { name: 'Replicad tray' })).toBeDefined();
+    expect(screen.getByRole('heading', { name: 'Custom Tray System (Original)' })).toBeDefined();
     expect(screen.queryByRole('heading', { name: 'OpenSCAD bracket' })).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'OpenSCAD' }));

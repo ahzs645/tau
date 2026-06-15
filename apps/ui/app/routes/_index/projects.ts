@@ -1,101 +1,101 @@
 import type { PlaygroundExample } from '#routes/_index/playground-examples.js';
-import old3dRackScadMainScad from '#routes/_index/imported-openscad-examples/old-3d-rack-scad/main.scad?raw';
-import oldSaboteurCardHolderMainScad from '#routes/_index/imported-openscad-examples/old-saboteur-card-holder/main.scad?raw';
-import oldTrayScadMainScad from '#routes/_index/imported-openscad-examples/old-tray-scad/main.scad?raw';
-import oldKeyguardWithRaisedTabsMainScad from '#routes/_index/imported-openscad-examples/old-keyguard-with-raised-tabs/main.scad?raw';
-import oldKeyguardWithRaisedTabsopenings_and_additions_txt from '#routes/_index/imported-openscad-examples/old-keyguard-with-raised-tabs/openings_and_additions.txt?raw';
-import oldPeriodicTableMainScad from '#routes/_index/imported-openscad-examples/old-periodic-table/main.scad?raw';
-import oldNetworkingMainScad from '#routes/_index/imported-openscad-examples/old-networking/main.scad?raw';
-import oldParametricGelCombMainScad from '#routes/_index/imported-openscad-examples/old-parametric-gel-comb/main.scad?raw';
-import oldPendantLampMainScad from '#routes/_index/imported-openscad-examples/old-pendant-lamp/Main.scad?raw';
-import oldPreChamberNozzleInsertMainScad from '#routes/_index/imported-openscad-examples/old-pre-chamber-nozzle-insert/prechamber_nozzle_insert_BOSL2_threads.scad?raw';
-import oldStampMainScad from '#routes/_index/imported-openscad-examples/old-stamp/Main.scad?raw';
-import oldStampyaa_svg from '#routes/_index/imported-openscad-examples/old-stamp/yaa.svg?raw';
-import oldVaneTrapMainScad from '#routes/_index/imported-openscad-examples/old-vane-trap/main.scad?raw';
-import oldWhamMainScad from '#routes/_index/imported-openscad-examples/old-wham/main.scad?raw';
+import rackScadMainScad from '#routes/_index/projects/3d-rack-scad/main.scad?raw';
+import saboteurCardHolderMainScad from '#routes/_index/projects/saboteur-card-holder/main.scad?raw';
+import trayScadMainScad from '#routes/_index/projects/tray-scad/main.scad?raw';
+import keyguardWithRaisedTabsMainScad from '#routes/_index/projects/keyguard-with-raised-tabs/main.scad?raw';
+import keyguardWithRaisedTabsOpeningsAndAdditions from '#routes/_index/projects/keyguard-with-raised-tabs/openings_and_additions.txt?raw';
+import periodicTableMainScad from '#routes/_index/projects/periodic-table/main.scad?raw';
+import networkingMainScad from '#routes/_index/projects/networking/main.scad?raw';
+import parametricGelCombMainScad from '#routes/_index/projects/parametric-gel-comb/main.scad?raw';
+import pendantLampMainScad from '#routes/_index/projects/pendant-lamp/Main.scad?raw';
+import preChamberNozzleInsertMainScad from '#routes/_index/projects/pre-chamber-nozzle-insert/prechamber_nozzle_insert_BOSL2_threads.scad?raw';
+import stampMainScad from '#routes/_index/projects/stamp/Main.scad?raw';
+import stampYaaSvg from '#routes/_index/projects/stamp/yaa.svg?raw';
+import vaneTrapMainScad from '#routes/_index/projects/vane-trap/main.scad?raw';
+import whamMainScad from '#routes/_index/projects/wham/main.scad?raw';
 
-export const importedOpenScadExamples: readonly PlaygroundExample[] = [
+export const projectExamples: readonly PlaygroundExample[] = [
   {
-    id: 'old-3d-rack-scad',
+    id: '3d-rack-scad',
     name: '3D Rack System (Original)',
     kernel: 'OpenSCAD',
     mainFile: 'main.scad',
     language: 'scad',
     description: 'Customizable modular rack system for organizing components and tools',
     exportFormats: ['glb'],
-    code: old3dRackScadMainScad,
+    code: rackScadMainScad,
     sourceFiles: {
-      'main.scad': old3dRackScadMainScad,
+      'main.scad': rackScadMainScad,
     },
   },
   {
-    id: 'old-saboteur-card-holder',
+    id: 'saboteur-card-holder',
     name: 'Card Holder Grid (Original)',
     kernel: 'OpenSCAD',
     mainFile: 'main.scad',
     language: 'scad',
     description: 'Organizational grid system for holding and displaying cards, perfect for board games',
     exportFormats: ['glb'],
-    code: oldSaboteurCardHolderMainScad,
+    code: saboteurCardHolderMainScad,
     sourceFiles: {
-      'main.scad': oldSaboteurCardHolderMainScad,
+      'main.scad': saboteurCardHolderMainScad,
     },
   },
   {
-    id: 'old-tray-scad',
+    id: 'tray-scad',
     name: 'Custom Tray System (Original)',
     kernel: 'OpenSCAD',
     mainFile: 'main.scad',
     language: 'scad',
     description: 'Customizable tray system for organizing tools and small items',
     exportFormats: ['glb'],
-    code: oldTrayScadMainScad,
+    code: trayScadMainScad,
     sourceFiles: {
-      'main.scad': oldTrayScadMainScad,
+      'main.scad': trayScadMainScad,
     },
   },
   {
-    id: 'old-keyguard-with-raised-tabs',
+    id: 'keyguard-with-raised-tabs',
     name: 'Customizable Keyguard (Original)',
     kernel: 'OpenSCAD',
     mainFile: 'main.scad',
     language: 'scad',
     description: '3D printable keyguard for tablets and AAC devices with customizable raised tabs',
     exportFormats: ['glb'],
-    code: oldKeyguardWithRaisedTabsMainScad,
+    code: keyguardWithRaisedTabsMainScad,
     sourceFiles: {
-      'main.scad': oldKeyguardWithRaisedTabsMainScad,
-      'openings_and_additions.txt': oldKeyguardWithRaisedTabsopenings_and_additions_txt,
+      'main.scad': keyguardWithRaisedTabsMainScad,
+      'openings_and_additions.txt': keyguardWithRaisedTabsOpeningsAndAdditions,
     },
   },
   {
-    id: 'old-periodic-table',
+    id: 'periodic-table',
     name: 'Interlocking Boxes System (Original)',
     kernel: 'OpenSCAD',
     mainFile: 'main.scad',
     language: 'scad',
     description: 'Modular interlocking box system perfect for organizing small parts and components',
     exportFormats: ['glb'],
-    code: oldPeriodicTableMainScad,
+    code: periodicTableMainScad,
     sourceFiles: {
-      'main.scad': oldPeriodicTableMainScad,
+      'main.scad': periodicTableMainScad,
     },
   },
   {
-    id: 'old-networking',
+    id: 'networking',
     name: 'Network Equipment Rack (Original)',
     kernel: 'OpenSCAD',
     mainFile: 'main.scad',
     language: 'scad',
     description: 'Custom rack system for network equipment including POE switches and patch panels',
     exportFormats: ['glb'],
-    code: oldNetworkingMainScad,
+    code: networkingMainScad,
     sourceFiles: {
-      'main.scad': oldNetworkingMainScad,
+      'main.scad': networkingMainScad,
     },
   },
   {
-    id: 'old-parametric-gel-comb',
+    id: 'parametric-gel-comb',
     name: 'Parametric Gel Comb (Original)',
     kernel: 'OpenSCAD',
     mainFile: 'main.scad',
@@ -103,26 +103,26 @@ export const importedOpenScadExamples: readonly PlaygroundExample[] = [
     description:
       'Customizable gel comb with adjustable tooth count, tooth and bar thickness, ridges, slots, and side hooks',
     exportFormats: ['glb'],
-    code: oldParametricGelCombMainScad,
+    code: parametricGelCombMainScad,
     sourceFiles: {
-      'main.scad': oldParametricGelCombMainScad,
+      'main.scad': parametricGelCombMainScad,
     },
   },
   {
-    id: 'old-pendant-lamp',
+    id: 'pendant-lamp',
     name: 'Pleated Pendant Lamp (Original)',
     kernel: 'OpenSCAD',
     mainFile: 'Main.scad',
     language: 'scad',
     description: 'Elegant pleated pendant lamp shade with customizable dimensions and pleating patterns',
     exportFormats: ['glb'],
-    code: oldPendantLampMainScad,
+    code: pendantLampMainScad,
     sourceFiles: {
-      'Main.scad': oldPendantLampMainScad,
+      'Main.scad': pendantLampMainScad,
     },
   },
   {
-    id: 'old-pre-chamber-nozzle-insert',
+    id: 'pre-chamber-nozzle-insert',
     name: 'Pre-Chamber Nozzle Insert (Original)',
     kernel: 'OpenSCAD',
     mainFile: 'prechamber_nozzle_insert_BOSL2_threads.scad',
@@ -130,49 +130,49 @@ export const importedOpenScadExamples: readonly PlaygroundExample[] = [
     description:
       'Custom M14x1.25-to-M10x1.0 spark-plug pre-chamber / jet-ignition nozzle insert. Reverse-engineered starter CAD with BOSL2 helical threads, selectable original/corrected hex and collar dimensions, conical nozzle tip, 2.5 mm axial orifice, and angled 2.5/1.0 mm side jet holes. SCAD source included alongside the pre-rendered metal GLB.',
     exportFormats: ['glb'],
-    code: oldPreChamberNozzleInsertMainScad,
+    code: preChamberNozzleInsertMainScad,
     sourceFiles: {
-      'prechamber_nozzle_insert_BOSL2_threads.scad': oldPreChamberNozzleInsertMainScad,
+      'prechamber_nozzle_insert_BOSL2_threads.scad': preChamberNozzleInsertMainScad,
     },
   },
   {
-    id: 'old-stamp',
+    id: 'stamp',
     name: 'Stamp (Original)',
     kernel: 'OpenSCAD',
     mainFile: 'Main.scad',
     language: 'scad',
     description: 'SVG-driven stamp generator using uploaded artwork',
     exportFormats: ['glb'],
-    code: oldStampMainScad,
+    code: stampMainScad,
     sourceFiles: {
-      'Main.scad': oldStampMainScad,
-      'yaa.svg': oldStampyaa_svg,
+      'Main.scad': stampMainScad,
+      'yaa.svg': stampYaaSvg,
     },
   },
   {
-    id: 'old-vane-trap',
+    id: 'vane-trap',
     name: 'Vane Trap Device (Original)',
     kernel: 'OpenSCAD',
     mainFile: 'main.scad',
     language: 'scad',
     description: 'Custom vane trap mechanism with adjustable parameters',
     exportFormats: ['glb'],
-    code: oldVaneTrapMainScad,
+    code: vaneTrapMainScad,
     sourceFiles: {
-      'main.scad': oldVaneTrapMainScad,
+      'main.scad': vaneTrapMainScad,
     },
   },
   {
-    id: 'old-wham',
+    id: 'wham',
     name: 'Wham Project (Original)',
     kernel: 'OpenSCAD',
     mainFile: 'main.scad',
     language: 'scad',
     description: 'Experimental design project with customizable features',
     exportFormats: ['glb'],
-    code: oldWhamMainScad,
+    code: whamMainScad,
     sourceFiles: {
-      'main.scad': oldWhamMainScad,
+      'main.scad': whamMainScad,
     },
   },
 ];

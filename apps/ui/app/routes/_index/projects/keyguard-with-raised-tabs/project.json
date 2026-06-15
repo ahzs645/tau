@@ -1,0 +1,9 @@
+{
+  "title": "Customizable Keyguard",
+  "entry": "main.scad",
+  "description": "3D printable keyguard for tablets and AAC devices with customizable raised tabs",
+  "category": "Accessibility",
+  "tags": ["keyguard", "accessibility", "tablet", "AAC", "customizable"],
+  "created": "2024-01-01",
+  "author": "OpenSCAD Playground"
+}

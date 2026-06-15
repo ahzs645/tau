@@ -1,0 +1,9 @@
+{
+  "title": "Parametric Gel Comb",
+  "entry": "main.scad",
+  "description": "Customizable gel comb with adjustable tooth count, tooth and bar thickness, ridges, slots, and side hooks",
+  "category": "Lab Equipment",
+  "tags": ["gel-comb", "lab", "parametric", "customizable"],
+  "created": "2026-05-29",
+  "author": "OpenSCAD Playground"
+}

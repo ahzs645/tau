@@ -1,6 +1,6 @@
 import type { FileExtension } from '@taucad/types';
-import { importedOpenScadExamples } from '#routes/_index/imported-openscad-examples.js';
 import { legacyPlaygroundExamples } from '#routes/_index/legacy-playground-examples.js';
+import { projectExamples } from '#routes/_index/projects.js';
 
 export type PlaygroundPreset = {
   readonly name: string;
@@ -421,6 +421,6 @@ export default function main(params = {}) {
 
 export const playgroundExamples: readonly PlaygroundExample[] = [
   ...curatedPlaygroundExamples,
-  ...importedOpenScadExamples,
+  ...projectExamples,
   ...legacyPlaygroundExamples,
 ] as const;

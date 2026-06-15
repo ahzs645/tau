@@ -2,11 +2,12 @@ import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { ArrowLeft, Box, ExternalLink, FileCode2, Search } from 'lucide-react';
 import { buttonVariants } from '#components/ui/button.js';
-import { playgroundExamples } from '#routes/_index/playground-examples.js';
+import { projectExamples } from '#routes/_index/projects.js';
 import { cn } from '#utils/ui.utils.js';
 import type { Handle } from '#types/matches.types.js';
 
-const engineFilters = ['All', 'OpenSCAD', 'Replicad', 'OpenCascade'] as const;
+const galleryExamples = projectExamples;
+const engineFilters = ['All', 'OpenSCAD'] as const;
 
 type EngineFilter = (typeof engineFilters)[number];
 
@@ -20,7 +21,7 @@ export default function PlaygroundGallery(): React.JSX.Element {
 
   const filteredExamples = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
-    return playgroundExamples.filter((example) => {
+    return galleryExamples.filter((example) => {
       if (engineFilter !== 'All' && example.kernel !== engineFilter) {
         return false;
       }
@@ -45,7 +46,7 @@ export default function PlaygroundGallery(): React.JSX.Element {
           </div>
           <div className='min-w-0'>
             <h1 className='truncate text-base font-semibold'>Tau CAD Gallery</h1>
-            <p className='truncate text-xs text-muted-foreground'>OpenSCAD, Replicad, and OpenCascade examples</p>
+            <p className='truncate text-xs text-muted-foreground'>OpenSCAD project gallery</p>
           </div>
         </div>
         <Link to='/' className={buttonVariants({ variant: 'outline', size: 'sm' })}>

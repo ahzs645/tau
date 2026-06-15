@@ -1,0 +1,10 @@
+{
+  "title": "Wham Project",
+  "entry": "main.scad",
+  "description": "Experimental design project with customizable features",
+  "category": "Experimental",
+  "tags": ["experimental", "design", "prototype"],
+  "created": "2024-01-01",
+  "author": "OpenSCAD Playground",
+  "hidden": true
+}
