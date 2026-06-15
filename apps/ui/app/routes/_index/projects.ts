@@ -21,7 +21,9 @@ const bosl2SourceFiles = import.meta.glob('./projects/BOSL2/**/*.scad', {
 }) as Record<string, string>;
 
 const bosl2Files = Object.fromEntries(
-  Object.entries(bosl2SourceFiles).map(([path, content]) => [path.replace('./projects/', ''), content]),
+  Object.entries(bosl2SourceFiles)
+    .filter(([path]) => !path.endsWith('/joiners.scad'))
+    .map(([path, content]) => [path.replace('./projects/', ''), content]),
 );
 
 function withBosl2(files: Record<string, string>): Record<string, string> {

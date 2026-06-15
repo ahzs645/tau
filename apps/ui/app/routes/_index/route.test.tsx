@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import type { FileExtension } from '@taucad/types';
-import PlaygroundRoot from '#routes/_index/route.js';
+import PlaygroundRoot, { loader as playgroundRootLoader } from '#routes/_index/route.js';
 
 type CadEventMap = {
   geometryExported: { blob: Blob; format: FileExtension };
@@ -337,9 +337,14 @@ describe('PlaygroundRoot', () => {
 });
 
 function renderPlaygroundRoot(): ReturnType<typeof render> {
+  const loaderData = playgroundRootLoader({
+    request: new Request(globalThis.location.href),
+    // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- tests only need request for this loader.
+  } as Parameters<typeof playgroundRootLoader>[0]);
+
   return render(
     <MemoryRouter>
-      <PlaygroundRoot />
+      <PlaygroundRoot loaderData={loaderData} />
     </MemoryRouter>,
   );
 }

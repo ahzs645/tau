@@ -1,5 +1,4 @@
 include <BOSL2/std.scad>
-include <BOSL2/joiners.scad>
 
 /*[Rack Dimensions]*/
 rack_width = 201;
@@ -64,6 +63,28 @@ bottom_depth = 7;
 /*[Component Selection]*/
 // Combo box to select which component to render
 component_selection = "assembly"; // [assembly:Assembly, bottom_rack:Bottom Rack, combined_rack:Combined Rack, vertical_support:Vertical Support]
+
+module male_dovetail(slide, width, height, back_width, spin) {
+    rotate([0, 0, spin])
+        linear_extrude(height=slide, center=true)
+            polygon([
+                [-width / 2, -height / 2],
+                [width / 2, -height / 2],
+                [back_width / 2, height / 2],
+                [-back_width / 2, height / 2],
+            ]);
+}
+
+module female_dovetail(slide, width, height, back_width, spin) {
+    rotate([0, 0, spin])
+        linear_extrude(height=slide, center=true)
+            polygon([
+                [-back_width / 2, -height / 2],
+                [back_width / 2, -height / 2],
+                [width / 2, height / 2],
+                [-width / 2, height / 2],
+            ]);
+}
 
 /* Function, module, and layout definitions remain the same as in the original code */
 
@@ -172,11 +193,11 @@ module bottom_rack() {
         cuboid([rack_width, rack_depth, section_height], anchor=CENTER) {
             // Left side male dovetail
             attach(LEFT)
-                dovetail("male", slide=rack_depth, width=dovetail_width, height=dovetail_height, back_width=dovetail_back_width, spin=90);
+                male_dovetail(slide=rack_depth, width=dovetail_width, height=dovetail_height, back_width=dovetail_back_width, spin=90);
 
             // Right side male dovetail
             attach(RIGHT)
-                dovetail("male", slide=rack_depth, width=dovetail_width, height=dovetail_height, back_width=dovetail_back_width, spin=90);
+                male_dovetail(slide=rack_depth, width=dovetail_width, height=dovetail_height, back_width=dovetail_back_width, spin=90);
         }
         // Subtract bottom dimples
         bottom_dimples();
@@ -246,11 +267,11 @@ module combined_rack() {
         cuboid([rack_width, rack_depth, section_height], anchor=CENTER) {
             // Left side male dovetail
             attach(LEFT)
-                dovetail("male", slide=rack_depth, width=dovetail_width, height=dovetail_height, back_width=dovetail_back_width, spin=90);
+                male_dovetail(slide=rack_depth, width=dovetail_width, height=dovetail_height, back_width=dovetail_back_width, spin=90);
 
             // Right side male dovetail
             attach(RIGHT)
-                dovetail("male", slide=rack_depth, width=dovetail_width, height=dovetail_height, back_width=dovetail_back_width, spin=90);
+                male_dovetail(slide=rack_depth, width=dovetail_width, height=dovetail_height, back_width=dovetail_back_width, spin=90);
         }
         
         // Numbered hole pattern
@@ -275,11 +296,12 @@ module vertical_support() {
                 translate([0, rack_depth/2, dovetail_z_pos]) {
                     // Create the main dovetail cutout
                     rotate([0, 90, 0])
-                        dovetail("female", 
+                        female_dovetail(
                                 slide=rack_depth*2, 
                                 width=dovetail_width, 
                                 height=dovetail_height, 
-                                back_width=dovetail_back_width);
+                                back_width=dovetail_back_width,
+                                spin=0);
                     
                     // Add the partial opening only on the front face
                     translate([support_thickness/2 - dovetail_cut_depth/2, 0, 0])

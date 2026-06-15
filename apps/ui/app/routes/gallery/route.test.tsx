@@ -14,7 +14,10 @@ describe('PlaygroundGallery', () => {
 
     expect(screen.getByRole('heading', { name: 'Tau CAD Gallery' })).toBeDefined();
     expect(screen.getByRole('heading', { name: '3D Rack System (Original)' })).toBeDefined();
-    expect(screen.getByRole('heading', { name: 'Interlocking Boxes System (Original)' })).toBeDefined();
+    expect(screen.getByRole('heading', { name: 'Network Equipment Rack (Original)' })).toBeDefined();
+    expect(screen.queryByRole('heading', { name: 'Custom Tray System (Original)' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Card Holder Grid (Original)' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'Wham Project (Original)' })).toBeNull();
     expect(screen.queryByRole('heading', { name: 'Replicad tray' })).toBeNull();
     expect(screen.queryByRole('heading', { name: 'OpenCascade direct' })).toBeNull();
     expect(screen.getAllByRole('link', { name: 'Open' })[0]?.getAttribute('href')).toBe('/?model=3d-rack-scad');
@@ -23,14 +26,14 @@ describe('PlaygroundGallery', () => {
   it('filters gallery models by search and engine', () => {
     renderGallery();
 
-    fireEvent.change(screen.getByLabelText('Search gallery'), { target: { value: 'tray' } });
+    fireEvent.change(screen.getByLabelText('Search gallery'), { target: { value: 'rack' } });
 
-    expect(screen.getByRole('heading', { name: 'Custom Tray System (Original)' })).toBeDefined();
+    expect(screen.getByRole('heading', { name: '3D Rack System (Original)' })).toBeDefined();
     expect(screen.queryByRole('heading', { name: 'OpenSCAD bracket' })).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'OpenSCAD' }));
 
-    expect(screen.getByRole('heading', { name: 'Custom Tray System (Original)' })).toBeDefined();
+    expect(screen.getByRole('heading', { name: '3D Rack System (Original)' })).toBeDefined();
 
     fireEvent.change(screen.getByLabelText('Search gallery'), { target: { value: 'not-a-real-model' } });
 

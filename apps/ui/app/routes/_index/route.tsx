@@ -14,6 +14,7 @@ import type { PlaygroundExample, PlaygroundPreset } from '#routes/_index/playgro
 import { PreviewParameters } from '#routes/projects_.$id_.preview/preview-parameters.js';
 import { encodeTextFile } from '#utils/filesystem.utils.js';
 import type { Handle } from '#types/matches.types.js';
+import type { Route } from './+types/route.js';
 
 const CodeEditorLazy = lazy(async () => {
   const module = await import('#components/code/code-editor.client.js');
@@ -31,8 +32,14 @@ export const handle: Handle = {
   enablePageWrapper: false,
 };
 
-export default function PlaygroundRoot(): React.JSX.Element {
-  const [activeExampleId] = useState(readInitialExampleId);
+export function loader({ request }: Route.LoaderArgs): { activeExampleId: string } {
+  return {
+    activeExampleId: readInitialExampleIdFromSearch(new URL(request.url).searchParams),
+  };
+}
+
+export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}): React.JSX.Element {
+  const [activeExampleId] = useState(props.loaderData?.activeExampleId ?? defaultExample.id);
   const initialExample = playgroundExamples.find((example) => example.id === activeExampleId) ?? defaultExample;
   const [editorValue, setEditorValue] = useState(initialExample.code);
   const [previewValue, setPreviewValue] = useState(initialExample.code);
@@ -106,7 +113,7 @@ export default function PlaygroundRoot(): React.JSX.Element {
   }, [runPreview]);
 
   return (
-    <main className='flex min-h-dvh flex-col bg-background text-foreground'>
+    <main className='flex h-dvh flex-col overflow-hidden bg-background text-foreground'>
       <header className='flex min-h-14 flex-wrap items-center justify-between gap-3 border-b px-4 py-3 md:px-5'>
         <div className='flex min-w-0 items-center gap-3'>
           <div className='flex size-8 shrink-0 items-center justify-center rounded-md border bg-muted'>
@@ -415,13 +422,7 @@ function PlaygroundExportButton({
   );
 }
 
-function readInitialExampleId(): string {
-  const browserWindow = getBrowserWindow();
-  if (!browserWindow) {
-    return defaultExample.id;
-  }
-
-  const params = new URLSearchParams(browserWindow.location.search);
+function readInitialExampleIdFromSearch(params: URLSearchParams): string {
   const candidate = params.get('model') ?? params.get('example');
   if (candidate && playgroundExamples.some((example) => example.id === candidate)) {
     return candidate;
