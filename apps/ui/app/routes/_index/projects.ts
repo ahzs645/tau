@@ -14,6 +14,23 @@ import stampYaaSvg from '#routes/_index/projects/stamp/yaa.svg?raw';
 import vaneTrapMainScad from '#routes/_index/projects/vane-trap/main.scad?raw';
 import whamMainScad from '#routes/_index/projects/wham/main.scad?raw';
 
+const bosl2SourceFiles = import.meta.glob('./projects/BOSL2/**/*.scad', {
+  eager: true,
+  query: '?raw',
+  import: 'default',
+}) as Record<string, string>;
+
+const bosl2Files = Object.fromEntries(
+  Object.entries(bosl2SourceFiles).map(([path, content]) => [path.replace('./projects/', ''), content]),
+);
+
+function withBosl2(files: Record<string, string>): Record<string, string> {
+  return {
+    ...bosl2Files,
+    ...files,
+  };
+}
+
 export const projectExamples: readonly PlaygroundExample[] = [
   {
     id: '3d-rack-scad',
@@ -24,9 +41,9 @@ export const projectExamples: readonly PlaygroundExample[] = [
     description: 'Customizable modular rack system for organizing components and tools',
     exportFormats: ['glb'],
     code: rackScadMainScad,
-    sourceFiles: {
+    sourceFiles: withBosl2({
       'main.scad': rackScadMainScad,
-    },
+    }),
   },
   {
     id: 'saboteur-card-holder',
@@ -117,9 +134,9 @@ export const projectExamples: readonly PlaygroundExample[] = [
     description: 'Elegant pleated pendant lamp shade with customizable dimensions and pleating patterns',
     exportFormats: ['glb'],
     code: pendantLampMainScad,
-    sourceFiles: {
+    sourceFiles: withBosl2({
       'Main.scad': pendantLampMainScad,
-    },
+    }),
   },
   {
     id: 'pre-chamber-nozzle-insert',
@@ -131,9 +148,9 @@ export const projectExamples: readonly PlaygroundExample[] = [
       'Custom M14x1.25-to-M10x1.0 spark-plug pre-chamber / jet-ignition nozzle insert. Reverse-engineered starter CAD with BOSL2 helical threads, selectable original/corrected hex and collar dimensions, conical nozzle tip, 2.5 mm axial orifice, and angled 2.5/1.0 mm side jet holes. SCAD source included alongside the pre-rendered metal GLB.',
     exportFormats: ['glb'],
     code: preChamberNozzleInsertMainScad,
-    sourceFiles: {
+    sourceFiles: withBosl2({
       'prechamber_nozzle_insert_BOSL2_threads.scad': preChamberNozzleInsertMainScad,
-    },
+    }),
   },
   {
     id: 'stamp',
@@ -158,9 +175,9 @@ export const projectExamples: readonly PlaygroundExample[] = [
     description: 'Custom vane trap mechanism with adjustable parameters',
     exportFormats: ['glb'],
     code: vaneTrapMainScad,
-    sourceFiles: {
+    sourceFiles: withBosl2({
       'main.scad': vaneTrapMainScad,
-    },
+    }),
   },
   {
     id: 'wham',

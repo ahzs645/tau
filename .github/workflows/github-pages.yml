@@ -60,6 +60,17 @@ jobs:
           VITE_BUILD_TIME: ${{ env.VITE_BUILD_TIME }}
         run: pnpm exec react-router build
 
+      - name: Mirror public assets under /tau
+        working-directory: apps/ui
+        run: |
+          mkdir -p build/client/tau
+          cp -R build/client/android-chrome-192x192.png build/client/tau/
+          cp -R build/client/android-chrome-512x512.png build/client/tau/
+          cp -R build/client/apple-touch-icon.png build/client/tau/
+          cp -R build/client/favicon.ico build/client/tau/
+          cp -R build/client/favicon.svg build/client/tau/
+          cp -R build/client/favicon-96x96.png build/client/tau/
+
       - name: Add custom-domain root redirect
         working-directory: apps/ui
         run: |
