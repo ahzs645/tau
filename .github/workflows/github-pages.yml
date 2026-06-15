@@ -44,6 +44,11 @@ jobs:
           pnpm nx run runtime:copy-assets
           pnpm nx run ui:copy-assets
 
+      - name: Set build metadata
+        run: |
+          echo "VITE_COMMIT_SHA=${GITHUB_SHA}" >> "$GITHUB_ENV"
+          echo "VITE_BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> "$GITHUB_ENV"
+
       - name: Build React Router app
         working-directory: apps/ui
         env:
@@ -51,6 +56,8 @@ jobs:
           TAU_API_URL: https://api.taucad.dev
           TAU_FRONTEND_URL: https://3dd.ahmadjalil.com/tau
           TAU_WEBSOCKET_URL: wss://api.taucad.dev
+          VITE_COMMIT_SHA: ${{ env.VITE_COMMIT_SHA }}
+          VITE_BUILD_TIME: ${{ env.VITE_BUILD_TIME }}
         run: pnpm exec react-router build
 
       - name: Add custom-domain root redirect

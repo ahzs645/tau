@@ -1,13 +1,17 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { ArrowLeft, Box, ExternalLink, FileCode2, Search } from 'lucide-react';
 import { buttonVariants } from '#components/ui/button.js';
+import { toast } from '#components/ui/sonner.js';
 import { projectExamples } from '#routes/_index/projects.js';
+import type { AppVersion } from '#routes/version[.]json.js';
 import { cn } from '#utils/ui.utils.js';
 import type { Handle } from '#types/matches.types.js';
 
 const galleryExamples = projectExamples;
 const engineFilters = ['All', 'OpenSCAD'] as const;
+const updateCheckIntervalMs = 60_000;
+const updateToastId = 'app-version-update-available';
 
 type EngineFilter = (typeof engineFilters)[number];
 
@@ -18,6 +22,7 @@ export const handle: Handle = {
 export default function PlaygroundGallery(): React.JSX.Element {
   const [searchTerm, setSearchTerm] = useState('');
   const [engineFilter, setEngineFilter] = useState<EngineFilter>('All');
+  useGalleryVersionCheck();
 
   const filteredExamples = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
@@ -136,4 +141,66 @@ export default function PlaygroundGallery(): React.JSX.Element {
       </section>
     </main>
   );
+}
+
+function useGalleryVersionCheck(): void {
+  useEffect(() => {
+    const currentCommit = import.meta.env['VITE_COMMIT_SHA'];
+
+    if (!currentCommit) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const checkForUpdate = async (): Promise<void> => {
+      try {
+        const response = await fetch(`${getVersionJsonHref()}?ts=${Date.now()}`, { cache: 'no-store' });
+
+        if (!response.ok) {
+          return;
+        }
+
+        const latest = (await response.json()) as AppVersion;
+
+        if (!cancelled && latest.commit && latest.commit !== currentCommit) {
+          toast.info('New version available', {
+            id: updateToastId,
+            description: 'Refresh to use the latest gallery and project files.',
+            action: {
+              label: 'Refresh',
+              onClick: () => {
+                globalThis.location.reload();
+              },
+            },
+            duration: Number.POSITIVE_INFINITY,
+          });
+        }
+      } catch {
+        // Version checks are best-effort; cached app shells should still remain usable offline.
+      }
+    };
+
+    void checkForUpdate();
+    const interval = globalThis.setInterval(() => {
+      void checkForUpdate();
+    }, updateCheckIntervalMs);
+
+    return () => {
+      cancelled = true;
+      globalThis.clearInterval(interval);
+    };
+  }, []);
+}
+
+function getVersionJsonHref(): string {
+  const frontendUrl = globalThis.window.ENV.TAU_FRONTEND_URL;
+
+  try {
+    const { pathname } = new URL(frontendUrl);
+    const publicBasePath = pathname === '/' ? '' : pathname.replace(/\/$/, '');
+    return `${publicBasePath}/version.json`;
+  } catch {
+    return '/version.json';
+  }
 }
