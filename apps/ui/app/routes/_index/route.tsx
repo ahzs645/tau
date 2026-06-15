@@ -45,12 +45,18 @@ export default function PlaygroundRoot(): React.JSX.Element {
   const hasUnrunChanges = editorValue !== previewValue;
 
   const files = useMemo(
-    () => ({
-      [activeExample.mainFile]: {
-        content: encodeTextFile(previewValue),
-      },
-    }),
-    [activeExample.mainFile, previewValue],
+    () =>
+      Object.fromEntries(
+        Object.entries(activeExample.sourceFiles ?? { [activeExample.mainFile]: previewValue }).map(
+          ([path, content]) => [
+            path,
+            {
+              content: encodeTextFile(path === activeExample.mainFile ? previewValue : content),
+            },
+          ],
+        ),
+      ),
+    [activeExample.mainFile, activeExample.sourceFiles, previewValue],
   );
 
   const runPreview = useCallback(() => {

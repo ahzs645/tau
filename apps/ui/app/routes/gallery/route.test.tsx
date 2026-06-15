@@ -15,7 +15,7 @@ describe('PlaygroundGallery', () => {
     expect(screen.getByRole('heading', { name: 'Tau CAD Gallery' })).toBeDefined();
     expect(screen.getByRole('heading', { name: 'OpenSCAD bracket' })).toBeDefined();
     expect(screen.getByRole('heading', { name: 'Replicad tray' })).toBeDefined();
-    expect(screen.getByRole('heading', { name: 'Interlocking Boxes System' })).toBeDefined();
+    expect(screen.getByRole('heading', { name: 'Interlocking Boxes System (Original)' })).toBeDefined();
     expect(screen.getAllByRole('link', { name: 'Open' })[0]?.getAttribute('href')).toBe('/?model=openscad-bracket');
   });
 
@@ -28,6 +28,10 @@ describe('PlaygroundGallery', () => {
     expect(screen.queryByRole('heading', { name: 'OpenSCAD bracket' })).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'OpenSCAD' }));
+
+    expect(screen.getByRole('heading', { name: 'Custom Tray System (Original)' })).toBeDefined();
+
+    fireEvent.change(screen.getByLabelText('Search gallery'), { target: { value: 'not-a-real-model' } });
 
     expect(screen.getByText('No gallery models match the current filters.')).toBeDefined();
   });

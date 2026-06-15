@@ -1,4 +1,5 @@
 import type { FileExtension } from '@taucad/types';
+import { importedOpenScadExamples } from '#routes/_index/imported-openscad-examples.js';
 import { legacyPlaygroundExamples } from '#routes/_index/legacy-playground-examples.js';
 
 export type PlaygroundPreset = {
@@ -17,9 +18,10 @@ export type PlaygroundExample = {
   readonly initialParameters?: Record<string, unknown>;
   readonly presets?: readonly PlaygroundPreset[];
   readonly code: string;
+  readonly sourceFiles?: Record<string, string>;
 };
 
-export const playgroundExamples: readonly PlaygroundExample[] = [
+const curatedPlaygroundExamples: readonly PlaygroundExample[] = [
   {
     id: 'openscad-bracket',
     name: 'OpenSCAD bracket',
@@ -415,5 +417,10 @@ export default function main(params = {}) {
   return result;
 }`,
   },
+] as const;
+
+export const playgroundExamples: readonly PlaygroundExample[] = [
+  ...curatedPlaygroundExamples,
+  ...importedOpenScadExamples,
   ...legacyPlaygroundExamples,
 ] as const;
