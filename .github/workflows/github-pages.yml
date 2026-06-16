@@ -20,7 +20,9 @@ jobs:
     name: Build static UI
     runs-on: ubuntu-latest
     # Fail fast on a hung build instead of holding the concurrency slot for the 6h default.
-    timeout-minutes: 20
+    # The build step retries internally (the Rolldown transform deadlocks intermittently), so allow
+    # headroom for up to three 5-minute attempts plus the install/asset steps.
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -71,7 +73,24 @@ jobs:
           # Match the canonical Nx build (apps/ui/project.json): the client bundle
           # needs >default heap, and full client source maps cause OOM/GC-thrash hangs.
           NODE_OPTIONS: '--max-old-space-size=8192'
-        run: pnpm exec react-router build --sourcemapClient hidden
+        # The Rolldown transform intermittently deadlocks at "transforming..." (see commit a4e2af37).
+        # A healthy build finishes in ~1 min, so cap each attempt at 5 min and retry up to 3 times:
+        # a flaky hang is killed early and a later attempt succeeds instead of failing the deploy.
+        run: |
+          for attempt in 1 2 3; do
+            echo "::group::React Router build attempt ${attempt}/3"
+            if timeout 300 pnpm exec react-router build --sourcemapClient hidden; then
+              echo "::endgroup::"
+              echo "Build succeeded on attempt ${attempt}."
+              exit 0
+            fi
+            status=$?
+            echo "::endgroup::"
+            echo "::warning::Build attempt ${attempt} failed or timed out (exit ${status}); retrying."
+            rm -rf build
+          done
+          echo "::error::React Router build failed after 3 attempts."
+          exit 1
 
       - name: Mirror public assets under /tau
         working-directory: apps/ui
