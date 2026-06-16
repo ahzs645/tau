@@ -30,49 +30,35 @@ const client = createRuntimeClient({
 
 The `openscad()` factory returns a standard `KernelPlugin` registration. The kernel module itself (loaded dynamically by the runtime worker) lives at `@taucad/openscad/kernel`.
 
-## Known issues
+## Font support
 
-### `text()` renders nothing — no fonts are resolved
+### `text()` requires a registered fontconfig directory
 
-**Symptom.** Any model that uses OpenSCAD's `text()` produces no text geometry. The
-rest of the model renders fine, the render reports `ready`, and the worker log shows:
+OpenSCAD's `text()` depends on fontconfig and FreeType. The kernel bundles Geist
+`.ttf` faces and mounts them into the OpenSCAD Emscripten filesystem before invoking
+`callMain()`.
+
+The failure mode for an unregistered font directory is easy to miss: the rest of the
+model renders fine, but text geometry is empty and the worker log shows:
 
 ```
 WARNING: Can't get font  in file /main.scad, line N
 ```
 
 A concrete example is the `3d-rack-scad` gallery project: with `enable_numbers = true`
-the engraved hole numbers (and any other `text()` output) silently disappear.
+the engraved hole numbers disappear when fontconfig cannot discover the mounted fonts.
 
-**Root cause.** `mountFonts()` in [`src/openscad.kernel.ts`](./src/openscad.kernel.ts)
-writes the bundled Geist `.ttf` files and a `fonts.conf` into the Emscripten FS at
-`/fonts`, but `openscad-wasm-prebuilt@1.2.0` never discovers them:
+The kernel avoids that by writing:
 
-- The shipped `fonts.conf` is empty (`<fontconfig></fontconfig>`) — it does not register
-  `<dir>/fonts</dir>`, so even if fontconfig read it, no font directory would be scanned.
-- More fundamentally, the prebuilt wasm does not honor a **runtime** font config. Its
-  fontconfig default config path is baked into the wasm binary, and Emscripten freezes
-  the process environment at libc init — _before_ the kernel runs — so the config can't
-  be redirected after the instance is created.
+- `/fonts/Geist-Regular.ttf`
+- `/fonts/Geist-Bold.ttf`
+- `/fonts/fonts.conf`
+- `/etc/fonts/fonts.conf`
 
-**What was tried (and did _not_ work)** — recorded so it isn't repeated:
-
-- Adding `<dir>/fonts</dir>` + a default-family alias to `fonts.conf`.
-- Writing the config to both `/fonts/fonts.conf` and `/etc/fonts/fonts.conf`.
-- Setting `FONTCONFIG_FILE` / `FONTCONFIG_PATH` on `Module.ENV` before `callMain`
-  (verified via debug logging that `ENV` was applied and the `.ttf`s were mounted).
-
-All combinations still produced `Can't get font`, confirming the env/config is read
-before the kernel can influence it.
-
-**Recommended fix (build-level).** One of:
-
-1. Rebuild / swap to an `openscad-wasm` that bakes the fonts (and a prebuilt fontconfig
-   cache) into the image, so `text()` resolves without runtime configuration.
-2. Ship a prebuilt fontconfig cache directory alongside the registered `/fonts` dir.
-3. Patch the package init to accept a `preRun`/`ENV` hook that sets `FONTCONFIG_FILE`
-   _before_ the wasm runtime initializes (the current `InitOptions` only exposes
-   `noInitialRun`/`print`/`printErr`).
+and by setting `FONTCONFIG_FILE=/etc/fonts/fonts.conf` plus
+`FONTCONFIG_PATH=/etc/fonts` on the Emscripten `Module.ENV` before `callMain()`.
+The `fonts.conf` explicitly registers `<dir>/fonts</dir>` and prepends `Geist` as the
+default family, so `text("12")` works even without a `font = ...` argument.
 
 Note: OpenSCAD/FreeType requires `.ttf`/`.otf` fonts — `.woff2` will not work, and the
 correct-format Geist faces are already bundled.

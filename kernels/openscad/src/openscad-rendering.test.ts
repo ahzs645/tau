@@ -7,12 +7,14 @@
  * `baseColorFactor`. See docs/policy/color-space-policy.md.
  */
 import { describe, expect, it } from 'vitest';
+import { NodeIO } from '@gltf-transform/core';
 import openscadKernel from '#openscad.kernel.js';
 import {
   assertSuccess,
   colorParityCases,
   createGeometryFile,
   createTestWorker,
+  extractGltfFromResult,
   expectLinearBaseColor,
   getAllMaterialBaseColors,
   getMaterialAlphaMode,
@@ -42,6 +44,23 @@ async function renderColored(hex: string, opacity: number): Promise<CreateGeomet
   })) as CreateGeometryResult;
   assertSuccess(result, `openscad createGeometry (${hex}, alpha=${opacity})`);
   return result;
+}
+
+async function getTriangleVertexCount(result: CreateGeometryResult): Promise<number> {
+  const glb = extractGltfFromResult(result);
+  expect(glb).toBeDefined();
+
+  const document = await new NodeIO().readBinary(glb!);
+  let count = 0;
+  for (const mesh of document.getRoot().listMeshes()) {
+    for (const primitive of mesh.listPrimitives()) {
+      if (primitive.getMode() === 4) {
+        count += primitive.getAttribute('POSITION')?.getCount() ?? 0;
+      }
+    }
+  }
+
+  return count;
 }
 
 describe('OpenSCAD — color rendering parity', { timeout: 120_000 }, () => {
@@ -97,5 +116,19 @@ describe('OpenSCAD — color rendering parity', { timeout: 120_000 }, () => {
     const baseColor = await getMaterialBaseColor(result);
     expect(baseColor).toHaveLength(4);
     expect(baseColor[3]).toBeCloseTo(1, 2);
+  });
+
+  it('resolves fontconfig fonts for OpenSCAD text geometry', async () => {
+    const file = 'text.scad';
+    const worker = await createTestWorker(openscadKernel, {
+      [file]: 'linear_extrude(1) text("12", size=10);',
+    });
+    const result = (await worker.createGeometry({
+      file: createGeometryFile(file),
+      parameters: {},
+    })) as CreateGeometryResult;
+    assertSuccess(result, 'openscad text() createGeometry');
+
+    await expect(getTriangleVertexCount(result)).resolves.toBeGreaterThan(0);
   });
 });

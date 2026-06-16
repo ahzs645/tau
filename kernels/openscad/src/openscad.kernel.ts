@@ -55,6 +55,13 @@ const tessellationSpecialVariables = ['$fn', '$fa', '$fs'] as const;
 const fontsConfig = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
 <fontconfig>
+  <dir>/fonts</dir>
+  <cachedir>/fonts/cache</cachedir>
+  <match target="pattern">
+    <edit name="family" mode="prepend">
+      <string>Geist</string>
+    </edit>
+  </match>
 </fontconfig>
 `;
 
@@ -113,17 +120,17 @@ function resolveIncludePath(baseFilePath: string, relativePath: string): string 
   return resolved.join('/');
 }
 
-function isGzipPayload(payload: Uint8Array): boolean {
+function isGzipPayload(payload: Uint8Array<ArrayBuffer>): boolean {
   return payload[0] === 0x1f && payload[1] === 0x8b;
 }
 
-async function decodeBundledLibraryPayload(payload: Uint8Array): Promise<string> {
+async function decodeBundledLibraryPayload(payload: Uint8Array<ArrayBuffer>): Promise<string> {
   if (!isGzipPayload(payload)) {
     return new TextDecoder().decode(payload);
   }
 
   if (typeof DecompressionStream === 'undefined') {
-    throw new Error('This runtime cannot decompress the bundled BOSL2 library asset');
+    throw new TypeError('This runtime cannot decompress the bundled BOSL2 library asset');
   }
 
   const stream = new Blob([payload]).stream().pipeThrough(new DecompressionStream('gzip'));
@@ -179,7 +186,7 @@ async function getReferencedScadFiles(options: {
     visited.add(normalizedPath);
 
     let code = await readBundledOpenScadLibraryFile(normalizedPath);
-    let source: 'project' | 'library' = code === undefined ? 'project' : 'library';
+    const source: 'project' | 'library' = code === undefined ? 'project' : 'library';
 
     if (code === undefined) {
       try {
@@ -275,6 +282,14 @@ function ensureDirectoryForFile(instance: OpenSCAD, filePath: string): void {
   }
 }
 
+function ensureDirectory(instance: OpenSCAD, directoryPath: string): void {
+  try {
+    instance.FS.mkdir(directoryPath);
+  } catch {
+    // Already exists
+  }
+}
+
 async function mountFileSystem(
   instance: OpenSCAD,
   options: {
@@ -359,17 +374,23 @@ async function mountFonts(instance: OpenSCAD, context: OpenScadContext, logger: 
       }
     }
 
-    try {
-      instance.FS.mkdir('/fonts');
-    } catch {
-      // Already exists
-    }
+    ensureDirectory(instance, '/fonts');
+    ensureDirectory(instance, '/fonts/cache');
+    ensureDirectory(instance, '/etc');
+    ensureDirectory(instance, '/etc/fonts');
 
     for (const [filename, data] of context.fontCache) {
       instance.FS.writeFile(`/fonts/${filename}`, data);
     }
 
     instance.FS.writeFile('/fonts/fonts.conf', fontsConfig);
+    instance.FS.writeFile('/etc/fonts/fonts.conf', fontsConfig);
+
+    const environment = (instance as OpenSCAD & { ENV?: Record<string, string> }).ENV;
+    if (environment) {
+      environment['FONTCONFIG_FILE'] = '/etc/fonts/fonts.conf';
+      environment['FONTCONFIG_PATH'] = '/etc/fonts';
+    }
   } catch (error) {
     context.fontCache.clear();
     logger.warn('Failed to mount fonts - text() may not render correctly', {

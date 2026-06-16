@@ -64,26 +64,36 @@ bottom_depth = 7;
 // Combo box to select which component to render
 component_selection = "assembly"; // [assembly:Assembly, bottom_rack:Bottom Rack, combined_rack:Combined Rack, vertical_support:Vertical Support]
 
-module male_dovetail(slide, width, height, back_width, spin) {
-    rotate([0, 0, spin])
-        linear_extrude(height=slide, center=true)
-            polygon([
-                [-width / 2, -height / 2],
-                [width / 2, -height / 2],
-                [back_width / 2, height / 2],
-                [-back_width / 2, height / 2],
-            ]);
+module depth_dovetail_profile(side, width, height, back_width) {
+    polygon([
+        [0, -width / 2],
+        [side * height, -back_width / 2],
+        [side * height, back_width / 2],
+        [0, width / 2],
+    ]);
 }
 
-module female_dovetail(slide, width, height, back_width, spin) {
-    rotate([0, 0, spin])
-        linear_extrude(height=slide, center=true)
-            polygon([
-                [-back_width / 2, -height / 2],
-                [back_width / 2, -height / 2],
-                [width / 2, height / 2],
-                [-width / 2, height / 2],
-            ]);
+module depth_dovetail_rail(side) {
+    translate([side * rack_width / 2, 0, 0])
+        rotate([90, 0, 0])
+            linear_extrude(height=rack_depth, center=true)
+                depth_dovetail_profile(side, dovetail_width, dovetail_height, dovetail_back_width);
+}
+
+module depth_dovetail_socket(side, clearance=0.35) {
+    socket_width = dovetail_width + clearance;
+    socket_height = dovetail_height + clearance;
+    socket_back_width = dovetail_back_width + clearance;
+
+    translate([side * support_thickness / 2, 0, 0])
+        rotate([90, 0, 0])
+            linear_extrude(height=rack_depth + 2, center=true)
+                depth_dovetail_profile(side, socket_width, socket_height, socket_back_width);
+}
+
+module rack_side_rails() {
+    depth_dovetail_rail(-1);
+    depth_dovetail_rail(1);
 }
 
 /* Function, module, and layout definitions remain the same as in the original code */
@@ -190,14 +200,9 @@ module tube_holes() {
 module bottom_rack() {
     difference() {
         // Main body with bottom dimples and attached dovetails
-        cuboid([rack_width, rack_depth, section_height], anchor=CENTER) {
-            // Left side male dovetail
-            attach(LEFT)
-                male_dovetail(slide=rack_depth, width=dovetail_width, height=dovetail_height, back_width=dovetail_back_width, spin=90);
-
-            // Right side male dovetail
-            attach(RIGHT)
-                male_dovetail(slide=rack_depth, width=dovetail_width, height=dovetail_height, back_width=dovetail_back_width, spin=90);
+        union() {
+            cuboid([rack_width, rack_depth, section_height], anchor=CENTER);
+            rack_side_rails();
         }
         // Subtract bottom dimples
         bottom_dimples();
@@ -264,14 +269,9 @@ module numbered_tube_holes() {
 module combined_rack() {
     difference() {
         // Main body of the combined rack
-        cuboid([rack_width, rack_depth, section_height], anchor=CENTER) {
-            // Left side male dovetail
-            attach(LEFT)
-                male_dovetail(slide=rack_depth, width=dovetail_width, height=dovetail_height, back_width=dovetail_back_width, spin=90);
-
-            // Right side male dovetail
-            attach(RIGHT)
-                male_dovetail(slide=rack_depth, width=dovetail_width, height=dovetail_height, back_width=dovetail_back_width, spin=90);
+        union() {
+            cuboid([rack_width, rack_depth, section_height], anchor=CENTER);
+            rack_side_rails();
         }
         
         // Numbered hole pattern
@@ -280,7 +280,7 @@ module combined_rack() {
 }
 
 // Part 3: Vertical Support with Dynamic Number of Dovetails
-module vertical_support() {
+module vertical_support(socket_side=1) {
     // Calculate total height needed based on number of plates
     total_height = max(rack_height, (num_plates * section_height) + dovetail_start_height + section_height);
     
@@ -293,23 +293,8 @@ module vertical_support() {
             for(i = [0:dovetail_count-2]) {
                 dovetail_z_pos = dovetail_start_height + i * dovetail_spacing;
                 
-                translate([0, rack_depth/2, dovetail_z_pos]) {
-                    // Create the main dovetail cutout
-                    rotate([0, 90, 0])
-                        female_dovetail(
-                                slide=rack_depth*2, 
-                                width=dovetail_width, 
-                                height=dovetail_height, 
-                                back_width=dovetail_back_width,
-                                spin=0);
-                    
-                    // Add the partial opening only on the front face
-                    translate([support_thickness/2 - dovetail_cut_depth/2, 0, 0])
-                        cuboid([dovetail_cut_depth, 
-                               rack_depth*4,
-                               dovetail_opening_width], 
-                               anchor=CENTER);
-                }
+                translate([0, 0, dovetail_z_pos])
+                    depth_dovetail_socket(socket_side);
             }
         }
         
@@ -362,11 +347,11 @@ module assembly() {
     
     // Left support
     color("White") 
-        translate([-rack_width/2, 0, 0]) 
-            vertical_support();
+        translate([-rack_width/2 - support_thickness/2, 0, 0]) 
+            vertical_support(1);
     
-    // Right support (mirrored)
+    // Right support
     color("White") 
-        translate([rack_width/2, 0, 0]) 
-            mirror([1,0,0]) vertical_support();
+        translate([rack_width/2 + support_thickness/2, 0, 0]) 
+            vertical_support(-1);
 }
