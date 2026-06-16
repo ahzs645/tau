@@ -18,6 +18,7 @@ export type ExampleManifest = {
     | 'hollow-box'
     | 'ibeam'
     | 'lego'
+    | 'pet-bottle-opener'
     | 'pot-plant'
     | 'projection-test'
     | 'simple-tray'
