@@ -46,6 +46,7 @@
     "docs:validate": "nx run scripts:validate-frontmatter",
     "projects:validate": "nx run scripts:validate-project-names",
     "size:build": "node tools/size-build.mjs",
+    "json-url:build": "git submodule update --init vendor/json-url && npm --prefix vendor/json-url install && npm --prefix vendor/json-url run build",
     "prepare": "husky"
   },
   "dependencies": {
