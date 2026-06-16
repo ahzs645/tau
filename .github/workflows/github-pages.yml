@@ -24,6 +24,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          submodules: recursive
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -32,6 +34,12 @@ jobs:
 
       - name: Enable corepack
         run: corepack enable
+
+      # vendor/json-url ships its dist/ gitignored, and pnpm copies file: deps into its store at
+      # install time — so json-url must be built BEFORE pnpm install, otherwise the bundler can't
+      # resolve @firstform/json-url and Rolldown deadlocks on the missing import (20-min hang).
+      - name: Build json-url submodule
+        run: pnpm run json-url:build
 
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
