@@ -7,6 +7,7 @@ import { ChatDetails } from '#routes/projects_.$id/chat-details.js';
 import { ChatConverter } from '#routes/projects_.$id/chat-converter.js';
 import { ProjectUnavailableOverlay } from '#routes/projects_.$id/project-unavailable-overlay.js';
 import { cn } from '#utils/ui.utils.js';
+import { useFeature } from '#flags/use-feature.js';
 import { ChatInterfaceNav } from '#routes/projects_.$id/chat-interface-nav.js';
 import { Tabs, TabsContent } from '#components/ui/tabs.js';
 import { useChatInterfaceState } from '#routes/projects_.$id/use-chat-interface-state.js';
@@ -19,6 +20,8 @@ export const ChatInterfaceMobile = memo(function (): React.JSX.Element {
     useChatInterfaceState();
 
   const isViewerTab = activeTab === 'viewer';
+  // Kiosk / viewer-only mode: never mount the editor panel.
+  const isCodeEditorDisabled = useFeature('disableCodeEditor');
 
   return (
     <ChatInterfaceSessionGate fallback={<div className='absolute inset-0 size-full md:hidden' />}>
@@ -95,9 +98,11 @@ export const ChatInterfaceMobile = memo(function (): React.JSX.Element {
                 <ChatParameters />
               </TabsContent>
               <TabsContent enableAnimation={false} value='viewer' className='flex h-full flex-col' />
-              <TabsContent enableAnimation={false} value='editor' className='flex h-full flex-col'>
-                <ChatEditorLayout />
-              </TabsContent>
+              {isCodeEditorDisabled ? null : (
+                <TabsContent enableAnimation={false} value='editor' className='flex h-full flex-col'>
+                  <ChatEditorLayout />
+                </TabsContent>
+              )}
               <TabsContent enableAnimation={false} value='details' className='flex h-full flex-col'>
                 <ChatDetails />
               </TabsContent>

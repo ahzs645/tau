@@ -42,6 +42,19 @@ const environmentSchema = z.preprocess(
       .optional()
       .transform((value) => (value === undefined ? false : /^(1|true)$/i.test(value)))
       .describe('Enable in-app debug surfaces (debug panel, inspectors). Default false.'),
+    /**
+     * Disable "code mode": hide the Monaco code editor (and its toggles) so
+     * Tau runs as a parameter / viewer-only experience suitable for kiosk and
+     * gallery deployments. Surfaced in the React tree via the
+     * `disableCodeEditor` feature flag (`#flags/feature-flags.ts`). Accepts the
+     * canonical truthy strings `'1'` and `'true'` (case-insensitive) — anything
+     * else resolves to `false`.
+     */
+    TAU_DISABLE_CODE_EDITOR: z
+      .string()
+      .optional()
+      .transform((value) => (value === undefined ? false : /^(1|true)$/i.test(value)))
+      .describe('Disable the in-app code editor (kiosk / viewer-only mode). Default false.'),
     NODE_ENV: z.enum(['development', 'production', 'test']),
     GITHUB_API_TOKEN: z.string().optional().describe('GitHub API token for the GitHub API client.'),
 

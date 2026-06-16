@@ -1,5 +1,6 @@
 import { Box, Code2, Info, MessageCircleIcon, SlidersHorizontal, Download, Files } from 'lucide-react';
 import { TabsList, TabsTrigger } from '#components/ui/tabs.js';
+import { useFeature } from '#flags/use-feature.js';
 import { cn } from '#utils/ui.utils.js';
 import type { PanelId } from '#constants/editor.constants.js';
 
@@ -42,6 +43,10 @@ export const chatTabs = [
 ] as const satisfies Array<{ id: PanelId; label: string; icon: React.ReactNode }>;
 
 export function ChatInterfaceNav({ className }: { readonly className?: string }): React.ReactNode {
+  // Kiosk / viewer-only mode: drop the editor tab so code mode is unreachable.
+  const isCodeEditorDisabled = useFeature('disableCodeEditor');
+  const visibleTabs = isCodeEditorDisabled ? chatTabs.filter((tab) => tab.id !== 'editor') : chatTabs;
+
   return (
     <TabsList
       enableAnimation={false}
@@ -51,7 +56,7 @@ export function ChatInterfaceNav({ className }: { readonly className?: string })
         className,
       )}
     >
-      {chatTabs.map((tab) => (
+      {visibleTabs.map((tab) => (
         <TabsTrigger
           key={tab.id}
           enableAnimation={false}
