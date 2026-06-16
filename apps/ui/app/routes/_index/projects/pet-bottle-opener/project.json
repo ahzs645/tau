@@ -1,0 +1,35 @@
+{
+  "title": "Modular PET Bottle Opener (OpenCascade)",
+  "entry": "main.txt",
+  "mainFile": "main.ts",
+  "kernel": "Replicad",
+  "language": "typescript",
+  "description": "Parametric flat PET bottle / cap opener with one or two fin-style heads joined by a neck. Ported from a PythonOCC (OpenCascade) design to Tau's Replicad kernel and exportable to solid STEP as well as mesh formats.",
+  "exportFormats": ["glb", "stl", "3mf", "step"],
+  "initialParameters": {
+    "secondOpener": false
+  },
+  "presets": [
+    {
+      "name": "Single opener + hang hole",
+      "parameters": {
+        "secondOpener": false,
+        "handleHoleDiameter": 25,
+        "handleOuterRadius": 17.5
+      }
+    },
+    {
+      "name": "Dual opener heads",
+      "parameters": {
+        "secondOpener": true,
+        "centerDistance": 47
+      }
+    },
+    {
+      "name": "Faceted rim",
+      "parameters": {
+        "outerSides": 10
+      }
+    }
+  ]
+}
