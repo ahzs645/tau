@@ -88,7 +88,7 @@ module depth_dovetail_socket(side, clearance=0.35) {
     translate([side * support_thickness / 2, 0, 0])
         rotate([90, 0, 0])
             linear_extrude(height=rack_depth + 2, center=true)
-                depth_dovetail_profile(side, socket_width, socket_height, socket_back_width);
+                depth_dovetail_profile(-side, socket_width, socket_height, socket_back_width);
 }
 
 module rack_side_rails() {
