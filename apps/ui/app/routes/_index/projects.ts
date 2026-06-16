@@ -13,6 +13,15 @@ import stampMainScad from '#routes/_index/projects/stamp/Main.scad?raw';
 import stampYaaSvg from '#routes/_index/projects/stamp/yaa.svg?raw';
 import vaneTrapMainScad from '#routes/_index/projects/vane-trap/main.scad?raw';
 import whamMainScad from '#routes/_index/projects/wham/main.scad?raw';
+// Stored as `.ts.txt` so TypeScript never compiles the replicad source (it
+// imports `replicad`, which apps/ui does not depend on); it is only ever read
+// as raw editor text, exactly like the OpenSCAD `.scad` project sources.
+import petBottleOpenerMainTs from '#routes/_index/projects/pet-bottle-opener/main.ts.txt?raw';
+
+// Mesh export formats every kernel can produce from its rendered geometry.
+const meshExportFormats = ['glb', 'stl', '3mf', 'obj'] as const;
+// BREP kernels (Replicad / OpenCascade) can additionally emit solid STEP.
+const solidExportFormats = ['glb', 'stl', '3mf', 'step'] as const;
 
 export const projectExamples: readonly PlaygroundExample[] = [
   {
@@ -22,7 +31,7 @@ export const projectExamples: readonly PlaygroundExample[] = [
     mainFile: 'main.scad',
     language: 'scad',
     description: 'Customizable modular rack system for organizing components and tools',
-    exportFormats: ['glb'],
+    exportFormats: meshExportFormats,
     code: rackScadMainScad,
     sourceFiles: {
       'main.scad': rackScadMainScad,
@@ -35,7 +44,7 @@ export const projectExamples: readonly PlaygroundExample[] = [
     mainFile: 'main.scad',
     language: 'scad',
     description: 'Organizational grid system for holding and displaying cards, perfect for board games',
-    exportFormats: ['glb'],
+    exportFormats: meshExportFormats,
     code: saboteurCardHolderMainScad,
     sourceFiles: {
       'main.scad': saboteurCardHolderMainScad,
@@ -48,7 +57,7 @@ export const projectExamples: readonly PlaygroundExample[] = [
     mainFile: 'main.scad',
     language: 'scad',
     description: 'Customizable tray system for organizing tools and small items',
-    exportFormats: ['glb'],
+    exportFormats: meshExportFormats,
     code: trayScadMainScad,
     sourceFiles: {
       'main.scad': trayScadMainScad,
@@ -61,7 +70,7 @@ export const projectExamples: readonly PlaygroundExample[] = [
     mainFile: 'main.scad',
     language: 'scad',
     description: '3D printable keyguard for tablets and AAC devices with customizable raised tabs',
-    exportFormats: ['glb'],
+    exportFormats: meshExportFormats,
     code: keyguardWithRaisedTabsMainScad,
     sourceFiles: {
       'main.scad': keyguardWithRaisedTabsMainScad,
@@ -75,7 +84,7 @@ export const projectExamples: readonly PlaygroundExample[] = [
     mainFile: 'main.scad',
     language: 'scad',
     description: 'Modular interlocking box system perfect for organizing small parts and components',
-    exportFormats: ['glb'],
+    exportFormats: meshExportFormats,
     code: periodicTableMainScad,
     sourceFiles: {
       'main.scad': periodicTableMainScad,
@@ -88,7 +97,7 @@ export const projectExamples: readonly PlaygroundExample[] = [
     mainFile: 'main.scad',
     language: 'scad',
     description: 'Custom rack system for network equipment including POE switches and patch panels',
-    exportFormats: ['glb'],
+    exportFormats: meshExportFormats,
     code: networkingMainScad,
     sourceFiles: {
       'main.scad': networkingMainScad,
@@ -102,7 +111,7 @@ export const projectExamples: readonly PlaygroundExample[] = [
     language: 'scad',
     description:
       'Customizable gel comb with adjustable tooth count, tooth and bar thickness, ridges, slots, and side hooks',
-    exportFormats: ['glb'],
+    exportFormats: meshExportFormats,
     code: parametricGelCombMainScad,
     sourceFiles: {
       'main.scad': parametricGelCombMainScad,
@@ -115,7 +124,7 @@ export const projectExamples: readonly PlaygroundExample[] = [
     mainFile: 'Main.scad',
     language: 'scad',
     description: 'Elegant pleated pendant lamp shade with customizable dimensions and pleating patterns',
-    exportFormats: ['glb'],
+    exportFormats: meshExportFormats,
     code: pendantLampMainScad,
     sourceFiles: {
       'Main.scad': pendantLampMainScad,
@@ -129,7 +138,7 @@ export const projectExamples: readonly PlaygroundExample[] = [
     language: 'scad',
     description:
       'Custom M14x1.25-to-M10x1.0 spark-plug pre-chamber / jet-ignition nozzle insert. Reverse-engineered starter CAD with BOSL2 helical threads, selectable original/corrected hex and collar dimensions, conical nozzle tip, 2.5 mm axial orifice, and angled 2.5/1.0 mm side jet holes. SCAD source included alongside the pre-rendered metal GLB.',
-    exportFormats: ['glb'],
+    exportFormats: meshExportFormats,
     code: preChamberNozzleInsertMainScad,
     sourceFiles: {
       'prechamber_nozzle_insert_BOSL2_threads.scad': preChamberNozzleInsertMainScad,
@@ -142,7 +151,7 @@ export const projectExamples: readonly PlaygroundExample[] = [
     mainFile: 'Main.scad',
     language: 'scad',
     description: 'SVG-driven stamp generator using uploaded artwork',
-    exportFormats: ['glb'],
+    exportFormats: meshExportFormats,
     code: stampMainScad,
     sourceFiles: {
       'Main.scad': stampMainScad,
@@ -156,7 +165,7 @@ export const projectExamples: readonly PlaygroundExample[] = [
     mainFile: 'main.scad',
     language: 'scad',
     description: 'Custom vane trap mechanism with adjustable parameters',
-    exportFormats: ['glb'],
+    exportFormats: meshExportFormats,
     code: vaneTrapMainScad,
     sourceFiles: {
       'main.scad': vaneTrapMainScad,
@@ -169,10 +178,39 @@ export const projectExamples: readonly PlaygroundExample[] = [
     mainFile: 'main.scad',
     language: 'scad',
     description: 'Experimental design project with customizable features',
-    exportFormats: ['glb'],
+    exportFormats: meshExportFormats,
     code: whamMainScad,
     sourceFiles: {
       'main.scad': whamMainScad,
+    },
+  },
+  {
+    id: 'pet-bottle-opener',
+    name: 'Modular PET Bottle Opener (OpenCascade)',
+    kernel: 'Replicad',
+    mainFile: 'main.ts',
+    language: 'typescript',
+    description:
+      'Parametric flat PET bottle / cap opener with one or two fin-style heads joined by a neck. Ported from a PythonOCC (OpenCascade) design to Tau’s Replicad kernel and exportable to solid STEP as well as mesh formats.',
+    exportFormats: solidExportFormats,
+    initialParameters: { secondOpener: false },
+    presets: [
+      {
+        name: 'Single opener + hang hole',
+        parameters: { secondOpener: false, handleHoleDiameter: 25, handleOuterRadius: 17.5 },
+      },
+      {
+        name: 'Dual opener heads',
+        parameters: { secondOpener: true, centerDistance: 47 },
+      },
+      {
+        name: 'Faceted rim',
+        parameters: { outerSides: 10 },
+      },
+    ],
+    code: petBottleOpenerMainTs,
+    sourceFiles: {
+      'main.ts': petBottleOpenerMainTs,
     },
   },
 ];

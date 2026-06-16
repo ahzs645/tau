@@ -15,12 +15,17 @@ describe('PlaygroundGallery', () => {
     expect(screen.getByRole('heading', { name: 'Tau CAD Gallery' })).toBeDefined();
     expect(screen.getByRole('heading', { name: '3D Rack System (Original)' })).toBeDefined();
     expect(screen.getByRole('heading', { name: 'Network Equipment Rack (Original)' })).toBeDefined();
-    expect(screen.queryByRole('heading', { name: 'Custom Tray System (Original)' })).toBeNull();
-    expect(screen.queryByRole('heading', { name: 'Card Holder Grid (Original)' })).toBeNull();
-    expect(screen.queryByRole('heading', { name: 'Wham Project (Original)' })).toBeNull();
-    expect(screen.queryByRole('heading', { name: 'Replicad tray' })).toBeNull();
-    expect(screen.queryByRole('heading', { name: 'OpenCascade direct' })).toBeNull();
+    // OpenCascade-derived (Replicad) projects must be visible alongside OpenSCAD ones.
+    expect(screen.getByRole('heading', { name: 'Modular PET Bottle Opener (OpenCascade)' })).toBeDefined();
     expect(screen.getAllByRole('link', { name: 'Open' })[0]?.getAttribute('href')).toBe('/?model=3d-rack-scad');
+  });
+
+  it('exposes a per-kernel engine filter including Replicad', () => {
+    renderGallery();
+
+    // Both kernels present in the gallery get their own filter chip.
+    expect(screen.getByRole('button', { name: 'OpenSCAD' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Replicad' })).toBeDefined();
   });
 
   it('filters gallery models by search and engine', () => {
@@ -34,6 +39,13 @@ describe('PlaygroundGallery', () => {
     fireEvent.click(screen.getByRole('button', { name: 'OpenSCAD' }));
 
     expect(screen.getByRole('heading', { name: '3D Rack System (Original)' })).toBeDefined();
+
+    // Switching to the Replicad engine filter hides the OpenSCAD rack and shows the opener.
+    fireEvent.change(screen.getByLabelText('Search gallery'), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Replicad' }));
+
+    expect(screen.queryByRole('heading', { name: '3D Rack System (Original)' })).toBeNull();
+    expect(screen.getByRole('heading', { name: 'Modular PET Bottle Opener (OpenCascade)' })).toBeDefined();
 
     fireEvent.change(screen.getByLabelText('Search gallery'), { target: { value: 'not-a-real-model' } });
 

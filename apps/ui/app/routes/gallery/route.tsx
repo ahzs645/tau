@@ -9,11 +9,13 @@ import { cn } from '#utils/ui.utils.js';
 import type { Handle } from '#types/matches.types.js';
 
 const galleryExamples = projectExamples;
-const engineFilters = ['All', 'OpenSCAD'] as const;
+// Build the engine filter list from the kernels actually present in the gallery
+// so OpenCascade / Replicad projects surface their own filter automatically.
+const engineFilters: readonly string[] = ['All', ...new Set(galleryExamples.map((example) => example.kernel))];
 const updateCheckIntervalMs = 60_000;
 const updateToastId = 'app-version-update-available';
 
-type EngineFilter = (typeof engineFilters)[number];
+type EngineFilter = string;
 
 export const handle: Handle = {
   enablePageWrapper: false,
@@ -51,7 +53,7 @@ export default function PlaygroundGallery(): React.JSX.Element {
           </div>
           <div className='min-w-0'>
             <h1 className='truncate text-base font-semibold'>Tau CAD Gallery</h1>
-            <p className='truncate text-xs text-muted-foreground'>OpenSCAD project gallery</p>
+            <p className='truncate text-xs text-muted-foreground'>OpenSCAD &amp; OpenCascade project gallery</p>
           </div>
         </div>
         <Link to='/' className={buttonVariants({ variant: 'outline', size: 'sm' })}>
