@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
+import jsonUrl from '@firstform/json-url';
 import type { FileExtension } from '@taucad/types';
 import PlaygroundRoot, { loader as playgroundRootLoader } from '#routes/_index/route.js';
 
@@ -21,6 +22,7 @@ const {
   mockCadSend,
   mockDownloadBlob,
   mockSetParameters,
+  mockState,
   mockToastError,
   mockToastSuccess,
   mockWriteText,
@@ -32,8 +34,12 @@ const {
     exportFailed: [],
   };
 
+  // Mutable preview state the useCadPreview mock reads from; tests set `parameters` to simulate overrides.
+  const state: { parameters: Record<string, unknown> } = { parameters: {} };
+
   return {
     cadEventHandlers: handlers,
+    mockState: state,
     mockCadSend: vi.fn((event: { readonly type: string; readonly format?: FileExtension }) => {
       if (event.type === 'exportGeometry' && event.format) {
         const blob = new Blob([`export:${event.format}`], {
@@ -48,7 +54,7 @@ const {
     mockSetParameters: vi.fn(),
     mockToastError: vi.fn(),
     mockToastSuccess: vi.fn(),
-    mockWriteText: vi.fn(async () => 'copied'),
+    mockWriteText: vi.fn(async (_text: string) => 'copied'),
     providerCalls: [] as Array<{
       projectId: string;
       mainFile: string;
@@ -64,6 +70,7 @@ const {
       mockToastSuccess.mockClear();
       mockWriteText.mockClear();
       providerCalls.length = 0;
+      state.parameters = {};
     },
   };
 });
@@ -180,9 +187,29 @@ vi.mock('#hooks/use-cad-preview.js', () => ({
       },
       error: undefined,
       geometries: [{}],
+      parameters: mockState.parameters,
       setParameters: mockSetParameters,
       status: 'ready',
     };
+  },
+}));
+
+vi.mock('#components/ui/dropdown-menu.js', () => ({
+  DropdownMenu({ children }: { readonly children: React.ReactNode }) {
+    return <div>{children}</div>;
+  },
+  DropdownMenuTrigger({ children }: { readonly children: React.ReactNode; readonly asChild?: boolean }) {
+    return <>{children}</>;
+  },
+  DropdownMenuContent({ children }: { readonly children: React.ReactNode; readonly align?: string }) {
+    return <div>{children}</div>;
+  },
+  DropdownMenuItem({ children, onSelect }: { readonly children: React.ReactNode; readonly onSelect?: () => void }) {
+    return (
+      <button type='button' onClick={onSelect}>
+        {children}
+      </button>
+    );
   },
 }));
 
@@ -323,6 +350,30 @@ describe('PlaygroundRoot', () => {
       expect(mockWriteText).toHaveBeenCalledWith(expect.stringMatching(/\/\?model=openscad-bracket$/));
     });
     expect(mockToastSuccess).toHaveBeenCalledWith('Playground link copied');
+  });
+
+  it('embeds changed parameters in the shared link and round-trips them', async () => {
+    mockState.parameters = { width: 99, style: 'hollow' };
+
+    renderPlaygroundRoot();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+
+    await waitFor(() => {
+      expect(mockWriteText).toHaveBeenCalled();
+    });
+
+    const sharedUrl = mockWriteText.mock.calls.at(-1)?.[0];
+    expect(sharedUrl).toBeDefined();
+    const url = new URL(sharedUrl ?? '');
+    expect(url.searchParams.get('model')).toBe('openscad-bracket');
+
+    const token = url.searchParams.get('p');
+    expect(token).toBeTruthy();
+
+    const decoded = await jsonUrl.createWebShareEngine().tryDecompress(token ?? '', {});
+    expect(decoded).toEqual({ width: 99, style: 'hollow' });
+    expect(mockToastSuccess).toHaveBeenCalledWith('Playground link copied with your changes');
   });
 
   it('applies model presets through Tau preview parameters', async () => {

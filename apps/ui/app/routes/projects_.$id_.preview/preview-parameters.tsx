@@ -9,8 +9,7 @@ import { cn } from '#utils/ui.utils.js';
 import { useCadPreview } from '#hooks/use-cad-preview.js';
 
 export function PreviewParameters(): React.JSX.Element {
-  const { cadRef, graphicsRef, defaultParameters, jsonSchema, setParameters } = useCadPreview();
-  const parameters = useSelector(cadRef, (snapshot) => snapshot.context.parameters);
+  const { graphicsRef, parameters, defaultParameters, jsonSchema, setParameters } = useCadPreview();
   const units = useSelector(graphicsRef, (state) => state.context.units);
 
   const [isSearchVisible, setIsSearchVisible] = useState(false);

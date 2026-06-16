@@ -1,11 +1,28 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router';
-import { Box, Braces, Download, Eye, LayoutGrid, Play, RotateCcw, Share2, SlidersHorizontal } from 'lucide-react';
+import {
+  Braces,
+  ChevronDown,
+  Download,
+  Eye,
+  LayoutGrid,
+  Play,
+  RotateCcw,
+  Share2,
+  SlidersHorizontal,
+} from 'lucide-react';
+import jsonUrl from '@firstform/json-url';
 import type { FileExtension } from '@taucad/types';
 import { downloadBlob } from '@taucad/utils/file';
 import { toast } from '#components/ui/sonner.js';
 import { CadPreviewStatus, CadPreviewViewer } from '#components/cad-preview.js';
 import { Button, buttonVariants } from '#components/ui/button.js';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '#components/ui/dropdown-menu.js';
 import { ClientOnly } from '#components/ui/utils/client-only.js';
 import { FileManagerProvider, SharedWorkerGate } from '#hooks/use-file-manager.js';
 import { CadPreviewProvider, useCadPreview } from '#hooks/use-cad-preview.js';
@@ -29,6 +46,38 @@ type EditorFallbackProps = {
 
 const defaultExample: PlaygroundExample = playgroundExamples[0]!;
 
+/** Query parameter that carries the json-url-encoded parameter overrides on a shared link. */
+const SHARE_PARAMETERS_KEY = 'p';
+
+/** Stable empty record so consumers can rely on referential equality when there are no overrides. */
+const EMPTY_PARAMETERS: Record<string, unknown> = Object.freeze({});
+
+/**
+ * Web-share codec (json-url): compresses the parameter delta into a compact, URL-safe token
+ * (e.g. `1.raw.<base64>`), auto-upgrading to gzip/brotli/lz-string for larger payloads. The token
+ * is self-describing, so decoding auto-detects the codec.
+ */
+const shareCodec = jsonUrl.createWebShareEngine<Record<string, unknown>>();
+
+/** Canonical, key-order-independent serialization used to compare parameter sets. */
+function canonicalize(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => canonicalize(item)).join(',')}]`;
+  }
+
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonicalize(item)}`).join(',')}}`;
+  }
+
+  return JSON.stringify(value) ?? 'null';
+}
+
+/** True when two parameter records are deeply equal regardless of key order. */
+function sameParameters(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+  return canonicalize(a) === canonicalize(b);
+}
+
 export const handle: Handle = {
   enablePageWrapper: false,
 };
@@ -48,6 +97,12 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
   const [previewValue, setPreviewValue] = useState(initialExample.code);
   const [previewVersion, setPreviewVersion] = useState(0);
   const [isCodeVisible, setIsCodeVisible] = useState(false);
+
+  // Live parameter overrides reported up from inside the preview provider (the Share button lives in
+  // the header, outside the provider). Empty until something is changed away from the example baseline.
+  const [liveParameters, setLiveParameters] = useState<Record<string, unknown>>(EMPTY_PARAMETERS);
+  // Overrides decoded from a shared `?p=` token, applied to the preview once the kernel is ready.
+  const [pendingParameters, setPendingParameters] = useState<Record<string, unknown> | undefined>(undefined);
 
   // Kiosk / viewer-only mode: hide the editor and its toggle entirely.
   const isCodeEditorDisabled = useFeature('disableCodeEditor');
@@ -85,26 +140,64 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
   }, [activeExample]);
 
   const copyShareLink = useCallback(() => {
-    const url = buildExampleUrl(activeExample.id);
-    if (!url) {
+    const browserWindow = getBrowserWindow();
+    if (!browserWindow) {
       return;
     }
+
+    // "Changes" means the live overrides differ from the example's own baseline parameters — so loading
+    // an example and sharing it without touching anything yields the same plain link as before.
+    const baseline = activeExample.initialParameters ?? EMPTY_PARAMETERS;
+    const hasParameterChanges = !sameParameters(liveParameters, baseline);
 
     // oxlint-disable-next-line tau-lint/no-async-iife -- clipboard writes are event-driven and report via toast.
     void (async () => {
       try {
-        await globalThis.navigator.clipboard.writeText(url);
-        toast.success('Playground link copied');
+        const url = new URL(browserWindow.location.href);
+        url.searchParams.set('model', activeExample.id);
+        url.searchParams.delete('example');
+
+        if (hasParameterChanges) {
+          // Encode only the changed parameters (the delta) into a compact, URL-safe token.
+          url.searchParams.set(SHARE_PARAMETERS_KEY, await shareCodec.compress(liveParameters));
+        } else {
+          url.searchParams.delete(SHARE_PARAMETERS_KEY);
+        }
+
+        await browserWindow.navigator.clipboard.writeText(url.toString());
+        toast.success(hasParameterChanges ? 'Playground link copied with your changes' : 'Playground link copied');
       } catch {
         toast.error('Unable to copy playground link');
       }
     })();
-  }, [activeExample.id]);
+  }, [activeExample.id, activeExample.initialParameters, liveParameters]);
 
   useEffect(() => {
     const searchExampleId = readInitialExampleIdFromSearch(new URLSearchParams(location.search));
     setActiveExampleId(searchExampleId);
   }, [loaderExampleId, location.search]);
+
+  // Decode any `?p=` token from the URL into the overrides that should be applied to the preview.
+  useEffect(() => {
+    const token = new URLSearchParams(location.search).get(SHARE_PARAMETERS_KEY);
+    if (!token) {
+      setPendingParameters(undefined);
+      return;
+    }
+
+    let cancelled = false;
+    // oxlint-disable-next-line tau-lint/no-async-iife -- token decoding is async; a stale result is ignored on cleanup.
+    void (async () => {
+      const decoded = await shareCodec.tryDecompress(token, EMPTY_PARAMETERS);
+      if (!cancelled && decoded !== null && typeof decoded === 'object') {
+        setPendingParameters(decoded);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [location.search]);
 
   // The static prerender bakes the default example into the loader data, so the editor and
   // preview start on the default code regardless of the `?model=` param. When the active
@@ -149,9 +242,6 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
     <main className='flex h-dvh flex-col overflow-hidden bg-background text-foreground'>
       <header className='flex min-h-14 flex-wrap items-center justify-between gap-3 border-b px-4 py-3 md:px-5'>
         <div className='flex min-w-0 items-center gap-3'>
-          <div className='flex size-8 shrink-0 items-center justify-center rounded-md border bg-muted'>
-            <Box className='size-4' />
-          </div>
           <div className='min-w-0'>
             <h1 className='truncate text-base font-semibold'>Tau CAD Playground</h1>
             <p className='truncate text-xs text-muted-foreground'>
@@ -244,6 +334,7 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
               files={files}
               parameters={activeExample.initialParameters}
             >
+              <PlaygroundParameterBridge pendingParameters={pendingParameters} onParametersChange={setLiveParameters} />
               <section className='flex min-h-[56dvh] min-w-0 flex-col xl:min-h-0 xl:border-r'>
                 <div className='flex h-11 items-center justify-between border-b px-3'>
                   <div className='flex items-center gap-2'>
@@ -278,6 +369,44 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
       </div>
     </main>
   );
+}
+
+/**
+ * Bridges the preview's live parameter overrides out to the header (where the Share button lives,
+ * outside the provider) and applies any overrides decoded from a shared `?p=` token once the kernel
+ * is ready. Renders nothing.
+ */
+function PlaygroundParameterBridge({
+  pendingParameters,
+  onParametersChange,
+}: {
+  readonly pendingParameters: Record<string, unknown> | undefined;
+  readonly onParametersChange: (parameters: Record<string, unknown>) => void;
+}): null {
+  const { parameters, setParameters, status } = useCadPreview();
+  const liveParameters = parameters ?? EMPTY_PARAMETERS;
+
+  // Surface the live overrides to the header so Share can encode them.
+  useEffect(() => {
+    onParametersChange(liveParameters);
+  }, [liveParameters, onParametersChange]);
+
+  // Apply decoded shared parameters exactly once per distinct token, after the kernel is ready.
+  const appliedRef = useRef<Record<string, unknown> | undefined>(undefined);
+  useEffect(() => {
+    if (status !== 'ready' || !pendingParameters || appliedRef.current === pendingParameters) {
+      return;
+    }
+
+    if (Object.keys(pendingParameters).length === 0) {
+      return;
+    }
+
+    appliedRef.current = pendingParameters;
+    setParameters(pendingParameters);
+  }, [pendingParameters, status, setParameters]);
+
+  return null;
 }
 
 function PlaygroundParameters({ presets }: { readonly presets: readonly PlaygroundPreset[] }): React.JSX.Element {
@@ -320,15 +449,6 @@ function PlaygroundPresetControls({ presets }: { readonly presets: readonly Play
     </div>
   );
 }
-
-type PlaygroundExportButtonProps = {
-  readonly format: FileExtension;
-  readonly exampleId: string;
-  readonly exportGeometry: (format: FileExtension) => void;
-  readonly isExportEnabled: boolean;
-  readonly isExporting: boolean;
-  readonly isPrimary: boolean;
-};
 
 type ActorSubscription = {
   readonly unsubscribe: () => void;
@@ -414,46 +534,28 @@ function PlaygroundExportControls({
   }, [exportGeometry, primaryFormat]);
 
   return (
-    <>
-      {formats.map((format, index) => (
-        <PlaygroundExportButton
-          key={format}
-          format={format}
-          exampleId={exampleId}
-          exportGeometry={exportGeometry}
-          isExportEnabled={isExportEnabled}
-          isExporting={isExporting}
-          isPrimary={index === 0}
-        />
-      ))}
-    </>
-  );
-}
-
-function PlaygroundExportButton({
-  format,
-  exportGeometry,
-  isExportEnabled,
-  isExporting,
-  isPrimary,
-}: PlaygroundExportButtonProps): React.JSX.Element {
-  const label = format.toUpperCase();
-
-  const handleExport = useCallback(() => {
-    exportGeometry(format);
-  }, [exportGeometry, format]);
-
-  return (
-    <Button
-      variant='outline'
-      size='xs'
-      disabled={!isExportEnabled}
-      onClick={handleExport}
-      title={isPrimary ? 'Export. Shortcut: F7' : undefined}
-    >
-      <Download className='size-3' />
-      {isExporting ? '...' : label}
-    </Button>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant='outline' size='xs' disabled={!isExportEnabled} title='Export. Shortcut: F7'>
+          <Download className='size-3' />
+          {isExporting ? 'Exporting…' : 'Export'}
+          <ChevronDown className='size-3 opacity-60' />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align='end'>
+        {formats.map((format) => (
+          <DropdownMenuItem
+            key={format}
+            onSelect={() => {
+              exportGeometry(format);
+            }}
+          >
+            <Download className='size-3.5' />
+            {format.toUpperCase()}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 

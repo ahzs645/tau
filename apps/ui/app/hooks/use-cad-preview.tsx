@@ -29,6 +29,8 @@ export type CadPreviewContextValue = {
   readonly error: Error | undefined;
   readonly cadRef: ActorRefFrom<typeof cadMachine>;
   readonly graphicsRef: ActorRefFrom<typeof graphicsMachine>;
+  /** The active parameter overrides (the delta from defaults). Empty when nothing has been changed. */
+  readonly parameters: Record<string, unknown>;
   readonly defaultParameters: Record<string, unknown>;
   readonly jsonSchema: JSONSchema7 | undefined;
   readonly setParameters: (parameters: Record<string, unknown>) => void;
@@ -192,6 +194,7 @@ export function CadPreviewProvider({
 
   // Selectors on cadRef for reactive state
   const geometries = useSelector(cadRef, (s) => s.context.geometries);
+  const currentParameters = useSelector(cadRef, (s) => s.context.parameters);
   const cadStateValue = useSelector(cadRef, (s) => s.value);
   const kernelIssues = useSelector(cadRef, (s) => s.context.kernelIssues);
   const defaultParameters = useSelector(cadRef, (s) => s.context.defaultParameters);
@@ -245,11 +248,12 @@ export function CadPreviewProvider({
       error,
       cadRef,
       graphicsRef,
+      parameters: currentParameters,
       defaultParameters,
       jsonSchema,
       setParameters,
     }),
-    [geometries, status, error, cadRef, graphicsRef, defaultParameters, jsonSchema, setParameters],
+    [geometries, status, error, cadRef, graphicsRef, currentParameters, defaultParameters, jsonSchema, setParameters],
   );
 
   return <CadPreviewContext.Provider value={value}>{children}</CadPreviewContext.Provider>;
