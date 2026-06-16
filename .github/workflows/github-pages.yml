@@ -19,6 +19,8 @@ jobs:
   build:
     name: Build static UI
     runs-on: ubuntu-latest
+    # Fail fast on a hung build instead of holding the concurrency slot for the 6h default.
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -58,7 +60,10 @@ jobs:
           TAU_WEBSOCKET_URL: wss://api.taucad.dev
           VITE_COMMIT_SHA: ${{ env.VITE_COMMIT_SHA }}
           VITE_BUILD_TIME: ${{ env.VITE_BUILD_TIME }}
-        run: pnpm exec react-router build
+          # Match the canonical Nx build (apps/ui/project.json): the client bundle
+          # needs >default heap, and full client source maps cause OOM/GC-thrash hangs.
+          NODE_OPTIONS: '--max-old-space-size=8192'
+        run: pnpm exec react-router build --sourcemapClient hidden
 
       - name: Mirror public assets under /tau
         working-directory: apps/ui
