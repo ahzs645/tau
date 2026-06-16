@@ -85,12 +85,12 @@ jobs:
             <head>
               <meta charset="utf-8">
               <meta name="viewport" content="width=device-width, initial-scale=1">
-              <meta http-equiv="refresh" content="0; url=/tau/">
-              <title>Tau CAD Playground</title>
-              <script>globalThis.location.replace('/tau/' + globalThis.location.search + globalThis.location.hash);</script>
+              <meta http-equiv="refresh" content="0; url=/tau/gallery">
+              <title>Tau CAD Gallery</title>
+              <script>globalThis.location.replace('/tau/gallery' + globalThis.location.search + globalThis.location.hash);</script>
             </head>
             <body>
-              <a href="/tau/">Open Tau CAD Playground</a>
+              <a href="/tau/gallery">Open Tau CAD Gallery</a>
             </body>
           </html>
           HTML
