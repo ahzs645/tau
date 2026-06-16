@@ -53,6 +53,10 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
   const isExplorerPaneVisible = isTauDebugEnabled && isExplorerOpen;
   const isKernelPaneVisible = isTauDebugEnabled && isKernelOpen;
 
+  // Kiosk / viewer-only mode: hide the code editor pane and its toggle.
+  const isCodeEditorDisabled = useFeature('disableCodeEditor');
+  const isEditorPaneVisible = !isCodeEditorDisabled && isEditorOpen;
+
   const allotmentRef = useRef<HTMLDivElement>(null);
   const allotmentInstanceRef = useRef<AllotmentHandle>(null);
   const [isClient, setIsClient] = useState(false);
@@ -65,7 +69,7 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
 
   // Determine if any left/right panels are open for center pane edge treatment
   const isAnyLeftPanelOpen = isChatOpen || isFileTreeOpen || isExplorerPaneVisible || isKernelPaneVisible;
-  const isAnyRightPanelOpen = isParametersOpen || isEditorOpen || isConverterOpen || isDetailsOpen;
+  const isAnyRightPanelOpen = isParametersOpen || isEditorPaneVisible || isConverterOpen || isDetailsOpen;
 
   // Map panel IDs to their visibility states
   // Viewer is always visible, toggleable panes use their respective state
@@ -76,7 +80,7 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
     kernel: isKernelPaneVisible,
     viewer: true, // Always visible
     parameters: isParametersOpen,
-    editor: isEditorOpen,
+    editor: isEditorPaneVisible,
     converter: isConverterOpen,
     details: isDetailsOpen,
   };
@@ -334,12 +338,14 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
                     setIsParametersOpen((previous) => !previous);
                   }}
                 />
-                <ChatEditorLayoutTrigger
-                  isOpen={isEditorOpen}
-                  onToggle={() => {
-                    setIsEditorOpen((previous) => !previous);
-                  }}
-                />
+                {isCodeEditorDisabled ? null : (
+                  <ChatEditorLayoutTrigger
+                    isOpen={isEditorOpen}
+                    onToggle={() => {
+                      setIsEditorOpen((previous) => !previous);
+                    }}
+                  />
+                )}
                 <ChatConverterTrigger
                   isOpen={isConverterOpen}
                   onToggle={() => {
@@ -386,9 +392,9 @@ export const ChatInterfaceDesktop = memo(function (): React.JSX.Element {
               minSize={panelMinSizeEditor}
               preferredSize={panelSizes.editor}
               priority={LayoutPriority.Low}
-              visible={isEditorOpen}
+              visible={isEditorPaneVisible}
             >
-              <ChatEditorLayout isExpanded={isEditorOpen} setIsExpanded={setIsEditorOpen} />
+              <ChatEditorLayout isExpanded={isEditorPaneVisible} setIsExpanded={setIsEditorOpen} />
             </Allotment.Pane>
 
             <Allotment.Pane

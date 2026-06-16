@@ -29,6 +29,16 @@ export type FlagDefinition = {
  */
 const tauDebugDefault = Boolean((ENV as { TAU_DEBUG?: boolean }).TAU_DEBUG);
 
+/**
+ * Resolve the boolean default for `disableCodeEditor` from the runtime
+ * environment (`TAU_DISABLE_CODE_EDITOR=1|true`). The env var is the source of
+ * truth for kiosk / gallery deployments; a localStorage override still wins
+ * because the default only fires when no override is stored.
+ */
+const disableCodeEditorDefault = Boolean(
+  (ENV as { TAU_DISABLE_CODE_EDITOR?: boolean }).TAU_DISABLE_CODE_EDITOR,
+);
+
 export const flagRegistry = {
   planMode: {
     schema: z.boolean().default(false),
@@ -39,6 +49,11 @@ export const flagRegistry = {
     schema: z.boolean().default(tauDebugDefault),
     label: 'Tau Debug',
     description: 'Enable in-app debug surfaces (e2e diagnostic panels, geometry inspectors).',
+  },
+  disableCodeEditor: {
+    schema: z.boolean().default(disableCodeEditorDefault),
+    label: 'Disable Code Editor',
+    description: 'Hide the code editor for a parameter / viewer-only (kiosk) experience.',
   },
 } as const satisfies Record<string, FlagDefinition>;
 

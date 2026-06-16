@@ -9,6 +9,7 @@ import { Button, buttonVariants } from '#components/ui/button.js';
 import { ClientOnly } from '#components/ui/utils/client-only.js';
 import { FileManagerProvider, SharedWorkerGate } from '#hooks/use-file-manager.js';
 import { CadPreviewProvider, useCadPreview } from '#hooks/use-cad-preview.js';
+import { useFeature } from '#flags/use-feature.js';
 import { playgroundExamples } from '#routes/_index/playground-examples.js';
 import type { PlaygroundExample, PlaygroundPreset } from '#routes/_index/playground-examples.js';
 import { PreviewParameters } from '#routes/projects_.$id_.preview/preview-parameters.js';
@@ -47,6 +48,10 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
   const [previewValue, setPreviewValue] = useState(initialExample.code);
   const [previewVersion, setPreviewVersion] = useState(0);
   const [isCodeVisible, setIsCodeVisible] = useState(false);
+
+  // Kiosk / viewer-only mode: hide the editor and its toggle entirely.
+  const isCodeEditorDisabled = useFeature('disableCodeEditor');
+  const showCodeSection = isCodeVisible && !isCodeEditorDisabled;
 
   const activeExample = playgroundExamples.find((example) => example.id === activeExampleId) ?? defaultExample;
   const previewProjectId = `root-playground-${activeExample.id}-${previewVersion}`;
@@ -159,17 +164,19 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
             <LayoutGrid className='size-3.5' />
             Gallery
           </Link>
-          <Button
-            variant={isCodeVisible ? 'default' : 'outline'}
-            size='sm'
-            aria-pressed={isCodeVisible}
-            onClick={() => {
-              setIsCodeVisible((visible) => !visible);
-            }}
-          >
-            <Eye className='size-3.5' />
-            Code
-          </Button>
+          {isCodeEditorDisabled ? null : (
+            <Button
+              variant={isCodeVisible ? 'default' : 'outline'}
+              size='sm'
+              aria-pressed={isCodeVisible}
+              onClick={() => {
+                setIsCodeVisible((visible) => !visible);
+              }}
+            >
+              <Eye className='size-3.5' />
+              Code
+            </Button>
+          )}
           <Button variant='outline' size='sm' onClick={copyShareLink}>
             <Share2 className='size-3.5' />
             Share
@@ -186,7 +193,7 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
       </header>
 
       <div className='grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[minmax(520px,1fr)_360px]'>
-        {isCodeVisible ? (
+        {showCodeSection ? (
           <section className='flex min-h-[42dvh] min-w-0 flex-col border-b xl:col-span-2 xl:min-h-[34dvh]'>
             <div className='flex h-11 items-center justify-between border-b px-3'>
               <div className='flex min-w-0 items-center gap-2'>

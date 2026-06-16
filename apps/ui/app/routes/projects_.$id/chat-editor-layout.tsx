@@ -10,6 +10,7 @@ import {
   FloatingPanelContentTitle,
   FloatingPanelTrigger,
 } from '#components/ui/floating-panel.js';
+import { useFeature } from '#flags/use-feature.js';
 import { useKeybinding } from '#hooks/use-keyboard.js';
 import { EditorDockview } from '#routes/projects_.$id/chat-editor-dockview.js';
 import type { KeyCombination } from '#utils/keys.utils.js';
@@ -53,7 +54,13 @@ export function ChatEditorLayout({
   readonly isExpanded?: boolean;
   readonly setIsExpanded?: (value: boolean | ((current: boolean) => boolean)) => void;
 }): React.JSX.Element {
+  // Kiosk / viewer-only mode: the Ctrl+E shortcut must not reopen the editor.
+  const isCodeEditorDisabled = useFeature('disableCodeEditor');
   const toggleEditor = (): void => {
+    if (isCodeEditorDisabled) {
+      return;
+    }
+
     setIsExpanded?.((current) => !current);
   };
 
