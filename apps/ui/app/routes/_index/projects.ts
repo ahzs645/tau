@@ -13,10 +13,14 @@ import stampMainScad from '#routes/_index/projects/stamp/Main.scad?raw';
 import stampYaaSvg from '#routes/_index/projects/stamp/yaa.svg?raw';
 import vaneTrapMainScad from '#routes/_index/projects/vane-trap/main.scad?raw';
 import whamMainScad from '#routes/_index/projects/wham/main.scad?raw';
-// Stored as `.ts.txt` so TypeScript never compiles the replicad source (it
-// imports `replicad`, which apps/ui does not depend on); it is only ever read
-// as raw editor text, exactly like the OpenSCAD `.scad` project sources.
-import petBottleOpenerMainTs from '#routes/_index/projects/pet-bottle-opener/main.ts.txt?raw';
+// Plain `.txt` (NOT `.ts.txt`): the filename must not contain a `.ts` substring.
+// Even with `?raw`, Vite/Rolldown's TS transform matches `.ts` in the name and
+// compiles this file as a real module, turning its `import … from 'replicad'`
+// into a live dependency edge. That pulls replicad + the OpenCascade WASM graph
+// into the apps/ui client bundle (which does not depend on replicad) and
+// deadlocks Rolldown. As `.txt`, `?raw` short-circuits to raw editor text,
+// exactly like the OpenSCAD `.scad` project sources.
+import petBottleOpenerMainTs from '#routes/_index/projects/pet-bottle-opener/main.txt?raw';
 
 // Mesh export formats every kernel can produce from its rendered geometry.
 const meshExportFormats = ['glb', 'stl', '3mf', 'obj'] as const;
