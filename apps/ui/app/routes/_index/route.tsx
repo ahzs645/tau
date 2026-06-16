@@ -224,6 +224,80 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
     writeExampleToUrl(activeExample.id, { replace: true });
   }, [activeExample.id, location.search]);
 
+  // Keep the address bar's `?p=` token in sync with live parameter edits: add/update it when the
+  // overrides differ from the example baseline, remove it when they match. Written via raw
+  // history.replaceState so it does not re-trigger the loader or the decode effect above.
+  const urlSyncHydratedRef = useRef(false);
+  const urlSyncModelRef = useRef(activeExample.id);
+  const urlSyncInitialTokenRef = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    const browserWindow = getBrowserWindow();
+    if (!browserWindow) {
+      return;
+    }
+
+    // Restart hydration gating whenever the active model changes.
+    if (urlSyncModelRef.current !== activeExample.id) {
+      urlSyncModelRef.current = activeExample.id;
+      urlSyncHydratedRef.current = false;
+      urlSyncInitialTokenRef.current = undefined;
+    }
+
+    const params = new URLSearchParams(browserWindow.location.search);
+    if (urlSyncInitialTokenRef.current === undefined) {
+      urlSyncInitialTokenRef.current = params.get(SHARE_PARAMETERS_KEY);
+    }
+
+    // Only manage the token while this example is the one reflected in the URL.
+    if (readInitialExampleIdFromSearch(params) !== activeExample.id) {
+      return;
+    }
+
+    const baseline = activeExample.initialParameters ?? EMPTY_PARAMETERS;
+    const hasParameterChanges = !sameParameters(liveParameters, baseline);
+
+    // On initial load from a shared link, wait until the decoded params are applied before touching
+    // the URL — otherwise we would wipe the token before hydration completes.
+    if (!urlSyncHydratedRef.current) {
+      if (urlSyncInitialTokenRef.current && !hasParameterChanges) {
+        return;
+      }
+
+      urlSyncHydratedRef.current = true;
+    }
+
+    let cancelled = false;
+    // oxlint-disable-next-line tau-lint/no-async-iife -- compression is async; stale writes are dropped on cleanup.
+    void (async () => {
+      const token = hasParameterChanges ? await shareCodec.compress(liveParameters) : undefined;
+      if (cancelled) {
+        return;
+      }
+
+      const url = new URL(browserWindow.location.href);
+      const existing = url.searchParams.get(SHARE_PARAMETERS_KEY);
+      if (token === undefined) {
+        if (existing === null) {
+          return;
+        }
+
+        url.searchParams.delete(SHARE_PARAMETERS_KEY);
+      } else {
+        if (existing === token) {
+          return;
+        }
+
+        url.searchParams.set(SHARE_PARAMETERS_KEY, token);
+      }
+
+      browserWindow.history.replaceState({}, '', url.toString());
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [liveParameters, activeExample.id, activeExample.initialParameters]);
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'F5' || ((event.metaKey || event.ctrlKey) && event.key === 'Enter')) {

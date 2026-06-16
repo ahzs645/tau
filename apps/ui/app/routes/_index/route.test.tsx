@@ -271,7 +271,7 @@ describe('PlaygroundRoot', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText('3D Rack System (Original) · OpenSCAD')).toBeDefined();
+    expect(await screen.findByText('3D Rack System · OpenSCAD')).toBeDefined();
     await waitFor(() => {
       expect(providerCalls.at(-1)?.projectId).toContain('root-playground-3d-rack-scad');
     });
@@ -282,7 +282,7 @@ describe('PlaygroundRoot', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText('Network Equipment Rack (Original) · OpenSCAD')).toBeDefined();
+    expect(await screen.findByText('Network Equipment Rack · OpenSCAD')).toBeDefined();
     await waitFor(() => {
       expect(providerCalls.at(-1)?.projectId).toContain('root-playground-networking');
     });
@@ -295,7 +295,7 @@ describe('PlaygroundRoot', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText('Network Equipment Rack (Original) · OpenSCAD')).toBeDefined();
+    expect(await screen.findByText('Network Equipment Rack · OpenSCAD')).toBeDefined();
     await waitFor(() => {
       expect(providerCalls.at(-1)?.projectId).toContain('root-playground-networking');
     });
@@ -374,6 +374,30 @@ describe('PlaygroundRoot', () => {
     const decoded = await jsonUrl.createWebShareEngine().tryDecompress(token ?? '', {});
     expect(decoded).toEqual({ width: 99, style: 'hollow' });
     expect(mockToastSuccess).toHaveBeenCalledWith('Playground link copied with your changes');
+  });
+
+  it('live-syncs the address bar ?p= token as parameters change', async () => {
+    mockState.parameters = { width: 42, depth: 17 };
+
+    renderPlaygroundRoot();
+
+    await waitFor(() => {
+      expect(new URLSearchParams(globalThis.location.search).get('p')).toBeTruthy();
+    });
+
+    const token = new URLSearchParams(globalThis.location.search).get('p');
+    const decoded = await jsonUrl.createWebShareEngine().tryDecompress(token ?? '', {});
+    expect(decoded).toEqual({ width: 42, depth: 17 });
+  });
+
+  it('keeps ?p= out of the address bar when parameters match the baseline', async () => {
+    renderPlaygroundRoot();
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Share' })).toBeDefined();
+    });
+
+    expect(new URLSearchParams(globalThis.location.search).get('p')).toBeNull();
   });
 
   it('applies model presets through Tau preview parameters', async () => {
