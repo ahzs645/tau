@@ -1,6 +1,6 @@
 import type { FileExtension } from '@taucad/types';
-import { legacyPlaygroundExamples } from '#routes/_index/legacy-playground-examples.js';
-import { projectExamples } from '#routes/_index/projects.js';
+import { legacyPlaygroundExamples } from '#routes/playground/legacy-playground-examples.js';
+import { projectExamples } from '#routes/playground/projects.js';
 
 export type PlaygroundPreset = {
   readonly name: string;

@@ -10,7 +10,7 @@ import { assertSuccess, createGeometryFile, createTestWorker } from '@taucad/run
 import opencascadeKernel from '@taucad/runtime/kernels/opencascade';
 import replicadKernel from '@taucad/runtime/kernels/replicad';
 import { openscad } from '@taucad/openscad';
-import { playgroundExamples } from '#routes/_index/playground-examples.js';
+import { playgroundExamples } from '#routes/playground/playground-examples.js';
 
 const exportCases: ReadonlyArray<{
   readonly exampleId: string;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { projectExamples, projectMetadataSchema } from '#routes/_index/projects.js';
+import { projectExamples, projectMetadataSchema } from '#routes/playground/projects.js';
 
 describe('project examples discovery', () => {
   it('validates project metadata before building examples', () => {

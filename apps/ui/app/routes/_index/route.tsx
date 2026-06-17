@@ -1,716 +1,195 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useLocation } from 'react-router';
-import {
-  Braces,
-  ChevronDown,
-  Download,
-  Eye,
-  LayoutGrid,
-  Play,
-  RotateCcw,
-  Share2,
-  SlidersHorizontal,
-} from 'lucide-react';
-import jsonUrl from '@firstform/json-url';
-import type { FileExtension } from '@taucad/types';
-import { downloadBlob } from '@taucad/utils/file';
+import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router';
+import { ExternalLink, FileCode2, Search } from 'lucide-react';
+import { buttonVariants } from '#components/ui/button.js';
 import { toast } from '#components/ui/sonner.js';
-import { CadPreviewStatus, CadPreviewViewer } from '#components/cad-preview.js';
-import { Button, buttonVariants } from '#components/ui/button.js';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '#components/ui/dropdown-menu.js';
-import { ClientOnly } from '#components/ui/utils/client-only.js';
-import { FileManagerProvider, SharedWorkerGate } from '#hooks/use-file-manager.js';
-import { CadPreviewProvider, useCadPreview } from '#hooks/use-cad-preview.js';
-import { useFeature } from '#flags/use-feature.js';
-import { playgroundExamples } from '#routes/_index/playground-examples.js';
-import type { PlaygroundExample, PlaygroundPreset } from '#routes/_index/playground-examples.js';
-import { PreviewParameters } from '#routes/projects_.$id_.preview/preview-parameters.js';
-import { encodeTextFile } from '#utils/filesystem.utils.js';
+import { projectExamples } from '#routes/playground/projects.js';
+import type { AppVersion } from '#routes/version[.]json.js';
+import { cn } from '#utils/ui.utils.js';
 import type { Handle } from '#types/matches.types.js';
-import type { Route } from './+types/route.js';
 
-const CodeEditorLazy = lazy(async () => {
-  const module = await import('#components/code/code-editor.client.js');
-  return { default: module.CodeEditor };
-});
+const galleryExamples = projectExamples;
+// Build the engine filter list from the kernels actually present in the gallery
+// so OpenCascade / Replicad projects surface their own filter automatically.
+const engineFilters: readonly string[] = ['All', ...new Set(galleryExamples.map((example) => example.kernel))];
+const updateCheckIntervalMs = 60_000;
+const updateToastId = 'app-version-update-available';
 
-type EditorFallbackProps = {
-  readonly value: string;
-  readonly onChange: (value: string) => void;
-};
-
-const defaultExample: PlaygroundExample = playgroundExamples[0]!;
-
-/** Query parameter that carries the json-url-encoded parameter overrides on a shared link. */
-const SHARE_PARAMETERS_KEY = 'p';
-
-/** Stable empty record so consumers can rely on referential equality when there are no overrides. */
-const EMPTY_PARAMETERS: Record<string, unknown> = Object.freeze({});
-
-/**
- * Web-share codec (json-url): compresses the parameter delta into a compact, URL-safe token
- * (e.g. `1.raw.<base64>`), auto-upgrading to gzip/brotli/lz-string for larger payloads. The token
- * is self-describing, so decoding auto-detects the codec.
- */
-const shareCodec = jsonUrl.createWebShareEngine<Record<string, unknown>>();
-
-/** Canonical, key-order-independent serialization used to compare parameter sets. */
-function canonicalize(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => canonicalize(item)).join(',')}]`;
-  }
-
-  if (value !== null && typeof value === 'object') {
-    const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-    return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonicalize(item)}`).join(',')}}`;
-  }
-
-  return JSON.stringify(value) ?? 'null';
-}
-
-/** True when two parameter records are deeply equal regardless of key order. */
-function sameParameters(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
-  return canonicalize(a) === canonicalize(b);
-}
+type EngineFilter = string;
 
 export const handle: Handle = {
   enablePageWrapper: false,
 };
 
-export function loader({ request }: Route.LoaderArgs): { activeExampleId: string } {
-  return {
-    activeExampleId: readInitialExampleIdFromSearch(new URL(request.url).searchParams),
-  };
-}
+export default function PlaygroundGallery(): React.JSX.Element {
+  const [searchTerm, setSearchTerm] = useState('');
+  const [engineFilter, setEngineFilter] = useState<EngineFilter>('All');
+  useGalleryVersionCheck();
 
-export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}): React.JSX.Element {
-  const location = useLocation();
-  const loaderExampleId = props.loaderData?.activeExampleId ?? defaultExample.id;
-  const [activeExampleId, setActiveExampleId] = useState(loaderExampleId);
-  const initialExample = playgroundExamples.find((example) => example.id === activeExampleId) ?? defaultExample;
-  const [editorValue, setEditorValue] = useState(initialExample.code);
-  const [previewValue, setPreviewValue] = useState(initialExample.code);
-  const [previewVersion, setPreviewVersion] = useState(0);
-  const [isCodeVisible, setIsCodeVisible] = useState(false);
-
-  // Live parameter overrides reported up from inside the preview provider (the Share button lives in
-  // the header, outside the provider). Empty until something is changed away from the example baseline.
-  const [liveParameters, setLiveParameters] = useState<Record<string, unknown>>(EMPTY_PARAMETERS);
-  // Overrides decoded from a shared `?p=` token, applied to the preview once the kernel is ready.
-  const [pendingParameters, setPendingParameters] = useState<Record<string, unknown> | undefined>(undefined);
-
-  // Kiosk / viewer-only mode: hide the editor and its toggle entirely.
-  const isCodeEditorDisabled = useFeature('disableCodeEditor');
-  const showCodeSection = isCodeVisible && !isCodeEditorDisabled;
-
-  const activeExample = playgroundExamples.find((example) => example.id === activeExampleId) ?? defaultExample;
-  const previewProjectId = `root-playground-${activeExample.id}-${previewVersion}`;
-  const isDirty = editorValue !== activeExample.code;
-  const hasUnrunChanges = editorValue !== previewValue;
-
-  const files = useMemo(
-    () =>
-      Object.fromEntries(
-        Object.entries(activeExample.sourceFiles ?? { [activeExample.mainFile]: previewValue }).map(
-          ([path, content]) => [
-            path,
-            {
-              content: encodeTextFile(path === activeExample.mainFile ? previewValue : content),
-            },
-          ],
-        ),
-      ),
-    [activeExample.mainFile, activeExample.sourceFiles, previewValue],
-  );
-
-  const runPreview = useCallback(() => {
-    setPreviewValue(editorValue);
-    setPreviewVersion((version) => version + 1);
-  }, [editorValue]);
-
-  const resetExample = useCallback(() => {
-    setEditorValue(activeExample.code);
-    setPreviewValue(activeExample.code);
-    setPreviewVersion((version) => version + 1);
-  }, [activeExample]);
-
-  const copyShareLink = useCallback(() => {
-    const browserWindow = getBrowserWindow();
-    if (!browserWindow) {
-      return;
-    }
-
-    // "Changes" means the live overrides differ from the example's own baseline parameters — so loading
-    // an example and sharing it without touching anything yields the same plain link as before.
-    const baseline = activeExample.initialParameters ?? EMPTY_PARAMETERS;
-    const hasParameterChanges = !sameParameters(liveParameters, baseline);
-
-    // oxlint-disable-next-line tau-lint/no-async-iife -- clipboard writes are event-driven and report via toast.
-    void (async () => {
-      try {
-        const url = new URL(browserWindow.location.href);
-        url.searchParams.set('model', activeExample.id);
-        url.searchParams.delete('example');
-
-        if (hasParameterChanges) {
-          // Encode only the changed parameters (the delta) into a compact, URL-safe token.
-          url.searchParams.set(SHARE_PARAMETERS_KEY, await shareCodec.compress(liveParameters));
-        } else {
-          url.searchParams.delete(SHARE_PARAMETERS_KEY);
-        }
-
-        await browserWindow.navigator.clipboard.writeText(url.toString());
-        toast.success(hasParameterChanges ? 'Playground link copied with your changes' : 'Playground link copied');
-      } catch {
-        toast.error('Unable to copy playground link');
-      }
-    })();
-  }, [activeExample.id, activeExample.initialParameters, liveParameters]);
-
-  useEffect(() => {
-    const searchExampleId = readInitialExampleIdFromSearch(new URLSearchParams(location.search));
-    setActiveExampleId(searchExampleId);
-  }, [loaderExampleId, location.search]);
-
-  // Decode any `?p=` token from the URL into the overrides that should be applied to the preview.
-  useEffect(() => {
-    const token = new URLSearchParams(location.search).get(SHARE_PARAMETERS_KEY);
-    if (!token) {
-      setPendingParameters(undefined);
-      return;
-    }
-
-    let cancelled = false;
-    // oxlint-disable-next-line tau-lint/no-async-iife -- token decoding is async; a stale result is ignored on cleanup.
-    void (async () => {
-      const decoded = await shareCodec.tryDecompress(token, EMPTY_PARAMETERS);
-      if (!cancelled && decoded !== null && typeof decoded === 'object') {
-        setPendingParameters(decoded);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [location.search]);
-
-  // The static prerender bakes the default example into the loader data, so the editor and
-  // preview start on the default code regardless of the `?model=` param. When the active
-  // example changes (e.g. opening a project from the gallery), load its code into the editor
-  // and preview so the rendered model matches the selected example.
-  const loadedExampleIdRef = useRef(activeExample.id);
-  useEffect(() => {
-    if (loadedExampleIdRef.current === activeExample.id) {
-      return;
-    }
-
-    loadedExampleIdRef.current = activeExample.id;
-    setEditorValue(activeExample.code);
-    setPreviewValue(activeExample.code);
-    setPreviewVersion((version) => version + 1);
-  }, [activeExample]);
-
-  useEffect(() => {
-    const currentExampleId = readInitialExampleIdFromSearch(new URLSearchParams(location.search));
-    if (currentExampleId !== activeExample.id) {
-      return;
-    }
-
-    writeExampleToUrl(activeExample.id, { replace: true });
-  }, [activeExample.id, location.search]);
-
-  // Keep the address bar's `?p=` token in sync with live parameter edits: add/update it when the
-  // overrides differ from the example baseline, remove it when they match. Written via raw
-  // history.replaceState so it does not re-trigger the loader or the decode effect above.
-  const urlSyncHydratedRef = useRef(false);
-  const urlSyncModelRef = useRef(activeExample.id);
-  const urlSyncInitialTokenRef = useRef<string | null | undefined>(undefined);
-  useEffect(() => {
-    const browserWindow = getBrowserWindow();
-    if (!browserWindow) {
-      return;
-    }
-
-    // Restart hydration gating whenever the active model changes.
-    if (urlSyncModelRef.current !== activeExample.id) {
-      urlSyncModelRef.current = activeExample.id;
-      urlSyncHydratedRef.current = false;
-      urlSyncInitialTokenRef.current = undefined;
-    }
-
-    const params = new URLSearchParams(browserWindow.location.search);
-    if (urlSyncInitialTokenRef.current === undefined) {
-      urlSyncInitialTokenRef.current = params.get(SHARE_PARAMETERS_KEY);
-    }
-
-    // Only manage the token while this example is the one reflected in the URL.
-    if (readInitialExampleIdFromSearch(params) !== activeExample.id) {
-      return;
-    }
-
-    const baseline = activeExample.initialParameters ?? EMPTY_PARAMETERS;
-    const hasParameterChanges = !sameParameters(liveParameters, baseline);
-
-    // On initial load from a shared link, wait until the decoded params are applied before touching
-    // the URL — otherwise we would wipe the token before hydration completes.
-    if (!urlSyncHydratedRef.current) {
-      if (urlSyncInitialTokenRef.current && !hasParameterChanges) {
-        return;
+  const filteredExamples = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase();
+    return galleryExamples.filter((example) => {
+      if (engineFilter !== 'All' && example.kernel !== engineFilter) {
+        return false;
       }
 
-      urlSyncHydratedRef.current = true;
-    }
-
-    let cancelled = false;
-    // oxlint-disable-next-line tau-lint/no-async-iife -- compression is async; stale writes are dropped on cleanup.
-    void (async () => {
-      const token = hasParameterChanges ? await shareCodec.compress(liveParameters) : undefined;
-      if (cancelled) {
-        return;
+      if (!term) {
+        return true;
       }
 
-      const url = new URL(browserWindow.location.href);
-      const existing = url.searchParams.get(SHARE_PARAMETERS_KEY);
-      if (token === undefined) {
-        if (existing === null) {
-          return;
-        }
-
-        url.searchParams.delete(SHARE_PARAMETERS_KEY);
-      } else {
-        if (existing === token) {
-          return;
-        }
-
-        url.searchParams.set(SHARE_PARAMETERS_KEY, token);
-      }
-
-      browserWindow.history.replaceState({}, '', url.toString());
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [liveParameters, activeExample.id, activeExample.initialParameters]);
-
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'F5' || ((event.metaKey || event.ctrlKey) && event.key === 'Enter')) {
-        event.preventDefault();
-        runPreview();
-      }
-    };
-
-    globalThis.addEventListener('keydown', handleKeyDown);
-    return () => {
-      globalThis.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [runPreview]);
+      return [example.name, example.description, example.kernel, example.mainFile]
+        .join(' ')
+        .toLowerCase()
+        .includes(term);
+    });
+  }, [engineFilter, searchTerm]);
 
   return (
-    <main className='flex h-dvh flex-col overflow-hidden bg-background text-foreground'>
-      <header className='flex min-h-14 flex-wrap items-center justify-between gap-3 border-b px-4 py-3 md:px-5'>
-        <div className='flex min-w-0 items-center gap-3'>
-          <div className='min-w-0'>
-            <h1 className='truncate text-base font-semibold'>Tau CAD Playground</h1>
-            <p className='truncate text-xs text-muted-foreground'>
-              {activeExample.name} · {activeExample.kernel}
-            </p>
+    <main className='h-dvh overflow-y-auto bg-background text-foreground'>
+      <section className='mx-auto flex w-full max-w-7xl flex-col gap-4 px-4 py-5 md:px-6'>
+        <div className='flex flex-col gap-3 border-b pb-4 md:flex-row md:items-center md:justify-between'>
+          <label className='flex min-h-9 w-full items-center gap-2 rounded-md border bg-background px-3 text-sm md:max-w-md'>
+            <Search className='size-3.5 text-muted-foreground' />
+            <input
+              className='min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground'
+              type='search'
+              aria-label='Search gallery'
+              placeholder='Search gallery'
+              value={searchTerm}
+              onChange={(event) => {
+                setSearchTerm(event.target.value);
+              }}
+            />
+          </label>
+
+          <div className='flex flex-wrap gap-1.5'>
+            {engineFilters.map((filter) => (
+              <button
+                key={filter}
+                type='button'
+                className={cn(
+                  'rounded-sm border px-2.5 py-1.5 text-xs transition-colors hover:border-primary/50',
+                  filter === engineFilter ? 'border-primary bg-primary text-primary-foreground' : 'bg-background',
+                )}
+                onClick={() => {
+                  setEngineFilter(filter);
+                }}
+              >
+                {filter}
+              </button>
+            ))}
           </div>
         </div>
-        <div className='flex items-center gap-2'>
-          <Link to='/gallery' className={buttonVariants({ variant: 'outline', size: 'sm' })}>
-            <LayoutGrid className='size-3.5' />
-            Gallery
-          </Link>
-          {isCodeEditorDisabled ? null : (
-            <Button
-              variant={isCodeVisible ? 'default' : 'outline'}
-              size='sm'
-              aria-pressed={isCodeVisible}
-              onClick={() => {
-                setIsCodeVisible((visible) => !visible);
-              }}
-            >
-              <Eye className='size-3.5' />
-              Code
-            </Button>
-          )}
-          <Button variant='outline' size='sm' onClick={copyShareLink}>
-            <Share2 className='size-3.5' />
-            Share
-          </Button>
-          <Button variant='outline' size='sm' onClick={resetExample}>
-            <RotateCcw className='size-3.5' />
-            Reset
-          </Button>
-          <Button size='sm' onClick={runPreview}>
-            <Play className='size-3.5' />
-            Run
-          </Button>
-        </div>
-      </header>
 
-      <div className='grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[minmax(520px,1fr)_360px]'>
-        {showCodeSection ? (
-          <section className='flex min-h-[42dvh] min-w-0 flex-col border-b xl:col-span-2 xl:min-h-[34dvh]'>
-            <div className='flex h-11 items-center justify-between border-b px-3'>
-              <div className='flex min-w-0 items-center gap-2'>
-                <Braces className='size-4 text-muted-foreground' />
-                <span className='truncate font-mono text-xs'>{activeExample.mainFile}</span>
-              </div>
-              <div className='flex items-center gap-1.5'>
-                {isDirty ? (
-                  <span className='bg-amber-500/15 text-amber-700 rounded-sm px-2 py-1 text-xs'>edited</span>
-                ) : null}
-                {hasUnrunChanges ? (
-                  <span className='rounded-sm bg-muted px-2 py-1 text-xs text-muted-foreground'>unrun</span>
-                ) : null}
-                <span className='rounded-sm bg-muted px-2 py-1 text-xs text-muted-foreground'>
-                  {activeExample.kernel}
+        <div className='grid gap-3 sm:grid-cols-2 xl:grid-cols-3'>
+          {filteredExamples.map((example) => (
+            <article key={example.id} className='rounded-md border bg-background p-4'>
+              <div className='mb-3 flex items-start justify-between gap-3'>
+                <div className='min-w-0'>
+                  <h2 className='truncate text-sm font-semibold'>{example.name}</h2>
+                  <p className='mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground'>{example.description}</p>
+                </div>
+                <span className='shrink-0 rounded-sm bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground'>
+                  {example.kernel}
                 </span>
               </div>
-            </div>
-            <div className='min-h-0 flex-1'>
-              <ClientOnly fallback={<EditorFallback value={editorValue} onChange={setEditorValue} />}>
-                <Suspense fallback={<EditorFallback value={editorValue} onChange={setEditorValue} />}>
-                  <CodeEditorLazy
-                    className='h-full'
-                    height='100%'
-                    path={activeExample.mainFile}
-                    language={activeExample.language}
-                    value={editorValue}
-                    onChange={(value) => {
-                      setEditorValue(value ?? '');
-                    }}
-                  />
-                </Suspense>
-              </ClientOnly>
-            </div>
-          </section>
+
+              <dl className='grid grid-cols-2 gap-2 text-xs'>
+                <div className='rounded-sm bg-muted/50 px-2 py-1.5'>
+                  <dt className='text-muted-foreground'>File</dt>
+                  <dd className='truncate font-mono'>{example.mainFile}</dd>
+                </div>
+                <div className='rounded-sm bg-muted/50 px-2 py-1.5'>
+                  <dt className='text-muted-foreground'>Exports</dt>
+                  <dd className='truncate uppercase'>{example.exportFormats.join(', ')}</dd>
+                </div>
+              </dl>
+
+              <div className='mt-3 flex items-center justify-between gap-2'>
+                <div className='flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground'>
+                  <FileCode2 className='size-3.5 shrink-0' />
+                  <span className='truncate'>{example.presets?.length ?? 0} presets</span>
+                </div>
+                <Link
+                  to={`/playground?model=${example.id}`}
+                  className={buttonVariants({ variant: 'default', size: 'sm' })}
+                >
+                  <ExternalLink className='size-3.5' />
+                  Open
+                </Link>
+              </div>
+            </article>
+          ))}
+        </div>
+
+        {filteredExamples.length === 0 ? (
+          <div className='rounded-md border border-dashed p-6 text-sm text-muted-foreground'>
+            No gallery models match the current filters.
+          </div>
         ) : null}
-
-        <SharedWorkerGate>
-          <FileManagerProvider
-            key={previewProjectId}
-            projectId={previewProjectId}
-            rootDirectory={`/projects/${previewProjectId}`}
-            initialBackend='indexeddb'
-          >
-            <CadPreviewProvider
-              projectId={previewProjectId}
-              mainFile={activeExample.mainFile}
-              files={files}
-              parameters={activeExample.initialParameters}
-            >
-              <PlaygroundParameterBridge pendingParameters={pendingParameters} onParametersChange={setLiveParameters} />
-              <section className='flex min-h-[56dvh] min-w-0 flex-col xl:min-h-0 xl:border-r'>
-                <div className='flex h-11 items-center justify-between border-b px-3'>
-                  <div className='flex items-center gap-2'>
-                    <SlidersHorizontal className='size-4 text-muted-foreground' />
-                    <PreviewSummary />
-                  </div>
-                  <div className='flex items-center gap-1.5'>
-                    <PlaygroundExportControls exampleId={activeExample.id} formats={activeExample.exportFormats} />
-                  </div>
-                </div>
-                <div className='relative min-h-0 flex-1 bg-muted/30'>
-                  <CadPreviewViewer
-                    className='size-full'
-                    enablePan
-                    enableZoom
-                    stageOptions={{ zoomLevel: 1.25 }}
-                    graphicsOptions={{
-                      enableLines: true,
-                      viewerClassName: 'bg-muted/30',
-                    }}
-                  />
-                  <CadPreviewStatus className='absolute top-3 left-3' />
-                </div>
-              </section>
-
-              <section className='flex min-h-[260px] min-w-0 flex-col border-t bg-background xl:min-h-0 xl:border-t-0'>
-                <PlaygroundParameters presets={activeExample.presets ?? []} />
-              </section>
-            </CadPreviewProvider>
-          </FileManagerProvider>
-        </SharedWorkerGate>
-      </div>
+      </section>
     </main>
   );
 }
 
-/**
- * Bridges the preview's live parameter overrides out to the header (where the Share button lives,
- * outside the provider) and applies any overrides decoded from a shared `?p=` token once the kernel
- * is ready. Renders nothing.
- */
-function PlaygroundParameterBridge({
-  pendingParameters,
-  onParametersChange,
-}: {
-  readonly pendingParameters: Record<string, unknown> | undefined;
-  readonly onParametersChange: (parameters: Record<string, unknown>) => void;
-}): null {
-  const { parameters, setParameters, status } = useCadPreview();
-  const liveParameters = parameters ?? EMPTY_PARAMETERS;
-
-  // Surface the live overrides to the header so Share can encode them.
+function useGalleryVersionCheck(): void {
   useEffect(() => {
-    onParametersChange(liveParameters);
-  }, [liveParameters, onParametersChange]);
+    const currentCommit = import.meta.env['VITE_COMMIT_SHA'];
 
-  // Apply decoded shared parameters exactly once per distinct token, after the kernel is ready.
-  const appliedRef = useRef<Record<string, unknown> | undefined>(undefined);
-  useEffect(() => {
-    if (status !== 'ready' || !pendingParameters || appliedRef.current === pendingParameters) {
+    if (!currentCommit) {
       return;
     }
 
-    if (Object.keys(pendingParameters).length === 0) {
-      return;
-    }
+    let cancelled = false;
 
-    appliedRef.current = pendingParameters;
-    setParameters(pendingParameters);
-  }, [pendingParameters, status, setParameters]);
+    const checkForUpdate = async (): Promise<void> => {
+      try {
+        const response = await fetch(`${getVersionJsonHref()}?ts=${Date.now()}`, { cache: 'no-store' });
 
-  return null;
-}
-
-function PlaygroundParameters({ presets }: { readonly presets: readonly PlaygroundPreset[] }): React.JSX.Element {
-  return (
-    <div className='flex h-full min-h-0 flex-col'>
-      {presets.length > 0 ? <PlaygroundPresetControls presets={presets} /> : null}
-      <div className='min-h-0 flex-1'>
-        <PreviewParameters />
-      </div>
-    </div>
-  );
-}
-
-function PlaygroundPresetControls({ presets }: { readonly presets: readonly PlaygroundPreset[] }): React.JSX.Element {
-  const { setParameters } = useCadPreview();
-
-  const applyPreset = useCallback(
-    (preset: PlaygroundPreset) => {
-      setParameters(preset.parameters);
-      toast.success(`Applied ${preset.name}`);
-    },
-    [setParameters],
-  );
-
-  return (
-    <div className='flex flex-wrap items-center gap-1.5 border-b bg-muted/30 px-2 py-1.5'>
-      <span className='mr-1 text-xs text-muted-foreground'>Presets</span>
-      {presets.map((preset) => (
-        <Button
-          key={preset.name}
-          variant='outline'
-          size='xs'
-          onClick={() => {
-            applyPreset(preset);
-          }}
-        >
-          {preset.name}
-        </Button>
-      ))}
-    </div>
-  );
-}
-
-type ActorSubscription = {
-  readonly unsubscribe: () => void;
-};
-
-function issueMessage(errors: ReadonlyArray<{ readonly message?: unknown }>): string {
-  const message = errors[0]?.message;
-  return typeof message === 'string' ? message : 'Export failed';
-}
-
-function PlaygroundExportControls({
-  exampleId,
-  formats,
-}: {
-  readonly exampleId: string;
-  readonly formats: readonly FileExtension[];
-}): React.JSX.Element {
-  const { cadRef, status, geometries } = useCadPreview();
-  const [isExporting, setIsExporting] = useState(false);
-  const isExportEnabled = status === 'ready' && geometries.length > 0 && !isExporting;
-  const primaryFormat = formats[0];
-
-  const exportGeometry = useCallback(
-    (format: FileExtension) => {
-      if (!isExportEnabled) {
-        return;
-      }
-
-      setIsExporting(true);
-
-      // oxlint-disable-next-line tau-lint/no-async-iife -- export completion is delivered through actor events.
-      void (async () => {
-        try {
-          const blob = await new Promise<Blob>((resolve, reject) => {
-            const subscriptions: ActorSubscription[] = [];
-
-            const cleanup = () => {
-              for (const subscription of subscriptions) {
-                subscription.unsubscribe();
-              }
-            };
-
-            subscriptions.push(
-              cadRef.on('geometryExported', (event) => {
-                cleanup();
-                resolve(event.blob);
-              }),
-              cadRef.on('exportFailed', (event) => {
-                cleanup();
-                reject(new Error(issueMessage(event.errors)));
-              }),
-            );
-
-            cadRef.send({ type: 'exportGeometry', format });
-          });
-
-          const filename = `${exampleId}.${format}`;
-          downloadBlob(blob, filename);
-          toast.success(`Downloaded ${filename}`);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : 'Export failed';
-          toast.error(`Failed to export: ${message}`);
-        } finally {
-          setIsExporting(false);
+        if (!response.ok) {
+          return;
         }
-      })();
-    },
-    [cadRef, isExportEnabled, exampleId],
-  );
 
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'F7' && primaryFormat) {
-        event.preventDefault();
-        exportGeometry(primaryFormat);
+        const latest = (await response.json()) as AppVersion;
+
+        if (!cancelled && latest.commit && latest.commit !== currentCommit) {
+          toast.info('New version available', {
+            id: updateToastId,
+            description: 'Refresh to use the latest gallery and project files.',
+            action: {
+              label: 'Refresh',
+              onClick: () => {
+                globalThis.location.reload();
+              },
+            },
+            duration: Number.POSITIVE_INFINITY,
+          });
+        }
+      } catch {
+        // Version checks are best-effort; cached app shells should still remain usable offline.
       }
     };
 
-    globalThis.addEventListener('keydown', handleKeyDown);
+    void checkForUpdate();
+    const interval = globalThis.setInterval(() => {
+      void checkForUpdate();
+    }, updateCheckIntervalMs);
+
     return () => {
-      globalThis.removeEventListener('keydown', handleKeyDown);
+      cancelled = true;
+      globalThis.clearInterval(interval);
     };
-  }, [exportGeometry, primaryFormat]);
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant='outline' size='xs' disabled={!isExportEnabled} title='Export. Shortcut: F7'>
-          <Download className='size-3' />
-          {isExporting ? 'Exporting…' : 'Export'}
-          <ChevronDown className='size-3 opacity-60' />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align='end'>
-        {formats.map((format) => (
-          <DropdownMenuItem
-            key={format}
-            onSelect={() => {
-              exportGeometry(format);
-            }}
-          >
-            <Download className='size-3.5' />
-            {format.toUpperCase()}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
+  }, []);
 }
 
-function readInitialExampleIdFromSearch(params: URLSearchParams): string {
-  const candidate = params.get('model') ?? params.get('example');
-  if (candidate && playgroundExamples.some((example) => example.id === candidate)) {
-    return candidate;
+function getVersionJsonHref(): string {
+  const frontendUrl = globalThis.window.ENV.TAU_FRONTEND_URL;
+
+  try {
+    const { pathname } = new URL(frontendUrl);
+    const publicBasePath = pathname === '/' ? '' : pathname.replace(/\/$/, '');
+    return `${publicBasePath}/version.json`;
+  } catch {
+    return '/version.json';
   }
-
-  return defaultExample.id;
-}
-
-function buildExampleUrl(exampleId: string): string | undefined {
-  const browserWindow = getBrowserWindow();
-  if (!browserWindow) {
-    return undefined;
-  }
-
-  const url = new URL(browserWindow.location.href);
-  url.searchParams.set('model', exampleId);
-  url.searchParams.delete('example');
-  return url.toString();
-}
-
-function writeExampleToUrl(exampleId: string, options: { readonly replace?: boolean } = {}): void {
-  const browserWindow = getBrowserWindow();
-  if (!browserWindow) {
-    return;
-  }
-
-  const url = buildExampleUrl(exampleId);
-  if (!url) {
-    return;
-  }
-
-  const current = `${browserWindow.location.pathname}${browserWindow.location.search}${browserWindow.location.hash}`;
-  const nextUrl = new URL(url);
-  const next = `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`;
-  if (current === next) {
-    return;
-  }
-
-  if (options.replace) {
-    browserWindow.history.replaceState({}, '', url);
-    return;
-  }
-
-  browserWindow.history.pushState({}, '', url);
-}
-
-function getBrowserWindow(): Window | undefined {
-  const maybeGlobal = globalThis as typeof globalThis & {
-    readonly window?: Window;
-  };
-  return maybeGlobal.window;
-}
-
-function PreviewSummary(): React.JSX.Element {
-  const { status, geometries, error, defaultParameters } = useCadPreview();
-  const parameterCount = Object.keys(defaultParameters).length;
-
-  if (error) {
-    return <span className='truncate text-xs text-destructive'>{error.message}</span>;
-  }
-
-  return (
-    <span className='truncate text-xs text-muted-foreground'>
-      {status} · {geometries.length} geometries · {parameterCount} parameters
-    </span>
-  );
-}
-
-function EditorFallback({ value, onChange }: EditorFallbackProps): React.JSX.Element {
-  return (
-    <textarea
-      className='size-full resize-none bg-background p-4 font-mono text-sm leading-6 outline-none'
-      spellCheck={false}
-      value={value}
-      onChange={(event) => {
-        onChange(event.target.value);
-      }}
-    />
-  );
 }
