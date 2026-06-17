@@ -14,7 +14,8 @@ import { CadPreviewViewer } from '#components/cad-preview.js';
 import type { ProjectsWithFiles } from '#constants/project-examples.js';
 import { KernelTierBadge } from '#components/tier-badge.js';
 
-export const communityGridClassName = 'grid grid-cols-2 gap-3 sm:gap-6 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5';
+export const communityGridClassName =
+  'grid min-w-0 grid-cols-2 gap-3 sm:gap-6 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5';
 
 export type CommunityProjectGridProperties = {
   readonly projects: ProjectsWithFiles[];
@@ -112,7 +113,7 @@ function ProjectCard({
   }, [navigate, id]);
 
   return (
-    <Card className='group relative flex flex-col overflow-hidden py-0 transition-all duration-300 hover:border-primary/30 hover:bg-muted/70'>
+    <Card className='group relative flex min-w-0 flex-col overflow-hidden py-0 transition-all duration-300 hover:border-primary/30 hover:bg-muted/70'>
       <div className='flex flex-1 cursor-pointer flex-col' onClick={handleCardClick}>
         <div className='inset-0 aspect-video h-fit w-full overflow-hidden bg-muted group-hover:bg-accent/70 sm:aspect-video'>
           {!visible && (
@@ -144,7 +145,8 @@ function ProjectCard({
               <Button
                 variant='overlay'
                 size='icon'
-                className='absolute top-1 right-1 z-10 size-7 sm:top-2 sm:right-2 sm:size-9'
+                className='absolute top-1 right-1 z-10 size-11 sm:top-2 sm:right-2'
+                aria-label={visible ? `Hide preview for ${name}` : `Preview ${name}`}
                 onClick={handlePreviewToggle}
               >
                 <Eye className={visible ? 'size-3.5 text-primary sm:size-4' : 'size-3.5 sm:size-4'} />
@@ -199,7 +201,7 @@ function ProjectCard({
                   <Button
                     variant='outline'
                     size='sm'
-                    className='flex h-7 items-center gap-1 px-2 text-xs text-muted-foreground hover:text-primary sm:h-8 sm:px-3 sm:text-sm'
+                    className='flex min-h-11 items-center gap-1 px-2 text-xs text-muted-foreground hover:text-primary sm:h-8 sm:min-h-0 sm:px-3 sm:text-sm'
                     disabled={isForking}
                     onClick={handleFork}
                   >

@@ -55,6 +55,15 @@ const environmentSchema = z.preprocess(
       .optional()
       .transform((value) => (value === undefined ? false : /^(1|true)$/i.test(value)))
       .describe('Disable the in-app code editor (kiosk / viewer-only mode). Default false.'),
+    /**
+     * Enable project-creation entry points. Disabled by default so gallery /
+     * viewer deployments do not invite users into unavailable creation flows.
+     */
+    TAU_ENABLE_PROJECT_CREATION: z
+      .string()
+      .optional()
+      .transform((value) => (value === undefined ? false : /^(1|true)$/i.test(value)))
+      .describe('Enable project creation entry points. Default false.'),
     NODE_ENV: z.enum(['development', 'production', 'test']),
     GITHUB_API_TOKEN: z.string().optional().describe('GitHub API token for the GitHub API client.'),
 

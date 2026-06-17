@@ -1,10 +1,10 @@
-import { useState, useCallback } from 'react';
-import { Link, useNavigate } from 'react-router';
+import { useState, useCallback, useEffect } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router';
 import { useSession } from '@better-auth-ui/react';
 import { authClient } from '#lib/auth-client.js';
 import type { KernelProvider } from '@taucad/runtime';
 import type { FileSystemBackend } from '@taucad/types';
-import { kernelConfigurations } from '@taucad/types/constants';
+import { isKernelId, kernelConfigurations } from '@taucad/types/constants';
 import { Button } from '#components/ui/button.js';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from '#components/ui/card.js';
 import { Input } from '#components/ui/input.js';
@@ -32,6 +32,7 @@ import { isWorkspaceDirectoryRequiredError } from '#filesystem/workspace-errors.
 import { useWorkspaceTelemetry } from '#utils/workspace-telemetry.utils.js';
 import { useNewProjectWorkspacePicker } from '#routes/projects_.new/use-new-project-workspace-picker.js';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '#components/ui/select.js';
+import { useFeature } from '#flags/use-feature.js';
 
 export const handle: Handle = {
   breadcrumb() {
@@ -49,20 +50,22 @@ export const handle: Handle = {
 function KernelDetailsContent({ kernelId }: { readonly kernelId: KernelProvider }): React.JSX.Element {
   const selectedOption = getKernelOption(kernelId);
   return (
-    <div className='space-y-4'>
+    <div className='min-w-0 space-y-4'>
       <TierBadge tier={getKernelRequiredTier(kernelId)} />
-      <p className='text-sm leading-relaxed text-muted-foreground'>{selectedOption.longDescription}</p>
+      <p className='min-w-0 text-sm leading-relaxed wrap-break-word text-muted-foreground'>
+        {selectedOption.longDescription}
+      </p>
 
       <div className='space-y-3'>
-        <Badge variant='default' className='text-xs font-medium'>
+        <Badge variant='default' className='max-w-full text-xs font-medium whitespace-normal'>
           Best for: {selectedOption.recommended}
         </Badge>
 
         <div className='space-y-2'>
           <h4 className='text-sm font-medium'>Tags:</h4>
-          <div className='flex flex-wrap gap-1'>
+          <div className='flex min-w-0 flex-wrap gap-1'>
             {selectedOption.tags.map((tag) => (
-              <Badge key={tag} variant='secondary' className='text-xs'>
+              <Badge key={tag} variant='secondary' className='max-w-full text-xs whitespace-normal'>
                 {tag}
               </Badge>
             ))}
@@ -149,10 +152,12 @@ function useProjectCreation() {
   return { createProject, isCreating };
 }
 
-export default function ProjectsNew(): React.JSX.Element {
+export default function ProjectsNew(): React.JSX.Element | undefined {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { createProject, isCreating } = useProjectCreation();
   const telemetry = useWorkspaceTelemetry();
+  const isProjectCreationEnabled = useFeature('enableProjectCreation');
 
   const { kernel, setKernel: setSelectedKernel } = useKernel();
   const [projectName, setProjectName] = useState('');
@@ -163,6 +168,13 @@ export default function ProjectsNew(): React.JSX.Element {
   );
 
   const { workspaces, selectedWorkspaceId, setSelectedWorkspaceId, workspaceStatus } = useNewProjectWorkspacePicker();
+
+  useEffect(() => {
+    const kernelParameter = searchParams.get('kernel');
+    if (kernelParameter && isKernelId(kernelParameter) && kernelParameter !== kernel) {
+      setSelectedKernel(kernelParameter);
+    }
+  }, [kernel, searchParams, setSelectedKernel]);
 
   const activeWorkspace = workspaces.find((workspace) => workspace.workspaceId === selectedWorkspaceId);
   const backendBadge = selectedBackend === 'webaccess' && activeWorkspace ? activeWorkspace.name : undefined;
@@ -240,8 +252,18 @@ export default function ProjectsNew(): React.JSX.Element {
     }, [isCreateButtonDisabled, handleCreateProject]),
   );
 
+  useEffect(() => {
+    if (!isProjectCreationEnabled) {
+      void navigate('/', { replace: true });
+    }
+  }, [isProjectCreationEnabled, navigate]);
+
+  if (!isProjectCreationEnabled) {
+    return undefined;
+  }
+
   return (
-    <div className='container mx-auto flex max-w-4xl flex-col px-4 pb-4 md:h-full md:min-h-0'>
+    <div className='container mx-auto flex h-full min-h-0 max-w-4xl flex-col overflow-y-auto px-4 pb-4 md:overflow-hidden'>
       <div className='mb-4 shrink-0 text-center'>
         <h1 className='mb-2 text-3xl font-semibold tracking-tight'>Create New Project</h1>
         <p className='text-muted-foreground'>Choose a CAD kernel and start building</p>
@@ -348,8 +370,13 @@ export default function ProjectsNew(): React.JSX.Element {
                         kernel === option.id && 'bg-primary/5',
                       )}
                     >
-                      <div className='flex items-start gap-3 p-4'>
-                        <RadioGroupItem value={option.id} id={`mobile-${option.id}`} className='mt-1' />
+                      <div className='flex min-w-0 items-start gap-3 p-4'>
+                        <RadioGroupItem
+                          value={option.id}
+                          id={`mobile-${option.id}`}
+                          className='mt-1'
+                          aria-label={`Select ${option.name}`}
+                        />
                         <div className='min-w-0 flex-1'>
                           <AccordionTrigger
                             className={cn(
@@ -361,11 +388,11 @@ export default function ProjectsNew(): React.JSX.Element {
                               <SvgIcon id={option.id} className='mt-0.5 size-6 shrink-0' />
                               <div className='flex w-full min-w-0 flex-col gap-1'>
                                 <div className='flex w-full items-start justify-between gap-2'>
-                                  <span className='flex items-center gap-1.5 text-sm font-medium'>
+                                  <span className='flex min-w-0 flex-wrap items-center gap-1.5 text-sm font-medium'>
                                     {option.name}
                                     <KernelTierBadge kernelId={option.id} />
                                   </span>
-                                  <span className='font-mono text-xs text-muted-foreground/70'>
+                                  <span className='min-w-0 shrink truncate font-mono text-xs text-muted-foreground/70'>
                                     {option.backendProvider}
                                   </span>
                                 </div>
@@ -377,7 +404,7 @@ export default function ProjectsNew(): React.JSX.Element {
                           </AccordionTrigger>
                         </div>
                       </div>
-                      <AccordionContent className='px-4 pb-4'>
+                      <AccordionContent className='min-w-0 px-4 pb-4 pl-14'>
                         <KernelDetailsContent kernelId={option.id} />
                       </AccordionContent>
                     </AccordionItem>
@@ -387,8 +414,8 @@ export default function ProjectsNew(): React.JSX.Element {
             </div>
 
             {/* Desktop: only the kernel list column scrolls */}
-            <div className='hidden min-h-0 md:flex md:flex-1 md:gap-6'>
-              <div className='flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-card md:basis-1/2'>
+            <div className='hidden min-h-0 lg:flex lg:flex-1 lg:gap-6'>
+              <div className='flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-card lg:basis-1/2'>
                 <div className='min-h-0 flex-1 scroll-shadows-y overflow-y-auto'>
                   <RadioGroup
                     value={kernel}
@@ -406,15 +433,22 @@ export default function ProjectsNew(): React.JSX.Element {
                           kernel === option.id && 'bg-primary/5 hover:bg-primary/10',
                         )}
                       >
-                        <RadioGroupItem value={option.id} id={option.id} className='mt-1' />
+                        <RadioGroupItem
+                          value={option.id}
+                          id={option.id}
+                          className='mt-1'
+                          aria-label={`Select ${option.name}`}
+                        />
                         <SvgIcon id={option.id} className='mt-0.5 size-6 shrink-0' />
                         <div className='flex w-full min-w-0 flex-col gap-1'>
                           <div className='flex w-full items-start justify-between gap-2'>
-                            <span className='flex items-center gap-1.5 text-sm font-medium'>
+                            <span className='flex min-w-0 flex-wrap items-center gap-1.5 text-sm font-medium'>
                               {option.name}
                               <KernelTierBadge kernelId={option.id} />
                             </span>
-                            <span className='font-mono text-xs text-muted-foreground/70'>{option.backendProvider}</span>
+                            <span className='min-w-0 shrink truncate font-mono text-xs text-muted-foreground/70'>
+                              {option.backendProvider}
+                            </span>
                           </div>
                           <span className='text-xs leading-relaxed text-muted-foreground'>{option.description}</span>
                         </div>
@@ -424,7 +458,7 @@ export default function ProjectsNew(): React.JSX.Element {
                 </div>
               </div>
 
-              <div className='flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto rounded-lg border border-border bg-card p-6 md:basis-1/2'>
+              <div className='flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto rounded-lg border border-border bg-card p-6 lg:basis-1/2'>
                 <KernelDetailsContent kernelId={kernel} />
               </div>
             </div>

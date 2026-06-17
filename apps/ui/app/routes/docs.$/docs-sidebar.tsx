@@ -71,17 +71,16 @@ export const useDocsSidebarProvider = (): DocsSidebarProviderContextType => {
 };
 
 export function DocsSidebarProvider({ children }: { readonly children: ReactNode }): React.JSX.Element {
-  const [isDocsSidebarOpen, setIsDocsSidebarOpen] = useCookie(cookieName.docsOpSidebar, true);
+  const [isDocsSidebarOpen, setIsDocsSidebarOpen] = useCookie(cookieName.docsOpSidebar, false);
+  const isMobile = useIsMobile();
 
   const toggleDocsSidebar = useCallback(() => {
     setIsDocsSidebarOpen((previous) => !previous);
   }, [setIsDocsSidebarOpen]);
 
-  const isMobile = useIsMobile();
   const location = useLocation();
   useEffect(() => {
     if (isMobile) {
-      // Location changes on mobile should close the sidebar
       setIsDocsSidebarOpen(false);
     }
   }, [location, isMobile, setIsDocsSidebarOpen]);
@@ -121,6 +120,7 @@ export function DocsSidebarTrigger({
     <FloatingPanelTrigger
       icon={MenuIcon}
       tooltipContent={`${isOpen ? 'Close' : 'Open'} Documentation Sidebar`}
+      ariaLabel={`${isOpen ? 'Close' : 'Open'} documentation sidebar`}
       className={isOpen ? 'text-primary' : undefined}
       onClick={onToggle}
     />
