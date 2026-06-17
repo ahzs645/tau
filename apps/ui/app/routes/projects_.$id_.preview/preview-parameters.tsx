@@ -8,7 +8,9 @@ import { Parameters } from '#components/geometry/parameters/parameters.js';
 import { cn } from '#utils/ui.utils.js';
 import { useCadPreview } from '#hooks/use-cad-preview.js';
 
-export function PreviewParameters(): React.JSX.Element {
+export function PreviewParameters({
+  headerActions,
+}: { readonly headerActions?: React.ReactNode } = {}): React.JSX.Element {
   const { graphicsRef, parameters, defaultParameters, jsonSchema, setParameters } = useCadPreview();
   const units = useSelector(graphicsRef, (state) => state.context.units);
 
@@ -41,6 +43,7 @@ export function PreviewParameters(): React.JSX.Element {
       <div className='flex items-center justify-between border-b p-2'>
         <h3 className='text-sm font-semibold'>Parameters</h3>
         <div className='flex items-center gap-1'>
+          {headerActions}
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
