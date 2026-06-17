@@ -486,15 +486,12 @@ function PlaygroundParameterBridge({
 function PlaygroundParameters({ presets }: { readonly presets: readonly PlaygroundPreset[] }): React.JSX.Element {
   return (
     <div className='flex h-full min-h-0 flex-col'>
-      {presets.length > 0 ? <PlaygroundPresetControls presets={presets} /> : null}
-      <div className='min-h-0 flex-1'>
-        <PreviewParameters />
-      </div>
+      <PreviewParameters headerActions={presets.length > 0 ? <PlaygroundPresetMenu presets={presets} /> : undefined} />
     </div>
   );
 }
 
-function PlaygroundPresetControls({ presets }: { readonly presets: readonly PlaygroundPreset[] }): React.JSX.Element {
+function PlaygroundPresetMenu({ presets }: { readonly presets: readonly PlaygroundPreset[] }): React.JSX.Element {
   const { setParameters } = useCadPreview();
 
   const applyPreset = useCallback(
@@ -506,21 +503,26 @@ function PlaygroundPresetControls({ presets }: { readonly presets: readonly Play
   );
 
   return (
-    <div className='flex flex-wrap items-center gap-1.5 border-b bg-muted/30 px-2 py-1.5'>
-      <span className='mr-1 text-xs text-muted-foreground'>Presets</span>
-      {presets.map((preset) => (
-        <Button
-          key={preset.name}
-          variant='outline'
-          size='xs'
-          onClick={() => {
-            applyPreset(preset);
-          }}
-        >
-          {preset.name}
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant='ghost' size='xs' className='gap-1'>
+          Presets
+          <ChevronDown className='size-3.5' />
         </Button>
-      ))}
-    </div>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align='end'>
+        {presets.map((preset) => (
+          <DropdownMenuItem
+            key={preset.name}
+            onSelect={() => {
+              applyPreset(preset);
+            }}
+          >
+            {preset.name}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 

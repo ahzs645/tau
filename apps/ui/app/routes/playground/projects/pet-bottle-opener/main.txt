@@ -1,53 +1,70 @@
 /**
- * Modular PET Bottle Opener
+ * Modular PET Bottle Opener - angled / offset tooth version
  *
- * A parametric, flat (extruded) PET bottle / cap opener with one or two
- * fin-style opener heads joined by a neck. The top head grips a bottle cap
- * with a ring of tapered radial fins; the lower module is either a plain
- * finger / hanging hole or a second smaller opener head.
- *
- * Ported from a PythonOCC (OpenCascade) design to Replicad. The whole part is
- * built as a single 2D profile using boolean operations on drawings, then
- * extruded to the desired thickness.
+ * This keeps the original flat-extruded Replicad approach, but changes the
+ * fin geometry to match the STEP reference more closely:
+ * - 60 teeth, 6 degree pitch
+ * - every 3rd tooth reaches the cap as a contact fin
+ * - the two teeth between are support fins, set back about 0.7 mm
+ * - tooth roots are swept/angled about 7.36 degrees from the inner tips
+ * - support teeth are slightly phase-offset, matching the STEP tooth pattern
  */
 import type { Drawing, Shape3D } from 'replicad';
 import { draw, drawCircle, drawPolysides } from 'replicad';
 
 export const defaultParams = {
-  thickness: 10, // Overall plate thickness (mm)
+  thickness: 10, // Use ~22 for the thick STEP-style body, 8-12 for a flatter print.
 
-  // --- Main (top) opener head ---
-  capDiameter: 29.5, // Clear diameter at the fin tips (cap knurl diameter)
-  finOuterRadius: 25, // Radius where the fins meet the outer rim
-  outerRadius: 27.5, // Outside radius of the head
-  finCount: 60, // Number of radial gripping fins
-  finInnerWidth: 0.75, // Tangential fin width at the tip (mm)
-  finOuterWidth: 1.35, // Tangential fin width at the root (mm)
-  contactEvery: 1, // 1 = every fin touches the cap; N = every Nth fin
-  supportSetback: 0, // How far non-contact fins stop short of the cap (mm)
-  outerSides: 64, // 64 = round rim; use 8/10/12 for a faceted rim
+  // --- Main opener head, tuned from the uploaded STEP ---
+  capDiameter: 29.5, // Contact fin inner diameter: 14.75 mm radius
+  finOuterRadius: 25, // Tooth root radius in the STEP
+  outerRadius: 29.1, // Outside radius, close to the STEP outside body
+  outerSides: 16, // The STEP outer wall is faceted; use 64 for round
 
-  // --- Layout ---
-  centerDistance: 45, // Distance between the two head centers (mm)
-  neckWidth: 16, // Width of the bridge between modules (mm)
+  finCount: 60, // 6 degree tooth pitch
+  contactEvery: 3, // 1 long contact fin, then 2 support fins
+  supportSetback: 0.7, // 15.45 mm support radius when cap radius is 14.75
 
-  // --- Lower module ---
-  secondOpener: false, // false = finger/hang hole, true = second opener head
-  handleHoleDiameter: 25, // Finger/hang hole diameter (when secondOpener = false)
-  handleOuterRadius: 17.5, // Outside radius of the lower disc (hole mode)
+  // Tip/root widths measured from the STEP tooth edges.
+  finInnerWidth: 0.86,
+  finOuterWidth: 1.8,
+  supportFinInnerWidth: 0.855,
+  supportFinOuterWidth: 1.8,
 
-  // --- Second opener head (used when secondOpener = true) ---
+  // STEP-style tooth sweep and phase.
+  // Negative means the root is clockwise from the inner tip.
+  finRootOffsetDeg: -7.36,
+  finPhaseDeg: 1.67,
+  supportPhaseOffsetDeg: -1.03,
+
+  // --- Optional lower module ---
+  // false/false gives the ring-only opener like the blue STEP render.
+  addHandle: false,
+  secondOpener: false,
+
+  centerDistance: 48,
+  neckWidth: 16,
+
+  // Finger/hanging hole, used when addHandle = true and secondOpener = false.
+  handleHoleDiameter: 25,
+  handleOuterRadius: 17.5,
+
+  // --- Second opener head, used when secondOpener = true ---
   secondCapDiameter: 19,
   secondFinOuterRadius: 16.5,
   secondOuterRadius: 18.5,
   secondFinCount: 36,
   secondFinInnerWidth: 0.55,
   secondFinOuterWidth: 1.05,
+  secondSupportFinInnerWidth: 0.65,
+  secondSupportFinOuterWidth: 1.05,
+  secondContactEvery: 2,
+  secondSupportSetback: 0.5,
+  secondFinRootOffsetDeg: -7.36,
+  secondFinPhaseDeg: 1.67,
+  secondSupportPhaseOffsetDeg: -1.0,
 
-  // --- Finishing ---
-  // Rounds every edge of the final solid. Leave at 0 for sharp CAD edges and
-  // the fastest, most reliable render. Small values (~0.3) look nicer when
-  // printed but filleting a 60-tooth ring can be slow or fail.
+  // Leave at 0 for most reliable rendering. Try 0.25-0.35 later.
   edgeRound: 0,
 };
 
@@ -55,6 +72,7 @@ export const defaultParams = {
 const ROOT_OVERLAP = 0.35;
 // Overlap between the neck and each round module so they merge cleanly.
 const NECK_OVERLAP = 1.8;
+const DEG = Math.PI / 180;
 
 type OpenerHead = {
   capDiameter: number;
@@ -63,9 +81,14 @@ type OpenerHead = {
   finCount: number;
   finInnerWidth: number;
   finOuterWidth: number;
+  supportFinInnerWidth?: number;
+  supportFinOuterWidth?: number;
   contactEvery: number;
   supportSetback: number;
   outerSides: number;
+  finRootOffsetDeg?: number;
+  finPhaseDeg?: number;
+  supportPhaseOffsetDeg?: number;
 };
 
 /** Point at `radius` and `angle` (radians) around a center. */
@@ -83,11 +106,13 @@ function polar(
 /** Closed polygon from a list of 2D points. */
 function polygon(points: Array<[number, number]>): Drawing {
   const [first, ...rest] = points;
+
   if (!first) {
     throw new Error('polygon needs at least one point');
   }
 
   let pen = draw(first);
+
   for (const point of rest) {
     pen = pen.lineTo(point);
   }
@@ -96,33 +121,47 @@ function polygon(points: Array<[number, number]>): Drawing {
 }
 
 /** Ring centered at the origin. Faceted when `sides` is between 3 and 63. */
-function annulus(outerRadius: number, innerRadius: number, sides: number): Drawing {
+function annulus(
+  outerRadius: number,
+  innerRadius: number,
+  sides: number,
+): Drawing {
   const outer =
     sides >= 3 && sides < 64
       ? drawPolysides(outerRadius, sides)
       : drawCircle(outerRadius);
+
   return outer.cut(drawCircle(innerRadius));
 }
 
-/** A single tapered radial fin/tooth pointing inward toward the center. */
-function radialFin(
+/**
+ * A single tapered fin/tooth whose root is angularly offset from its tip.
+ *
+ * `innerAngle` is the center angle at the cap side.
+ * `rootAngleOffset` sweeps the root relative to the inner tip.
+ */
+function angledRadialFin(
   innerRadius: number,
   outerRadius: number,
   innerWidth: number,
   outerWidth: number,
-  angle: number,
+  innerAngle: number,
+  rootAngleOffset: number,
 ): Drawing {
   const center: [number, number] = [0, 0];
-  // Convert tangential widths (mm) into angular half-widths at each radius.
+
+  // Convert tangential widths in mm into angular half-widths.
   const innerHalf = innerWidth / 2 / Math.max(innerRadius, 0.01);
   const outerHalf = outerWidth / 2 / Math.max(outerRadius, 0.01);
+
   const finOuter = outerRadius + ROOT_OVERLAP;
+  const outerAngle = innerAngle + rootAngleOffset;
 
   return polygon([
-    polar(center, innerRadius, angle - innerHalf),
-    polar(center, finOuter, angle - outerHalf),
-    polar(center, finOuter, angle + outerHalf),
-    polar(center, innerRadius, angle + innerHalf),
+    polar(center, innerRadius, innerAngle - innerHalf),
+    polar(center, finOuter, outerAngle - outerHalf),
+    polar(center, finOuter, outerAngle + outerHalf),
+    polar(center, innerRadius, innerAngle + innerHalf),
   ]);
 }
 
@@ -131,34 +170,73 @@ function buildOpenerHead(head: OpenerHead): Drawing {
   const capRadius = head.capDiameter / 2;
   const ringInner = head.finOuterRadius - ROOT_OVERLAP;
 
+  const contactEvery = Math.max(1, Math.round(head.contactEvery));
+  const supportSetback = Math.max(0, head.supportSetback);
+
+  const supportFinInnerWidth =
+    head.supportFinInnerWidth ?? head.finInnerWidth;
+
+  const supportFinOuterWidth =
+    head.supportFinOuterWidth ?? head.finOuterWidth;
+
+  const finRootOffset = (head.finRootOffsetDeg ?? 0) * DEG;
+  const finPhase = (head.finPhaseDeg ?? 0) * DEG;
+  const supportPhaseOffset = (head.supportPhaseOffsetDeg ?? 0) * DEG;
+
   if (capRadius <= 0) {
     throw new Error('capDiameter must be positive');
   }
+
   if (head.finOuterRadius <= capRadius) {
     throw new Error('finOuterRadius must be larger than capDiameter / 2');
   }
+
   if (head.outerRadius <= head.finOuterRadius) {
     throw new Error('outerRadius must be larger than finOuterRadius');
   }
+
   if (head.finCount < 3) {
     throw new Error('finCount must be at least 3');
+  }
+
+  if (
+    contactEvery > 1 &&
+    capRadius + supportSetback >= head.finOuterRadius - 0.25
+  ) {
+    throw new Error(
+      'supportSetback is too large; support fins would not reach the rim cleanly',
+    );
   }
 
   let shape = annulus(head.outerRadius, ringInner, head.outerSides);
 
   for (let i = 0; i < head.finCount; i++) {
-    const isContact = head.contactEvery <= 1 || i % head.contactEvery === 0;
+    const isContact = contactEvery <= 1 || i % contactEvery === 0;
+
     const finInnerRadius = isContact
       ? capRadius
-      : capRadius + head.supportSetback;
-    const angle = (i * 2 * Math.PI) / head.finCount;
+      : capRadius + supportSetback;
+
+    const innerWidth = isContact
+      ? head.finInnerWidth
+      : supportFinInnerWidth;
+
+    const outerWidth = isContact
+      ? head.finOuterWidth
+      : supportFinOuterWidth;
+
+    const phaseOffset = isContact ? 0 : supportPhaseOffset;
+    const innerAngle =
+      finPhase + phaseOffset + (i * 2 * Math.PI) / head.finCount;
+
     shape = shape.fuse(
-      radialFin(
+      angledRadialFin(
         finInnerRadius,
         head.finOuterRadius,
-        head.finInnerWidth,
-        head.finOuterWidth,
-        angle,
+        innerWidth,
+        outerWidth,
+        innerAngle,
+        finRootOffset,
       ),
     );
   }
@@ -181,6 +259,7 @@ function buildBridge(
   const vx = centerB[0] - centerA[0];
   const vy = centerB[1] - centerA[1];
   const length = Math.hypot(vx, vy);
+
   if (length < 1e-6) {
     return null;
   }
@@ -192,6 +271,7 @@ function buildBridge(
 
   const startDist = Math.max(radiusA - NECK_OVERLAP, 0);
   const endDist = Math.max(radiusB - NECK_OVERLAP, 0);
+
   const sx = centerA[0] + ux * startDist;
   const sy = centerA[1] + uy * startDist;
   const ex = centerB[0] - ux * endDist;
@@ -203,6 +283,7 @@ function buildBridge(
   }
 
   const hw = width / 2;
+
   return polygon([
     [sx + nx * hw, sy + ny * hw],
     [ex + nx * hw, ey + ny * hw],
@@ -215,7 +296,6 @@ export default function main(p = defaultParams): Shape3D {
   const topCenter: [number, number] = [0, 0];
   const lowerCenter: [number, number] = [0, -p.centerDistance];
 
-  // Top opener head (built at the origin, which is already its center).
   let body = buildOpenerHead({
     capDiameter: p.capDiameter,
     finOuterRadius: p.finOuterRadius,
@@ -223,17 +303,23 @@ export default function main(p = defaultParams): Shape3D {
     finCount: p.finCount,
     finInnerWidth: p.finInnerWidth,
     finOuterWidth: p.finOuterWidth,
+    supportFinInnerWidth: p.supportFinInnerWidth,
+    supportFinOuterWidth: p.supportFinOuterWidth,
     contactEvery: p.contactEvery,
     supportSetback: p.supportSetback,
     outerSides: p.outerSides,
+    finRootOffsetDeg: p.finRootOffsetDeg,
+    finPhaseDeg: p.finPhaseDeg,
+    supportPhaseOffsetDeg: p.supportPhaseOffsetDeg,
   });
 
-  let lowerOuterRadius: number;
-  let lower: Drawing;
+  let lowerOuterRadius = 0;
+  let lower: Drawing | null = null;
   let handleHole: Drawing | null = null;
 
   if (p.secondOpener) {
     lowerOuterRadius = p.secondOuterRadius;
+
     lower = buildOpenerHead({
       capDiameter: p.secondCapDiameter,
       finOuterRadius: p.secondFinOuterRadius,
@@ -241,36 +327,47 @@ export default function main(p = defaultParams): Shape3D {
       finCount: p.secondFinCount,
       finInnerWidth: p.secondFinInnerWidth,
       finOuterWidth: p.secondFinOuterWidth,
-      contactEvery: 1,
-      supportSetback: 0,
+      supportFinInnerWidth: p.secondSupportFinInnerWidth,
+      supportFinOuterWidth: p.secondSupportFinOuterWidth,
+      contactEvery: p.secondContactEvery,
+      supportSetback: p.secondSupportSetback,
       outerSides: 64,
+      finRootOffsetDeg: p.secondFinRootOffsetDeg,
+      finPhaseDeg: p.secondFinPhaseDeg,
+      supportPhaseOffsetDeg: p.secondSupportPhaseOffsetDeg,
     }).translate(lowerCenter[0], lowerCenter[1]);
-  } else {
+  } else if (p.addHandle) {
     lowerOuterRadius = p.handleOuterRadius;
+
     lower = drawCircle(p.handleOuterRadius).translate(
       lowerCenter[0],
       lowerCenter[1],
     );
+
     handleHole = drawCircle(p.handleHoleDiameter / 2).translate(
       lowerCenter[0],
       lowerCenter[1],
     );
   }
 
-  const bridge = buildBridge(
-    topCenter,
-    lowerCenter,
-    p.outerRadius,
-    lowerOuterRadius,
-    p.neckWidth,
-  );
-  if (bridge) {
-    body = body.fuse(bridge);
-  }
+  if (lower) {
+    const bridge = buildBridge(
+      topCenter,
+      lowerCenter,
+      p.outerRadius,
+      lowerOuterRadius,
+      p.neckWidth,
+    );
 
-  body = body.fuse(lower);
-  if (handleHole) {
-    body = body.cut(handleHole);
+    if (bridge) {
+      body = body.fuse(bridge);
+    }
+
+    body = body.fuse(lower);
+
+    if (handleHole) {
+      body = body.cut(handleHole);
+    }
   }
 
   const solid = body.sketchOnPlane().extrude(p.thickness);

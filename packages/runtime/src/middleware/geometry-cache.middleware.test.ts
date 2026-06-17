@@ -191,7 +191,18 @@ describe('geometryCacheMiddleware', () => {
         const result = await wrapCreateGeometry!(input, handler, runtime);
 
         expect(handler).toHaveBeenCalled();
-        expect(result).toBe(handlerResult);
+        // The cached result is retained in L1, so delivery returns a detach-safe
+        // copy (fresh GLTF buffer) rather than the original handler object.
+        expect(result.success).toBe(true);
+        if (
+          result.success &&
+          handlerResult.success &&
+          result.data[0]?.format === 'gltf' &&
+          handlerResult.data[0]?.format === 'gltf'
+        ) {
+          expect(result.data[0].content).toEqual(handlerResult.data[0].content);
+          expect(result.data[0].content.buffer).not.toBe(handlerResult.data[0].content.buffer);
+        }
       });
 
       it('should log cache miss message', async () => {
@@ -352,7 +363,15 @@ describe('geometryCacheMiddleware', () => {
 
         // Should treat as cache miss and call handler
         expect(handler).toHaveBeenCalled();
-        expect(result).toBe(handlerResult);
+        expect(result.success).toBe(true);
+        if (
+          result.success &&
+          handlerResult.success &&
+          result.data[0]?.format === 'gltf' &&
+          handlerResult.data[0]?.format === 'gltf'
+        ) {
+          expect(result.data[0].content).toEqual(handlerResult.data[0].content);
+        }
       });
 
       it('should handle file write errors gracefully', async () => {
@@ -369,7 +388,15 @@ describe('geometryCacheMiddleware', () => {
         // Should not throw, just log warning
         const result = await wrapCreateGeometry!(input, handler, runtime);
 
-        expect(result).toBe(handlerResult);
+        expect(result.success).toBe(true);
+        if (
+          result.success &&
+          handlerResult.success &&
+          result.data[0]?.format === 'gltf' &&
+          handlerResult.data[0]?.format === 'gltf'
+        ) {
+          expect(result.data[0].content).toEqual(handlerResult.data[0].content);
+        }
         expect(runtime.logger.warn).toHaveBeenCalledWith(expect.stringContaining('Cache write error'));
       });
     });
@@ -631,6 +658,53 @@ describe('geometryCacheMiddleware', () => {
         expect(cached.data[0].content.buffer).toBe(originalContent.buffer);
         expect(cached.data[0].content).toEqual(originalContent);
       }
+    });
+
+    it('should survive transfer-tier detachment of the delivered buffer across cache hits', async () => {
+      // Reproduces the worker transfer tier: the consumer detaches the GLTF
+      // buffer it receives (as `postMessage` does for transferables). The cache
+      // must keep handing back intact, structurally-equal bytes on every hit,
+      // never the now-detached source buffer.
+      const originalBytes = [9, 8, 7, 6];
+      const handlerResult = createGltfSuccessResult(new Uint8Array(originalBytes));
+      const { input, runtime } = createCacheTestContext({ cacheExists: false });
+      const handler = createMockCreateGeometryHandler(handlerResult);
+
+      const { wrapCreateGeometry } = geometryCacheMiddleware;
+
+      const detachDelivered = (result: CreateGeometryResult): void => {
+        if (result.success && result.data[0]?.format === 'gltf') {
+          // Transferring an ArrayBuffer detaches it; structuredClone with a
+          // transfer list mirrors what the worker channel does on postMessage.
+          structuredClone(result.data[0].content.buffer, {
+            transfer: [result.data[0].content.buffer],
+          });
+        }
+      };
+
+      const expectIntactBytes = (result: CreateGeometryResult): void => {
+        expect(result.success).toBe(true);
+        if (result.success && result.data[0]?.format === 'gltf') {
+          expect([...result.data[0].content]).toEqual(originalBytes);
+        }
+      };
+
+      // First compute (miss) → delivered copy gets transferred/detached.
+      const first = await wrapCreateGeometry!(input, handler, runtime);
+      expectIntactBytes(first);
+      detachDelivered(first);
+
+      // Subsequent renders hit L1; each must still deliver intact bytes even
+      // though the previously delivered buffers were detached.
+      const secondHit = await wrapCreateGeometry!(input, handler, runtime);
+      expectIntactBytes(secondHit);
+      detachDelivered(secondHit);
+
+      const thirdHit = await wrapCreateGeometry!(input, handler, runtime);
+      expectIntactBytes(thirdHit);
+      detachDelivered(thirdHit);
+
+      expect(handler).toHaveBeenCalledOnce();
     });
   });
 
