@@ -1,4 +1,4 @@
-import type { PlaygroundExample } from '#routes/_index/playground-examples.js';
+import type { PlaygroundExample } from '#routes/playground/playground-examples.js';
 
 export const legacyPlaygroundExamples = [
   {

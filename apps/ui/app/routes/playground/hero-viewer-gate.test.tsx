@@ -2,11 +2,11 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, act } from '@testing-library/react';
 
-vi.mock('#routes/_index/hero-viewer.js', () => ({
+vi.mock('#routes/playground/hero-viewer.js', () => ({
   HeroViewer: () => <div data-testid='hero-viewer'>HeroViewer</div>,
 }));
 
-const { LazyHeroViewer } = await import('#routes/_index/hero-viewer-gate.js');
+const { LazyHeroViewer } = await import('#routes/playground/hero-viewer-gate.js');
 
 describe('LazyHeroViewer', () => {
   let intersectionCallback: IntersectionObserverCallback;

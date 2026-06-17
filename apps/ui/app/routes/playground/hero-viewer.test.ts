@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { CapabilitiesManifest } from '@taucad/runtime';
-import { deriveExportFormatOptions } from '#routes/_index/hero-viewer.utils.js';
+import { deriveExportFormatOptions } from '#routes/playground/hero-viewer.utils.js';
 
 describe('deriveExportFormatOptions', () => {
   it('should return empty list when capabilities are unavailable', () => {

@@ -4,7 +4,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useMemo } from 'react';
 import { TooltipProvider } from '#components/ui/tooltip.js';
-// Import Index from '#routes/_index/route.js';
+// Import Index from '#routes/playground/route.js';
 
 // Test wrapper component that provides necessary providers
 function TestWrapper({ children }: { readonly children: React.ReactNode }): React.JSX.Element {

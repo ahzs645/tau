@@ -1,6 +1,6 @@
 import type { FileExtension } from '@taucad/types';
 import { z } from 'zod';
-import type { PlaygroundExample } from '#routes/_index/playground-examples.js';
+import type { PlaygroundExample } from '#routes/playground/playground-examples.js';
 
 const meshExportFormats = ['glb', 'stl', '3mf', 'obj'] as const;
 const solidExportFormats = ['glb', 'stl', '3mf', 'step'] as const;

@@ -1,8 +1,8 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
-import { HeroViewerSkeleton } from '#routes/_index/section-skeletons.js';
+import { HeroViewerSkeleton } from '#routes/playground/section-skeletons.js';
 
 const HeroViewerLazy = lazy(async () => {
-  const m = await import('#routes/_index/hero-viewer.js');
+  const m = await import('#routes/playground/hero-viewer.js');
   return { default: m.HeroViewer };
 });
 
