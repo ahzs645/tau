@@ -93,6 +93,36 @@ function deserializeResult(data: Uint8Array<ArrayBuffer>): KernelSuccessResult<G
 }
 
 /**
+ * Produce a delivery-safe copy of a cached result whose GLTF byte buffers
+ * are freshly allocated.
+ *
+ * The worker host publishes GLTF geometry through a *transfer* tier that
+ * detaches `content.buffer` for zero-copy hand-off (see
+ * `worker-host-bindings.ts`). The L1 cache, however, retains the result by
+ * reference, so handing the cached object straight to the transport would
+ * detach the cached buffer — every subsequent cache hit would then fail with
+ * "ArrayBuffer at index 0 is already detached". Returning a copy for delivery
+ * keeps the cached entry pristine while the caller still gets a transferable
+ * buffer it can safely detach.
+ *
+ * Only GLTF content is copied; SVG/WebRTC payloads ride the copy tier and are
+ * never detached.
+ *
+ * @param result - The cached result to copy for delivery
+ * @returns A shallow clone with fresh GLTF byte buffers
+ */
+function cloneResultForDelivery(
+  result: KernelSuccessResult<GeometryResponse[]>,
+): KernelSuccessResult<GeometryResponse[]> {
+  return {
+    ...result,
+    data: result.data.map((geometry) =>
+      geometry.format === 'gltf' ? { ...geometry, content: new Uint8Array(geometry.content) } : geometry,
+    ),
+  };
+}
+
+/**
  * Get the cache file path for a given cache key.
  * Uses .bin extension for MessagePack binary storage.
  *
@@ -220,7 +250,7 @@ export const geometryCacheMiddleware = defineMiddleware({
     const memoryCached = geometryMemoryCache.get(cacheKey);
     if (memoryCached) {
       logger.debug(`Geometry memory cache hit for ${cacheKey}`);
-      return memoryCached;
+      return cloneResultForDelivery(memoryCached);
     }
 
     // L2: Filesystem cache
@@ -231,7 +261,7 @@ export const geometryCacheMiddleware = defineMiddleware({
 
       const result = deserializeResult(cachedData);
       geometryMemoryCache.set(cacheKey, result);
-      return result;
+      return cloneResultForDelivery(result);
     } catch (error) {
       logger.debug(`Cache miss for ${cacheKey}: ${String(error)}`);
     }
@@ -240,11 +270,13 @@ export const geometryCacheMiddleware = defineMiddleware({
     const result = await handler(input);
 
     // Write back to L2 and populate L1 (skip webrtc for both)
+    let cached = false;
     if (result.success && result.data.length > 0) {
       if (hasVideoStreamGeometry(result.data)) {
         logger.debug(`Skipping cache for ${cacheKey}: contains webrtc geometry`);
       } else {
         geometryMemoryCache.set(cacheKey, result);
+        cached = true;
 
         try {
           const cacheDirectory = getCacheDirectory(basePath);
@@ -266,6 +298,8 @@ export const geometryCacheMiddleware = defineMiddleware({
       }
     }
 
-    return result;
+    // When the result is retained by the L1 cache, hand the caller a copy so
+    // the downstream transfer tier never detaches the cached buffer.
+    return cached && result.success ? cloneResultForDelivery(result) : result;
   },
 });
