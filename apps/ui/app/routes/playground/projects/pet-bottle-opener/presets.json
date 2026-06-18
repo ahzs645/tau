@@ -2,49 +2,42 @@
   {
     "name": "Thin release",
     "parameters": {
-      "thickness": 10,
-      "lowerModule": "none"
+      "body": { "thickness": 10 },
+      "lower": { "module": "none" }
     }
   },
   {
     "name": "Thick release",
     "parameters": {
-      "thickness": 22,
-      "lowerModule": "none"
+      "body": { "thickness": 22 },
+      "lower": { "module": "none" }
     }
   },
   {
     "name": "Thin handle",
     "parameters": {
-      "thickness": 10,
-      "lowerModule": "handle",
-      "handleHoleDiameter": 25,
-      "handleOuterRadius": 17.5
+      "body": { "thickness": 10 },
+      "lower": { "module": "handle", "handleHoleDiameter": 25, "handleOuterRadius": 17.5 }
     }
   },
   {
     "name": "Dual opener (smaller)",
     "parameters": {
-      "thickness": 10,
-      "lowerModule": "opener",
-      "openerSize": "smaller",
-      "secondCapDiameter": 19,
-      "centerDistance": 50
+      "body": { "thickness": 10 },
+      "lower": { "module": "opener", "openerSize": "smaller", "secondCapDiameter": 19, "centerDistance": 50 }
     }
   },
   {
     "name": "Dual opener (same)",
     "parameters": {
-      "thickness": 10,
-      "lowerModule": "opener",
-      "openerSize": "same",
-      "centerDistance": 60
+      "body": { "thickness": 10 },
+      "lower": { "module": "opener", "openerSize": "same", "centerDistance": 60 }
     }
   },
   {
     "name": "Round rim",
     "parameters": {
-      "outerSides": 64
+      "body": { "outerSides": 64 }
     }
   }
 ]

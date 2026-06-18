@@ -1,4 +1,5 @@
 import type { FileExtension } from '@taucad/types';
+import { replicadExampleCode } from '@taucad/tau-examples';
 import { z } from 'zod';
 import type { PlaygroundExample } from '#routes/playground/playground-examples.js';
 
@@ -12,6 +13,10 @@ export const projectMetadataSchema = z.looseObject({
   description: z.string(),
   type: z.enum(['scad', 'static']).optional(),
   mainFile: z.string().min(1).optional(),
+  // Pulls the project's code from @taucad/tau-examples (the canonical source)
+  // instead of a local file, keyed by the example folder name. Avoids keeping a
+  // duplicate copy of the source in this app.
+  libSource: z.string().min(1).optional(),
   name: z.string().min(1).optional(),
   language: z.string().min(1).optional(),
   kernel: z.enum(['OpenSCAD', 'Replicad', 'OpenCascade', 'Static']).optional(),
@@ -71,6 +76,18 @@ export const projectExamples: readonly PlaygroundExample[] = Object.entries(proj
     const sourceFiles = sourceFilesForProject(projectId, metadata);
     const mainFile = metadata.mainFile ?? metadata.entry;
     const entryFile = metadata.entry;
+
+    // Projects with `libSource` pull their canonical code from @taucad/tau-examples
+    // rather than carrying a duplicate copy in this app's project folder.
+    if (metadata.libSource) {
+      const libCode = replicadExampleCode[metadata.libSource];
+      if (!libCode) {
+        throw new Error(`Project "${projectId}" references unknown libSource "${metadata.libSource}"`);
+      }
+      sourceFiles[mainFile] = libCode;
+      sourceFiles[entryFile] = libCode;
+    }
+
     const code = sourceFiles[mainFile] ?? sourceFiles[entryFile];
     const staticPreview = staticPreviewForProject(projectId, metadata);
     const mode = modeFromMetadata(metadata);

@@ -1,3 +1,4 @@
+import { replicadExampleCode } from '@taucad/tau-examples';
 import { describe, expect, it } from 'vitest';
 import { projectExamples, projectMetadataSchema, projectPresetsSchema } from '#routes/playground/projects.js';
 
@@ -71,12 +72,16 @@ describe('project examples discovery', () => {
       kernel: 'Replicad',
       mainFile: 'main.ts',
       language: 'typescript',
-      initialParameters: { lowerModule: 'none' },
+      initialParameters: { lower: { module: 'none' } },
     });
     expect(example?.exportFormats).toContain('step');
     expect(example?.presets).toHaveLength(6);
     expect(example?.sourceFiles).toHaveProperty('main.ts', example?.code);
     expect(example?.sourceFiles).not.toHaveProperty('presets.json');
+    // Single source of truth: the playground pulls its code from the shared
+    // library via `libSource`, so there is no duplicate copy in this app.
+    expect(example?.code).toBe(replicadExampleCode['pet-bottle-opener']);
+    expect(example?.code).toContain('Modular PET Bottle Opener');
   });
 
   it('validates separate project preset files', () => {

@@ -23,48 +23,67 @@
 import type { Drawing, EdgeFinder, Shape3D } from 'replicad';
 import { draw, drawCircle, drawPolysides } from 'replicad';
 
+// Parameters are grouped so the playground renders them as labelled,
+// collapsible sections (nested objects become sections in the UI). The exported
+// `jsonSchema` below turns the string fields into dropdowns and adds ranges.
 export const defaultParams = {
-  // --- Overall body ---
-  thickness: 22, // 22 = thick release, 10 = thin release
-  outerSides: 16, // 16 = faceted rim (like the STEP); 64 = round rim
+  // --- Body ---
+  body: {
+    thickness: 22, // 22 = thick release, 10 = thin release
+    outerSides: 16, // 16 = faceted rim (like the STEP); 64 = round rim
+  },
 
-  // --- Cap fit: the single knob that sizes the head ---
-  capDiameter: 29.5, // PET cap knurl Ø to grip. Everything below tracks this.
-
-  // --- Head proportions (radial deltas from the cap; rarely changed) ---
-  finBandDepth: 10.25, // Cap face -> fin-root ring        (25.0 - 14.75)
-  wallThickness: 3, //    Fin-root ring -> outer rim corner (28.0 - 25.0)
-  boreClearance: 1.5, //  Fin-root ring -> smooth bore      (25.0 - 23.5)
+  // --- Cap & head: capDiameter sizes the head; the rest are radial deltas ---
+  head: {
+    capDiameter: 29.5, // PET cap knurl Ø to grip. Everything tracks this.
+    finBandDepth: 10.25, // Cap face -> fin-root ring        (25.0 - 14.75)
+    wallThickness: 3, //   Fin-root ring -> outer rim corner (28.0 - 25.0)
+    boreClearance: 1.5, // Fin-root ring -> smooth bore      (25.0 - 23.5)
+  },
 
   // --- Fin band: kept constant across cap sizes (the "offset and angle") ---
-  finHeight: 8, // Working height of the fin band (mm)
-  finCount: 60, // 6° tooth pitch on the main head
-  contactEvery: 3, // 1 long contact fin, then 2 short support fins
-  supportSetback: 0.7, // THE OFFSET: how far support fins stop short of the cap
-  finRootOffsetDeg: -7.36, // THE ANGLE: root sweep from the inner tip (cw)
-  finPhaseDeg: 1.67, // Overall tooth phase
-  supportPhaseOffsetDeg: -1.03, // Extra phase nudge on support fins
-  finInnerWidth: 0.86, // Contact fin tip width (mm)
-  finOuterWidth: 1.8, // Contact fin root width (mm)
-  supportFinInnerWidth: 0.855, // Support fin tip width (mm)
-  supportFinOuterWidth: 1.8, // Support fin root width (mm)
+  fins: {
+    finHeight: 8, // Working height of the fin band (mm)
+    finCount: 60, // 6° tooth pitch on the main head
+    contactEvery: 3, // 1 long contact fin, then 2 short support fins
+    supportSetback: 0.7, // THE OFFSET: how far support fins stop short of the cap
+    rootOffsetDeg: -7.36, // THE ANGLE: root sweep from the inner tip (cw)
+    phaseDeg: 1.67, // Overall tooth phase
+    supportPhaseOffsetDeg: -1.03, // Extra phase nudge on support fins
+    innerWidth: 0.86, // Contact fin tip width (mm)
+    outerWidth: 1.8, // Contact fin root width (mm)
+    supportInnerWidth: 0.855, // Support fin tip width (mm)
+    supportOuterWidth: 1.8, // Support fin root width (mm)
+  },
 
   // --- Chamfers: the source's finished look. Set any to 0 for sharp edges. ---
-  rimChamfer: 1.6, // Top & bottom bevel on the outer rim (the "nut" look)
-  boreChamfer: 0.6, // Bevel on the top smooth-bore edge
-  finTipChamfer: 0, // Optional break on the fin tips (slow on 60 fins; off by default)
+  chamfers: {
+    rim: 1.6, // Top & bottom bevel on the outer rim (the "nut" look)
+    bore: 0.6, // Bevel on the top smooth-bore edge
+    finTip: 0, // Optional break on the fin tips (slow on 60 fins; off by default)
+  },
 
-  // --- Lower module ---
-  lowerModule: 'none', // 'none' | 'handle' | 'opener'
-  openerSize: 'smaller', // When 'opener': 'same' as the main head, or 'smaller'
-  secondCapDiameter: 19, // Cap Ø for the lower head when openerSize = 'smaller'
-  centerDistance: 48, // Distance between the two module centers (mm)
-  neckWidth: 16, // Width of the bridge between modules (mm)
-  handleHoleDiameter: 25, // Finger / hang hole Ø (lowerModule = 'handle')
-  handleOuterRadius: 17.5, // Outer radius of the handle disc (lowerModule = 'handle')
+  // --- Lower module: none, a finger/hang hole, or a second opener head ---
+  lower: {
+    module: 'none', // 'none' | 'handle' | 'opener'
+    openerSize: 'smaller', // When 'opener': 'same' as the main head, or 'smaller'
+    secondCapDiameter: 19, // Cap Ø for the lower head when openerSize = 'smaller'
+    centerDistance: 48, // Distance between the two module centers (mm)
+    neckWidth: 16, // Width of the bridge between modules (mm)
+    handleHoleDiameter: 25, // Finger / hang hole Ø (module = 'handle')
+    handleOuterRadius: 17.5, // Outer radius of the handle disc (module = 'handle')
+  },
 };
 
 type Params = typeof defaultParams;
+type DeepPartial<T> = {
+  [K in keyof T]?: T[K] extends object ? Partial<T[K]> : T[K];
+};
+type HeadProportions = {
+  finBandDepth: number;
+  wallThickness: number;
+  boreClearance: number;
+};
 type Point = [number, number];
 
 // Small overlap between fin roots and the outer rim for reliable 2D fusing.
@@ -100,6 +119,185 @@ type ChamferSpec = {
   rimChamfer: number;
   boreChamfer: number;
   finTipChamfer: number;
+};
+
+// --- Parameter UI schema -----------------------------------------------------
+// When a model exports `jsonSchema`, the kernel renders the parameter panel from
+// it instead of inferring one from the values. We build the schema from
+// `defaultParams` (so every field is covered automatically) and layer on the
+// things inference can't express: dropdowns (enums), friendly titles, and
+// numeric ranges. Nested groups become collapsible sections in the panel.
+const GROUP_TITLES: Record<string, string> = {
+  body: 'Body',
+  head: 'Cap & head',
+  fins: 'Fin band',
+  chamfers: 'Chamfers',
+  lower: 'Lower module',
+};
+
+const ENUM_OPTIONS: Record<string, string[]> = {
+  module: ['none', 'handle', 'opener'],
+  openerSize: ['smaller', 'same'],
+};
+
+type FieldMeta = {
+  title?: string;
+  description?: string;
+  min?: number;
+  max?: number;
+  step?: number;
+};
+
+const FIELD_META: Record<string, FieldMeta> = {
+  thickness: { title: 'Thickness (mm)', min: 2, max: 60, step: 0.5 },
+  outerSides: {
+    title: 'Rim facets',
+    description: '16 = faceted (like the source), 64 = round',
+    min: 3,
+    max: 64,
+    step: 1,
+  },
+  capDiameter: { title: 'Cap diameter (mm)', min: 10, max: 60, step: 0.5 },
+  finBandDepth: { title: 'Fin band depth (mm)', min: 3, max: 25, step: 0.25 },
+  wallThickness: { title: 'Wall thickness (mm)', min: 1, max: 12, step: 0.25 },
+  boreClearance: { title: 'Bore clearance (mm)', min: 0.5, max: 6, step: 0.25 },
+  finHeight: { title: 'Fin band height (mm)', min: 1, max: 30, step: 0.5 },
+  finCount: { title: 'Fin count', min: 6, max: 120, step: 1 },
+  contactEvery: { title: 'Contact every Nth fin', min: 1, max: 6, step: 1 },
+  supportSetback: { title: 'Support setback (mm)', min: 0, max: 3, step: 0.05 },
+  rootOffsetDeg: { title: 'Fin sweep angle (°)', min: -20, max: 20, step: 0.1 },
+  phaseDeg: { title: 'Tooth phase (°)', min: -10, max: 10, step: 0.1 },
+  supportPhaseOffsetDeg: {
+    title: 'Support phase offset (°)',
+    min: -10,
+    max: 10,
+    step: 0.1,
+  },
+  innerWidth: { title: 'Contact tip width (mm)', min: 0.2, max: 4, step: 0.05 },
+  outerWidth: {
+    title: 'Contact root width (mm)',
+    min: 0.2,
+    max: 4,
+    step: 0.05,
+  },
+  supportInnerWidth: {
+    title: 'Support tip width (mm)',
+    min: 0.2,
+    max: 4,
+    step: 0.05,
+  },
+  supportOuterWidth: {
+    title: 'Support root width (mm)',
+    min: 0.2,
+    max: 4,
+    step: 0.05,
+  },
+  rim: { title: 'Rim chamfer (mm)', min: 0, max: 6, step: 0.1 },
+  bore: { title: 'Bore chamfer (mm)', min: 0, max: 4, step: 0.1 },
+  finTip: {
+    title: 'Fin-tip chamfer (mm)',
+    description: 'Best-effort; slow on 60 fins',
+    min: 0,
+    max: 1,
+    step: 0.05,
+  },
+  module: {
+    title: 'Lower module',
+    description: 'None, a finger/hang hole, or a second opener',
+  },
+  openerSize: {
+    title: 'Second opener size',
+    description: 'Same cap as the main head, or smaller',
+  },
+  secondCapDiameter: {
+    title: 'Second cap diameter (mm)',
+    min: 10,
+    max: 60,
+    step: 0.5,
+  },
+  centerDistance: { title: 'Module spacing (mm)', min: 20, max: 120, step: 1 },
+  neckWidth: { title: 'Neck width (mm)', min: 4, max: 40, step: 0.5 },
+  handleHoleDiameter: {
+    title: 'Handle hole Ø (mm)',
+    min: 0,
+    max: 50,
+    step: 0.5,
+  },
+  handleOuterRadius: {
+    title: 'Handle radius (mm)',
+    min: 5,
+    max: 40,
+    step: 0.5,
+  },
+};
+
+function titleCase(key: string): string {
+  const spaced = key.replaceAll(/[A-Z]/gu, (match) => ` ${match}`);
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
+type JsonSchemaNode = Record<string, unknown>;
+
+function schemaForLeaf(key: string, value: unknown): JsonSchemaNode {
+  const meta = FIELD_META[key] ?? {};
+  const base: JsonSchemaNode = {
+    title: meta.title ?? titleCase(key),
+    default: value,
+    ...(meta.description ? { description: meta.description } : {}),
+  };
+
+  if (typeof value === 'boolean') {
+    return { ...base, type: 'boolean' };
+  }
+
+  if (typeof value === 'number') {
+    return {
+      ...base,
+      type: 'number',
+      ...(meta.min === undefined ? {} : { minimum: meta.min }),
+      ...(meta.max === undefined ? {} : { maximum: meta.max }),
+      ...(meta.step === undefined ? {} : { multipleOf: meta.step }),
+    };
+  }
+
+  return {
+    ...base,
+    type: 'string',
+    ...(ENUM_OPTIONS[key] ? { enum: ENUM_OPTIONS[key] } : {}),
+  };
+}
+
+function buildSchemaProperties(
+  group: Record<string, unknown>,
+): Record<string, JsonSchemaNode> {
+  const properties: Record<string, JsonSchemaNode> = {};
+
+  for (const [key, value] of Object.entries(group)) {
+    properties[key] =
+      value !== null && typeof value === 'object' && !Array.isArray(value)
+        ? {
+            type: 'object',
+            title: GROUP_TITLES[key] ?? titleCase(key),
+            properties: buildSchemaProperties(value as Record<string, unknown>),
+          }
+        : schemaForLeaf(key, value);
+  }
+
+  return properties;
+}
+
+/**
+ * Parameter panel schema: groups become collapsible sections, the two string
+ * fields become dropdowns, and numbers get ranges. Consumed by the kernel's
+ * `getParameters`.
+ *
+ * @public
+ */
+export const jsonSchema = {
+  $schema: 'http://json-schema.org/draft-07/schema#',
+  title: 'PET Bottle Opener',
+  type: 'object',
+  properties: buildSchemaProperties(defaultParams),
 };
 
 /** Point at `radius` and `angle` (radians) around a center. */
@@ -175,19 +373,19 @@ function angledRadialFin(
 /** Derive every head radius from a cap diameter, keeping band/wall constant. */
 function deriveHead(
   capDiameter: number,
-  p: Params,
+  proportions: HeadProportions,
   finCount: number,
 ): HeadGeometry {
   const capRadius = capDiameter / 2;
-  const finOuterRadius = capRadius + p.finBandDepth;
+  const finOuterRadius = capRadius + proportions.finBandDepth;
 
   return {
     capDiameter,
     finOuterRadius,
-    outerRadius: finOuterRadius + p.wallThickness,
+    outerRadius: finOuterRadius + proportions.wallThickness,
     // Bore sits just inside the fin-root ring; never let it pinch the cap.
     smoothBoreRadius: Math.max(
-      finOuterRadius - p.boreClearance,
+      finOuterRadius - proportions.boreClearance,
       capRadius + 0.5,
     ),
     finCount,
@@ -474,66 +672,79 @@ function buildBridge(
   ]);
 }
 
-export default function main(params: Partial<Params> = {}): Shape3D {
-  // Merge over the defaults so a partial (or empty) parameter object can never
-  // leave a field undefined — an undefined dimension becomes NaN and OCCT
-  // throws Standard_OutOfRange. The playground sends a complete set, but this
-  // keeps direct/programmatic calls and partial presets safe too.
-  const p: Params = { ...defaultParams, ...params };
+export default function main(params: DeepPartial<Params> = {}): Shape3D {
+  // Deep-merge each group over the defaults so a partial (or empty) parameter
+  // object can never leave a field undefined — an undefined dimension becomes
+  // NaN and OCCT throws Standard_OutOfRange. The playground already deep-merges
+  // with defaults; this keeps direct/programmatic and partial calls safe too.
+  const body = { ...defaultParams.body, ...params.body };
+  const head = { ...defaultParams.head, ...params.head };
+  const fins = { ...defaultParams.fins, ...params.fins };
+  const chamferParams = { ...defaultParams.chamfers, ...params.chamfers };
+  const lower = { ...defaultParams.lower, ...params.lower };
 
-  const topCenter: Point = [0, 0];
-  const lowerCenter: Point = [0, -p.centerDistance];
+  const proportions: HeadProportions = {
+    finBandDepth: head.finBandDepth,
+    wallThickness: head.wallThickness,
+    boreClearance: head.boreClearance,
+  };
 
   const fin: FinSpec = {
-    contactEvery: p.contactEvery,
-    supportSetback: p.supportSetback,
-    finInnerWidth: p.finInnerWidth,
-    finOuterWidth: p.finOuterWidth,
-    supportFinInnerWidth: p.supportFinInnerWidth,
-    supportFinOuterWidth: p.supportFinOuterWidth,
-    finRootOffsetDeg: p.finRootOffsetDeg,
-    finPhaseDeg: p.finPhaseDeg,
-    supportPhaseOffsetDeg: p.supportPhaseOffsetDeg,
+    contactEvery: fins.contactEvery,
+    supportSetback: fins.supportSetback,
+    finInnerWidth: fins.innerWidth,
+    finOuterWidth: fins.outerWidth,
+    supportFinInnerWidth: fins.supportInnerWidth,
+    supportFinOuterWidth: fins.supportOuterWidth,
+    finRootOffsetDeg: fins.rootOffsetDeg,
+    finPhaseDeg: fins.phaseDeg,
+    supportPhaseOffsetDeg: fins.supportPhaseOffsetDeg,
   };
 
   const chamfer: ChamferSpec = {
-    rimChamfer: p.rimChamfer,
-    boreChamfer: p.boreChamfer,
-    finTipChamfer: p.finTipChamfer,
+    rimChamfer: chamferParams.rim,
+    boreChamfer: chamferParams.bore,
+    finTipChamfer: chamferParams.finTip,
   };
 
-  const finHeight = Math.min(Math.max(p.finHeight, 0.1), p.thickness);
+  const finHeight = Math.min(Math.max(fins.finHeight, 0.1), body.thickness);
+
+  const topCenter: Point = [0, 0];
+  const lowerCenter: Point = [0, -lower.centerDistance];
 
   // --- Main (top) head -----------------------------------------------------
-  const topGeom = deriveHead(p.capDiameter, p, p.finCount);
-  let body = finishHead(
-    buildLayeredHead(topGeom, fin, p.outerSides, p.thickness, finHeight),
+  const topGeom = deriveHead(head.capDiameter, proportions, fins.finCount);
+  let solid = finishHead(
+    buildLayeredHead(topGeom, fin, body.outerSides, body.thickness, finHeight),
     topGeom,
-    p.outerSides,
-    p.thickness,
+    body.outerSides,
+    body.thickness,
     finHeight,
     chamfer,
   );
 
   // --- Lower module --------------------------------------------------------
   const mode =
-    p.lowerModule === 'opener' || p.lowerModule === 'handle'
-      ? p.lowerModule
+    lower.module === 'opener' || lower.module === 'handle'
+      ? lower.module
       : 'none';
 
   if (mode !== 'none') {
-    let lower: Shape3D;
+    let lowerSolid: Shape3D;
     let lowerOuterRadius: number;
 
     if (mode === 'opener') {
       // The second head reuses every shared fin parameter; only its cap size
       // changes. Its fin count is derived to keep the tooth pitch constant.
-      const sameSize = p.openerSize !== 'smaller';
-      const secondCapDiameter = sameSize ? p.capDiameter : p.secondCapDiameter;
+      const sameSize = lower.openerSize !== 'smaller';
+      const secondCapDiameter = sameSize
+        ? head.capDiameter
+        : lower.secondCapDiameter;
 
       const mainLinearPitch =
         (2 * Math.PI * topGeom.finOuterRadius) / topGeom.finCount;
-      const secondFinOuterRadius = secondCapDiameter / 2 + p.finBandDepth;
+      const secondFinOuterRadius =
+        secondCapDiameter / 2 + proportions.finBandDepth;
       const rawCount = Math.round(
         (2 * Math.PI * secondFinOuterRadius) / mainLinearPitch,
       );
@@ -541,23 +752,33 @@ export default function main(params: Partial<Params> = {}): Shape3D {
         Math.max(1, Math.round(rawCount / fin.contactEvery)) * fin.contactEvery;
       const secondFinCount = Math.max(fin.contactEvery * 4, grouped);
 
-      const secondGeom = deriveHead(secondCapDiameter, p, secondFinCount);
+      const secondGeom = deriveHead(
+        secondCapDiameter,
+        proportions,
+        secondFinCount,
+      );
       lowerOuterRadius = secondGeom.outerRadius;
 
-      lower = finishHead(
-        buildLayeredHead(secondGeom, fin, p.outerSides, p.thickness, finHeight),
+      lowerSolid = finishHead(
+        buildLayeredHead(
+          secondGeom,
+          fin,
+          body.outerSides,
+          body.thickness,
+          finHeight,
+        ),
         secondGeom,
-        p.outerSides,
-        p.thickness,
+        body.outerSides,
+        body.thickness,
         finHeight,
         chamfer,
       ).translate(lowerCenter[0], lowerCenter[1], 0);
     } else {
-      lowerOuterRadius = p.handleOuterRadius;
-      lower = buildHandleSolid(
-        p.handleOuterRadius,
-        p.handleHoleDiameter / 2,
-        p.thickness,
+      lowerOuterRadius = lower.handleOuterRadius;
+      lowerSolid = buildHandleSolid(
+        lower.handleOuterRadius,
+        lower.handleHoleDiameter / 2,
+        body.thickness,
         chamfer,
       ).translate(lowerCenter[0], lowerCenter[1], 0);
     }
@@ -567,15 +788,15 @@ export default function main(params: Partial<Params> = {}): Shape3D {
       lowerCenter,
       topGeom.outerRadius,
       lowerOuterRadius,
-      p.neckWidth,
+      lower.neckWidth,
     );
 
     if (bridge) {
-      body = body.fuse(extrudeDrawing(bridge, p.thickness));
+      solid = solid.fuse(extrudeDrawing(bridge, body.thickness));
     }
 
-    body = body.fuse(lower);
+    solid = solid.fuse(lowerSolid);
   }
 
-  return body;
+  return solid;
 }
