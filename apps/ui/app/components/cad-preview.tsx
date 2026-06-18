@@ -114,6 +114,53 @@ export const CadPreviewViewer = memo(function CadPreviewViewer({
   );
 });
 
+export const StaticPreviewViewer = memo(function StaticPreviewViewer({
+  className,
+  enablePan,
+  enableZoom,
+  stageOptions,
+  graphicsOptions,
+  staticPreviewUrl,
+}: CadPreviewViewerProps & { readonly staticPreviewUrl: string }): React.JSX.Element {
+  const [geometry, setGeometry] = useState<Geometry | undefined>(undefined);
+  const [error, setError] = useState<Error | undefined>(undefined);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setGeometry(undefined);
+    setError(undefined);
+
+    // oxlint-disable-next-line tau-lint/no-async-iife -- static preview fetch is the render source.
+    void (async () => {
+      try {
+        setGeometry(await loadStaticPreviewGeometry(staticPreviewUrl, controller.signal));
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          return;
+        }
+
+        setError(error instanceof Error ? error : new Error('Failed to load static preview'));
+      }
+    })();
+
+    return () => {
+      controller.abort();
+    };
+  }, [staticPreviewUrl]);
+
+  return (
+    <ModelViewer
+      geometries={geometry ? [geometry] : []}
+      className={className}
+      enablePan={enablePan}
+      enableZoom={enableZoom}
+      stageOptions={stageOptions}
+      graphicsOptions={graphicsOptions}
+      error={error}
+    />
+  );
+});
+
 type CadPreviewStatusProps = {
   readonly className?: string;
 };

@@ -1,0 +1,9 @@
+{
+  "title": "Atmospheric Sampler",
+  "entry": "atmospheric-sampler.glb",
+  "type": "static",
+  "description": "Static 3D model of an atmospheric sampler device.",
+  "category": "Examples",
+  "tags": ["static", "glb", "model", "3d"],
+  "author": "OpenSCAD Playground"
+}

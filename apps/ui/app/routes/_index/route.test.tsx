@@ -14,6 +14,7 @@ describe('PlaygroundGallery', () => {
 
     expect(screen.getByRole('heading', { name: '3D Rack System' })).toBeDefined();
     expect(screen.getByRole('heading', { name: 'Network Equipment Rack' })).toBeDefined();
+    expect(screen.getByRole('heading', { name: 'Atmospheric Sampler' })).toBeDefined();
     // OpenCascade-derived (Replicad) projects must be visible alongside OpenSCAD ones.
     expect(screen.getByRole('heading', { name: 'Modular PET Bottle Opener (OpenCascade)' })).toBeDefined();
     expect(screen.getAllByRole('link', { name: 'Open' })[0]?.getAttribute('href')).toBe(
@@ -27,6 +28,7 @@ describe('PlaygroundGallery', () => {
     // Both kernels present in the gallery get their own filter chip.
     expect(screen.getByRole('button', { name: 'OpenSCAD' })).toBeDefined();
     expect(screen.getByRole('button', { name: 'Replicad' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'Static' })).toBeDefined();
   });
 
   it('filters gallery models by search and engine', () => {

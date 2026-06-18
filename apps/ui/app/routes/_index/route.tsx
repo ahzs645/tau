@@ -102,7 +102,9 @@ export default function PlaygroundGallery(): React.JSX.Element {
                 </div>
                 <div className='min-w-0 rounded-sm bg-muted/50 px-2 py-1.5'>
                   <dt className='text-muted-foreground'>Exports</dt>
-                  <dd className='truncate uppercase'>{example.exportFormats.join(', ')}</dd>
+                  <dd className='truncate uppercase'>
+                    {example.exportFormats.length > 0 ? example.exportFormats.join(', ') : 'Static'}
+                  </dd>
                 </div>
               </dl>
 

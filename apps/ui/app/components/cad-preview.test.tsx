@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import type { Geometry } from '@taucad/types';
-import { CadPreviewViewer, loadStaticPreviewGeometry } from '#components/cad-preview.js';
+import { CadPreviewViewer, StaticPreviewViewer, loadStaticPreviewGeometry } from '#components/cad-preview.js';
 
 const { mockPreview } = vi.hoisted(() => ({
   mockPreview: {
@@ -87,6 +87,16 @@ describe('CadPreviewViewer', () => {
       expect(fetch).toHaveBeenCalledWith('/static/rack.glb', expect.any(Object));
     });
     expect(screen.getByTestId('model-viewer')).toHaveAttribute('data-hash', 'live-preview');
+  });
+
+  it('loads a standalone static preview without CAD preview context', async () => {
+    render(<StaticPreviewViewer staticPreviewUrl='/static/demo.glb' />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('model-viewer')).toHaveAttribute('data-count', '1');
+    });
+
+    expect(screen.getByTestId('model-viewer')).toHaveAttribute('data-hash', 'static-preview:/static/demo.glb');
   });
 });
 

@@ -28,6 +28,15 @@ describe('project examples discovery', () => {
         staticPreview: { glb: 'preview.glb' },
       }).success,
     ).toBe(true);
+
+    expect(
+      projectMetadataSchema.safeParse({
+        title: 'Static project',
+        entry: 'preview.glb',
+        type: 'static',
+        description: 'A static gallery project.',
+      }).success,
+    ).toBe(true);
   });
 
   it('builds playground examples from project folders', () => {
@@ -40,6 +49,17 @@ describe('project examples discovery', () => {
     });
 
     expect(examplesById.get('keyguard-with-raised-tabs')?.sourceFiles).toHaveProperty('openings_and_additions.txt');
+    expect(examplesById.get('atmospheric-sampler')).toMatchObject({
+      name: 'Atmospheric Sampler',
+      kernel: 'Static',
+      mode: 'static',
+      mainFile: 'atmospheric-sampler.glb',
+      language: 'gltf',
+      exportFormats: [],
+      code: '',
+      sourceFiles: {},
+    });
+    expect(examplesById.get('atmospheric-sampler')?.staticPreview).toBeDefined();
     expect(examplesById.has('wham')).toBe(false);
   });
 

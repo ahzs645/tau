@@ -14,7 +14,8 @@ export type PlaygroundStaticPreview = {
 export type PlaygroundExample = {
   readonly id: string;
   readonly name: string;
-  readonly kernel: 'OpenSCAD' | 'Replicad' | 'OpenCascade';
+  readonly kernel: 'OpenSCAD' | 'Replicad' | 'OpenCascade' | 'Static';
+  readonly mode?: 'editable' | 'static';
   readonly mainFile: string;
   readonly language: string;
   readonly description: string;

@@ -10,10 +10,11 @@ export const projectMetadataSchema = z.looseObject({
   title: z.string().min(1),
   entry: z.string().min(1),
   description: z.string(),
+  type: z.enum(['scad', 'static']).optional(),
   mainFile: z.string().min(1).optional(),
   name: z.string().min(1).optional(),
   language: z.string().min(1).optional(),
-  kernel: z.enum(['OpenSCAD', 'Replicad', 'OpenCascade']).optional(),
+  kernel: z.enum(['OpenSCAD', 'Replicad', 'OpenCascade', 'Static']).optional(),
   engine: z.enum(['openscad', 'replicad', 'opencascade', 'occt']).optional(),
   hidden: z.boolean().optional(),
   exportFormats: z.array(z.enum(exportFormats)).optional(),
@@ -59,7 +60,7 @@ const projectStaticPreviewGlbByPath = import.meta.glob<string>('./projects/**/*.
 });
 
 export const projectExamples: readonly PlaygroundExample[] = Object.entries(projectMetadataByPath)
-  .flatMap(([metadataPath, rawMetadata]) => {
+  .flatMap<PlaygroundExample>(([metadataPath, rawMetadata]) => {
     const metadata = parseProjectMetadata(metadataPath, rawMetadata);
     if (metadata.hidden === true) {
       return [];
@@ -72,6 +73,29 @@ export const projectExamples: readonly PlaygroundExample[] = Object.entries(proj
     const entryFile = metadata.entry;
     const code = sourceFiles[mainFile] ?? sourceFiles[entryFile];
     const staticPreview = staticPreviewForProject(projectId, metadata);
+    const mode = modeFromMetadata(metadata);
+
+    if (mode === 'static') {
+      if (!staticPreview) {
+        throw new Error(`Static project "${projectId}" is missing static preview "${entryFile}"`);
+      }
+
+      return [
+        {
+          id: projectId,
+          name: metadata.name ?? metadata.title,
+          kernel: 'Static',
+          mode,
+          mainFile,
+          language: languageFromMetadata(metadata, mainFile),
+          description: metadata.description,
+          exportFormats: [],
+          staticPreview,
+          code: '',
+          sourceFiles: {},
+        },
+      ];
+    }
 
     if (!code) {
       throw new Error(`Project "${projectId}" is missing source for entry "${entryFile}"`);
@@ -82,6 +106,7 @@ export const projectExamples: readonly PlaygroundExample[] = Object.entries(proj
         id: projectId,
         name: metadata.name ?? metadata.title,
         kernel: kernelFromMetadata(metadata),
+        mode,
         mainFile,
         language: languageFromMetadata(metadata, mainFile),
         description: metadata.description,
@@ -159,7 +184,8 @@ function staticPreviewForProject(
   projectId: string,
   metadata: ProjectMetadata,
 ): PlaygroundExample['staticPreview'] | undefined {
-  const glbPath = metadata.staticPreview?.glb ?? metadata.previewGlb;
+  const glbPath =
+    metadata.staticPreview?.glb ?? metadata.previewGlb ?? (metadata.type === 'static' ? metadata.entry : undefined);
   if (!glbPath) {
     return undefined;
   }
@@ -171,6 +197,10 @@ function staticPreviewForProject(
   }
 
   return { glb };
+}
+
+function modeFromMetadata(metadata: ProjectMetadata): NonNullable<PlaygroundExample['mode']> {
+  return metadata.type === 'static' ? 'static' : 'editable';
 }
 
 function kernelFromMetadata(metadata: ProjectMetadata): PlaygroundExample['kernel'] {
@@ -195,6 +225,10 @@ function kernelFromMetadata(metadata: ProjectMetadata): PlaygroundExample['kerne
 function languageFromMetadata(metadata: ProjectMetadata, mainFile: string): string {
   if (metadata.language) {
     return metadata.language;
+  }
+
+  if (mainFile.endsWith('.glb') || mainFile.endsWith('.gltf')) {
+    return 'gltf';
   }
 
   if (mainFile.endsWith('.ts') || mainFile.endsWith('.js')) {

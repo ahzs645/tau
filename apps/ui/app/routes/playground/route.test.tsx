@@ -110,6 +110,9 @@ vi.mock('#components/cad-preview.js', () => ({
   CadPreviewViewer() {
     return <div data-testid='cad-preview-viewer'>viewer</div>;
   },
+  StaticPreviewViewer({ staticPreviewUrl }: { readonly staticPreviewUrl: string }) {
+    return <div data-testid='static-preview-viewer' data-url={staticPreviewUrl}>static viewer</div>;
+  },
   CadPreviewStatus() {
     return <div data-testid='cad-preview-status'>status</div>;
   },
@@ -324,6 +327,22 @@ describe('PlaygroundRoot', () => {
     await waitFor(() => {
       expect(providerCalls.at(-1)?.projectId).toBe('root-playground-networking');
     });
+  });
+
+  it('opens static gallery demos without editor, export controls, or parameter sidebar', async () => {
+    globalThis.history.replaceState({}, '', '/?model=atmospheric-sampler');
+
+    renderPlaygroundRoot();
+
+    expect(await screen.findByText('Atmospheric Sampler · Static')).toBeDefined();
+    expect(screen.getByTestId('static-preview-viewer')).toBeDefined();
+    expect(screen.queryByRole('button', { name: 'Code' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Run' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Reset' })).toBeNull();
+    expect(screen.queryByText('Export')).toBeNull();
+    expect(screen.queryByTestId('preview-parameters')).toBeNull();
+    expect(screen.queryByTestId('file-manager-provider')).toBeNull();
+    expect(screen.queryByTestId('cad-preview-provider')).toBeNull();
   });
 
   it('runs edited code through the preview provider', async () => {

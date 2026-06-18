@@ -16,7 +16,7 @@ import jsonUrl from '@firstform/json-url';
 import type { FileExtension } from '@taucad/types';
 import { downloadBlob } from '@taucad/utils/file';
 import { toast } from '#components/ui/sonner.js';
-import { CadPreviewStatus, CadPreviewViewer } from '#components/cad-preview.js';
+import { CadPreviewStatus, CadPreviewViewer, StaticPreviewViewer } from '#components/cad-preview.js';
 import { Button, buttonVariants } from '#components/ui/button.js';
 import {
   DropdownMenu,
@@ -32,6 +32,7 @@ import { playgroundExamples } from '#routes/playground/playground-examples.js';
 import type { PlaygroundExample, PlaygroundPreset } from '#routes/playground/playground-examples.js';
 import { PreviewParameters } from '#routes/projects_.$id_.preview/preview-parameters.js';
 import { encodeTextFile } from '#utils/filesystem.utils.js';
+import { cn } from '#utils/ui.utils.js';
 import type { Handle } from '#types/matches.types.js';
 // oxlint-disable-next-line import/extensions -- React Router typegen resolves this virtual route module.
 import type { Route } from './+types/route.js';
@@ -113,9 +114,12 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
 
   // Kiosk / viewer-only mode: hide the editor and its toggle entirely.
   const isCodeEditorDisabled = useFeature('disableCodeEditor');
-  const showCodeSection = isCodeVisible && !isCodeEditorDisabled;
 
   const activeExample = playgroundExamples.find((example) => example.id === activeExampleId) ?? defaultExample;
+  const isEditableExample = activeExample.mode !== 'static';
+  const showCodeControls = isEditableExample && !isCodeEditorDisabled;
+  const showCodeSection = isCodeVisible && showCodeControls;
+  const staticPreviewUrl = activeExample.staticPreview?.glb;
   const previewProjectId = `root-playground-${activeExample.id}`;
   const previewRenderKey = `${previewProjectId}-${previewVersion}`;
   const isDirty = editorValue !== activeExample.code;
@@ -137,15 +141,23 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
   );
 
   const runPreview = useCallback(() => {
+    if (!isEditableExample) {
+      return;
+    }
+
     setPreviewValue(editorValue);
     setPreviewVersion((version) => version + 1);
-  }, [editorValue]);
+  }, [editorValue, isEditableExample]);
 
   const resetExample = useCallback(() => {
+    if (!isEditableExample) {
+      return;
+    }
+
     setEditorValue(activeExample.code);
     setPreviewValue(activeExample.code);
     setPreviewVersion((version) => version + 1);
-  }, [activeExample]);
+  }, [activeExample, isEditableExample]);
 
   const setExportControlsRef = useCallback<RefCallback<HTMLDivElement>>((node) => {
     setExportControlsElement(node ?? undefined);
@@ -314,6 +326,10 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (!isEditableExample) {
+        return;
+      }
+
       if (event.key === 'F5' || ((event.metaKey || event.ctrlKey) && event.key === 'Enter')) {
         event.preventDefault();
         runPreview();
@@ -324,7 +340,7 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
     return () => {
       globalThis.removeEventListener('keydown', handleKeyDown);
     };
-  }, [runPreview]);
+  }, [isEditableExample, runPreview]);
 
   return (
     <main className='flex h-dvh flex-col overflow-hidden bg-background text-foreground'>
@@ -343,7 +359,7 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
             Gallery
           </Link>
           <div ref={setExportControlsRef} className='flex items-center gap-1.5' />
-          {isCodeEditorDisabled ? null : (
+          {showCodeControls ? (
             <Button
               variant={isCodeVisible ? 'default' : 'outline'}
               size='sm'
@@ -355,23 +371,32 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
               <Eye className='size-3.5' />
               Code
             </Button>
-          )}
+          ) : null}
           <Button variant='outline' size='sm' onClick={copyShareLink}>
             <Share2 className='size-3.5' />
             Share
           </Button>
-          <Button variant='outline' size='sm' onClick={resetExample}>
-            <RotateCcw className='size-3.5' />
-            Reset
-          </Button>
-          <Button size='sm' onClick={runPreview}>
-            <Play className='size-3.5' />
-            Run
-          </Button>
+          {isEditableExample ? (
+            <>
+              <Button variant='outline' size='sm' onClick={resetExample}>
+                <RotateCcw className='size-3.5' />
+                Reset
+              </Button>
+              <Button size='sm' onClick={runPreview}>
+                <Play className='size-3.5' />
+                Run
+              </Button>
+            </>
+          ) : null}
         </div>
       </header>
 
-      <div className='grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[minmax(520px,1fr)_360px]'>
+      <div
+        className={cn(
+          'grid min-h-0 flex-1 grid-cols-1',
+          isEditableExample ? 'xl:grid-cols-[minmax(520px,1fr)_360px]' : 'xl:grid-cols-1',
+        )}
+      >
         {showCodeSection ? (
           <section className='flex min-h-[42dvh] min-w-0 flex-col border-b xl:col-span-2 xl:min-h-[34dvh]'>
             <div className='flex h-11 items-center justify-between border-b px-3'>
@@ -410,54 +435,74 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
           </section>
         ) : null}
 
-        <SharedWorkerGate>
-          <FileManagerProvider
-            key={previewProjectId}
-            projectId={previewProjectId}
-            rootDirectory={`/projects/${previewProjectId}`}
-            initialBackend='indexeddb'
-          >
-            <CadPreviewProvider
-              key={previewRenderKey}
+        {isEditableExample ? (
+          <SharedWorkerGate>
+            <FileManagerProvider
+              key={previewProjectId}
               projectId={previewProjectId}
-              mainFile={activeExample.mainFile}
-              files={files}
-              parameters={activeExample.initialParameters}
+              rootDirectory={`/projects/${previewProjectId}`}
+              initialBackend='indexeddb'
             >
-              {exportControlsElement
-                ? createPortal(
-                    <PlaygroundExportControls
-                      exampleId={activeExample.id}
-                      formats={activeExample.exportFormats}
-                      buttonSize='sm'
-                    />,
-                    exportControlsElement,
-                  )
-                : undefined}
-              <PlaygroundParameterBridge pendingParameters={pendingParameters} onParametersChange={setLiveParameters} />
-              <section className='flex min-h-[56dvh] min-w-0 flex-col xl:min-h-0 xl:border-r'>
-                <div className='relative min-h-0 flex-1 bg-muted/30'>
-                  <CadPreviewViewer
-                    className='size-full'
-                    enablePan
-                    enableZoom
-                    staticPreviewUrl={activeExample.staticPreview?.glb}
-                    stageOptions={{ zoomLevel: 1.25 }}
-                    graphicsOptions={{
-                      enableLines: true,
-                      viewerClassName: 'bg-muted/30',
-                    }}
-                  />
-                  <CadPreviewStatus className='absolute top-3 left-3' />
-                </div>
-              </section>
+              <CadPreviewProvider
+                key={previewRenderKey}
+                projectId={previewProjectId}
+                mainFile={activeExample.mainFile}
+                files={files}
+                parameters={activeExample.initialParameters}
+              >
+                {exportControlsElement && activeExample.exportFormats.length > 0
+                  ? createPortal(
+                      <PlaygroundExportControls
+                        exampleId={activeExample.id}
+                        formats={activeExample.exportFormats}
+                        buttonSize='sm'
+                      />,
+                      exportControlsElement,
+                    )
+                  : undefined}
+                <PlaygroundParameterBridge pendingParameters={pendingParameters} onParametersChange={setLiveParameters} />
+                <section className='flex min-h-[56dvh] min-w-0 flex-col xl:min-h-0 xl:border-r'>
+                  <div className='relative min-h-0 flex-1 bg-muted/30'>
+                    <CadPreviewViewer
+                      className='size-full'
+                      enablePan
+                      enableZoom
+                      staticPreviewUrl={staticPreviewUrl}
+                      stageOptions={{ zoomLevel: 1.25 }}
+                      graphicsOptions={{
+                        enableLines: true,
+                        viewerClassName: 'bg-muted/30',
+                      }}
+                    />
+                    <CadPreviewStatus className='absolute top-3 left-3' />
+                  </div>
+                </section>
 
-              <section className='flex min-h-[260px] min-w-0 flex-col border-t bg-background xl:min-h-0 xl:border-t-0'>
-                <PlaygroundParameters presets={activeExample.presets ?? []} />
-              </section>
-            </CadPreviewProvider>
-          </FileManagerProvider>
-        </SharedWorkerGate>
+                <section className='flex min-h-[260px] min-w-0 flex-col border-t bg-background xl:min-h-0 xl:border-t-0'>
+                  <PlaygroundParameters presets={activeExample.presets ?? []} />
+                </section>
+              </CadPreviewProvider>
+            </FileManagerProvider>
+          </SharedWorkerGate>
+        ) : (
+          <section className='flex min-h-0 min-w-0 flex-col'>
+            <div className='relative min-h-0 flex-1 bg-muted/30'>
+              {staticPreviewUrl ? (
+                <StaticPreviewViewer
+                  className='size-full'
+                  enablePan
+                  enableZoom
+                  staticPreviewUrl={staticPreviewUrl}
+                  stageOptions={{ zoomLevel: 1.25 }}
+                  graphicsOptions={{
+                    enableLines: true,
+                    viewerClassName: 'bg-muted/30',
+                  }}
+                />
+              ) : null}
+            </div>
+          </section>
+        )}
       </div>
     </main>
   );
