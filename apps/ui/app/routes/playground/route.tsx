@@ -11,7 +11,6 @@ import {
   Play,
   RotateCcw,
   Share2,
-  SlidersHorizontal,
 } from 'lucide-react';
 import jsonUrl from '@firstform/json-url';
 import type { FileExtension } from '@taucad/types';
@@ -28,7 +27,6 @@ import {
 import { ClientOnly } from '#components/ui/utils/client-only.js';
 import { FileManagerProvider, SharedWorkerGate } from '#hooks/use-file-manager.js';
 import { CadPreviewProvider, useCadPreview } from '#hooks/use-cad-preview.js';
-import { playgroundPreviewKernelOptions } from '#constants/kernel-options.presets.js';
 import { useFeature } from '#flags/use-feature.js';
 import { playgroundExamples } from '#routes/playground/playground-examples.js';
 import type { PlaygroundExample, PlaygroundPreset } from '#routes/playground/playground-examples.js';
@@ -425,7 +423,6 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
               mainFile={activeExample.mainFile}
               files={files}
               parameters={activeExample.initialParameters}
-              kernelOptionsFactory={playgroundPreviewKernelOptions}
             >
               {exportControlsElement
                 ? createPortal(
@@ -439,12 +436,6 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
                 : undefined}
               <PlaygroundParameterBridge pendingParameters={pendingParameters} onParametersChange={setLiveParameters} />
               <section className='flex min-h-[56dvh] min-w-0 flex-col xl:min-h-0 xl:border-r'>
-                <div className='flex h-11 items-center justify-between border-b px-3'>
-                  <div className='flex items-center gap-2'>
-                    <SlidersHorizontal className='size-4 text-muted-foreground' />
-                    <PreviewSummary />
-                  </div>
-                </div>
                 <div className='relative min-h-0 flex-1 bg-muted/30'>
                   <CadPreviewViewer
                     className='size-full'
@@ -716,21 +707,6 @@ function getBrowserWindow(): Window | undefined {
     readonly window?: Window;
   };
   return maybeGlobal.window;
-}
-
-function PreviewSummary(): React.JSX.Element {
-  const { status, geometries, error, defaultParameters } = useCadPreview();
-  const parameterCount = Object.keys(defaultParameters).length;
-
-  if (error) {
-    return <span className='truncate text-xs text-destructive'>{error.message}</span>;
-  }
-
-  return (
-    <span className='truncate text-xs text-muted-foreground'>
-      {status} · {geometries.length} geometries · {parameterCount} parameters
-    </span>
-  );
 }
 
 function EditorFallback({ value, onChange }: EditorFallbackProps): React.JSX.Element {
