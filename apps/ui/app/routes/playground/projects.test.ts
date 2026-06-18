@@ -71,10 +71,10 @@ describe('project examples discovery', () => {
       kernel: 'Replicad',
       mainFile: 'main.ts',
       language: 'typescript',
-      initialParameters: { secondOpener: false },
+      initialParameters: { lowerModule: 'none' },
     });
     expect(example?.exportFormats).toContain('step');
-    expect(example?.presets).toHaveLength(5);
+    expect(example?.presets).toHaveLength(6);
     expect(example?.sourceFiles).toHaveProperty('main.ts', example?.code);
     expect(example?.sourceFiles).not.toHaveProperty('presets.json');
   });

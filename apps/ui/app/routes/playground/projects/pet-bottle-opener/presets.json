@@ -3,39 +3,48 @@
     "name": "Thin release",
     "parameters": {
       "thickness": 10,
-      "addHandle": false,
-      "secondOpener": false
+      "lowerModule": "none"
     }
   },
   {
     "name": "Thick release",
     "parameters": {
       "thickness": 22,
-      "addHandle": false,
-      "secondOpener": false
+      "lowerModule": "none"
     }
   },
   {
     "name": "Thin handle",
     "parameters": {
       "thickness": 10,
-      "addHandle": true,
-      "secondOpener": false,
+      "lowerModule": "handle",
       "handleHoleDiameter": 25,
       "handleOuterRadius": 17.5
     }
   },
   {
-    "name": "Dual opener heads",
+    "name": "Dual opener (smaller)",
     "parameters": {
-      "secondOpener": true,
-      "centerDistance": 47
+      "thickness": 10,
+      "lowerModule": "opener",
+      "openerSize": "smaller",
+      "secondCapDiameter": 19,
+      "centerDistance": 50
     }
   },
   {
-    "name": "Faceted rim",
+    "name": "Dual opener (same)",
     "parameters": {
-      "outerSides": 10
+      "thickness": 10,
+      "lowerModule": "opener",
+      "openerSize": "same",
+      "centerDistance": 60
+    }
+  },
+  {
+    "name": "Round rim",
+    "parameters": {
+      "outerSides": 64
     }
   }
 ]

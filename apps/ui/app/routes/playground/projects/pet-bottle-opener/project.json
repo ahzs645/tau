@@ -4,9 +4,9 @@
   "mainFile": "main.ts",
   "kernel": "Replicad",
   "language": "typescript",
-  "description": "Parametric flat PET bottle / cap opener with one or two fin-style heads joined by a neck. Ported from a PythonOCC (OpenCascade) design to Tau's Replicad kernel and exportable to solid STEP as well as mesh formats.",
+  "description": "Parametric PET bottle / cap opener with a chamfered, faceted rim and a recessed band of angled contact + support fins, matching the 'New Standard' STEP reference. One cap-diameter knob sizes the head; an optional lower module adds a finger hole or a same/smaller second opener. Exportable to solid STEP as well as mesh formats.",
   "exportFormats": ["glb", "stl", "3mf", "step"],
   "initialParameters": {
-    "secondOpener": false
+    "lowerModule": "none"
   }
 }
