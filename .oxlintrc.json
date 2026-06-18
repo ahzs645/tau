@@ -21,7 +21,8 @@
     "**/content/docs/**",
     "tarballs/**",
     "experiments/**",
-    "**/*.jscad.js"
+    "**/*.jscad.js",
+    "**/routes/playground/projects/*/**"
   ],
   "plugins": [
     "unicorn",

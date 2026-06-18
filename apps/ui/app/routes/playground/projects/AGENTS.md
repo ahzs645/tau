@@ -58,21 +58,27 @@ metadata may use `engine`: `openscad`, `replicad`, `opencascade`, or `occt`.
 The loader imports raw text source files with these extensions:
 
 ```text
-.js, .json, .scad, .svg, .txt
+.js, .ts, .json, .scad, .svg, .txt
 ```
 
-Use `mainFile` only for compatibility aliases. For example, TypeScript examples may store source as
-`main.txt` to force raw loading, while exposing it to the runtime as `main.ts`.
+TypeScript projects store their source directly as `main.ts` (no `.txt` alias needed) — the loader
+raw-imports it and the runtime executes it. These project sources are **excluded from the app's
+linter** (`.oxlintrc.json` + `eslint.config.mjs` ignore `routes/playground/projects/*/**`) because
+they are illustrative kernel example assets, not app code; they are still type-checked by the app
+`tsconfig`. Use `mainFile` only for compatibility aliases (e.g. exposing a differently-named entry to
+the runtime).
 
 ### Pulling code from `@taucad/tau-examples`
 
-If a project's code is also a canonical example in the shared `@taucad/tau-examples` library, do
-**not** copy the source into this folder. Instead set `"libSource": "<example-folder-name>"` in
-`project.json` and keep only `project.json` (+ optional `presets.json`) here. The loader resolves the
-code from `replicadExampleCode` in the library, so there is a single source of truth: the library's
-`main.ts` (type-checked, linted, and render-tested). The dependency only points one way — apps import
-the library, never the reverse — so the library, not this folder, owns the code. Add new entries to
-`libs/tau-examples/src/playground-sources.ts`. `pet-bottle-opener` uses this.
+A project may optionally pull its code from the shared `@taucad/tau-examples` library by setting
+`"libSource": "<example-folder-name>"` in `project.json` (keeping only `project.json` + optional
+`presets.json` here); the loader then resolves the code from `replicadExampleCode` in the library.
+The dependency only points one way — apps import the library, never the reverse.
+
+As of now **no project uses `libSource`** and `replicadExampleCode` is empty: every project owns its
+own source under `projects/<id>/` (this folder is the single home for project code). `pet-bottle-opener`
+was migrated here as a local `main.ts`. The `libSource` mechanism remains available should a future
+project want to reuse a library-owned example verbatim.
 
 Binary files (`.stl`, `.glb`, `.usdz`, etc.) are not loaded into the editor by this path. If a
 project needs binary runtime assets, design that asset path explicitly before adding the project.

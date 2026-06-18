@@ -5,7 +5,9 @@
 /** Map of kernel names to their available example fixture names. */
 export type ExampleManifest = {
   jscad: 'cube' | 'cylinder' | 'gear';
+  openscad: 'kitchen-sink';
   replicad:
+    | 'bambu-plate'
     | 'birdhouse'
     | 'bottle'
     | 'card-holder'
@@ -14,13 +16,14 @@ export type ExampleManifest = {
     | 'decorated-box'
     | 'drinking-glass'
     | 'gridfinity-box'
+    | 'helical-gear'
     | 'hex-screwdriver'
     | 'hollow-box'
     | 'ibeam'
     | 'lego'
-    | 'pet-bottle-opener'
     | 'pot-plant'
     | 'projection-test'
+    | 'rao-nozzle'
     | 'simple-tray'
     | 'staircase'
     | 'stress-test'

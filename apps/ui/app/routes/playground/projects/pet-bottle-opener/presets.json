@@ -1,37 +1,44 @@
 [
   {
-    "name": "Thin release",
-    "parameters": {
-      "body": { "thickness": 10 },
-      "lower": { "module": "none" }
-    }
-  },
-  {
-    "name": "Thick release",
+    "name": "Thick release (22 mm)",
     "parameters": {
       "body": { "thickness": 22 },
       "lower": { "module": "none" }
     }
   },
   {
-    "name": "Thin handle",
+    "name": "Thin release (14 mm)",
+    "parameters": {
+      "body": { "thickness": 14 },
+      "lower": { "module": "none" }
+    }
+  },
+  {
+    "name": "Extra-thin release (10 mm)",
     "parameters": {
       "body": { "thickness": 10 },
+      "lower": { "module": "none" }
+    }
+  },
+  {
+    "name": "Thin handle",
+    "parameters": {
+      "body": { "thickness": 14 },
       "lower": { "module": "handle", "handleHoleDiameter": 25, "handleOuterRadius": 17.5 }
     }
   },
   {
     "name": "Dual opener (smaller)",
     "parameters": {
-      "body": { "thickness": 10 },
-      "lower": { "module": "opener", "openerSize": "smaller", "secondCapDiameter": 19, "centerDistance": 50 }
+      "body": { "thickness": 14 },
+      "lower": { "module": "opener", "openerSize": "smaller", "secondCapDiameter": 19, "centerDistance": 63 }
     }
   },
   {
     "name": "Dual opener (same)",
     "parameters": {
-      "body": { "thickness": 10 },
-      "lower": { "module": "opener", "openerSize": "same", "centerDistance": 60 }
+      "body": { "thickness": 14 },
+      "lower": { "module": "opener", "openerSize": "same", "centerDistance": 68 }
     }
   },
   {

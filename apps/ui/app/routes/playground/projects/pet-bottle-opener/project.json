@@ -2,7 +2,6 @@
   "title": "Modular PET Bottle Opener (OpenCascade)",
   "entry": "main.ts",
   "mainFile": "main.ts",
-  "libSource": "pet-bottle-opener",
   "kernel": "Replicad",
   "language": "typescript",
   "description": "Parametric PET bottle / cap opener with a chamfered, faceted rim and a recessed band of angled contact + support fins, matching the 'New Standard' STEP reference. One cap-diameter knob sizes the head; an optional lower module adds a finger hole or a same/smaller second opener. Exportable to solid STEP as well as mesh formats.",

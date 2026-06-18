@@ -217,6 +217,9 @@ const config = [
       '**/wasm/**',
       'repos/**',
       '**/reports/**',
+      // Playground project sources are raw kernel example assets executed by the
+      // runtime, not app code — exempt them from the app's stylistic lint rules.
+      '**/routes/playground/projects/*/**',
     ],
   },
 

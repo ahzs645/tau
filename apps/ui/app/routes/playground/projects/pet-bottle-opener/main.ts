@@ -68,7 +68,7 @@ export const defaultParams = {
     module: 'none', // 'none' | 'handle' | 'opener'
     openerSize: 'smaller', // When 'opener': 'same' as the main head, or 'smaller'
     secondCapDiameter: 19, // Cap Ø for the lower head when openerSize = 'smaller'
-    centerDistance: 48, // Distance between the two module centers (mm)
+    centerDistance: 63, // Min distance between module centers; auto-grown for a clean blend
     neckWidth: 16, // Width of the bridge between modules (mm)
     handleHoleDiameter: 25, // Finger / hang hole Ø (module = 'handle')
     handleOuterRadius: 17.5, // Outer radius of the handle disc (module = 'handle')
@@ -90,6 +90,11 @@ type Point = [number, number];
 const ROOT_OVERLAP = 0.35;
 // Overlap between the neck and each round module so they merge cleanly.
 const NECK_OVERLAP = 1.8;
+// Default clear gap between two module rims. The lower module is spaced at least
+// this far from the main head so the rims never overlap AND there is room for
+// the neck to blend smoothly into both bodies (a melded waist, not a thin slab
+// crashing into a knife-edge junction). A larger user spacing is honored.
+const NECK_BLEND_GAP = 12;
 const DEG = Math.PI / 180;
 
 /** Resolved radii for one opener head, all derived from its cap diameter. */
@@ -215,7 +220,14 @@ const FIELD_META: Record<string, FieldMeta> = {
     max: 60,
     step: 0.5,
   },
-  centerDistance: { title: 'Module spacing (mm)', min: 20, max: 120, step: 1 },
+  centerDistance: {
+    title: 'Module spacing (mm)',
+    description:
+      'Minimum center-to-center distance; auto-increased so the heads never overlap and the neck blends in. Increase for a longer, smoother waist',
+    min: 20,
+    max: 120,
+    step: 1,
+  },
   neckWidth: { title: 'Neck width (mm)', min: 4, max: 40, step: 0.5 },
   handleHoleDiameter: {
     title: 'Handle hole Ø (mm)',
@@ -267,9 +279,7 @@ function schemaForLeaf(key: string, value: unknown): JsonSchemaNode {
   };
 }
 
-function buildSchemaProperties(
-  group: Record<string, unknown>,
-): Record<string, JsonSchemaNode> {
+function buildSchemaProperties(group: Record<string, unknown>): Record<string, JsonSchemaNode> {
   const properties: Record<string, JsonSchemaNode> = {};
 
   for (const [key, value] of Object.entries(group)) {
@@ -287,9 +297,58 @@ function buildSchemaProperties(
 }
 
 /**
- * Parameter panel schema: groups become collapsible sections, the two string
- * fields become dropdowns, and numbers get ranges. Consumed by the kernel's
- * `getParameters`.
+ * Conditional schema for the lower module. Only `module` shows until a value is
+ * chosen; RJSF resolves these `dependencies` against the current value so:
+ *  - `none`   reveals nothing else,
+ *  - `handle` reveals the hole/disc + bridge fields,
+ *  - `opener` reveals the second-opener + bridge fields.
+ * Hidden fields keep their defaults (the panel deep-merges defaults into the
+ * form data), so the geometry is unaffected by what is shown.
+ */
+function buildLowerSchema(): JsonSchemaNode {
+  const leaf = (key: keyof typeof defaultParams.lower): JsonSchemaNode => schemaForLeaf(key, defaultParams.lower[key]);
+
+  const bridgeFields = {
+    centerDistance: leaf('centerDistance'),
+    neckWidth: leaf('neckWidth'),
+  };
+
+  return {
+    type: 'object',
+    title: 'Lower module',
+    properties: {
+      module: leaf('module'),
+    },
+    dependencies: {
+      module: {
+        oneOf: [
+          { properties: { module: { enum: ['none'] } } },
+          {
+            properties: {
+              module: { enum: ['handle'] },
+              handleHoleDiameter: leaf('handleHoleDiameter'),
+              handleOuterRadius: leaf('handleOuterRadius'),
+              ...bridgeFields,
+            },
+          },
+          {
+            properties: {
+              module: { enum: ['opener'] },
+              openerSize: leaf('openerSize'),
+              secondCapDiameter: leaf('secondCapDiameter'),
+              ...bridgeFields,
+            },
+          },
+        ],
+      },
+    },
+  };
+}
+
+/**
+ * Parameter panel schema: groups become collapsible sections, the string fields
+ * become dropdowns, numbers get ranges, and the lower module gates its fields on
+ * the chosen `module`. Consumed by the kernel's `getParameters`.
  *
  * @public
  */
@@ -297,15 +356,15 @@ export const jsonSchema = {
   $schema: 'http://json-schema.org/draft-07/schema#',
   title: 'PET Bottle Opener',
   type: 'object',
-  properties: buildSchemaProperties(defaultParams),
+  properties: {
+    ...buildSchemaProperties(defaultParams),
+    lower: buildLowerSchema(),
+  },
 };
 
 /** Point at `radius` and `angle` (radians) around a center. */
 function polar(center: Point, radius: number, angle: number): Point {
-  return [
-    center[0] + radius * Math.cos(angle),
-    center[1] + radius * Math.sin(angle),
-  ];
+  return [center[0] + radius * Math.cos(angle), center[1] + radius * Math.sin(angle)];
 }
 
 /** Closed polygon from a list of 2D points. */
@@ -326,15 +385,8 @@ function polygon(points: Point[]): Drawing {
 }
 
 /** Ring centered at the origin. Faceted when `sides` is between 3 and 63. */
-function annulus(
-  outerRadius: number,
-  innerRadius: number,
-  sides: number,
-): Drawing {
-  const outer =
-    sides >= 3 && sides < 64
-      ? drawPolysides(outerRadius, sides)
-      : drawCircle(outerRadius);
+function annulus(outerRadius: number, innerRadius: number, sides: number): Drawing {
+  const outer = sides >= 3 && sides < 64 ? drawPolysides(outerRadius, sides) : drawCircle(outerRadius);
 
   return outer.cut(drawCircle(innerRadius));
 }
@@ -371,11 +423,7 @@ function angledRadialFin(
 }
 
 /** Derive every head radius from a cap diameter, keeping band/wall constant. */
-function deriveHead(
-  capDiameter: number,
-  proportions: HeadProportions,
-  finCount: number,
-): HeadGeometry {
+function deriveHead(capDiameter: number, proportions: HeadProportions, finCount: number): HeadGeometry {
   const capRadius = capDiameter / 2;
   const finOuterRadius = capRadius + proportions.finBandDepth;
 
@@ -384,20 +432,13 @@ function deriveHead(
     finOuterRadius,
     outerRadius: finOuterRadius + proportions.wallThickness,
     // Bore sits just inside the fin-root ring; never let it pinch the cap.
-    smoothBoreRadius: Math.max(
-      finOuterRadius - proportions.boreClearance,
-      capRadius + 0.5,
-    ),
+    smoothBoreRadius: Math.max(finOuterRadius - proportions.boreClearance, capRadius + 0.5),
     finCount,
   };
 }
 
 /** Builds one opener head as a 2D drawing (fin band only) at the origin. */
-function buildFinBand(
-  geom: HeadGeometry,
-  fin: FinSpec,
-  outerSides: number,
-): Drawing {
+function buildFinBand(geom: HeadGeometry, fin: FinSpec, outerSides: number): Drawing {
   const capRadius = geom.capDiameter / 2;
   const ringInner = geom.finOuterRadius - ROOT_OVERLAP;
 
@@ -424,13 +465,8 @@ function buildFinBand(
     throw new Error('finCount must be at least 3');
   }
 
-  if (
-    contactEvery > 1 &&
-    capRadius + supportSetback >= geom.finOuterRadius - 0.25
-  ) {
-    throw new Error(
-      'supportSetback is too large; support fins would not reach the rim cleanly',
-    );
+  if (contactEvery > 1 && capRadius + supportSetback >= geom.finOuterRadius - 0.25) {
+    throw new Error('supportSetback is too large; support fins would not reach the rim cleanly');
   }
 
   let shape = annulus(geom.outerRadius, ringInner, outerSides);
@@ -442,18 +478,10 @@ function buildFinBand(
     const innerWidth = isContact ? fin.finInnerWidth : fin.supportFinInnerWidth;
     const outerWidth = isContact ? fin.finOuterWidth : fin.supportFinOuterWidth;
     const phaseOffset = isContact ? 0 : supportPhaseOffset;
-    const innerAngle =
-      finPhase + phaseOffset + (i * 2 * Math.PI) / geom.finCount;
+    const innerAngle = finPhase + phaseOffset + (i * 2 * Math.PI) / geom.finCount;
 
     shape = shape.fuse(
-      angledRadialFin(
-        finInnerRadius,
-        geom.finOuterRadius,
-        innerWidth,
-        outerWidth,
-        innerAngle,
-        finRootOffset,
-      ),
+      angledRadialFin(finInnerRadius, geom.finOuterRadius, innerWidth, outerWidth, innerAngle, finRootOffset),
     );
   }
 
@@ -480,20 +508,11 @@ function buildLayeredHead(
   let solid = extrudeDrawing(buildFinBand(geom, fin, outerSides), band);
 
   if (upperHeight > 0) {
-    if (
-      geom.smoothBoreRadius <= 0 ||
-      geom.smoothBoreRadius >= geom.outerRadius
-    ) {
+    if (geom.smoothBoreRadius <= 0 || geom.smoothBoreRadius >= geom.outerRadius) {
       throw new Error('smoothBoreRadius must be between 0 and outerRadius');
     }
 
-    solid = solid.fuse(
-      extrudeDrawing(
-        annulus(geom.outerRadius, geom.smoothBoreRadius, outerSides),
-        upperHeight,
-        band,
-      ),
-    );
+    solid = solid.fuse(extrudeDrawing(annulus(geom.outerRadius, geom.smoothBoreRadius, outerSides), upperHeight, band));
   }
 
   return solid;
@@ -506,11 +525,7 @@ function buildLayeredHead(
  * never mutated in place — `chamfer` returns a new solid — so on failure we
  * just return the input untouched.
  */
-function safeChamfer(
-  solid: Shape3D,
-  size: number,
-  finder: (edge: EdgeFinder) => EdgeFinder,
-): Shape3D {
+function safeChamfer(solid: Shape3D, size: number, finder: (edge: EdgeFinder) => EdgeFinder): Shape3D {
   if (size <= 0) {
     return solid;
   }
@@ -537,9 +552,7 @@ function finishHead(
   // threshold a little inside it so every rim edge is caught but the bore and
   // fins (well inside) are excluded.
   const facetRadius =
-    outerSides >= 3 && outerSides < 64
-      ? geom.outerRadius * Math.cos(Math.PI / outerSides)
-      : geom.outerRadius;
+    outerSides >= 3 && outerSides < 64 ? geom.outerRadius * Math.cos(Math.PI / outerSides) : geom.outerRadius;
   const rimThreshold = facetRadius - Math.max(chamfer.rimChamfer, 0.5) - 0.1;
 
   // Top & bottom outer-rim bevel — the signature "nut" chamfer.
@@ -567,8 +580,7 @@ function finishHead(
   // top of the fin band). Chamfering 60 thin teeth often defeats OCCT, so this
   // is off by default and best-effort via safeChamfer.
   const capRadius = geom.capDiameter / 2;
-  const tipOuter =
-    capRadius + Math.max(0, geom.finOuterRadius - capRadius) * 0.25;
+  const tipOuter = capRadius + Math.max(0, geom.finOuterRadius - capRadius) * 0.25;
   for (const z of [0, Math.min(finHeight, thickness)]) {
     result = safeChamfer(result, chamfer.finTipChamfer, (edge) =>
       edge.inPlane('XY', z).when(({ element }) => {
@@ -582,12 +594,7 @@ function finishHead(
 }
 
 /** A round handle disc with a finger / hang hole, chamfered to match the head. */
-function buildHandleSolid(
-  outerRadius: number,
-  holeRadius: number,
-  thickness: number,
-  chamfer: ChamferSpec,
-): Shape3D {
+function buildHandleSolid(outerRadius: number, holeRadius: number, thickness: number, chamfer: ChamferSpec): Shape3D {
   let solid = extrudeDrawing(drawCircle(outerRadius), thickness);
 
   if (holeRadius > 0) {
@@ -599,9 +606,7 @@ function buildHandleSolid(
     solid = safeChamfer(solid, chamfer.rimChamfer, (edge) =>
       edge.inPlane('XY', z).when(({ element }) => {
         const mid = element.pointAt(0.5);
-        return (
-          Math.hypot(mid.x, mid.y) >= outerRadius - chamfer.rimChamfer - 0.1
-        );
+        return Math.hypot(mid.x, mid.y) >= outerRadius - chamfer.rimChamfer - 0.1;
       }),
     );
   }
@@ -629,13 +634,7 @@ function buildHandleSolid(
  * centers so it never fills a cap opening. Returns null when the modules
  * already overlap enough that no neck is needed.
  */
-function buildBridge(
-  centerA: Point,
-  centerB: Point,
-  radiusA: number,
-  radiusB: number,
-  width: number,
-): Drawing | null {
+function buildBridge(centerA: Point, centerB: Point, radiusA: number, radiusB: number, width: number): Drawing | null {
   const vx = centerB[0] - centerA[0];
   const vy = centerB[1] - centerA[1];
   const length = Math.hypot(vx, vy);
@@ -670,6 +669,85 @@ function buildBridge(
     [ex - nx * hw, ey - ny * hw],
     [sx - nx * hw, sy - ny * hw],
   ]);
+}
+
+/**
+ * A neck that *melds* into both modules instead of butting against them.
+ *
+ * The two body outlines and a straight neck are fused into a figure-8 whose
+ * only outline corners are the four concave rim junctions; filleting those
+ * rounds the neck so it flows tangentially into each rim (the smooth waist of
+ * the "New Standard" reference). We then keep only the material OUTSIDE the two
+ * bodies — so head bores stay open — plus a small overlap into each rim for a
+ * clean 3D fuse.
+ *
+ * Returns null when the blend can't be built (callers fall back to a plain
+ * rectangular neck), so a tricky parameter set degrades instead of failing.
+ */
+function buildMeldNeck(
+  centerA: Point,
+  centerB: Point,
+  radiusA: number,
+  radiusB: number,
+  width: number,
+  blend: number,
+): Drawing | null {
+  const vx = centerB[0] - centerA[0];
+  const vy = centerB[1] - centerA[1];
+  const length = Math.hypot(vx, vy);
+
+  if (length < 1e-6 || blend <= 0) {
+    return null;
+  }
+
+  const ux = vx / length;
+  const uy = vy / length;
+  const nx = -uy;
+  const ny = ux;
+  // Keep the neck narrower than the smaller body so the rect ends stay inside
+  // both discs and the only outline corners are the four rim junctions.
+  const hw = Math.min(width / 2, Math.min(radiusA, radiusB) * 0.8);
+
+  const discA = drawCircle(radiusA).translate(centerA[0], centerA[1]);
+  const discB = drawCircle(radiusB).translate(centerB[0], centerB[1]);
+
+  // Full-span neck (center to center) fused with both discs, then the concave
+  // junction corners rounded. Both ops can fail in OCCT for extreme inputs.
+  let blended: Drawing;
+
+  try {
+    const rectFull = polygon([
+      [centerA[0] + nx * hw, centerA[1] + ny * hw],
+      [centerB[0] + nx * hw, centerB[1] + ny * hw],
+      [centerB[0] - nx * hw, centerB[1] - ny * hw],
+      [centerA[0] - nx * hw, centerA[1] - ny * hw],
+    ]);
+
+    blended = discA.fuse(rectFull).fuse(discB).fillet(blend);
+  } catch {
+    return null;
+  }
+
+  try {
+    // Discard the body interiors (keep the blend wedges + inter-body neck), then
+    // add a short overlap strip into each rim for a watertight 3D fuse.
+    const startDist = Math.max(radiusA - NECK_OVERLAP, 0);
+    const endDist = Math.max(radiusB - NECK_OVERLAP, 0);
+    const sx = centerA[0] + ux * startDist;
+    const sy = centerA[1] + uy * startDist;
+    const ex = centerB[0] - ux * endDist;
+    const ey = centerB[1] - uy * endDist;
+    const overlap = polygon([
+      [sx + nx * hw, sy + ny * hw],
+      [ex + nx * hw, ey + ny * hw],
+      [ex - nx * hw, ey - ny * hw],
+      [sx - nx * hw, sy - ny * hw],
+    ]);
+
+    return blended.cut(discA).cut(discB).fuse(overlap);
+  } catch {
+    return null;
+  }
 }
 
 export default function main(params: DeepPartial<Params> = {}): Shape3D {
@@ -710,7 +788,6 @@ export default function main(params: DeepPartial<Params> = {}): Shape3D {
   const finHeight = Math.min(Math.max(fins.finHeight, 0.1), body.thickness);
 
   const topCenter: Point = [0, 0];
-  const lowerCenter: Point = [0, -lower.centerDistance];
 
   // --- Main (top) head -----------------------------------------------------
   const topGeom = deriveHead(head.capDiameter, proportions, fins.finCount);
@@ -724,78 +801,90 @@ export default function main(params: DeepPartial<Params> = {}): Shape3D {
   );
 
   // --- Lower module --------------------------------------------------------
-  const mode =
-    lower.module === 'opener' || lower.module === 'handle'
-      ? lower.module
-      : 'none';
+  const mode = lower.module === 'opener' || lower.module === 'handle' ? lower.module : 'none';
 
   if (mode !== 'none') {
-    let lowerSolid: Shape3D;
+    // Build the lower module at the origin; we place it once we know how far
+    // the two centers must sit apart to keep the rims from overlapping.
+    let lowerAtOrigin: Shape3D;
     let lowerOuterRadius: number;
 
     if (mode === 'opener') {
       // The second head reuses every shared fin parameter; only its cap size
       // changes. Its fin count is derived to keep the tooth pitch constant.
       const sameSize = lower.openerSize !== 'smaller';
-      const secondCapDiameter = sameSize
-        ? head.capDiameter
-        : lower.secondCapDiameter;
+      const secondCapDiameter = sameSize ? head.capDiameter : lower.secondCapDiameter;
 
-      const mainLinearPitch =
-        (2 * Math.PI * topGeom.finOuterRadius) / topGeom.finCount;
-      const secondFinOuterRadius =
-        secondCapDiameter / 2 + proportions.finBandDepth;
-      const rawCount = Math.round(
-        (2 * Math.PI * secondFinOuterRadius) / mainLinearPitch,
-      );
-      const grouped =
-        Math.max(1, Math.round(rawCount / fin.contactEvery)) * fin.contactEvery;
+      const mainLinearPitch = (2 * Math.PI * topGeom.finOuterRadius) / topGeom.finCount;
+      const secondFinOuterRadius = secondCapDiameter / 2 + proportions.finBandDepth;
+      const rawCount = Math.round((2 * Math.PI * secondFinOuterRadius) / mainLinearPitch);
+      const grouped = Math.max(1, Math.round(rawCount / fin.contactEvery)) * fin.contactEvery;
       const secondFinCount = Math.max(fin.contactEvery * 4, grouped);
 
-      const secondGeom = deriveHead(
-        secondCapDiameter,
-        proportions,
-        secondFinCount,
-      );
+      const secondGeom = deriveHead(secondCapDiameter, proportions, secondFinCount);
       lowerOuterRadius = secondGeom.outerRadius;
 
-      lowerSolid = finishHead(
-        buildLayeredHead(
-          secondGeom,
-          fin,
-          body.outerSides,
-          body.thickness,
-          finHeight,
-        ),
+      lowerAtOrigin = finishHead(
+        buildLayeredHead(secondGeom, fin, body.outerSides, body.thickness, finHeight),
         secondGeom,
         body.outerSides,
         body.thickness,
         finHeight,
         chamfer,
-      ).translate(lowerCenter[0], lowerCenter[1], 0);
+      );
     } else {
       lowerOuterRadius = lower.handleOuterRadius;
-      lowerSolid = buildHandleSolid(
-        lower.handleOuterRadius,
-        lower.handleHoleDiameter / 2,
-        body.thickness,
-        chamfer,
-      ).translate(lowerCenter[0], lowerCenter[1], 0);
+      lowerAtOrigin = buildHandleSolid(lower.handleOuterRadius, lower.handleHoleDiameter / 2, body.thickness, chamfer);
     }
 
-    const bridge = buildBridge(
-      topCenter,
-      lowerCenter,
-      topGeom.outerRadius,
-      lowerOuterRadius,
-      lower.neckWidth,
-    );
+    // Space the lower center so the rims clear each other with room for the
+    // neck to blend in, honoring a larger user-set distance. This is what stops
+    // the two heads overlapping (same-size or smaller).
+    const rimA = topGeom.outerRadius;
+    const rimB = lowerOuterRadius;
+    const minCenterDistance = rimA + rimB + NECK_BLEND_GAP;
+    const centerDistance = Math.max(lower.centerDistance, minCenterDistance);
+    const lowerCenter: Point = [0, -centerDistance];
 
-    if (bridge) {
-      solid = solid.fuse(extrudeDrawing(bridge, body.thickness));
+    const lowerSolid = lowerAtOrigin.translate(lowerCenter[0], lowerCenter[1], 0);
+
+    // Size the blend to the room available: the neck's straight edges run from
+    // each rim crossing inward, so each junction fillet can grow to about half
+    // that straight run (capped to a fraction of the smaller rim). A bigger
+    // user spacing therefore yields a more generous, smoother waist.
+    const hw = Math.min(lower.neckWidth / 2, Math.min(rimA, rimB) * 0.8);
+    const straight =
+      centerDistance - Math.sqrt(Math.max(0, rimA * rimA - hw * hw)) - Math.sqrt(Math.max(0, rimB * rimB - hw * hw));
+    const blendRadius = Math.min(Math.max(straight / 2 - 1, 0), Math.min(rimA, rimB) * 0.45);
+
+    // Prefer the melded neck; fall back to a plain rectangular bridge if the
+    // blend can't be built for this parameter set.
+    const neck =
+      (blendRadius > 0.5 && buildMeldNeck(topCenter, lowerCenter, rimA, rimB, lower.neckWidth, blendRadius)) ||
+      buildBridge(topCenter, lowerCenter, rimA, rimB, lower.neckWidth);
+
+    if (neck) {
+      solid = solid.fuse(extrudeDrawing(neck, body.thickness));
     }
 
     solid = solid.fuse(lowerSolid);
+
+    // Carry the rim chamfer across the melded neck so the whole figure-8 has a
+    // continuous top & bottom bevel, matching the heads (the source's finished
+    // look). The neck flank is the ONLY material that sits outside both rim
+    // circles, so that test isolates its top/bottom edges without touching the
+    // already-chamfered head rims, bores, or fins. Best-effort via safeChamfer.
+    const neckEdgeMargin = 0.1;
+    for (const z of [0, body.thickness]) {
+      solid = safeChamfer(solid, chamfer.rimChamfer, (edge) =>
+        edge.inPlane('XY', z).when(({ element }) => {
+          const mid = element.pointAt(0.5);
+          const toA = Math.hypot(mid.x - topCenter[0], mid.y - topCenter[1]);
+          const toB = Math.hypot(mid.x - lowerCenter[0], mid.y - lowerCenter[1]);
+          return toA > rimA + neckEdgeMargin && toB > rimB + neckEdgeMargin;
+        }),
+      );
+    }
   }
 
   return solid;

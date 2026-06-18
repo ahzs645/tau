@@ -52,7 +52,7 @@ const projectPresetsByPath = import.meta.glob<unknown>('./projects/*/presets.jso
   import: 'default',
 });
 
-const projectSourceByPath = import.meta.glob<string>('./projects/**/*.{js,json,scad,svg,txt}', {
+const projectSourceByPath = import.meta.glob<string>('./projects/**/*.{js,ts,json,scad,svg,txt}', {
   eager: true,
   import: 'default',
   query: '?raw',
