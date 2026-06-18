@@ -35,8 +35,15 @@ const tauDebugDefault = Boolean((ENV as { TAU_DEBUG?: boolean }).TAU_DEBUG);
  * truth for kiosk / gallery deployments; a localStorage override still wins
  * because the default only fires when no override is stored.
  */
-const disableCodeEditorDefault = Boolean(
-  (ENV as { TAU_DISABLE_CODE_EDITOR?: boolean }).TAU_DISABLE_CODE_EDITOR,
+const disableCodeEditorDefault = Boolean((ENV as { TAU_DISABLE_CODE_EDITOR?: boolean }).TAU_DISABLE_CODE_EDITOR);
+
+/**
+ * Resolve the boolean default for `enableProjectCreation` from the runtime
+ * environment (`TAU_ENABLE_PROJECT_CREATION=1|true`). Disabled by default so
+ * deployments must explicitly opt into creation entry points.
+ */
+const enableProjectCreationDefault = Boolean(
+  (ENV as { TAU_ENABLE_PROJECT_CREATION?: boolean }).TAU_ENABLE_PROJECT_CREATION,
 );
 
 export const flagRegistry = {
@@ -54,6 +61,11 @@ export const flagRegistry = {
     schema: z.boolean().default(disableCodeEditorDefault),
     label: 'Disable Code Editor',
     description: 'Hide the code editor for a parameter / viewer-only (kiosk) experience.',
+  },
+  enableProjectCreation: {
+    schema: z.boolean().default(enableProjectCreationDefault),
+    label: 'Enable Project Creation',
+    description: 'Show entry points that create new projects.',
   },
 } as const satisfies Record<string, FlagDefinition>;
 

@@ -78,6 +78,7 @@ import { KernelSelector } from '#components/chat/kernel-selector.js';
 import { ChatComposerProvider } from '#hooks/active-chat-provider.js';
 import { InteractiveHoverButton } from '#components/magicui/interactive-hover-button.js';
 import { useProjectManager } from '#hooks/use-project-manager.js';
+import { useFeature } from '#flags/use-feature.js';
 import { useKernel } from '#hooks/use-kernel.js';
 
 // Note: useCookie is still used for projectViewMode (user preference, not per-build state)
@@ -117,6 +118,7 @@ export default function PersonalCadProjects(): React.JSX.Element {
   const navigate = useNavigate();
   const { kernel, setKernel } = useKernel();
   const projectManager = useProjectManager();
+  const isProjectCreationEnabled = useFeature('enableProjectCreation');
 
   const handleToggleDeleted = useCallback((value: boolean) => {
     setShowDeleted(value);
@@ -203,9 +205,11 @@ export default function PersonalCadProjects(): React.JSX.Element {
     <div className='container mx-auto px-4 py-8'>
       <div className='mb-6 flex items-center justify-between'>
         <h1 className='text-3xl font-bold'>Projects</h1>
-        <Button asChild>
-          <NavLink to='/'>{({ isPending }) => (isPending ? <Loader /> : 'New Project')}</NavLink>
-        </Button>
+        {isProjectCreationEnabled ? (
+          <Button asChild>
+            <NavLink to='/'>{({ isPending }) => (isPending ? <Loader /> : 'New Project')}</NavLink>
+          </Button>
+        ) : null}
       </div>
 
       <Tabs
@@ -306,6 +310,7 @@ export default function PersonalCadProjects(): React.JSX.Element {
             selectedKernel={kernel}
             onKernelChange={setKernel}
             onSubmit={onSubmit}
+            isProjectCreationEnabled={isProjectCreationEnabled}
           />
         </TabsContent>
         <TabsContent enableAnimation={false} value='mechanical'>
@@ -316,6 +321,7 @@ export default function PersonalCadProjects(): React.JSX.Element {
             selectedKernel={kernel}
             onKernelChange={setKernel}
             onSubmit={onSubmit}
+            isProjectCreationEnabled={isProjectCreationEnabled}
           />
         </TabsContent>
         <TabsContent enableAnimation={false} value='electrical'>
@@ -326,6 +332,7 @@ export default function PersonalCadProjects(): React.JSX.Element {
             selectedKernel={kernel}
             onKernelChange={setKernel}
             onSubmit={onSubmit}
+            isProjectCreationEnabled={isProjectCreationEnabled}
           />
         </TabsContent>
         <TabsContent enableAnimation={false} value='firmware'>
@@ -336,6 +343,7 @@ export default function PersonalCadProjects(): React.JSX.Element {
             selectedKernel={kernel}
             onKernelChange={setKernel}
             onSubmit={onSubmit}
+            isProjectCreationEnabled={isProjectCreationEnabled}
           />
         </TabsContent>
         <TabsContent enableAnimation={false} value='software'>
@@ -346,6 +354,7 @@ export default function PersonalCadProjects(): React.JSX.Element {
             selectedKernel={kernel}
             onKernelChange={setKernel}
             onSubmit={onSubmit}
+            isProjectCreationEnabled={isProjectCreationEnabled}
           />
         </TabsContent>
       </Tabs>
@@ -360,6 +369,7 @@ type UnifiedProjectListProps = {
   readonly onSubmit: ChatTextareaProperties['onSubmit'];
   readonly selectedKernel: KernelProvider;
   readonly onKernelChange: (kernel: KernelProvider) => void;
+  readonly isProjectCreationEnabled: boolean;
 };
 
 // Page size options for different view modes
@@ -373,6 +383,7 @@ function UnifiedProjectList({
   onSubmit,
   selectedKernel,
   onKernelChange,
+  isProjectCreationEnabled,
 }: UnifiedProjectListProps) {
   const [sorting, setSorting] = useState<SortingState>([{ id: 'updatedAt', desc: true }]);
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
@@ -433,6 +444,20 @@ function UnifiedProjectList({
 
   // Show empty state if no projects at all
   if (projects.length === 0) {
+    if (!isProjectCreationEnabled) {
+      return (
+        <EmptyItems className='min-h-[60vh]'>
+          <div className='flex flex-col items-center space-y-4 text-center'>
+            <PackageX className='size-16 text-muted-foreground' strokeWidth={1} />
+            <div className='space-y-2'>
+              <h2 className='text-xl font-semibold'>No projects yet</h2>
+              <p className='text-sm text-muted-foreground'>Project creation is disabled for this deployment.</p>
+            </div>
+          </div>
+        </EmptyItems>
+      );
+    }
+
     return (
       <EmptyItems className='min-h-[60vh]'>
         {/* Empty-library CTA — composer-only, no chat session to attach to. */}

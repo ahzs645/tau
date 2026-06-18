@@ -10,6 +10,7 @@ import { toast } from '#components/ui/sonner.js';
 import { useProjectManager } from '#hooks/use-project-manager.js';
 import { useKernel } from '#hooks/use-kernel.js';
 import { useDraftActions } from '#hooks/use-chat.js';
+import { useFeature } from '#flags/use-feature.js';
 
 function CtaChatComposer(): React.JSX.Element {
   const navigate = useNavigate();
@@ -58,7 +59,13 @@ function CtaChatComposer(): React.JSX.Element {
   );
 }
 
-export function CtaSection(): React.JSX.Element {
+export function CtaSection(): React.JSX.Element | undefined {
+  const isProjectCreationEnabled = useFeature('enableProjectCreation');
+
+  if (!isProjectCreationEnabled) {
+    return undefined;
+  }
+
   return (
     <div className='border-t bg-linear-to-b from-muted/50 to-background'>
       <div className='container mx-auto px-4 py-20'>

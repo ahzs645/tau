@@ -12,7 +12,8 @@ const galleryExamples = projectExamples;
 // Build the engine filter list from the kernels actually present in the gallery
 // so OpenCascade / Replicad projects surface their own filter automatically.
 const engineFilters: readonly string[] = ['All', ...new Set(galleryExamples.map((example) => example.kernel))];
-const updateCheckIntervalMs = 60_000;
+/** Milliseconds. */
+const updateCheckInterval = 60_000;
 const updateToastId = 'app-version-update-available';
 
 type EngineFilter = string;
@@ -45,7 +46,7 @@ export default function PlaygroundGallery(): React.JSX.Element {
   }, [engineFilter, searchTerm]);
 
   return (
-    <main className='h-dvh overflow-y-auto bg-background text-foreground'>
+    <main className='h-dvh overflow-x-hidden overflow-y-auto bg-background text-foreground'>
       <section className='mx-auto flex w-full max-w-7xl flex-col gap-4 px-4 py-5 md:px-6'>
         <div className='flex flex-col gap-3 border-b pb-4 md:flex-row md:items-center md:justify-between'>
           <label className='flex min-h-9 w-full items-center gap-2 rounded-md border bg-background px-3 text-sm md:max-w-md'>
@@ -68,7 +69,7 @@ export default function PlaygroundGallery(): React.JSX.Element {
                 key={filter}
                 type='button'
                 className={cn(
-                  'rounded-sm border px-2.5 py-1.5 text-xs transition-colors hover:border-primary/50',
+                  'min-h-11 rounded-sm border px-3 py-2 text-xs transition-colors hover:border-primary/50 md:min-h-0 md:px-2.5 md:py-1.5',
                   filter === engineFilter ? 'border-primary bg-primary text-primary-foreground' : 'bg-background',
                 )}
                 onClick={() => {
@@ -81,9 +82,9 @@ export default function PlaygroundGallery(): React.JSX.Element {
           </div>
         </div>
 
-        <div className='grid gap-3 sm:grid-cols-2 xl:grid-cols-3'>
+        <div className='grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3'>
           {filteredExamples.map((example) => (
-            <article key={example.id} className='rounded-md border bg-background p-4'>
+            <article key={example.id} className='min-w-0 rounded-md border bg-background p-4'>
               <div className='mb-3 flex items-start justify-between gap-3'>
                 <div className='min-w-0'>
                   <h2 className='truncate text-sm font-semibold'>{example.name}</h2>
@@ -94,12 +95,12 @@ export default function PlaygroundGallery(): React.JSX.Element {
                 </span>
               </div>
 
-              <dl className='grid grid-cols-2 gap-2 text-xs'>
-                <div className='rounded-sm bg-muted/50 px-2 py-1.5'>
+              <dl className='grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-2 text-xs'>
+                <div className='min-w-0 rounded-sm bg-muted/50 px-2 py-1.5'>
                   <dt className='text-muted-foreground'>File</dt>
                   <dd className='truncate font-mono'>{example.mainFile}</dd>
                 </div>
-                <div className='rounded-sm bg-muted/50 px-2 py-1.5'>
+                <div className='min-w-0 rounded-sm bg-muted/50 px-2 py-1.5'>
                   <dt className='text-muted-foreground'>Exports</dt>
                   <dd className='truncate uppercase'>{example.exportFormats.join(', ')}</dd>
                 </div>
@@ -112,7 +113,7 @@ export default function PlaygroundGallery(): React.JSX.Element {
                 </div>
                 <Link
                   to={`/playground?model=${example.id}`}
-                  className={buttonVariants({ variant: 'default', size: 'sm' })}
+                  className={buttonVariants({ variant: 'default', size: 'sm', className: 'min-h-11 md:min-h-0' })}
                 >
                   <ExternalLink className='size-3.5' />
                   Open
@@ -134,7 +135,7 @@ export default function PlaygroundGallery(): React.JSX.Element {
 
 function useGalleryVersionCheck(): void {
   useEffect(() => {
-    const currentCommit = import.meta.env['VITE_COMMIT_SHA'];
+    const currentCommit = import.meta.env['VITE_COMMIT_SHA'] as string | undefined;
 
     if (!currentCommit) {
       return;
@@ -171,13 +172,13 @@ function useGalleryVersionCheck(): void {
     };
 
     void checkForUpdate();
-    const interval = globalThis.setInterval(() => {
+    const updateCheckTimer = globalThis.setInterval(() => {
       void checkForUpdate();
-    }, updateCheckIntervalMs);
+    }, updateCheckInterval);
 
     return () => {
       cancelled = true;
-      globalThis.clearInterval(interval);
+      globalThis.clearInterval(updateCheckTimer);
     };
   }, []);
 }

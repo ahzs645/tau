@@ -25,6 +25,9 @@ out-tsc
 # Test coverage
 coverage
 
+# Local agent audit artifacts
+tmp/interface-swarm-*/
+
 # Environment variables
 .env
 

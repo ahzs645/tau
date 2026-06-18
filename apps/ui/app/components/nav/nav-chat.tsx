@@ -4,10 +4,12 @@ import { SidebarGroup, SidebarMenuButton } from '#components/ui/sidebar.js';
 import { KeyShortcut } from '#components/ui/key-shortcut.js';
 import { useKeybinding } from '#hooks/use-keyboard.js';
 import { Loader } from '#components/ui/loader.js';
+import { useFeature } from '#flags/use-feature.js';
 
-export function NavChat(): React.JSX.Element {
+export function NavChat(): React.JSX.Element | undefined {
   const navigate = useNavigate();
   const isMatch = useMatch('/');
+  const isProjectCreationEnabled = useFeature('enableProjectCreation');
   const { formattedKeyCombination } = useKeybinding(
     {
       key: 'n',
@@ -19,6 +21,10 @@ export function NavChat(): React.JSX.Element {
       }
     },
   );
+  if (!isProjectCreationEnabled) {
+    return undefined;
+  }
+
   return (
     // Elevate the sidebar group above the other items to ensure the new project button is always clickable
     <SidebarGroup className='z-10'>

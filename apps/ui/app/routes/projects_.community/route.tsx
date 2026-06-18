@@ -17,6 +17,7 @@ import { sampleProjects } from '#constants/project-examples.js';
 import { CommunityProjectGrid } from '#components/project-grid.js';
 import type { Handle } from '#types/matches.types.js';
 import { Loader } from '#components/ui/loader.js';
+import { useFeature } from '#flags/use-feature.js';
 
 export const handle: Handle = {
   breadcrumb() {
@@ -37,6 +38,7 @@ export default function CadCommunity(): React.JSX.Element {
   const [selectedKernel, setSelectedKernel] = useState<KernelProvider | 'all'>('all');
   const [sortOption, setSortOption] = useState<SortOption>('newest');
   const [visibleProjects, setVisibleProjects] = useState(itemsPerPage);
+  const isProjectCreationEnabled = useFeature('enableProjectCreation');
 
   // Filter projects based on search term and selected language
   const filteredProjects = sampleProjects.filter((project) => {
@@ -89,13 +91,15 @@ export default function CadCommunity(): React.JSX.Element {
           <h1 className='text-3xl font-bold'>Community</h1>
           <span className='text-muted-foreground'>({sortedProjects.length})</span>
         </div>
-        <Button asChild>
-          <NavLink to='/'>{({ isPending }) => (isPending ? <Loader /> : 'New Project')}</NavLink>
-        </Button>
+        {isProjectCreationEnabled ? (
+          <Button asChild>
+            <NavLink to='/'>{({ isPending }) => (isPending ? <Loader /> : 'New Project')}</NavLink>
+          </Button>
+        ) : null}
       </div>
 
       <div className='flex flex-col gap-4'>
-        <div className='flex flex-col gap-4 md:flex-row md:items-center'>
+        <div className='flex flex-col gap-4 lg:flex-row lg:items-center'>
           <SearchInput
             placeholder='Search projects...'
             value={searchTerm}
@@ -105,12 +109,15 @@ export default function CadCommunity(): React.JSX.Element {
             }}
             onClear={handleSearchClear}
           />
-          <div className='flex items-center gap-2'>
+          <div className='flex min-w-0 flex-wrap items-center gap-2'>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant='outline' className='w-[180px] justify-start'>
+                <Button
+                  variant='outline'
+                  className='min-h-11 min-w-0 flex-1 justify-start sm:w-[180px] sm:flex-none md:min-h-0'
+                >
                   <Code2 className='mr-2 size-4' />
-                  {selectedKernel === 'all' ? 'All Kernels' : selectedKernel}
+                  <span className='truncate'>{selectedKernel === 'all' ? 'All Kernels' : selectedKernel}</span>
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align='end' className='w-[180px]'>
@@ -137,9 +144,12 @@ export default function CadCommunity(): React.JSX.Element {
             </DropdownMenu>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant='outline' className='w-[180px] justify-start'>
+                <Button
+                  variant='outline'
+                  className='min-h-11 min-w-0 flex-1 justify-start sm:w-[180px] sm:flex-none md:min-h-0'
+                >
                   <SlidersHorizontal className='mr-2 size-4' />
-                  Sort by: {sortOption}
+                  <span className='truncate'>Sort by: {sortOption}</span>
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align='end' className='w-[180px]'>

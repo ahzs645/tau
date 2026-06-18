@@ -9,12 +9,14 @@ import type { CommandPaletteItem } from '#components/layout/command-palette.js';
 import { useProjects } from '#hooks/use-projects.js';
 import { useAuthLinks } from '#hooks/use-auth-links.js';
 import { openSettingsDialog } from '#hooks/use-settings-dialog.js';
+import { useFeature } from '#flags/use-feature.js';
 
 export function RootCommandPaletteItems({ match }: { readonly match: UIMatch }): undefined {
   const { data: authData } = useSession(authClient);
   const { projects } = useProjects();
   const { signIn, signOut } = useAuthLinks();
   const location = useLocation();
+  const isProjectCreationEnabled = useFeature('enableProjectCreation');
 
   // Extract current project ID from pathname (e.g., /projects/abc123)
   const currentProjectId = location.pathname.startsWith('/projects/') ? location.pathname.split('/')[2] : undefined;
@@ -39,6 +41,7 @@ export function RootCommandPaletteItems({ match }: { readonly match: UIMatch }):
         icon: <MessageCircle />,
         link: '/',
         shortcut: '⌃N',
+        visible: isProjectCreationEnabled,
       },
       {
         id: 'new-project-from-code',
@@ -46,6 +49,7 @@ export function RootCommandPaletteItems({ match }: { readonly match: UIMatch }):
         group: 'Projects',
         icon: <Code2 />,
         link: '/projects/new',
+        visible: isProjectCreationEnabled,
       },
       {
         id: 'all-projects',
@@ -88,7 +92,7 @@ export function RootCommandPaletteItems({ match }: { readonly match: UIMatch }):
         visible: Boolean(authData),
       },
     ],
-    [authData, recentProjects, signIn, signOut],
+    [authData, isProjectCreationEnabled, recentProjects, signIn, signOut],
   );
 
   return undefined;

@@ -144,6 +144,7 @@ type FloatingPanelTriggerButtonProps = {
   readonly className?: string;
   readonly children?: React.ReactNode;
   readonly tooltipContent: React.ReactNode;
+  readonly ariaLabel?: string;
   readonly onClick: () => void;
 };
 
@@ -153,6 +154,7 @@ function FloatingPanelTriggerButton({
   className,
   children,
   tooltipContent,
+  ariaLabel,
   onClick,
 }: FloatingPanelTriggerButtonProps): React.JSX.Element {
   // Get context values
@@ -180,6 +182,7 @@ function FloatingPanelTriggerButton({
           variant='overlay'
           className={cn('text-muted-foreground', className)}
           data-slot='floating-panel-trigger'
+          aria-label={ariaLabel ?? (typeof tooltipContent === 'string' ? tooltipContent : undefined)}
           onClick={onClick}
         >
           <span className={cn('group-data-[state=open]/floating-panel:[&_svg]:text-primary')}>{renderIcon()}</span>
@@ -243,6 +246,7 @@ type FloatingPanelTriggerProps = {
   readonly onClick: () => void;
   readonly children?: React.ReactNode;
   readonly tooltipSide?: TooltipSide;
+  readonly ariaLabel?: string;
 };
 
 function FloatingPanelTrigger({
@@ -252,6 +256,7 @@ function FloatingPanelTrigger({
   onClick,
   children,
   tooltipSide,
+  ariaLabel,
 }: FloatingPanelTriggerProps): React.JSX.Element {
   return (
     <FloatingPanelTriggerButton
@@ -259,6 +264,7 @@ function FloatingPanelTrigger({
       tooltipContent={tooltipContent}
       className={cn(className)}
       tooltipSide={tooltipSide}
+      ariaLabel={ariaLabel}
       onClick={onClick}
     >
       {children}
