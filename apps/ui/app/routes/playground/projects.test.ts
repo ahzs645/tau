@@ -47,4 +47,49 @@ describe('project examples discovery', () => {
     expect(example?.presets).toHaveLength(3);
     expect(example?.sourceFiles).toHaveProperty('main.ts', example?.code);
   });
+
+  it('carries OpenSCAD Playground preset sets into discovered project metadata', () => {
+    const examplesById = new Map(projectExamples.map((example) => [example.id, example]));
+
+    expect(examplesById.get('3d-rack-scad')?.presets?.map((preset) => preset.name)).toEqual(['New set 1', 'New set 2']);
+    expect(examplesById.get('keyguard-with-raised-tabs')?.presets).toHaveLength(10);
+    expect(examplesById.get('pendant-lamp')?.presets?.map((preset) => preset.name)).toEqual([
+      'Small',
+      'Medium',
+      'Large',
+    ]);
+    expect(examplesById.get('periodic-table')?.presets?.map((preset) => preset.name)).toEqual([
+      'type1_inner_box',
+      'type2_top_edge',
+      'type3_right_edge',
+      'type4_bottom_edge',
+      'type5_left_edge',
+      'type6_corner_topleft',
+      'type7_corner_topright',
+      'type8_corner_bottomleft',
+      'type9_corner_bottomright',
+      'type10_lanthanide_left',
+      'type11_lanthanide_middle',
+      'type12_lanthanide_right',
+      'type13_gap_spacer',
+    ]);
+    expect(examplesById.get('vane-trap')?.presets).toHaveLength(1);
+  });
+
+  it('normalizes imported OpenSCAD preset scalar values', () => {
+    const examplesById = new Map(projectExamples.map((example) => [example.id, example]));
+    const rackParameters = examplesById.get('3d-rack-scad')?.presets?.[0]?.parameters;
+    const lampParameters = examplesById.get('pendant-lamp')?.presets?.[2]?.parameters;
+    const keyguardParameters = examplesById.get('keyguard-with-raised-tabs')?.presets?.[0]?.parameters;
+
+    expect(rackParameters?.['rack_width']).toBe(300);
+    expect(rackParameters?.['enable_numbers']).toBe(true);
+    expect(rackParameters?.['component_selection']).toBe('assembly');
+    expect(lampParameters?.['$fn']).toBe(100);
+    expect(lampParameters?.['top_brim']).toBe(false);
+    expect(lampParameters?.['radius']).toBe(177.88);
+    expect(keyguardParameters?.['number_of_columns']).toBe(4);
+    expect(keyguardParameters?.['add_circular_opening']).toBe('yes');
+    expect(keyguardParameters?.['Braille_text']).toBe('');
+  });
 });
