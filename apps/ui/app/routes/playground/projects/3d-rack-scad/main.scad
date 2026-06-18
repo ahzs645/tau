@@ -20,7 +20,6 @@ hole_spacing = 9.8;       // Spacing between holes in mm (only when hole count i
 /*[Hole Numbering Configuration]*/
 // Enable hole numbering
 enable_numbers = true;  // [true,false]
-render_numbers = enable_numbers && !$preview;
 // Numbering direction
 number_direction = "left_to_right"; // [left_to_right,right_to_left,front_to_back,back_to_front]
 // Enable middle dot markers
@@ -239,7 +238,7 @@ module numbered_tube_holes() {
                     cylinder(h=section_height*3, d=hole_diameter, center=true);
                     
                     // Number indent with improved spacing
-                    if (render_numbers) {
+                    if (enable_numbers) {
                         hole_number = get_hole_number(x, y, cols, rows);
                         number_width = len(str(hole_number)) * 4 * number_scale; // Approximate width of number
                         

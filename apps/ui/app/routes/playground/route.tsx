@@ -1,4 +1,6 @@
+import type { ReactNode, RefCallback } from 'react';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Link, useLocation } from 'react-router';
 import {
   Braces,
@@ -33,6 +35,7 @@ import type { PlaygroundExample, PlaygroundPreset } from '#routes/playground/pla
 import { PreviewParameters } from '#routes/projects_.$id_.preview/preview-parameters.js';
 import { encodeTextFile } from '#utils/filesystem.utils.js';
 import type { Handle } from '#types/matches.types.js';
+// oxlint-disable-next-line import/extensions -- React Router typegen resolves this virtual route module.
 import type { Route } from './+types/route.js';
 
 const CodeEditorLazy = lazy(async () => {
@@ -48,11 +51,10 @@ type EditorFallbackProps = {
 const defaultExample: PlaygroundExample = playgroundExamples[0]!;
 
 /** Query parameter that carries the json-url-encoded parameter overrides on a shared link. */
-const SHARE_PARAMETERS_KEY = 'p';
+const shareParametersKey = 'p';
 
 /** Stable empty record so consumers can rely on referential equality when there are no overrides. */
-const EMPTY_PARAMETERS: Record<string, unknown> = Object.freeze({});
-const playgroundRenderOptions: Record<string, unknown> = Object.freeze({ preview: true });
+const emptyParameters: Record<string, unknown> = Object.freeze({});
 
 /**
  * Web-share codec (json-url): compresses the parameter delta into a compact, URL-safe token
@@ -72,7 +74,11 @@ function canonicalize(value: unknown): string {
     return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonicalize(item)}`).join(',')}}`;
   }
 
-  return JSON.stringify(value) ?? 'null';
+  if (value === undefined || typeof value === 'function' || typeof value === 'symbol') {
+    return 'null';
+  }
+
+  return JSON.stringify(value);
 }
 
 /** True when two parameter records are deeply equal regardless of key order. */
@@ -99,10 +105,11 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
   const [previewValue, setPreviewValue] = useState(initialExample.code);
   const [previewVersion, setPreviewVersion] = useState(0);
   const [isCodeVisible, setIsCodeVisible] = useState(false);
+  const [exportControlsElement, setExportControlsElement] = useState<HTMLDivElement | undefined>(undefined);
 
   // Live parameter overrides reported up from inside the preview provider (the Share button lives in
   // the header, outside the provider). Empty until something is changed away from the example baseline.
-  const [liveParameters, setLiveParameters] = useState<Record<string, unknown>>(EMPTY_PARAMETERS);
+  const [liveParameters, setLiveParameters] = useState<Record<string, unknown>>(emptyParameters);
   // Overrides decoded from a shared `?p=` token, applied to the preview once the kernel is ready.
   const [pendingParameters, setPendingParameters] = useState<Record<string, unknown> | undefined>(undefined);
 
@@ -142,6 +149,10 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
     setPreviewVersion((version) => version + 1);
   }, [activeExample]);
 
+  const setExportControlsRef = useCallback<RefCallback<HTMLDivElement>>((node) => {
+    setExportControlsElement(node ?? undefined);
+  }, []);
+
   const copyShareLink = useCallback(() => {
     const browserWindow = getBrowserWindow();
     if (!browserWindow) {
@@ -150,7 +161,7 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
 
     // "Changes" means the live overrides differ from the example's own baseline parameters — so loading
     // an example and sharing it without touching anything yields the same plain link as before.
-    const baseline = activeExample.initialParameters ?? EMPTY_PARAMETERS;
+    const baseline = activeExample.initialParameters ?? emptyParameters;
     const hasParameterChanges = !sameParameters(liveParameters, baseline);
 
     // oxlint-disable-next-line tau-lint/no-async-iife -- clipboard writes are event-driven and report via toast.
@@ -162,9 +173,9 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
 
         if (hasParameterChanges) {
           // Encode only the changed parameters (the delta) into a compact, URL-safe token.
-          url.searchParams.set(SHARE_PARAMETERS_KEY, await shareCodec.compress(liveParameters));
+          url.searchParams.set(shareParametersKey, await shareCodec.compress(liveParameters));
         } else {
-          url.searchParams.delete(SHARE_PARAMETERS_KEY);
+          url.searchParams.delete(shareParametersKey);
         }
 
         await browserWindow.navigator.clipboard.writeText(url.toString());
@@ -182,7 +193,7 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
 
   // Decode any `?p=` token from the URL into the overrides that should be applied to the preview.
   useEffect(() => {
-    const token = new URLSearchParams(location.search).get(SHARE_PARAMETERS_KEY);
+    const token = new URLSearchParams(location.search).get(shareParametersKey);
     if (!token) {
       setPendingParameters(undefined);
       return;
@@ -191,10 +202,13 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
     let cancelled = false;
     // oxlint-disable-next-line tau-lint/no-async-iife -- token decoding is async; a stale result is ignored on cleanup.
     void (async () => {
-      const decoded = await shareCodec.tryDecompress(token, EMPTY_PARAMETERS);
-      if (!cancelled && decoded !== null && typeof decoded === 'object') {
-        setPendingParameters(decoded);
+      const decoded = await shareCodec.tryDecompress(token, emptyParameters);
+      // oxlint-disable-next-line typescript/no-unnecessary-condition -- React effect cleanup can flip this while awaiting.
+      if (cancelled) {
+        return;
       }
+
+      setPendingParameters(decoded);
     })();
 
     return () => {
@@ -232,7 +246,7 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
   // history.replaceState so it does not re-trigger the loader or the decode effect above.
   const urlSyncHydratedRef = useRef(false);
   const urlSyncModelRef = useRef(activeExample.id);
-  const urlSyncInitialTokenRef = useRef<string | null | undefined>(undefined);
+  const urlSyncInitialTokenRef = useRef<string | undefined>(undefined);
   useEffect(() => {
     const browserWindow = getBrowserWindow();
     if (!browserWindow) {
@@ -247,16 +261,14 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
     }
 
     const params = new URLSearchParams(browserWindow.location.search);
-    if (urlSyncInitialTokenRef.current === undefined) {
-      urlSyncInitialTokenRef.current = params.get(SHARE_PARAMETERS_KEY);
-    }
+    urlSyncInitialTokenRef.current ??= params.get(shareParametersKey) ?? undefined;
 
     // Only manage the token while this example is the one reflected in the URL.
     if (readInitialExampleIdFromSearch(params) !== activeExample.id) {
       return;
     }
 
-    const baseline = activeExample.initialParameters ?? EMPTY_PARAMETERS;
+    const baseline = activeExample.initialParameters ?? emptyParameters;
     const hasParameterChanges = !sameParameters(liveParameters, baseline);
 
     // On initial load from a shared link, wait until the decoded params are applied before touching
@@ -273,24 +285,25 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
     // oxlint-disable-next-line tau-lint/no-async-iife -- compression is async; stale writes are dropped on cleanup.
     void (async () => {
       const token = hasParameterChanges ? await shareCodec.compress(liveParameters) : undefined;
+      // oxlint-disable-next-line typescript/no-unnecessary-condition -- React effect cleanup can flip this while awaiting.
       if (cancelled) {
         return;
       }
 
       const url = new URL(browserWindow.location.href);
-      const existing = url.searchParams.get(SHARE_PARAMETERS_KEY);
+      const existing = url.searchParams.get(shareParametersKey);
       if (token === undefined) {
         if (existing === null) {
           return;
         }
 
-        url.searchParams.delete(SHARE_PARAMETERS_KEY);
+        url.searchParams.delete(shareParametersKey);
       } else {
         if (existing === token) {
           return;
         }
 
-        url.searchParams.set(SHARE_PARAMETERS_KEY, token);
+        url.searchParams.set(shareParametersKey, token);
       }
 
       browserWindow.history.replaceState({}, '', url.toString());
@@ -331,6 +344,7 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
             <LayoutGrid className='size-3.5' />
             Gallery
           </Link>
+          <div ref={setExportControlsRef} className='flex items-center gap-1.5' />
           {isCodeEditorDisabled ? null : (
             <Button
               variant={isCodeVisible ? 'default' : 'outline'}
@@ -412,17 +426,23 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
               files={files}
               parameters={activeExample.initialParameters}
               kernelOptionsFactory={playgroundPreviewKernelOptions}
-              renderOptions={playgroundRenderOptions}
             >
+              {exportControlsElement
+                ? createPortal(
+                    <PlaygroundExportControls
+                      exampleId={activeExample.id}
+                      formats={activeExample.exportFormats}
+                      buttonSize='sm'
+                    />,
+                    exportControlsElement,
+                  )
+                : undefined}
               <PlaygroundParameterBridge pendingParameters={pendingParameters} onParametersChange={setLiveParameters} />
               <section className='flex min-h-[56dvh] min-w-0 flex-col xl:min-h-0 xl:border-r'>
                 <div className='flex h-11 items-center justify-between border-b px-3'>
                   <div className='flex items-center gap-2'>
                     <SlidersHorizontal className='size-4 text-muted-foreground' />
                     <PreviewSummary />
-                  </div>
-                  <div className='flex items-center gap-1.5'>
-                    <PlaygroundExportControls exampleId={activeExample.id} formats={activeExample.exportFormats} />
                   </div>
                 </div>
                 <div className='relative min-h-0 flex-1 bg-muted/30'>
@@ -463,9 +483,9 @@ function PlaygroundParameterBridge({
 }: {
   readonly pendingParameters: Record<string, unknown> | undefined;
   readonly onParametersChange: (parameters: Record<string, unknown>) => void;
-}): null {
+}): ReactNode {
   const { parameters, setParameters, status } = useCadPreview();
-  const liveParameters = parameters ?? EMPTY_PARAMETERS;
+  const liveParameters = parameters;
 
   // Surface the live overrides to the header so Share can encode them.
   useEffect(() => {
@@ -487,7 +507,7 @@ function PlaygroundParameterBridge({
     setParameters(pendingParameters);
   }, [pendingParameters, status, setParameters]);
 
-  return null;
+  return undefined;
 }
 
 function PlaygroundParameters({ presets }: { readonly presets: readonly PlaygroundPreset[] }): React.JSX.Element {
@@ -545,9 +565,11 @@ function issueMessage(errors: ReadonlyArray<{ readonly message?: unknown }>): st
 function PlaygroundExportControls({
   exampleId,
   formats,
+  buttonSize = 'xs',
 }: {
   readonly exampleId: string;
   readonly formats: readonly FileExtension[];
+  readonly buttonSize?: 'xs' | 'sm';
 }): React.JSX.Element {
   const { cadRef, status, geometries } = useCadPreview();
   const [isExporting, setIsExporting] = useState(false);
@@ -619,7 +641,7 @@ function PlaygroundExportControls({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant='outline' size='xs' disabled={!isExportEnabled} title='Export. Shortcut: F7'>
+        <Button variant='outline' size={buttonSize} disabled={!isExportEnabled} title='Export. Shortcut: F7'>
           <Download className='size-3' />
           {isExporting ? 'Exporting…' : 'Export'}
           <ChevronDown className='size-3 opacity-60' />
