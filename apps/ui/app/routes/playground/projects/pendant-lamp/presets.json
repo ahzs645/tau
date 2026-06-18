@@ -1,0 +1,56 @@
+[
+  {
+    "name": "Small",
+    "parameters": {
+      "$fn": 100,
+      "bottom_brim": true,
+      "edge_radius": 0.5,
+      "opening_diameter": 90,
+      "pleat_gap": 2.8,
+      "pleat_height": 1.2,
+      "pleat_offset": -1,
+      "pleats_inside": false,
+      "radius": 109.13,
+      "shade_depth": 15,
+      "shade_thickness": 2,
+      "thickness": 0.8,
+      "top_brim": false
+    }
+  },
+  {
+    "name": "Medium",
+    "parameters": {
+      "$fn": 100,
+      "bottom_brim": true,
+      "edge_radius": 0.5,
+      "opening_diameter": 90,
+      "pleat_gap": 2.8,
+      "pleat_height": 1.2,
+      "pleat_offset": -1,
+      "pleats_inside": false,
+      "radius": 137.46,
+      "shade_depth": 15,
+      "shade_thickness": 2,
+      "thickness": 0.8,
+      "top_brim": false
+    }
+  },
+  {
+    "name": "Large",
+    "parameters": {
+      "$fn": 100,
+      "bottom_brim": true,
+      "edge_radius": 0.5,
+      "opening_diameter": 110,
+      "pleat_gap": 2.8,
+      "pleat_height": 1.2,
+      "pleat_offset": -1,
+      "pleats_inside": false,
+      "radius": 177.88,
+      "shade_depth": 15,
+      "shade_thickness": 2,
+      "thickness": 0.8,
+      "top_brim": false
+    }
+  }
+]

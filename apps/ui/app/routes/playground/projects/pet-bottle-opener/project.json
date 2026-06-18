@@ -8,28 +8,5 @@
   "exportFormats": ["glb", "stl", "3mf", "step"],
   "initialParameters": {
     "secondOpener": false
-  },
-  "presets": [
-    {
-      "name": "Single opener + hang hole",
-      "parameters": {
-        "secondOpener": false,
-        "handleHoleDiameter": 25,
-        "handleOuterRadius": 17.5
-      }
-    },
-    {
-      "name": "Dual opener heads",
-      "parameters": {
-        "secondOpener": true,
-        "centerDistance": 47
-      }
-    },
-    {
-      "name": "Faceted rim",
-      "parameters": {
-        "outerSides": 10
-      }
-    }
-  ]
+  }
 }

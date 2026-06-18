@@ -1,0 +1,20 @@
+[
+  {
+    "name": "New set 1",
+    "parameters": {
+      "$fn": 100,
+      "PART": "vanes",
+      "funnel_bot_od": 50,
+      "funnel_height": 40,
+      "funnel_top_od": 120,
+      "funnel_wall": 2,
+      "jar_thread_len": 8,
+      "jar_thread_od": 86.6,
+      "jar_thread_pitch": 3.175,
+      "slop": 0.15,
+      "vane_h": 140,
+      "vane_t": 2,
+      "vane_w": 130
+    }
+  }
+]

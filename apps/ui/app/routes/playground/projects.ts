@@ -18,19 +18,24 @@ export const projectMetadataSchema = z.looseObject({
   hidden: z.boolean().optional(),
   exportFormats: z.array(z.enum(exportFormats)).optional(),
   initialParameters: z.record(z.string(), z.unknown()).optional(),
-  presets: z
-    .array(
-      z.object({
-        name: z.string().min(1),
-        parameters: z.record(z.string(), z.unknown()),
-      }),
-    )
-    .optional(),
 });
 
+export const projectPresetsSchema = z.array(
+  z.object({
+    name: z.string().min(1),
+    parameters: z.record(z.string(), z.unknown()),
+  }),
+);
+
 type ProjectMetadata = z.infer<typeof projectMetadataSchema>;
+type ProjectPresets = z.infer<typeof projectPresetsSchema>;
 
 const projectMetadataByPath = import.meta.glob<unknown>('./projects/*/project.json', {
+  eager: true,
+  import: 'default',
+});
+
+const projectPresetsByPath = import.meta.glob<unknown>('./projects/*/presets.json', {
   eager: true,
   import: 'default',
 });
@@ -49,6 +54,7 @@ export const projectExamples: readonly PlaygroundExample[] = Object.entries(proj
     }
 
     const projectId = projectIdFromMetadataPath(metadataPath);
+    const presets = presetsForProject(projectId);
     const sourceFiles = sourceFilesForProject(projectId, metadata);
     const mainFile = metadata.mainFile ?? metadata.entry;
     const entryFile = metadata.entry;
@@ -68,7 +74,7 @@ export const projectExamples: readonly PlaygroundExample[] = Object.entries(proj
         description: metadata.description,
         exportFormats: metadata.exportFormats ?? exportFormatsFromMetadata(metadata),
         ...(metadata.initialParameters ? { initialParameters: metadata.initialParameters } : {}),
-        ...(metadata.presets ? { presets: metadata.presets } : {}),
+        ...(presets ? { presets } : {}),
         code,
         sourceFiles,
       },
@@ -93,12 +99,31 @@ function projectIdFromMetadataPath(metadataPath: string): string {
   return match[1];
 }
 
+function presetsForProject(projectId: string): ProjectPresets | undefined {
+  const presetsPath = `./projects/${projectId}/presets.json`;
+  const rawPresets = projectPresetsByPath[presetsPath];
+  if (!rawPresets) {
+    return undefined;
+  }
+
+  const result = projectPresetsSchema.safeParse(rawPresets);
+  if (result.success) {
+    return result.data;
+  }
+
+  throw new Error(`Invalid root playground project presets at "${presetsPath}": ${z.prettifyError(result.error)}`);
+}
+
 function sourceFilesForProject(projectId: string, metadata: ProjectMetadata): Record<string, string> {
   const prefix = `./projects/${projectId}/`;
   const sourceFiles: Record<string, string> = {};
 
   for (const [sourcePath, source] of Object.entries(projectSourceByPath)) {
-    if (!sourcePath.startsWith(prefix) || sourcePath === `${prefix}project.json`) {
+    if (
+      !sourcePath.startsWith(prefix) ||
+      sourcePath === `${prefix}project.json` ||
+      sourcePath === `${prefix}presets.json`
+    ) {
       continue;
     }
 

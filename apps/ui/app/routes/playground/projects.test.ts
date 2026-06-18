@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { projectExamples, projectMetadataSchema } from '#routes/playground/projects.js';
+import { projectExamples, projectMetadataSchema, projectPresetsSchema } from '#routes/playground/projects.js';
 
 describe('project examples discovery', () => {
   it('validates project metadata before building examples', () => {
@@ -46,6 +46,27 @@ describe('project examples discovery', () => {
     expect(example?.exportFormats).toContain('step');
     expect(example?.presets).toHaveLength(3);
     expect(example?.sourceFiles).toHaveProperty('main.ts', example?.code);
+    expect(example?.sourceFiles).not.toHaveProperty('presets.json');
+  });
+
+  it('validates separate project preset files', () => {
+    expect(
+      projectPresetsSchema.safeParse([
+        {
+          name: 'Wide',
+          parameters: { width: 120, enabled: true },
+        },
+      ]).success,
+    ).toBe(true);
+
+    expect(
+      projectPresetsSchema.safeParse([
+        {
+          name: '',
+          parameters: { width: 120 },
+        },
+      ]).success,
+    ).toBe(false);
   });
 
   it('carries OpenSCAD Playground preset sets into discovered project metadata', () => {
