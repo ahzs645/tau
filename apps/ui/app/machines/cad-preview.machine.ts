@@ -18,6 +18,7 @@ type CadPreviewContext = {
   mainFile: string;
   files?: Record<string, { content: Uint8Array<ArrayBuffer> }>;
   parameters: Record<string, unknown>;
+  renderOptions?: Record<string, unknown>;
   initError?: Error;
 };
 
@@ -27,6 +28,7 @@ type CadPreviewInput = {
   mainFile: string;
   files?: Record<string, { content: Uint8Array<ArrayBuffer> }>;
   parameters?: Record<string, unknown>;
+  renderOptions?: Record<string, unknown>;
 };
 
 type CadPreviewEvent =
@@ -100,6 +102,7 @@ export const cadPreviewMachine = setup({
         type: 'initializeModel',
         file,
         parameters: context.parameters,
+        options: context.renderOptions,
       });
     }),
     forwardSetParameters: enqueueActions(({ enqueue, context, event }) => {
@@ -121,6 +124,7 @@ export const cadPreviewMachine = setup({
     mainFile: input.mainFile,
     files: input.files,
     parameters: input.parameters ?? {},
+    renderOptions: input.renderOptions,
     initError: undefined,
   }),
   initial: 'idle',

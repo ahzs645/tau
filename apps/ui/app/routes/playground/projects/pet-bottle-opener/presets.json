@@ -1,7 +1,25 @@
 [
   {
-    "name": "Single opener + hang hole",
+    "name": "Thin release",
     "parameters": {
+      "thickness": 10,
+      "addHandle": false,
+      "secondOpener": false
+    }
+  },
+  {
+    "name": "Thick release",
+    "parameters": {
+      "thickness": 22,
+      "addHandle": false,
+      "secondOpener": false
+    }
+  },
+  {
+    "name": "Thin handle",
+    "parameters": {
+      "thickness": 10,
+      "addHandle": true,
       "secondOpener": false,
       "handleHoleDiameter": 25,
       "handleOuterRadius": 17.5

@@ -16,3 +16,12 @@ export const debugKernelOptions: LazyKernelOptionsFactory = async () => {
   const { createDebugKernelOptions } = await import('#constants/kernel-worker.constants.js');
   return createDebugKernelOptions;
 };
+
+/**
+ * Lazy-resolve playground preview kernel options.
+ * Omits expensive GLTF edge detection; playground exports still use the kernel export path.
+ */
+export const playgroundPreviewKernelOptions: LazyKernelOptionsFactory = async () => {
+  const { createPlaygroundPreviewKernelOptions } = await import('#constants/kernel-worker.constants.js');
+  return createPlaygroundPreviewKernelOptions;
+};

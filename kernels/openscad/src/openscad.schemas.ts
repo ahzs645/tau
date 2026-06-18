@@ -51,6 +51,10 @@ export type OpenScadTessellationOptions = z.infer<typeof openscadTessellationSch
  * @public
  */
 export const openscadRenderSchema = z.object({
+  preview: z
+    .boolean()
+    .default(false)
+    .describe('Whether to set OpenSCAD $preview=true for faster interactive preview branches'),
   tessellation: z
     .object({
       segments: z

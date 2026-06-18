@@ -7,6 +7,10 @@ export type PlaygroundPreset = {
   readonly parameters: Record<string, unknown>;
 };
 
+export type PlaygroundStaticPreview = {
+  readonly glb: string;
+};
+
 export type PlaygroundExample = {
   readonly id: string;
   readonly name: string;
@@ -17,6 +21,7 @@ export type PlaygroundExample = {
   readonly exportFormats: readonly FileExtension[];
   readonly initialParameters?: Record<string, unknown>;
   readonly presets?: readonly PlaygroundPreset[];
+  readonly staticPreview?: PlaygroundStaticPreview;
   readonly code: string;
   readonly sourceFiles?: Record<string, string>;
 };

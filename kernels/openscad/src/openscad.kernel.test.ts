@@ -2,6 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import { NodeIO } from '@gltf-transform/core';
 import openscadKernel from '#openscad.kernel.js';
+import { openscadRenderSchema } from '#openscad.schemas.js';
 import {
   assertSuccess,
   createGeometryFile,
@@ -102,6 +103,43 @@ function analyzeOffColorComponents(offData: string): {
   }
 
   return { rgbFaceCount, rgbaFaceCount };
+}
+
+function getOffBounds(offData: string): {
+  min: [number, number, number];
+  max: [number, number, number];
+} {
+  const lines = offData
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const headerParts = lines[0]?.split(/\s+/) ?? [];
+  const hasInlineCounts = headerParts[0] === 'OFF' && headerParts.length >= 4;
+  const countsLine = hasInlineCounts ? headerParts.slice(1).join(' ') : lines[1];
+  if (!countsLine) {
+    throw new Error('OFF data is missing a counts line');
+  }
+
+  const vertexCount = Number.parseInt(countsLine.split(/\s+/)[0] ?? '0', 10);
+  const vertexStartIndex = hasInlineCounts ? 1 : 2;
+  const vertices = lines.slice(vertexStartIndex, vertexStartIndex + vertexCount).map((line) => {
+    const [x = 0, y = 0, z = 0] = line.split(/\s+/).map(Number);
+    return [x, y, z] as const;
+  });
+
+  const min: [number, number, number] = [Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY];
+  const max: [number, number, number] = [Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY, Number.NEGATIVE_INFINITY];
+
+  for (const [x, y, z] of vertices) {
+    min[0] = Math.min(min[0], x);
+    min[1] = Math.min(min[1], y);
+    min[2] = Math.min(min[2], z);
+    max[0] = Math.max(max[0], x);
+    max[1] = Math.max(max[1], y);
+    max[2] = Math.max(max[2], z);
+  }
+
+  return { min, max };
 }
 
 // =============================================================================
@@ -2295,6 +2333,47 @@ describe('Tessellation', () => {
 
     // Tessellation injection should change the mesh density
     expect(withTessVertices).not.toBe(withoutTessVertices);
+  });
+});
+
+// =============================================================================
+// Render Options
+// =============================================================================
+
+describe('Render options', () => {
+  it('should default OpenSCAD preview mode off', () => {
+    expect(openscadRenderSchema.parse({}).preview).toBe(false);
+  });
+
+  it('should inject $preview=true for preview renders only', async () => {
+    const worker = await createWorker({
+      'preview.scad': `
+        if ($preview) {
+          cube([10, 10, 10]);
+        } else {
+          cube([20, 10, 10]);
+        }
+      `,
+    });
+    const geometryFile = createGeometryFile('preview.scad');
+
+    const previewResult = await worker.createGeometry({
+      file: geometryFile,
+      parameters: {},
+      options: { preview: true },
+    });
+    assertSuccess(previewResult);
+    const previewOffData = (worker as unknown as { nativeHandle: string }).nativeHandle;
+
+    const renderResult = await worker.createGeometry({
+      file: geometryFile,
+      parameters: {},
+    });
+    assertSuccess(renderResult);
+    const renderOffData = (worker as unknown as { nativeHandle: string }).nativeHandle;
+
+    expect(getOffBounds(previewOffData).max[0]).toBe(10);
+    expect(getOffBounds(renderOffData).max[0]).toBe(20);
   });
 });
 

@@ -50,6 +50,7 @@ export type CadPreviewProviderProps = {
   /** Whether the rendering should be triggered (default: true) */
   readonly isEnabled?: boolean;
   readonly kernelOptionsFactory?: LazyKernelOptionsFactory;
+  readonly renderOptions?: Record<string, unknown>;
   readonly children: ReactNode;
 };
 
@@ -104,6 +105,7 @@ export function CadPreviewProvider({
   parameters,
   isEnabled = true,
   kernelOptionsFactory = defaultKernelOptions,
+  renderOptions,
   children,
 }: CadPreviewProviderProps): React.JSX.Element {
   const { fileManagerRef } = useFileManager();
@@ -113,6 +115,7 @@ export function CadPreviewProvider({
       shouldInitializeKernelOnStart: false,
       fileManagerRef,
       kernelOptionsFactory,
+      renderOptions,
     },
   });
 
@@ -181,6 +184,7 @@ export function CadPreviewProvider({
         mainFile,
         files,
         parameters,
+        renderOptions,
       },
     },
   );

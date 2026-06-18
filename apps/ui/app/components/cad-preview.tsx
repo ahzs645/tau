@@ -1,4 +1,5 @@
-import { memo } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
+import type { Geometry } from '@taucad/types';
 import { ModelViewer, RenderStatusOverlay } from '#components/model-viewer.js';
 import type { ModelViewerGraphicsOptions } from '#components/model-viewer.js';
 import { useCadPreview } from '#hooks/use-cad-preview.js';
@@ -16,7 +17,22 @@ type CadPreviewViewerProps = {
   readonly enableZoom?: boolean;
   readonly stageOptions?: StageOptions;
   readonly graphicsOptions?: CadPreviewGraphicsOptions;
+  readonly staticPreviewUrl?: string;
 };
+
+export async function loadStaticPreviewGeometry(url: string, signal?: AbortSignal): Promise<Geometry> {
+  const response = await fetch(url, { signal });
+  if (!response.ok) {
+    throw new Error(`Failed to load static preview GLB: ${response.status}`);
+  }
+
+  const content = new Uint8Array(await response.arrayBuffer());
+  return {
+    format: 'gltf',
+    content,
+    hash: `static-preview:${url}`,
+  };
+}
 
 /**
  * Thin adapter over `ModelViewer` that reads from `CadPreviewProvider` context.
@@ -41,12 +57,52 @@ export const CadPreviewViewer = memo(function CadPreviewViewer({
   enableZoom,
   stageOptions,
   graphicsOptions,
+  staticPreviewUrl,
 }: CadPreviewViewerProps): React.JSX.Element {
   const { geometries, graphicsRef, status, error } = useCadPreview();
+  const [staticPreviewGeometry, setStaticPreviewGeometry] = useState<Geometry | undefined>(undefined);
+
+  useEffect(() => {
+    if (!staticPreviewUrl) {
+      setStaticPreviewGeometry(undefined);
+      return;
+    }
+
+    const controller = new AbortController();
+
+    // oxlint-disable-next-line tau-lint/no-async-iife -- static preview fetch is a best-effort first paint.
+    void (async () => {
+      try {
+        setStaticPreviewGeometry(await loadStaticPreviewGeometry(staticPreviewUrl, controller.signal));
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          return;
+        }
+
+        setStaticPreviewGeometry(undefined);
+      }
+    })();
+
+    return () => {
+      controller.abort();
+    };
+  }, [staticPreviewUrl]);
+
+  const displayGeometries = useMemo(() => {
+    if (geometries.length > 0) {
+      return geometries;
+    }
+
+    if (status === 'error' || !staticPreviewGeometry) {
+      return [];
+    }
+
+    return [staticPreviewGeometry];
+  }, [geometries, status, staticPreviewGeometry]);
 
   return (
     <ModelViewer
-      geometries={geometries}
+      geometries={displayGeometries}
       graphicsRef={graphicsRef}
       className={className}
       enablePan={enablePan}

@@ -26,6 +26,7 @@ const {
   mockToastError,
   mockToastSuccess,
   mockWriteText,
+  fileManagerCalls,
   providerCalls,
   resetProviderCalls,
 } = vi.hoisted(() => {
@@ -55,6 +56,10 @@ const {
     mockToastError: vi.fn(),
     mockToastSuccess: vi.fn(),
     mockWriteText: vi.fn(async (_text: string) => 'copied'),
+    fileManagerCalls: [] as Array<{
+      projectId: string;
+      rootDirectory: string;
+    }>,
     providerCalls: [] as Array<{
       projectId: string;
       mainFile: string;
@@ -69,6 +74,7 @@ const {
       mockToastError.mockClear();
       mockToastSuccess.mockClear();
       mockWriteText.mockClear();
+      fileManagerCalls.length = 0;
       providerCalls.length = 0;
       state.parameters = {};
     },
@@ -120,11 +126,11 @@ vi.mock('#components/ui/button.js', () => ({
     title,
     ...props
   }: {
+    readonly [key: string]: unknown;
     readonly children: React.ReactNode;
     readonly disabled?: boolean;
     readonly onClick?: () => void;
     readonly title?: string;
-    readonly [key: string]: unknown;
   }) {
     return (
       <button type='button' disabled={disabled} title={title} onClick={onClick} {...props}>
@@ -141,7 +147,16 @@ vi.mock('#components/ui/utils/client-only.js', () => ({
 }));
 
 vi.mock('#hooks/use-file-manager.js', () => ({
-  FileManagerProvider({ children }: { readonly children: React.ReactNode }) {
+  FileManagerProvider({
+    children,
+    projectId,
+    rootDirectory,
+  }: {
+    readonly children: React.ReactNode;
+    readonly projectId: string;
+    readonly rootDirectory: string;
+  }) {
+    fileManagerCalls.push({ projectId, rootDirectory });
     return <div data-testid='file-manager-provider'>{children}</div>;
   },
   SharedWorkerGate({ children }: { readonly children: React.ReactNode }) {
@@ -168,7 +183,8 @@ vi.mock('#hooks/use-cad-preview.js', () => ({
     return {
       cadRef: {
         on<EventName extends CadEventName>(eventName: EventName, handler: (event: CadEventMap[EventName]) => void) {
-          cadEventHandlers[eventName].push(handler as never);
+          const handlers = cadEventHandlers[eventName] as Array<(event: CadEventMap[EventName]) => void>;
+          handlers.push(handler);
           return {
             unsubscribe() {
               const handlers = cadEventHandlers[eventName] as Array<typeof handler>;
@@ -198,8 +214,8 @@ vi.mock('#components/ui/dropdown-menu.js', () => ({
   DropdownMenu({ children }: { readonly children: React.ReactNode }) {
     return <div>{children}</div>;
   },
-  DropdownMenuTrigger({ children }: { readonly children: React.ReactNode; readonly asChild?: boolean }) {
-    return <>{children}</>;
+  DropdownMenuTrigger({ children }: { readonly children: React.ReactElement; readonly asChild?: boolean }) {
+    return children;
   },
   DropdownMenuContent({ children }: { readonly children: React.ReactNode; readonly align?: string }) {
     return <div>{children}</div>;
@@ -214,8 +230,13 @@ vi.mock('#components/ui/dropdown-menu.js', () => ({
 }));
 
 vi.mock('#routes/projects_.$id_.preview/preview-parameters.js', () => ({
-  PreviewParameters() {
-    return <div data-testid='preview-parameters'>parameters</div>;
+  PreviewParameters({ headerActions }: { readonly headerActions?: React.ReactNode }) {
+    return (
+      <div data-testid='preview-parameters'>
+        parameters
+        {headerActions}
+      </div>
+    );
   },
 }));
 
@@ -258,7 +279,11 @@ describe('PlaygroundRoot', () => {
 
     expect(await screen.findByText('OpenCascade direct · OpenCascade')).toBeDefined();
     await waitFor(() => {
-      expect(providerCalls.at(-1)?.projectId).toContain('root-playground-opencascade-box');
+      expect(providerCalls.at(-1)?.projectId).toBe('root-playground-opencascade-box');
+    });
+    expect(fileManagerCalls.at(-1)).toEqual({
+      projectId: 'root-playground-opencascade-box',
+      rootDirectory: '/projects/root-playground-opencascade-box',
     });
     expect(providerCalls.at(-1)?.mainFile).toBe('main.ts');
     expect(providerCalls.at(-1)?.files['main.ts']).toBeDefined();
@@ -273,7 +298,7 @@ describe('PlaygroundRoot', () => {
 
     expect(await screen.findByText('3D Rack System · OpenSCAD')).toBeDefined();
     await waitFor(() => {
-      expect(providerCalls.at(-1)?.projectId).toContain('root-playground-3d-rack-scad');
+      expect(providerCalls.at(-1)?.projectId).toBe('root-playground-3d-rack-scad');
     });
 
     rerender(
@@ -284,7 +309,7 @@ describe('PlaygroundRoot', () => {
 
     expect(await screen.findByText('Network Equipment Rack · OpenSCAD')).toBeDefined();
     await waitFor(() => {
-      expect(providerCalls.at(-1)?.projectId).toContain('root-playground-networking');
+      expect(providerCalls.at(-1)?.projectId).toBe('root-playground-networking');
     });
   });
 
@@ -297,12 +322,17 @@ describe('PlaygroundRoot', () => {
 
     expect(await screen.findByText('Network Equipment Rack · OpenSCAD')).toBeDefined();
     await waitFor(() => {
-      expect(providerCalls.at(-1)?.projectId).toContain('root-playground-networking');
+      expect(providerCalls.at(-1)?.projectId).toBe('root-playground-networking');
     });
   });
 
   it('runs edited code through the preview provider', async () => {
     renderPlaygroundRoot();
+    await waitFor(() => {
+      expect(providerCalls.at(-1)?.projectId).toBe('root-playground-openscad-bracket');
+    });
+    const initialProjectId = providerCalls.at(-1)?.projectId;
+    const initialRootDirectory = fileManagerCalls.at(-1)?.rootDirectory;
 
     fireEvent.click(screen.getByRole('button', { name: 'Code' }));
     const editor = await screen.findByLabelText('Code editor');
@@ -313,9 +343,11 @@ describe('PlaygroundRoot', () => {
 
     await waitFor(() => {
       const lastCall = providerCalls.at(-1);
+      expect(lastCall?.projectId).toBe(initialProjectId);
       expect(lastCall?.mainFile).toBe('main.scad');
       expect(new TextDecoder().decode(lastCall?.files['main.scad']?.content)).toBe('cube([10, 10, 10]);');
     });
+    expect(fileManagerCalls.at(-1)?.rootDirectory).toBe(initialRootDirectory);
   });
 
   it('supports source-style keyboard shortcuts for preview and export', async () => {

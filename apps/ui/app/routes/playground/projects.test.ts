@@ -16,6 +16,16 @@ describe('project examples discovery', () => {
         entry: 'main.scad',
         description: 'A valid OpenSCAD gallery project.',
         exportFormats: ['glb', 'stl'],
+        previewGlb: 'preview.glb',
+      }).success,
+    ).toBe(true);
+
+    expect(
+      projectMetadataSchema.safeParse({
+        title: 'Valid project',
+        entry: 'main.scad',
+        description: 'A valid OpenSCAD gallery project.',
+        staticPreview: { glb: 'preview.glb' },
       }).success,
     ).toBe(true);
   });
@@ -44,7 +54,7 @@ describe('project examples discovery', () => {
       initialParameters: { secondOpener: false },
     });
     expect(example?.exportFormats).toContain('step');
-    expect(example?.presets).toHaveLength(3);
+    expect(example?.presets).toHaveLength(5);
     expect(example?.sourceFiles).toHaveProperty('main.ts', example?.code);
     expect(example?.sourceFiles).not.toHaveProperty('presets.json');
   });

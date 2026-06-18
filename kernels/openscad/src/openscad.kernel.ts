@@ -28,7 +28,11 @@ import {
   resolveToRelative,
 } from '@taucad/runtime/kernel';
 import type { OpenScadParameterExport } from '#parse-parameters.js';
-import { processOpenScadParameters, flattenParametersForInjection } from '#parse-parameters.js';
+import {
+  processOpenScadParameters,
+  flattenParametersForInjection,
+  parseOpenScadCustomizerParameters,
+} from '#parse-parameters.js';
 import { openscadRenderSchema, openscadExportSchemas } from '#openscad.schemas.js';
 import type { AddErrorFunction, GetFileContentsFunction } from '#parse-output.js';
 import { OpenScadStderrParser } from '#parse-output.js';
@@ -447,6 +451,51 @@ async function getParametersFromFile(
   }
 }
 
+async function readScadParameterSource(options: {
+  filePath: string;
+  basePath: string;
+  filesystem: KernelFileSystem;
+  fileContentCache: ReadonlyMap<string, Uint8Array<ArrayBuffer> | string>;
+}): Promise<string> {
+  const { filePath, basePath, filesystem, fileContentCache } = options;
+  const absolutePath = resolveFromRoot(filePath, basePath);
+  const cachedContent = fileContentCache.get(absolutePath);
+  if (cachedContent !== undefined) {
+    return typeof cachedContent === 'string' ? cachedContent : new TextDecoder().decode(cachedContent);
+  }
+
+  return filesystem.readFile(absolutePath, 'utf8');
+}
+
+async function getParametersFromFileFast(
+  filePath: string,
+  options: {
+    basePath: string;
+    filesystem: KernelFileSystem;
+    logger: RuntimeLogger;
+    fileContentCache: ReadonlyMap<string, Uint8Array<ArrayBuffer> | string>;
+  },
+): Promise<OpenScadParameterExport | undefined> {
+  try {
+    const source = await readScadParameterSource({
+      filePath,
+      basePath: options.basePath,
+      filesystem: options.filesystem,
+      fileContentCache: options.fileContentCache,
+    });
+    const parsed = parseOpenScadCustomizerParameters(source, filePath);
+    if (parsed) {
+      options.logger.debug(`Fast-parsed ${parsed.parameters.length} OpenSCAD parameters from ${filePath}`);
+    }
+    return parsed;
+  } catch (error) {
+    options.logger.debug(`Failed to fast-parse parameters from ${filePath}`, {
+      data: error,
+    });
+    return undefined;
+  }
+}
+
 function getGroupNameFromPath(filePath: string): string {
   const fileName = getBasename(filePath);
   const nameWithoutExtension = fileName.replace(/\.scad$/, '');
@@ -603,8 +652,16 @@ export default defineKernel({
       const allParameters: OpenScadParameterExport['parameters'] = [];
 
       for (const scadFile of referencedFiles) {
-        // oxlint-disable-next-line no-await-in-loop -- sequential: each file needs its own WASM instance
-        const extractedParameters = await getParametersFromFile(scadFile, {
+        // oxlint-disable-next-line no-await-in-loop -- sequential fallback keeps current extraction ordering stable
+        let extractedParameters = await getParametersFromFileFast(scadFile, {
+          basePath,
+          filesystem,
+          logger,
+          fileContentCache,
+        });
+
+        // oxlint-disable-next-line no-await-in-loop -- WASM fallback is intentionally sequential and per-file
+        extractedParameters ??= await getParametersFromFile(scadFile, {
           basePath,
           filesystem,
           logger,
@@ -721,8 +778,6 @@ export default defineKernel({
       await mountFonts(instance, context, logger);
       fontSpan.end();
 
-      instance.FS.writeFile(relativeFilePath, code);
-
       const args = [relativeFilePath, '-o', `${relativeFilePath}.off`, '--backend=manifold'];
 
       const flattenedParameters = flattenParametersForInjection(parameters);
@@ -730,7 +785,11 @@ export default defineKernel({
         args.push(`-D${key}=${formatValue(value)}`);
       }
 
-      const { tessellation } = options;
+      const renderOptions = openscadRenderSchema.parse(options ?? {});
+      const { tessellation } = renderOptions;
+      const shouldEnablePreview = renderOptions.preview && !('$preview' in flattenedParameters);
+      instance.FS.writeFile(relativeFilePath, shouldEnablePreview ? `$preview=true; ${code}` : code);
+
       const overrides: Record<string, number> = {};
       if (tessellation.segments > 0) {
         overrides['$fn'] = tessellation.segments;

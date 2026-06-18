@@ -1,13 +1,14 @@
 /**
  * Modular PET Bottle Opener - angled / offset tooth version
  *
- * This keeps the original flat-extruded Replicad approach, but changes the
- * fin geometry to match the STEP reference more closely:
+ * This keeps the parametric Replicad approach, but splits the opener into the
+ * same layered structure as the STEP/STL reference:
  * - 60 teeth, 6 degree pitch
  * - every 3rd tooth reaches the cap as a contact fin
  * - the two teeth between are support fins, set back about 0.7 mm
  * - tooth roots are swept/angled about 7.36 degrees from the inner tips
  * - support teeth are slightly phase-offset, matching the STEP tooth pattern
+ * - teeth occupy the lower fin band, with a smooth upper bore/lip above them
  */
 import type { Drawing, Shape3D } from 'replicad';
 import { draw, drawCircle, drawPolysides } from 'replicad';
@@ -18,8 +19,10 @@ export const defaultParams = {
   // --- Main opener head, tuned from the uploaded STEP ---
   capDiameter: 29.5, // Contact fin inner diameter: 14.75 mm radius
   finOuterRadius: 25, // Tooth root radius in the STEP
-  outerRadius: 29.1, // Outside radius, close to the STEP outside body
+  outerRadius: 27.5, // 55 mm outside envelope from the STL release files
   outerSides: 16, // The STEP outer wall is faceted; use 64 for round
+  finHeight: 8, // Height of the working fin band in both STL release variants
+  smoothBoreRadius: 24, // Clear bore above the recessed fin band
 
   finCount: 60, // 6 degree tooth pitch
   contactEvery: 3, // 1 long contact fin, then 2 support fins
@@ -64,8 +67,9 @@ export const defaultParams = {
   secondFinPhaseDeg: 1.67,
   secondSupportPhaseOffsetDeg: -1.0,
 
-  // Leave at 0 for most reliable rendering. Try 0.25-0.35 later.
-  edgeRound: 0,
+  // Chamfer the final solid to avoid the raw flat-extruded look. Keep tiny:
+  // larger values touch too many tooth edges and can fail in OCCT.
+  edgeChamfer: 0.1,
 };
 
 // Small overlap between fin roots and the outer rim for reliable 2D fusing.
@@ -89,6 +93,12 @@ type OpenerHead = {
   finRootOffsetDeg?: number;
   finPhaseDeg?: number;
   supportPhaseOffsetDeg?: number;
+};
+
+type LayeredOpenerHead = OpenerHead & {
+  finHeight: number;
+  smoothBoreRadius: number;
+  thickness: number;
 };
 
 /** Point at `radius` and `angle` (radians) around a center. */
@@ -244,6 +254,44 @@ function buildOpenerHead(head: OpenerHead): Drawing {
   return shape;
 }
 
+function extrudeDrawing(drawing: Drawing, height: number, z = 0): Shape3D {
+  const solid = drawing.sketchOnPlane().extrude(height);
+
+  if (z === 0) {
+    return solid;
+  }
+
+  return solid.translate(0, 0, z);
+}
+
+/** Builds the reference-style head: recessed fin band + smooth upper bore. */
+function buildLayeredOpenerHead(head: LayeredOpenerHead): Shape3D {
+  const finHeight = Math.min(Math.max(head.finHeight, 0.1), head.thickness);
+  const upperHeight = Math.max(head.thickness - finHeight, 0);
+
+  let solid = extrudeDrawing(buildOpenerHead(head), finHeight);
+
+  if (upperHeight > 0) {
+    if (head.smoothBoreRadius <= 0) {
+      throw new Error('smoothBoreRadius must be positive');
+    }
+
+    if (head.smoothBoreRadius >= head.outerRadius) {
+      throw new Error('smoothBoreRadius must be smaller than outerRadius');
+    }
+
+    solid = solid.fuse(
+      extrudeDrawing(
+        annulus(head.outerRadius, head.smoothBoreRadius, head.outerSides),
+        upperHeight,
+        finHeight,
+      ),
+    );
+  }
+
+  return solid;
+}
+
 /**
  * Rectangular neck that overlaps the two round modules but stops short of
  * their centers so it never fills a cap opening. Returns null when the modules
@@ -296,7 +344,7 @@ export default function main(p = defaultParams): Shape3D {
   const topCenter: [number, number] = [0, 0];
   const lowerCenter: [number, number] = [0, -p.centerDistance];
 
-  let body = buildOpenerHead({
+  let body = buildLayeredOpenerHead({
     capDiameter: p.capDiameter,
     finOuterRadius: p.finOuterRadius,
     outerRadius: p.outerRadius,
@@ -311,16 +359,19 @@ export default function main(p = defaultParams): Shape3D {
     finRootOffsetDeg: p.finRootOffsetDeg,
     finPhaseDeg: p.finPhaseDeg,
     supportPhaseOffsetDeg: p.supportPhaseOffsetDeg,
+    finHeight: p.finHeight,
+    smoothBoreRadius: p.smoothBoreRadius,
+    thickness: p.thickness,
   });
 
   let lowerOuterRadius = 0;
-  let lower: Drawing | null = null;
+  let lower: Shape3D | null = null;
   let handleHole: Drawing | null = null;
 
   if (p.secondOpener) {
     lowerOuterRadius = p.secondOuterRadius;
 
-    lower = buildOpenerHead({
+    lower = buildLayeredOpenerHead({
       capDiameter: p.secondCapDiameter,
       finOuterRadius: p.secondFinOuterRadius,
       outerRadius: p.secondOuterRadius,
@@ -335,13 +386,19 @@ export default function main(p = defaultParams): Shape3D {
       finRootOffsetDeg: p.secondFinRootOffsetDeg,
       finPhaseDeg: p.secondFinPhaseDeg,
       supportPhaseOffsetDeg: p.secondSupportPhaseOffsetDeg,
-    }).translate(lowerCenter[0], lowerCenter[1]);
+      finHeight: Math.min(p.finHeight, p.thickness),
+      smoothBoreRadius: Math.min(
+        p.secondFinOuterRadius - 0.5,
+        p.secondOuterRadius - 1,
+      ),
+      thickness: p.thickness,
+    }).translate(lowerCenter[0], lowerCenter[1], 0);
   } else if (p.addHandle) {
     lowerOuterRadius = p.handleOuterRadius;
 
-    lower = drawCircle(p.handleOuterRadius).translate(
-      lowerCenter[0],
-      lowerCenter[1],
+    lower = extrudeDrawing(
+      drawCircle(p.handleOuterRadius).translate(lowerCenter[0], lowerCenter[1]),
+      p.thickness,
     );
 
     handleHole = drawCircle(p.handleHoleDiameter / 2).translate(
@@ -360,21 +417,21 @@ export default function main(p = defaultParams): Shape3D {
     );
 
     if (bridge) {
-      body = body.fuse(bridge);
+      body = body.fuse(extrudeDrawing(bridge, p.thickness));
     }
 
     body = body.fuse(lower);
 
     if (handleHole) {
-      body = body.cut(handleHole);
+      body = body.cut(extrudeDrawing(handleHole, p.thickness));
     }
   }
 
-  const solid = body.sketchOnPlane().extrude(p.thickness);
-
-  if (p.edgeRound > 0) {
-    return solid.fillet(p.edgeRound);
+  // The dual-head bridge introduces tight intersections that OCCT cannot
+  // reliably chamfer, so keep that variant sharp rather than failing export.
+  if (p.edgeChamfer > 0 && !p.secondOpener) {
+    return body.chamfer(p.edgeChamfer);
   }
 
-  return solid;
+  return body;
 }

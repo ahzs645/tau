@@ -26,6 +26,7 @@ import {
 import { ClientOnly } from '#components/ui/utils/client-only.js';
 import { FileManagerProvider, SharedWorkerGate } from '#hooks/use-file-manager.js';
 import { CadPreviewProvider, useCadPreview } from '#hooks/use-cad-preview.js';
+import { playgroundPreviewKernelOptions } from '#constants/kernel-options.presets.js';
 import { useFeature } from '#flags/use-feature.js';
 import { playgroundExamples } from '#routes/playground/playground-examples.js';
 import type { PlaygroundExample, PlaygroundPreset } from '#routes/playground/playground-examples.js';
@@ -51,6 +52,7 @@ const SHARE_PARAMETERS_KEY = 'p';
 
 /** Stable empty record so consumers can rely on referential equality when there are no overrides. */
 const EMPTY_PARAMETERS: Record<string, unknown> = Object.freeze({});
+const playgroundRenderOptions: Record<string, unknown> = Object.freeze({ preview: true });
 
 /**
  * Web-share codec (json-url): compresses the parameter delta into a compact, URL-safe token
@@ -109,7 +111,8 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
   const showCodeSection = isCodeVisible && !isCodeEditorDisabled;
 
   const activeExample = playgroundExamples.find((example) => example.id === activeExampleId) ?? defaultExample;
-  const previewProjectId = `root-playground-${activeExample.id}-${previewVersion}`;
+  const previewProjectId = `root-playground-${activeExample.id}`;
+  const previewRenderKey = `${previewProjectId}-${previewVersion}`;
   const isDirty = editorValue !== activeExample.code;
   const hasUnrunChanges = editorValue !== previewValue;
 
@@ -403,10 +406,13 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
             initialBackend='indexeddb'
           >
             <CadPreviewProvider
+              key={previewRenderKey}
               projectId={previewProjectId}
               mainFile={activeExample.mainFile}
               files={files}
               parameters={activeExample.initialParameters}
+              kernelOptionsFactory={playgroundPreviewKernelOptions}
+              renderOptions={playgroundRenderOptions}
             >
               <PlaygroundParameterBridge pendingParameters={pendingParameters} onParametersChange={setLiveParameters} />
               <section className='flex min-h-[56dvh] min-w-0 flex-col xl:min-h-0 xl:border-r'>
@@ -424,6 +430,7 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
                     className='size-full'
                     enablePan
                     enableZoom
+                    staticPreviewUrl={activeExample.staticPreview?.glb}
                     stageOptions={{ zoomLevel: 1.25 }}
                     graphicsOptions={{
                       enableLines: true,

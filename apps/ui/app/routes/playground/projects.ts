@@ -18,6 +18,12 @@ export const projectMetadataSchema = z.looseObject({
   hidden: z.boolean().optional(),
   exportFormats: z.array(z.enum(exportFormats)).optional(),
   initialParameters: z.record(z.string(), z.unknown()).optional(),
+  previewGlb: z.string().min(1).optional(),
+  staticPreview: z
+    .object({
+      glb: z.string().min(1),
+    })
+    .optional(),
 });
 
 export const projectPresetsSchema = z.array(
@@ -46,6 +52,12 @@ const projectSourceByPath = import.meta.glob<string>('./projects/**/*.{js,json,s
   query: '?raw',
 });
 
+const projectStaticPreviewGlbByPath = import.meta.glob<string>('./projects/**/*.glb', {
+  eager: true,
+  import: 'default',
+  query: '?url',
+});
+
 export const projectExamples: readonly PlaygroundExample[] = Object.entries(projectMetadataByPath)
   .flatMap(([metadataPath, rawMetadata]) => {
     const metadata = parseProjectMetadata(metadataPath, rawMetadata);
@@ -59,6 +71,7 @@ export const projectExamples: readonly PlaygroundExample[] = Object.entries(proj
     const mainFile = metadata.mainFile ?? metadata.entry;
     const entryFile = metadata.entry;
     const code = sourceFiles[mainFile] ?? sourceFiles[entryFile];
+    const staticPreview = staticPreviewForProject(projectId, metadata);
 
     if (!code) {
       throw new Error(`Project "${projectId}" is missing source for entry "${entryFile}"`);
@@ -75,6 +88,7 @@ export const projectExamples: readonly PlaygroundExample[] = Object.entries(proj
         exportFormats: metadata.exportFormats ?? exportFormatsFromMetadata(metadata),
         ...(metadata.initialParameters ? { initialParameters: metadata.initialParameters } : {}),
         ...(presets ? { presets } : {}),
+        ...(staticPreview ? { staticPreview } : {}),
         code,
         sourceFiles,
       },
@@ -139,6 +153,24 @@ function sourceFilesForProject(projectId: string, metadata: ProjectMetadata): Re
   }
 
   return sourceFiles;
+}
+
+function staticPreviewForProject(
+  projectId: string,
+  metadata: ProjectMetadata,
+): PlaygroundExample['staticPreview'] | undefined {
+  const glbPath = metadata.staticPreview?.glb ?? metadata.previewGlb;
+  if (!glbPath) {
+    return undefined;
+  }
+
+  const previewPath = glbPath.startsWith('./') ? glbPath : `./projects/${projectId}/${glbPath}`;
+  const glb = projectStaticPreviewGlbByPath[previewPath];
+  if (!glb) {
+    throw new Error(`Project "${projectId}" references missing static preview GLB "${glbPath}"`);
+  }
+
+  return { glb };
 }
 
 function kernelFromMetadata(metadata: ProjectMetadata): PlaygroundExample['kernel'] {

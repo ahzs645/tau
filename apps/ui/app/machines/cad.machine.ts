@@ -37,6 +37,7 @@ export type CadContext = {
   renderPhase: RenderPhase | undefined;
   telemetryEntries: TelemetryEntry[];
   renderTimeout: number;
+  renderOptions?: Record<string, unknown>;
   kernelClient?: AppRuntimeClient;
   capabilities?: CapabilitiesManifest;
   activeKernelId?: string;
@@ -64,7 +65,12 @@ type KernelConnectedEvent = {
 };
 
 type CadEvent =
-  | { type: 'initializeModel'; file: GeometryFile; parameters?: Record<string, unknown> }
+  | {
+      type: 'initializeModel';
+      file: GeometryFile;
+      parameters?: Record<string, unknown>;
+      options?: Record<string, unknown>;
+    }
   | { type: 'setFile'; file: GeometryFile }
   | { type: 'setParameters'; parameters: Record<string, unknown> }
   | { type: 'setCodeIssues'; errors: CadContext['codeIssues'] }
@@ -93,6 +99,7 @@ type CadInput = {
   logRef?: ActorRefFrom<typeof logMachine>;
   fileManagerRef?: ActorRefFrom<typeof fileManagerMachine>;
   kernelOptionsFactory: LazyKernelOptionsFactory;
+  renderOptions?: Record<string, unknown>;
 };
 
 type ConnectKernelInput = {
@@ -343,6 +350,7 @@ export const cadMachine = setup({
       enqueue.assign({
         file: event.file,
         parameters: event.parameters ?? {},
+        renderOptions: event.options ?? context.renderOptions,
         codeIssues: [],
         geometries: [],
         exportedBlob: undefined,
@@ -351,11 +359,20 @@ export const cadMachine = setup({
     }),
     forwardSetFile: ({ context, event }) => {
       assertEvent(event, 'setFile');
-      void context.kernelClient?.openFile({ file: event.file, parameters: context.parameters });
+      void context.kernelClient?.openFile({
+        file: event.file,
+        parameters: context.parameters,
+        options: context.renderOptions,
+      });
     },
     forwardInitializeModel: ({ context, event }) => {
       assertEvent(event, 'initializeModel');
-      void context.kernelClient?.openFile({ file: event.file, parameters: event.parameters ?? {} });
+      const renderOptions = event.options ?? context.renderOptions;
+      void context.kernelClient?.openFile({
+        file: event.file,
+        parameters: event.parameters ?? {},
+        options: renderOptions,
+      });
     },
     setRenderTimeout: assign({
       renderTimeout({ event }) {
@@ -458,6 +475,7 @@ export const cadMachine = setup({
     renderPhase: undefined,
     telemetryEntries: [],
     renderTimeout: 30_000,
+    renderOptions: input.renderOptions,
     kernelClient: undefined,
     capabilities: undefined,
     activeKernelId: undefined,
@@ -508,7 +526,11 @@ export const cadMachine = setup({
             });
             void event.client.setOptions({ renderTimeout: context.renderTimeout });
             if (context.file) {
-              void event.client.openFile({ file: context.file, parameters: context.parameters });
+              void event.client.openFile({
+                file: context.file,
+                parameters: context.parameters,
+                options: context.renderOptions,
+              });
             }
           }),
         },

@@ -59,7 +59,10 @@ export const defaultKernels = [
  * is constructed with everything it needs up-front, preserving the
  * runtime invariant that `client.connect()` takes no arguments.
  */
-export const createDefaultKernelOptions: KernelOptionsFactory = ({ fileSystem, filePoolBuffer }) =>
+const createKernelOptions = (
+  { fileSystem, filePoolBuffer }: Parameters<KernelOptionsFactory>[0],
+  options: { readonly enableGltfEdgeDetection: boolean },
+) =>
   createRuntimeClientOptions({
     transport: webWorkerTransport({
       fileSystem,
@@ -75,11 +78,17 @@ export const createDefaultKernelOptions: KernelOptionsFactory = ({ fileSystem, f
       parameterCache(),
       geometryCache(),
       gltfCoordinateTransform(),
-      gltfEdgeDetection(),
+      ...(options.enableGltfEdgeDetection ? [gltfEdgeDetection()] : []),
     ],
     bundlers: [esbuild()],
     transcoders: [converterTranscoder()],
   });
+
+export const createDefaultKernelOptions: KernelOptionsFactory = (deps) =>
+  createKernelOptions(deps, { enableGltfEdgeDetection: true });
+
+export const createPlaygroundPreviewKernelOptions: KernelOptionsFactory = (deps) =>
+  createKernelOptions(deps, { enableGltfEdgeDetection: false });
 
 /**
  * Debug kernel options for the editor.
