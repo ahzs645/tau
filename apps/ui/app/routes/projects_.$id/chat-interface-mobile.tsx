@@ -1,4 +1,6 @@
 import { memo } from 'react';
+import { Download } from 'lucide-react';
+import { Button } from '#components/ui/button.js';
 import { ChatHistory } from '#routes/projects_.$id/chat-history.js';
 import { ChatFileTree } from '#routes/projects_.$id/chat-file-tree.js';
 import { ChatParameters } from '#routes/projects_.$id/chat-parameters.js';
@@ -45,6 +47,25 @@ export const ChatInterfaceMobile = memo(function (): React.JSX.Element {
           {/* Renders ProjectNotFound / FileManagerError / WorkspaceUnavailableRecovery
             depending on which gate has failed. See Audit R8 for rationale. */}
           <ProjectUnavailableOverlay />
+
+          {/* Export action lives on the model view itself on mobile, so users can export
+            without hunting for the Export tab. Only shown while the viewer is in front
+            (when a panel drawer is raised the viewer is mostly covered). */}
+          {isViewerTab ? (
+            <div className='absolute right-4 bottom-[calc(var(--nav-height)+var(--spacing)*4)] z-10'>
+              <Button
+                size='lg'
+                aria-label='Export model'
+                className='rounded-full shadow-lg'
+                onClick={() => {
+                  handleTabChange('converter');
+                }}
+              >
+                <Download className='mr-2 size-4' />
+                Export
+              </Button>
+            </div>
+          ) : null}
         </div>
 
         <Drawer
