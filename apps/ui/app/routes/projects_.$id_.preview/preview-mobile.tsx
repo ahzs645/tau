@@ -1,8 +1,9 @@
 import { memo, useCallback, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { FileCode } from 'lucide-react';
+import { Box, FileCode, SlidersHorizontal } from 'lucide-react';
 import { Loader } from '#components/ui/loader.js';
 import { Button } from '#components/ui/button.js';
+import { ToggleGroup, ToggleGroupItem } from '#components/ui/toggle-group.js';
 import { Tabs, TabsContent } from '#components/ui/tabs.js';
 import { Drawer, DrawerContent, DrawerTitle, DrawerDescription } from '#components/ui/drawer.js';
 import { toast } from '#components/ui/sonner.js';
@@ -113,6 +114,33 @@ export const PreviewMobile = memo(function (): React.JSX.Element {
             {isCloning ? 'Remixing...' : isStaticProject ? 'Remix' : 'Edit'}
           </Button>
         </div>
+      </div>
+
+      {/* Primary mode switch: flip between the 3D model and its Parameters in one tap.
+        Pinned to the (center-empty) top header band so it stays visible even while the
+        Parameters drawer is raised over the lower part of the viewer. */}
+      <div className='pointer-events-none absolute inset-x-0 top-2 z-30 flex justify-center'>
+        <ToggleGroup
+          type='single'
+          variant='outline'
+          size='sm'
+          value={activeTab === 'model' || activeTab === 'parameters' ? activeTab : ''}
+          className='pointer-events-auto bg-background/90 shadow-sm backdrop-blur'
+          onValueChange={(value) => {
+            if (value) {
+              handleTabChange(value);
+            }
+          }}
+        >
+          <ToggleGroupItem value='model' aria-label='Show 3D model'>
+            <Box className='mr-1.5 size-4' />
+            3D
+          </ToggleGroupItem>
+          <ToggleGroupItem value='parameters' aria-label='Show parameters'>
+            <SlidersHorizontal className='mr-1.5 size-4' />
+            Params
+          </ToggleGroupItem>
+        </ToggleGroup>
       </div>
 
       <Drawer
