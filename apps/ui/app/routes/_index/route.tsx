@@ -48,7 +48,7 @@ export default function PlaygroundGallery(): React.JSX.Element {
   return (
     <main className='h-dvh overflow-x-hidden overflow-y-auto bg-background text-foreground'>
       <section className='mx-auto flex w-full max-w-7xl flex-col gap-4 px-4 py-5 md:px-6'>
-        <div className='flex flex-col gap-3 border-b pb-4 md:flex-row md:items-center md:justify-between'>
+        <div className='flex flex-col gap-3 border-b pb-4 max-md:sticky max-md:top-0 max-md:z-20 max-md:-mx-4 max-md:bg-background/95 max-md:px-4 max-md:py-4 max-md:backdrop-blur md:flex-row md:items-center md:justify-between'>
           <label className='flex min-h-9 w-full items-center gap-2 rounded-md border bg-background px-3 text-sm md:max-w-md'>
             <Search className='size-3.5 text-muted-foreground' />
             <input
