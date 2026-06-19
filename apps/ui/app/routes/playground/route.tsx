@@ -2,16 +2,7 @@ import type { ReactNode, RefCallback } from 'react';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, useLocation } from 'react-router';
-import {
-  Braces,
-  ChevronDown,
-  Download,
-  Eye,
-  LayoutGrid,
-  Play,
-  RotateCcw,
-  Share2,
-} from 'lucide-react';
+import { Braces, ChevronDown, Download, Eye, LayoutGrid, Play, RotateCcw, Share2 } from 'lucide-react';
 import jsonUrl from '@firstform/json-url';
 import type { FileExtension } from '@taucad/types';
 import { downloadBlob } from '@taucad/utils/file';
@@ -104,6 +95,9 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
   const [previewValue, setPreviewValue] = useState(initialExample.code);
   const [previewVersion, setPreviewVersion] = useState(0);
   const [isCodeVisible, setIsCodeVisible] = useState(false);
+  // Mobile only: which pane the segmented tabs show (the 3D viewer or the parameters).
+  // On xl+ both render side by side and this is ignored.
+  const [mobilePane, setMobilePane] = useState<'3d' | 'params'>('3d');
   const [exportControlsElement, setExportControlsElement] = useState<HTMLDivElement | undefined>(undefined);
 
   // Live parameter overrides reported up from inside the preview provider (the Share button lives in
@@ -358,7 +352,8 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
             <LayoutGrid className='size-3.5' />
             Gallery
           </Link>
-          <div ref={setExportControlsRef} className='flex items-center gap-1.5' />
+          {/* Desktop export lives in the header; on mobile it moves onto the 3D viewer (below). */}
+          <div ref={setExportControlsRef} className='flex items-center gap-1.5 max-xl:hidden' />
           {showCodeControls ? (
             <Button
               variant={isCodeVisible ? 'default' : 'outline'}
@@ -393,7 +388,9 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
 
       <div
         className={cn(
-          'grid min-h-0 flex-1 grid-cols-1',
+          // Mobile: stack as a flex column so the active pane fills the screen.
+          // xl+: restore the original side-by-side grid (viewer + parameters).
+          'flex min-h-0 flex-1 flex-col xl:grid',
           isEditableExample ? 'xl:grid-cols-[minmax(520px,1fr)_360px]' : 'xl:grid-cols-1',
         )}
       >
@@ -460,8 +457,51 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
                       exportControlsElement,
                     )
                   : undefined}
-                <PlaygroundParameterBridge pendingParameters={pendingParameters} onParametersChange={setLiveParameters} />
-                <section className='flex min-h-[56dvh] min-w-0 flex-col xl:min-h-0 xl:border-r'>
+                <PlaygroundParameterBridge
+                  pendingParameters={pendingParameters}
+                  onParametersChange={setLiveParameters}
+                />
+                {/* Mobile-only segmented tabs to swap between the 3D model and its parameters.
+                  Hidden on xl+, where both panes show side by side. */}
+                <div className='flex shrink-0 border-b xl:hidden'>
+                  <button
+                    type='button'
+                    aria-pressed={mobilePane === '3d'}
+                    className={cn(
+                      'flex-1 py-2.5 text-sm font-medium transition-colors',
+                      mobilePane === '3d'
+                        ? 'border-b-2 border-primary text-primary'
+                        : 'border-b-2 border-transparent text-muted-foreground',
+                    )}
+                    onClick={() => {
+                      setMobilePane('3d');
+                    }}
+                  >
+                    3D View
+                  </button>
+                  <button
+                    type='button'
+                    aria-pressed={mobilePane === 'params'}
+                    className={cn(
+                      'flex-1 py-2.5 text-sm font-medium transition-colors',
+                      mobilePane === 'params'
+                        ? 'border-b-2 border-primary text-primary'
+                        : 'border-b-2 border-transparent text-muted-foreground',
+                    )}
+                    onClick={() => {
+                      setMobilePane('params');
+                    }}
+                  >
+                    Parameters
+                  </button>
+                </div>
+
+                <section
+                  className={cn(
+                    'flex min-w-0 flex-col xl:min-h-0 xl:border-r',
+                    mobilePane === '3d' ? 'max-xl:flex-1' : 'max-xl:hidden',
+                  )}
+                >
                   <div className='relative min-h-0 flex-1 bg-muted/30'>
                     <CadPreviewViewer
                       className='size-full'
@@ -475,17 +515,33 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
                       }}
                     />
                     <CadPreviewStatus className='absolute top-3 left-3' />
+
+                    {/* Mobile export: lives on the viewer instead of the crowded header. */}
+                    {activeExample.exportFormats.length > 0 ? (
+                      <div className='absolute right-3 bottom-3 z-10 xl:hidden'>
+                        <PlaygroundExportControls
+                          exampleId={activeExample.id}
+                          formats={activeExample.exportFormats}
+                          buttonSize='sm'
+                        />
+                      </div>
+                    ) : null}
                   </div>
                 </section>
 
-                <section className='flex min-h-[260px] min-w-0 flex-col border-t bg-background xl:min-h-0 xl:border-t-0'>
+                <section
+                  className={cn(
+                    'flex min-w-0 flex-col bg-background xl:min-h-0 xl:border-t-0',
+                    mobilePane === 'params' ? 'max-xl:flex-1' : 'max-xl:hidden',
+                  )}
+                >
                   <PlaygroundParameters presets={activeExample.presets ?? []} />
                 </section>
               </CadPreviewProvider>
             </FileManagerProvider>
           </SharedWorkerGate>
         ) : (
-          <section className='flex min-h-0 min-w-0 flex-col'>
+          <section className='flex min-h-0 min-w-0 flex-1 flex-col'>
             <div className='relative min-h-0 flex-1 bg-muted/30'>
               {staticPreviewUrl ? (
                 <StaticPreviewViewer

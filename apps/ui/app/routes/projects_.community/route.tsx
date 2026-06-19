@@ -15,6 +15,7 @@ import {
 } from '#components/ui/dropdown-menu.js';
 import { sampleProjects } from '#constants/project-examples.js';
 import { CommunityProjectGrid } from '#components/project-grid.js';
+import { cn } from '#utils/ui.utils.js';
 import type { Handle } from '#types/matches.types.js';
 import { Loader } from '#components/ui/loader.js';
 import { useFeature } from '#flags/use-feature.js';
@@ -98,7 +99,14 @@ export default function CadCommunity(): React.JSX.Element {
         ) : null}
       </div>
 
-      <div className='flex flex-col gap-4'>
+      <div
+        className={cn(
+          'flex flex-col gap-4',
+          // Mobile only: keep search + filters pinned to the top while the gallery scrolls.
+          // Desktop is unchanged (md:static restores normal flow).
+          'max-md:sticky max-md:top-0 max-md:z-20 max-md:-mx-4 max-md:border-b max-md:bg-background/90 max-md:px-4 max-md:py-3 max-md:backdrop-blur',
+        )}
+      >
         <div className='flex flex-col gap-4 lg:flex-row lg:items-center'>
           <SearchInput
             placeholder='Search projects...'

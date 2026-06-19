@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { CookieIcon } from 'lucide-react';
 import { Link } from 'react-router';
 import { useAnalytics, useCookieConsent } from '#hooks/use-analytics.js';
+import { posthogConfig } from '#lib/posthog.lib.js';
 import { Button } from '#components/ui/button.js';
 import { Checkbox } from '#components/ui/checkbox.js';
 import { Label } from '#components/ui/label.js';
@@ -189,6 +190,14 @@ export function CookieConsent(): React.JSX.Element | undefined {
   const handleManage = (): void => {
     setIsDialogOpen(true);
   };
+
+  // Don't render the banner when analytics isn't configured (no PostHog key, e.g.
+  // self-hosted / local). With no optional cookies in play there is nothing to
+  // consent to, so the prompt would be noise. It reappears automatically if a
+  // POSTHOG_CLIENT_KEY is set.
+  if (!posthogConfig.apiKey) {
+    return undefined;
+  }
 
   // Don't render banner if consent has already been given or not yet visible
   if (consentStatus !== 'pending' || !isVisible) {
