@@ -2092,7 +2092,7 @@ importers:
         version: 2.13.0
       '@kittycad/lib':
         specifier: 'catalog:'
-        version: 2.0.48(patch_hash=8d1f46d38811b73bcc38ba26f4eba9f1d9e32be6bd271ba35c1c6365f6fe04a9)(@swc/core@1.15.8(@swc/helpers@0.5.19))(@types/node@25.9.0)(typescript@5.9.3)
+        version: 2.0.48(patch_hash=8d1f46d38811b73bcc38ba26f4eba9f1d9e32be6bd271ba35c1c6365f6fe04a9)(@swc/core@1.15.8(@swc/helpers@0.5.19))(@types/node@24.0.15)(typescript@5.9.3)
       '@msgpack/msgpack':
         specifier: 'catalog:'
         version: 3.1.3
@@ -2189,10 +2189,10 @@ importers:
         version: 1.7.1(next@16.2.6(@babel/core@7.29.0)(@opentelemetry/api@1.9.1)(@playwright/test@1.60.0)(babel-plugin-macros@3.1.0)(react-dom@19.2.6(react@19.2.6))(react@19.2.6)(sass@1.97.3))
       vite:
         specifier: 'catalog:'
-        version: 8.0.10(@types/node@25.9.0)(esbuild@0.28.0)(jiti@2.7.0)(less@4.5.1)(sass-embedded@1.97.3)(sass@1.97.3)(stylus@0.64.0)(terser@5.46.0)(tsx@4.22.3)(yaml@2.9.0)
+        version: 8.0.10(@types/node@24.0.15)(esbuild@0.28.0)(jiti@2.7.0)(less@4.5.1)(sass-embedded@1.97.3)(sass@1.97.3)(stylus@0.64.0)(terser@5.46.0)(tsx@4.22.3)(yaml@2.9.0)
       vitest:
         specifier: 4.1.5
-        version: 4.1.5(@opentelemetry/api@1.9.1)(@types/node@25.9.0)(@vitest/coverage-v8@4.1.5)(@vitest/ui@4.1.5)(happy-dom@16.8.1)(jsdom@26.0.0(canvas@3.2.3))(vite@8.0.10(@types/node@25.9.0)(esbuild@0.28.0)(jiti@2.7.0)(less@4.5.1)(sass-embedded@1.97.3)(sass@1.97.3)(stylus@0.64.0)(terser@5.46.0)(tsx@4.22.3)(yaml@2.9.0))
+        version: 4.1.5(@opentelemetry/api@1.9.1)(@types/node@24.0.15)(@vitest/coverage-v8@4.1.5)(@vitest/ui@4.1.5)(happy-dom@16.8.1)(jsdom@26.0.0(canvas@3.2.3))(vite@8.0.10(@types/node@24.0.15)(esbuild@0.28.0)(jiti@2.7.0)(less@4.5.1)(sass-embedded@1.97.3)(sass@1.97.3)(stylus@0.64.0)(terser@5.46.0)(tsx@4.22.3)(yaml@2.9.0))
 
   packages/telemetry:
     dependencies:
@@ -2248,6 +2248,12 @@ importers:
         specifier: 'catalog:'
         version: 2.1.2
 
+  packages/viewer:
+    dependencies:
+      '@taucad/types':
+        specifier: workspace:*
+        version: link:../types
+
   packages/vm:
     dependencies:
       '@taucad/utils':
@@ -2280,7 +2286,7 @@ importers:
         version: 4.0.9
       netlify-cli:
         specifier: 'catalog:'
-        version: 25.6.2(@swc/core@1.15.8(@swc/helpers@0.5.19))(@types/node@25.9.0)(encoding@0.1.13)(ioredis@5.11.0)(picomatch@4.0.4)(rollup@4.59.0)
+        version: 25.6.2(@swc/core@1.15.8(@swc/helpers@0.5.19))(@types/node@24.0.15)(encoding@0.1.13)(ioredis@5.11.0)(picomatch@4.0.4)(rollup@4.59.0)
 
   tools/workspace-plugin: {}
 
@@ -25378,12 +25384,12 @@ snapshots:
       figures: 6.1.0
       ink: 6.8.0(@types/react@19.0.12)(react@19.2.6)
 
-  '@inquirer/external-editor@1.0.3(@types/node@25.9.0)':
+  '@inquirer/external-editor@1.0.3(@types/node@24.0.15)':
     dependencies:
       chardet: 2.1.1
       iconv-lite: 0.7.2
     optionalDependencies:
-      '@types/node': 25.9.0
+      '@types/node': 24.0.15
 
   '@ioredis/as-callback@3.0.0': {}
 
@@ -25725,17 +25731,6 @@ snapshots:
     dependencies:
       openapi-types: 12.1.3
       ts-node: 10.9.2(@swc/core@1.15.8(@swc/helpers@0.5.19))(@types/node@24.0.15)(typescript@5.9.3)
-      tslib: 2.8.1
-    transitivePeerDependencies:
-      - '@swc/core'
-      - '@swc/wasm'
-      - '@types/node'
-      - typescript
-
-  '@kittycad/lib@2.0.48(patch_hash=8d1f46d38811b73bcc38ba26f4eba9f1d9e32be6bd271ba35c1c6365f6fe04a9)(@swc/core@1.15.8(@swc/helpers@0.5.19))(@types/node@25.9.0)(typescript@5.9.3)':
-    dependencies:
-      openapi-types: 12.1.3
-      ts-node: 10.9.2(@swc/core@1.15.8(@swc/helpers@0.5.19))(@types/node@25.9.0)(typescript@5.9.3)
       tslib: 2.8.1
     transitivePeerDependencies:
       - '@swc/core'
@@ -26681,7 +26676,7 @@ snapshots:
       yaml: 2.9.0
       yargs: 17.7.2
 
-  '@netlify/build@35.13.4(@opentelemetry/api@1.8.0)(@swc/core@1.15.8(@swc/helpers@0.5.19))(@types/node@25.9.0)(encoding@0.1.13)(picomatch@4.0.4)(rollup@4.59.0)':
+  '@netlify/build@35.13.4(@opentelemetry/api@1.8.0)(@swc/core@1.15.8(@swc/helpers@0.5.19))(@types/node@24.0.15)(encoding@0.1.13)(picomatch@4.0.4)(rollup@4.59.0)':
     dependencies:
       '@bugsnag/js': 8.9.0
       '@netlify/blobs': 10.7.4(supports-color@10.2.2)
@@ -26730,7 +26725,7 @@ snapshots:
       string-width: 7.2.0
       supports-color: 10.2.2
       terminal-link: 4.0.0
-      ts-node: 10.9.2(@swc/core@1.15.8(@swc/helpers@0.5.19))(@types/node@25.9.0)(typescript@5.9.3)
+      ts-node: 10.9.2(@swc/core@1.15.8(@swc/helpers@0.5.19))(@types/node@24.0.15)(typescript@5.9.3)
       typescript: 5.9.3
       uuid: 11.1.0
       yaml: 2.9.0
@@ -33036,6 +33031,14 @@ snapshots:
     optionalDependencies:
       vite: 8.0.10(@types/node@24.0.15)(esbuild@0.27.7)(jiti@2.7.0)(less@4.5.1)(sass-embedded@1.97.3)(sass@1.97.3)(stylus@0.64.0)(terser@5.46.0)(tsx@4.22.3)(yaml@2.9.0)
 
+  '@vitest/mocker@4.1.5(vite@8.0.10(@types/node@24.0.15)(esbuild@0.28.0)(jiti@2.7.0)(less@4.5.1)(sass-embedded@1.97.3)(sass@1.97.3)(stylus@0.64.0)(terser@5.46.0)(tsx@4.22.3)(yaml@2.9.0))':
+    dependencies:
+      '@vitest/spy': 4.1.5
+      estree-walker: 3.0.3
+      magic-string: 0.30.21
+    optionalDependencies:
+      vite: 8.0.10(@types/node@24.0.15)(esbuild@0.28.0)(jiti@2.7.0)(less@4.5.1)(sass-embedded@1.97.3)(sass@1.97.3)(stylus@0.64.0)(terser@5.46.0)(tsx@4.22.3)(yaml@2.9.0)
+
   '@vitest/mocker@4.1.5(vite@8.0.10(@types/node@25.9.0)(esbuild@0.28.0)(jiti@2.7.0)(less@4.5.1)(sass-embedded@1.97.3)(sass@1.97.3)(stylus@0.64.0)(terser@5.46.0)(tsx@4.22.3)(yaml@2.9.0))':
     dependencies:
       '@vitest/spy': 4.1.5
@@ -37917,7 +37920,7 @@ snapshots:
       isstream: 0.1.2
       jsonwebtoken: 9.0.3
       mime-types: 2.1.35
-      retry-axios: 2.6.0(axios@1.7.9)
+      retry-axios: 2.6.0(axios@1.7.9(debug@4.4.3))
       tough-cookie: 4.1.4
     transitivePeerDependencies:
       - supports-color
@@ -38059,18 +38062,18 @@ snapshots:
 
   inline-style-parser@0.2.7: {}
 
-  inquirer-autocomplete-prompt@1.4.0(inquirer@8.2.7(@types/node@25.9.0)):
+  inquirer-autocomplete-prompt@1.4.0(inquirer@8.2.7(@types/node@24.0.15)):
     dependencies:
       ansi-escapes: 4.3.2
       chalk: 4.1.2
       figures: 3.2.0
-      inquirer: 8.2.7(@types/node@25.9.0)
+      inquirer: 8.2.7(@types/node@24.0.15)
       run-async: 2.4.1
       rxjs: 6.6.7
 
-  inquirer@8.2.7(@types/node@25.9.0):
+  inquirer@8.2.7(@types/node@24.0.15):
     dependencies:
-      '@inquirer/external-editor': 1.0.3(@types/node@25.9.0)
+      '@inquirer/external-editor': 1.0.3(@types/node@24.0.15)
       ansi-escapes: 4.3.2
       chalk: 4.1.2
       cli-cursor: 3.1.0
@@ -40909,13 +40912,13 @@ snapshots:
       rxjs: 7.8.2
       zod: 4.4.3
 
-  netlify-cli@25.6.2(@swc/core@1.15.8(@swc/helpers@0.5.19))(@types/node@25.9.0)(encoding@0.1.13)(ioredis@5.11.0)(picomatch@4.0.4)(rollup@4.59.0):
+  netlify-cli@25.6.2(@swc/core@1.15.8(@swc/helpers@0.5.19))(@types/node@24.0.15)(encoding@0.1.13)(ioredis@5.11.0)(picomatch@4.0.4)(rollup@4.59.0):
     dependencies:
       '@fastify/static': 9.0.0
       '@netlify/ai': 0.4.1
       '@netlify/api': 14.0.18
       '@netlify/blobs': 10.7.0
-      '@netlify/build': 35.13.4(@opentelemetry/api@1.8.0)(@swc/core@1.15.8(@swc/helpers@0.5.19))(@types/node@25.9.0)(encoding@0.1.13)(picomatch@4.0.4)(rollup@4.59.0)
+      '@netlify/build': 35.13.4(@opentelemetry/api@1.8.0)(@swc/core@1.15.8(@swc/helpers@0.5.19))(@types/node@24.0.15)(encoding@0.1.13)(picomatch@4.0.4)(rollup@4.59.0)
       '@netlify/build-info': 10.5.1
       '@netlify/config': 24.5.0
       '@netlify/dev': 4.17.3(encoding@0.1.13)(ioredis@5.11.0)(rollup@4.59.0)
@@ -40967,8 +40970,8 @@ snapshots:
       http-proxy: 1.18.1(debug@4.4.3)
       http-proxy-middleware: 3.0.5
       https-proxy-agent: 8.0.0
-      inquirer: 8.2.7(@types/node@25.9.0)
-      inquirer-autocomplete-prompt: 1.4.0(inquirer@8.2.7(@types/node@25.9.0))
+      inquirer: 8.2.7(@types/node@24.0.15)
+      inquirer-autocomplete-prompt: 1.4.0(inquirer@8.2.7(@types/node@24.0.15))
       is-docker: 4.0.0
       is-stream: 4.0.1
       is-wsl: 3.1.0
@@ -43560,7 +43563,7 @@ snapshots:
 
   ret@0.5.0: {}
 
-  retry-axios@2.6.0(axios@1.7.9):
+  retry-axios@2.6.0(axios@1.7.9(debug@4.4.3)):
     dependencies:
       axios: 1.7.9(debug@4.4.3)
 
@@ -45238,26 +45241,6 @@ snapshots:
     optionalDependencies:
       '@swc/core': 1.15.8(@swc/helpers@0.5.19)
 
-  ts-node@10.9.2(@swc/core@1.15.8(@swc/helpers@0.5.19))(@types/node@25.9.0)(typescript@5.9.3):
-    dependencies:
-      '@cspotcode/source-map-support': 0.8.1
-      '@tsconfig/node10': 1.0.12
-      '@tsconfig/node12': 1.0.11
-      '@tsconfig/node14': 1.0.3
-      '@tsconfig/node16': 1.0.4
-      '@types/node': 25.9.0
-      acorn: 8.16.0
-      acorn-walk: 8.3.5
-      arg: 4.1.3
-      create-require: 1.1.1
-      diff: 4.0.4
-      make-error: 1.3.6
-      typescript: 5.9.3
-      v8-compile-cache-lib: 3.0.1
-      yn: 3.1.1
-    optionalDependencies:
-      '@swc/core': 1.15.8(@swc/helpers@0.5.19)
-
   ts-replace-all@1.0.0:
     dependencies:
       core-js: 3.48.0
@@ -46021,6 +46004,26 @@ snapshots:
       tsx: 4.22.3
       yaml: 2.9.0
 
+  vite@8.0.10(@types/node@24.0.15)(esbuild@0.28.0)(jiti@2.7.0)(less@4.5.1)(sass-embedded@1.97.3)(sass@1.97.3)(stylus@0.64.0)(terser@5.46.0)(tsx@4.22.3)(yaml@2.9.0):
+    dependencies:
+      lightningcss: 1.32.0
+      picomatch: 4.0.4
+      postcss: 8.5.10
+      rolldown: 1.0.0-rc.17
+      tinyglobby: 0.2.16
+    optionalDependencies:
+      '@types/node': 24.0.15
+      esbuild: 0.28.0
+      fsevents: 2.3.3
+      jiti: 2.7.0
+      less: 4.5.1
+      sass: 1.97.3
+      sass-embedded: 1.97.3
+      stylus: 0.64.0
+      terser: 5.46.0
+      tsx: 4.22.3
+      yaml: 2.9.0
+
   vite@8.0.10(@types/node@25.9.0)(esbuild@0.28.0)(jiti@2.7.0)(less@4.5.1)(sass-embedded@1.97.3)(sass@1.97.3)(stylus@0.64.0)(terser@5.46.0)(tsx@4.22.3)(yaml@2.9.0):
     dependencies:
       lightningcss: 1.32.0
@@ -46045,7 +46048,7 @@ snapshots:
     dependencies:
       ts-essentials: 10.1.1(typescript@5.9.3)
       typescript: 5.9.3
-      vitest: 4.1.5(@opentelemetry/api@1.9.1)(@types/node@25.9.0)(@vitest/coverage-v8@4.1.5)(@vitest/ui@4.1.5)(happy-dom@16.8.1)(jsdom@26.0.0(canvas@3.2.3))(vite@8.0.10(@types/node@25.9.0)(esbuild@0.28.0)(jiti@2.7.0)(less@4.5.1)(sass-embedded@1.97.3)(sass@1.97.3)(stylus@0.64.0)(terser@5.46.0)(tsx@4.22.3)(yaml@2.9.0))
+      vitest: 4.1.5(@opentelemetry/api@1.9.1)(@types/node@24.0.15)(@vitest/coverage-v8@4.1.5)(@vitest/ui@4.1.5)(happy-dom@16.8.1)(jsdom@26.0.0(canvas@3.2.3))(vite@8.0.10(@types/node@24.0.15)(esbuild@0.28.0)(jiti@2.7.0)(less@4.5.1)(sass-embedded@1.97.3)(sass@1.97.3)(stylus@0.64.0)(terser@5.46.0)(tsx@4.22.3)(yaml@2.9.0))
 
   vitest@4.1.5(@opentelemetry/api@1.9.1)(@types/node@24.0.15)(@vitest/coverage-v8@4.1.5)(@vitest/ui@4.1.5)(happy-dom@16.8.1)(jsdom@26.0.0(canvas@3.2.3))(vite@8.0.10(@types/node@24.0.15)(esbuild@0.27.7)(jiti@2.7.0)(less@4.5.1)(sass-embedded@1.97.3)(sass@1.97.3)(stylus@0.64.0)(terser@5.46.0)(tsx@4.22.3)(yaml@2.9.0)):
     dependencies:
@@ -46068,6 +46071,38 @@ snapshots:
       tinyglobby: 0.2.16
       tinyrainbow: 3.1.0
       vite: 8.0.10(@types/node@24.0.15)(esbuild@0.27.7)(jiti@2.7.0)(less@4.5.1)(sass-embedded@1.97.3)(sass@1.97.3)(stylus@0.64.0)(terser@5.46.0)(tsx@4.22.3)(yaml@2.9.0)
+      why-is-node-running: 2.3.0
+    optionalDependencies:
+      '@opentelemetry/api': 1.9.1
+      '@types/node': 24.0.15
+      '@vitest/coverage-v8': 4.1.5(vitest@4.1.5)
+      '@vitest/ui': 4.1.5(vitest@4.1.5)
+      happy-dom: 16.8.1
+      jsdom: 26.0.0(canvas@3.2.3)
+    transitivePeerDependencies:
+      - msw
+
+  vitest@4.1.5(@opentelemetry/api@1.9.1)(@types/node@24.0.15)(@vitest/coverage-v8@4.1.5)(@vitest/ui@4.1.5)(happy-dom@16.8.1)(jsdom@26.0.0(canvas@3.2.3))(vite@8.0.10(@types/node@24.0.15)(esbuild@0.28.0)(jiti@2.7.0)(less@4.5.1)(sass-embedded@1.97.3)(sass@1.97.3)(stylus@0.64.0)(terser@5.46.0)(tsx@4.22.3)(yaml@2.9.0)):
+    dependencies:
+      '@vitest/expect': 4.1.5
+      '@vitest/mocker': 4.1.5(vite@8.0.10(@types/node@24.0.15)(esbuild@0.28.0)(jiti@2.7.0)(less@4.5.1)(sass-embedded@1.97.3)(sass@1.97.3)(stylus@0.64.0)(terser@5.46.0)(tsx@4.22.3)(yaml@2.9.0))
+      '@vitest/pretty-format': 4.1.5
+      '@vitest/runner': 4.1.5
+      '@vitest/snapshot': 4.1.5
+      '@vitest/spy': 4.1.5
+      '@vitest/utils': 4.1.5
+      es-module-lexer: 2.1.0
+      expect-type: 1.3.0
+      magic-string: 0.30.21
+      obug: 2.1.1
+      pathe: 2.0.3
+      picomatch: 4.0.4
+      std-env: 4.1.0
+      tinybench: 2.9.0
+      tinyexec: 1.1.2
+      tinyglobby: 0.2.16
+      tinyrainbow: 3.1.0
+      vite: 8.0.10(@types/node@24.0.15)(esbuild@0.28.0)(jiti@2.7.0)(less@4.5.1)(sass-embedded@1.97.3)(sass@1.97.3)(stylus@0.64.0)(terser@5.46.0)(tsx@4.22.3)(yaml@2.9.0)
       why-is-node-running: 2.3.0
     optionalDependencies:
       '@opentelemetry/api': 1.9.1
