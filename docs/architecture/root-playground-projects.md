@@ -73,6 +73,11 @@ all three are optional. `image` names a thumbnail file inside the project folder
 `.jpeg`, `.png`, or `.webp`); when present the gallery card shows it above the project details.
 Referencing a missing image fails the build, so the reference can never silently rot.
 
+Posters can be generated automatically: `nx run ui-e2e:thumbnails` drives the real playground with
+Playwright, waits for each project's kernel render, screenshots the canvas into
+`<project>/poster.jpg`, and stamps the `image` field into `project.json`. Projects that already
+declare an `image` are skipped unless `THUMBNAILS_FORCE=1`.
+
 ## Presets
 
 Parameter presets live in an optional `presets.json` next to `project.json` (not inline in

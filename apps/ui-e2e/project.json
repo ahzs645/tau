@@ -5,5 +5,13 @@
   "sourceRoot": "apps/ui-e2e/src",
   "tags": ["scope:ui", "type:e2e"],
   "implicitDependencies": ["ui"],
-  "targets": {}
+  "targets": {
+    "thumbnails": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "apps/ui-e2e",
+        "command": "playwright test --config=playwright.thumbnails.config.ts"
+      }
+    }
+  }
 }
