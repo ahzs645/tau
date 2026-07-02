@@ -2,7 +2,15 @@ import { defineConfig } from 'tsdown';
 import type { Options } from 'tsdown';
 
 const baseConfig: Options = {
-  entry: ['src/index.ts'],
+  entry: [
+    'src/index.ts',
+    'src/components/geometry/parameters/parameters.tsx',
+    'src/components/geometry/parameters/parameters-number.tsx',
+    'src/components/geometry/parameters/rjsf-theme.tsx',
+    'src/components/geometry/parameters/rjsf-utils.ts',
+    'src/components/geometry/parameters/rjsf-context.ts',
+    'src/components/ui/tooltip.tsx',
+  ],
   sourcemap: false,
   clean: true,
   dts: true,

@@ -32,7 +32,7 @@ import {
 } from '#components/geometry/parameters/rjsf-utils.js';
 import { hasCustomValue } from '#utils/object.utils.js';
 import { EmptyItems } from '#components/ui/empty-items.js';
-import { InlineCode } from '#components/code/code-block.js';
+import { InlineCode } from '#components/ui/inline-code.js';
 import type { RJSFContext } from '#components/geometry/parameters/rjsf-context.js';
 
 // Custom Field Template with Reset Button and Search Filtering

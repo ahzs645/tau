@@ -4,5 +4,6 @@
   "description": "SVG-driven stamp generator using uploaded artwork",
   "category": "Personalization",
   "tags": ["stamp", "svg", "text"],
-  "hidden": false
+  "hidden": false,
+  "image": "poster.jpg"
 }

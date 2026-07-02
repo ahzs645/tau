@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
 import { snapToStep } from '#components/geometry/parameters/parameters-number-field.js';
 

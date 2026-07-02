@@ -7,6 +7,8 @@
 @source '../components/auth';
 @source '../../../../node_modules/streamdown/dist';
 @source '../../content/docs/**/*.{json,mdx}';
+/* Workspace component library (parameters panel): its Tailwind classes must be scanned here. */
+@source '../../../../packages/react/src';
 
 /* Typography is provided by fumadocs-ui/css/preset.css (forked @tailwindcss/typography with fd-* color support) */
 

@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /* oxlint-disable max-lines -- test file */
 import type { Mock } from 'vitest';
 import { vi, describe, it, expect, beforeEach } from 'vitest';

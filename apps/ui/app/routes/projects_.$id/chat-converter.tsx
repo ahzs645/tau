@@ -40,8 +40,8 @@ import { sortGeometryUnitEntries } from '#routes/projects_.$id/geometry-unit.uti
 import type { FormatEntry } from '#routes/projects_.$id/export-formats.utils.js';
 import { deriveAvailableFormats, getFormatInfo } from '#routes/projects_.$id/export-formats.utils.js';
 import type { cadMachine } from '#machines/cad.machine.js';
-import { widgets, templates as rjsfTemplates } from '#components/geometry/parameters/rjsf-theme.js';
-import { rjsfIdPrefix, rjsfIdSeparator } from '#components/geometry/parameters/rjsf-utils.js';
+import { widgets, templates as rjsfTemplates } from '@taucad/react/rjsf-theme';
+import { rjsfIdPrefix, rjsfIdSeparator } from '@taucad/react/rjsf-utils';
 import { deleteValueAtPath, extractModifiedProperties } from '#utils/object.utils.js';
 import JSZip from 'jszip';
 import type { AppRuntimeClient } from '#types/runtime-client.alias.js';
