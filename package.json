@@ -394,13 +394,13 @@
       "replicad-opencascadejs": "npm:@taucad/replicad-opencascadejs@0.23.0-beta.0",
       "vitest": "catalog:"
     },
+    "$onlyBuiltDependencies:comment": "electron is intentionally absent: its postinstall downloads a ~100MB binary and hard-fails installs in sandboxed/proxied environments. Run `pnpm rebuild electron` before using examples/electron-tau (see its README).",
     "onlyBuiltDependencies": [
       "@nestjs/core",
       "@parcel/watcher",
       "@swc/core",
       "canvas",
       "core-js",
-      "electron",
       "esbuild",
       "nestjs-pino",
       "nx",
