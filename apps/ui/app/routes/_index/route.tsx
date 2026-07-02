@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
-import { ExternalLink, FileCode2, Search } from 'lucide-react';
-import { buttonVariants } from '#components/ui/button.js';
+import { ArrowUpRight, FileCode2, Search } from 'lucide-react';
 import { toast } from '#components/ui/sonner.js';
 import { projectExamples } from '#routes/playground/projects.js';
 import type { AppVersion } from '#routes/version[.]json.js';
@@ -12,9 +11,19 @@ const galleryExamples = projectExamples;
 // Build the engine filter list from the kernels actually present in the gallery
 // so OpenCascade / Replicad projects surface their own filter automatically.
 const engineFilters: readonly string[] = ['All', ...new Set(galleryExamples.map((example) => example.kernel))];
+// Categories come from each project's `project.json` metadata; projects without one
+// stay reachable through the "All" option.
+const categoryFilters: readonly string[] = [
+  'All',
+  ...[...new Set(galleryExamples.flatMap((example) => (example.category ? [example.category] : [])))].sort((a, b) =>
+    a.localeCompare(b),
+  ),
+];
 /** Milliseconds. */
 const updateCheckInterval = 60_000;
 const updateToastId = 'app-version-update-available';
+/** Tags shown on a card before collapsing into a "+n" chip. */
+const maxVisibleTags = 4;
 
 type EngineFilter = string;
 
@@ -25,6 +34,7 @@ export const handle: Handle = {
 export default function PlaygroundGallery(): React.JSX.Element {
   const [searchTerm, setSearchTerm] = useState('');
   const [engineFilter, setEngineFilter] = useState<EngineFilter>('All');
+  const [categoryFilter, setCategoryFilter] = useState('All');
   useGalleryVersionCheck();
 
   const filteredExamples = useMemo(() => {
@@ -34,16 +44,27 @@ export default function PlaygroundGallery(): React.JSX.Element {
         return false;
       }
 
+      if (categoryFilter !== 'All' && example.category !== categoryFilter) {
+        return false;
+      }
+
       if (!term) {
         return true;
       }
 
-      return [example.name, example.description, example.kernel, example.mainFile]
+      return [
+        example.name,
+        example.description,
+        example.kernel,
+        example.mainFile,
+        example.category ?? '',
+        ...(example.tags ?? []),
+      ]
         .join(' ')
         .toLowerCase()
         .includes(term);
     });
-  }, [engineFilter, searchTerm]);
+  }, [categoryFilter, engineFilter, searchTerm]);
 
   return (
     <main className='h-dvh overflow-x-hidden overflow-y-auto bg-background text-foreground'>
@@ -63,7 +84,23 @@ export default function PlaygroundGallery(): React.JSX.Element {
             />
           </label>
 
-          <div className='flex flex-wrap gap-1.5'>
+          <div className='flex flex-wrap items-center gap-1.5'>
+            {categoryFilters.length > 1 ? (
+              <select
+                aria-label='Filter by category'
+                className='min-h-11 rounded-sm border bg-background px-2.5 py-2 text-xs md:min-h-0 md:py-1.5'
+                value={categoryFilter}
+                onChange={(event) => {
+                  setCategoryFilter(event.target.value);
+                }}
+              >
+                {categoryFilters.map((category) => (
+                  <option key={category} value={category}>
+                    {category === 'All' ? 'All categories' : category}
+                  </option>
+                ))}
+              </select>
+            ) : null}
             {engineFilters.map((filter) => (
               <button
                 key={filter}
@@ -83,46 +120,87 @@ export default function PlaygroundGallery(): React.JSX.Element {
         </div>
 
         <div className='grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3'>
-          {filteredExamples.map((example) => (
-            <article key={example.id} className='min-w-0 rounded-md border bg-background p-4'>
-              <div className='mb-3 flex items-start justify-between gap-3'>
-                <div className='min-w-0'>
-                  <h2 className='truncate text-sm font-semibold'>{example.name}</h2>
-                  <p className='mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground'>{example.description}</p>
-                </div>
-                <span className='shrink-0 rounded-sm bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground'>
-                  {example.kernel}
-                </span>
-              </div>
+          {filteredExamples.map((example) => {
+            const visibleTags = example.tags?.slice(0, maxVisibleTags) ?? [];
+            const hiddenTagCount = (example.tags?.length ?? 0) - visibleTags.length;
+            const hasMetadataRow = Boolean(example.category) || visibleTags.length > 0;
 
-              <dl className='grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-2 text-xs'>
-                <div className='min-w-0 rounded-sm bg-muted/50 px-2 py-1.5'>
-                  <dt className='text-muted-foreground'>File</dt>
-                  <dd className='truncate font-mono'>{example.mainFile}</dd>
-                </div>
-                <div className='min-w-0 rounded-sm bg-muted/50 px-2 py-1.5'>
-                  <dt className='text-muted-foreground'>Exports</dt>
-                  <dd className='truncate uppercase'>
-                    {example.exportFormats.length > 0 ? example.exportFormats.join(', ') : 'Static'}
-                  </dd>
-                </div>
-              </dl>
+            return (
+              <Link
+                key={example.id}
+                to={`/playground?model=${example.id}`}
+                aria-label={`Open ${example.name}`}
+                className='group flex min-w-0 flex-col overflow-hidden rounded-md border bg-background transition-colors hover:border-primary/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none'
+              >
+                {example.image ? (
+                  <img
+                    src={example.image}
+                    alt=''
+                    loading='lazy'
+                    decoding='async'
+                    className='aspect-video w-full border-b bg-muted/30 object-cover'
+                  />
+                ) : null}
 
-              <div className='mt-3 flex items-center justify-between gap-2'>
-                <div className='flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground'>
-                  <FileCode2 className='size-3.5 shrink-0' />
-                  <span className='truncate'>{example.presets?.length ?? 0} presets</span>
+                <div className='flex flex-1 flex-col p-4'>
+                  <div className='mb-3 flex items-start justify-between gap-3'>
+                    <div className='min-w-0'>
+                      <h2 className='truncate text-sm font-semibold group-hover:text-primary'>{example.name}</h2>
+                      <p className='mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground'>{example.description}</p>
+                    </div>
+                    <span className='shrink-0 rounded-sm bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground'>
+                      {example.kernel}
+                    </span>
+                  </div>
+
+                  {hasMetadataRow ? (
+                    <div className='mb-3 flex flex-wrap items-center gap-1'>
+                      {example.category ? (
+                        <span className='rounded-sm border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary'>
+                          {example.category}
+                        </span>
+                      ) : null}
+                      {visibleTags.map((tag) => (
+                        <span
+                          key={tag}
+                          className='rounded-sm bg-muted/70 px-1.5 py-0.5 text-[10px] text-muted-foreground'
+                        >
+                          {tag}
+                        </span>
+                      ))}
+                      {hiddenTagCount > 0 ? (
+                        <span className='px-0.5 text-[10px] text-muted-foreground'>+{hiddenTagCount}</span>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  <dl className='grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-2 text-xs'>
+                    <div className='min-w-0 rounded-sm bg-muted/50 px-2 py-1.5'>
+                      <dt className='text-muted-foreground'>File</dt>
+                      <dd className='truncate font-mono'>{example.mainFile}</dd>
+                    </div>
+                    <div className='min-w-0 rounded-sm bg-muted/50 px-2 py-1.5'>
+                      <dt className='text-muted-foreground'>Exports</dt>
+                      <dd className='truncate uppercase'>
+                        {example.exportFormats.length > 0 ? example.exportFormats.join(', ') : 'Static'}
+                      </dd>
+                    </div>
+                  </dl>
+
+                  <div className='mt-3 flex items-center justify-between gap-2'>
+                    <div className='flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground'>
+                      <FileCode2 className='size-3.5 shrink-0' />
+                      <span className='truncate'>{example.presets?.length ?? 0} presets</span>
+                    </div>
+                    <span className='flex items-center gap-1 text-xs font-medium text-primary'>
+                      Open
+                      <ArrowUpRight className='size-3.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5' />
+                    </span>
+                  </div>
                 </div>
-                <Link
-                  to={`/playground?model=${example.id}`}
-                  className={buttonVariants({ variant: 'default', size: 'sm', className: 'min-h-11 md:min-h-0' })}
-                >
-                  <ExternalLink className='size-3.5' />
-                  Open
-                </Link>
-              </div>
-            </article>
-          ))}
+              </Link>
+            );
+          })}
         </div>
 
         {filteredExamples.length === 0 ? (

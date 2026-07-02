@@ -111,7 +111,11 @@ vi.mock('#components/cad-preview.js', () => ({
     return <div data-testid='cad-preview-viewer'>viewer</div>;
   },
   StaticPreviewViewer({ staticPreviewUrl }: { readonly staticPreviewUrl: string }) {
-    return <div data-testid='static-preview-viewer' data-url={staticPreviewUrl}>static viewer</div>;
+    return (
+      <div data-testid='static-preview-viewer' data-url={staticPreviewUrl}>
+        static viewer
+      </div>
+    );
   },
   CadPreviewStatus() {
     return <div data-testid='cad-preview-status'>status</div>;
@@ -273,6 +277,20 @@ describe('PlaygroundRoot', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Code' }));
     expect(await screen.findByLabelText('Code editor')).toBeDefined();
+  });
+
+  it('hides the code editor toggle when the URL opts into kiosk mode via ?editor=off', async () => {
+    globalThis.history.replaceState({}, '', '/?editor=off');
+
+    renderPlaygroundRoot();
+
+    expect(screen.getByRole('heading', { name: 'Tau CAD Playground' })).toBeDefined();
+    expect(screen.queryByRole('button', { name: 'Code' })).toBeNull();
+    // The rest of the playground stays interactive: viewer and parameters still render.
+    expect(screen.getByTestId('cad-preview-viewer')).toBeDefined();
+    await waitFor(() => {
+      expect(screen.getByTestId('preview-parameters')).toBeDefined();
+    });
   });
 
   it('opens a model from the URL and replaces the preview project and main file', async () => {
@@ -471,7 +489,8 @@ describe('PlaygroundRoot', () => {
   it('exports through the active CadPreview actor and downloads the returned blob', async () => {
     renderPlaygroundRoot();
 
-    fireEvent.click(screen.getByRole('button', { name: 'GLB' }));
+    // Export controls render twice (desktop header portal + mobile viewer overlay); either works.
+    fireEvent.click(screen.getAllByRole('button', { name: 'GLB' })[0]!);
 
     await waitFor(() => {
       expect(mockCadSend).toHaveBeenCalledWith({
@@ -487,7 +506,7 @@ describe('PlaygroundRoot', () => {
     globalThis.history.replaceState({}, '', '/?model=opencascade-box');
 
     renderPlaygroundRoot();
-    fireEvent.click(screen.getByRole('button', { name: 'STEP' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'STEP' })[0]!);
 
     await waitFor(() => {
       expect(mockCadSend).toHaveBeenCalledWith({

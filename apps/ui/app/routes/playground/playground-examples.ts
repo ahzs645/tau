@@ -19,6 +19,11 @@ export type PlaygroundExample = {
   readonly mainFile: string;
   readonly language: string;
   readonly description: string;
+  readonly category?: string;
+  readonly tags?: readonly string[];
+  readonly author?: string;
+  /** Resolved URL of an optional gallery card thumbnail. */
+  readonly image?: string;
   readonly exportFormats: readonly FileExtension[];
   readonly initialParameters?: Record<string, unknown>;
   readonly presets?: readonly PlaygroundPreset[];

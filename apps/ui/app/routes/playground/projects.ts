@@ -21,6 +21,11 @@ export const projectMetadataSchema = z.looseObject({
   language: z.string().min(1).optional(),
   kernel: z.enum(['OpenSCAD', 'Replicad', 'OpenCascade', 'Static']).optional(),
   engine: z.enum(['openscad', 'replicad', 'opencascade', 'occt']).optional(),
+  category: z.string().min(1).optional(),
+  tags: z.array(z.string().min(1)).optional(),
+  author: z.string().min(1).optional(),
+  // Optional gallery card thumbnail, relative to the project folder (e.g. "poster.webp").
+  image: z.string().min(1).optional(),
   hidden: z.boolean().optional(),
   exportFormats: z.array(z.enum(exportFormats)).optional(),
   initialParameters: z.record(z.string(), z.unknown()).optional(),
@@ -64,6 +69,12 @@ const projectStaticPreviewGlbByPath = import.meta.glob<string>('./projects/**/*.
   query: '?url',
 });
 
+const projectImageByPath = import.meta.glob<string>('./projects/**/*.{avif,jpeg,jpg,png,webp}', {
+  eager: true,
+  import: 'default',
+  query: '?url',
+});
+
 export const projectExamples: readonly PlaygroundExample[] = Object.entries(projectMetadataByPath)
   .flatMap<PlaygroundExample>(([metadataPath, rawMetadata]) => {
     const metadata = parseProjectMetadata(metadataPath, rawMetadata);
@@ -90,7 +101,14 @@ export const projectExamples: readonly PlaygroundExample[] = Object.entries(proj
 
     const code = sourceFiles[mainFile] ?? sourceFiles[entryFile];
     const staticPreview = staticPreviewForProject(projectId, metadata);
+    const image = imageForProject(projectId, metadata);
     const mode = modeFromMetadata(metadata);
+    const galleryMetadata = {
+      ...(metadata.category ? { category: metadata.category } : {}),
+      ...(metadata.tags && metadata.tags.length > 0 ? { tags: metadata.tags } : {}),
+      ...(metadata.author ? { author: metadata.author } : {}),
+      ...(image ? { image } : {}),
+    };
 
     if (mode === 'static') {
       if (!staticPreview) {
@@ -108,6 +126,7 @@ export const projectExamples: readonly PlaygroundExample[] = Object.entries(proj
           description: metadata.description,
           exportFormats: [],
           staticPreview,
+          ...galleryMetadata,
           code: '',
           sourceFiles: {},
         },
@@ -131,6 +150,7 @@ export const projectExamples: readonly PlaygroundExample[] = Object.entries(proj
         ...(metadata.initialParameters ? { initialParameters: metadata.initialParameters } : {}),
         ...(presets ? { presets } : {}),
         ...(staticPreview ? { staticPreview } : {}),
+        ...galleryMetadata,
         code,
         sourceFiles,
       },
@@ -214,6 +234,20 @@ function staticPreviewForProject(
   }
 
   return { glb };
+}
+
+function imageForProject(projectId: string, metadata: ProjectMetadata): string | undefined {
+  if (!metadata.image) {
+    return undefined;
+  }
+
+  const imagePath = metadata.image.startsWith('./') ? metadata.image : `./projects/${projectId}/${metadata.image}`;
+  const image = projectImageByPath[imagePath];
+  if (!image) {
+    throw new Error(`Project "${projectId}" references missing gallery image "${metadata.image}"`);
+  }
+
+  return image;
 }
 
 function modeFromMetadata(metadata: ProjectMetadata): NonNullable<PlaygroundExample['mode']> {

@@ -107,7 +107,7 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
   const [pendingParameters, setPendingParameters] = useState<Record<string, unknown> | undefined>(undefined);
 
   // Kiosk / viewer-only mode: hide the editor and its toggle entirely.
-  const isCodeEditorDisabled = useFeature('disableCodeEditor');
+  const isCodeEditorDisabled = useIsCodeEditorDisabled(location.search);
 
   const activeExample = playgroundExamples.find((example) => example.id === activeExampleId) ?? defaultExample;
   const isEditableExample = activeExample.mode !== 'static';
@@ -754,6 +754,17 @@ function PlaygroundExportControls({
       </DropdownMenuContent>
     </DropdownMenu>
   );
+}
+
+/**
+ * True when the code editor should be hidden. The `disableCodeEditor` flag covers
+ * whole deployments; `?editor=off|0|false` covers a single visit so embeds and
+ * shared kiosk links work without any stored state.
+ */
+function useIsCodeEditorDisabled(search: string): boolean {
+  const isDisabledByFlag = useFeature('disableCodeEditor');
+  const editorParameter = new URLSearchParams(search).get('editor')?.toLowerCase();
+  return isDisabledByFlag || editorParameter === 'off' || editorParameter === '0' || editorParameter === 'false';
 }
 
 function readInitialExampleIdFromSearch(params: URLSearchParams): string {
