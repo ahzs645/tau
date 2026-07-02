@@ -144,7 +144,7 @@ vi.mock('dockview-react', () => ({
   },
 }));
 
-vi.mock('#components/geometry/parameters/parameters.js', () => ({
+vi.mock('@taucad/react/parameters', () => ({
   Parameters: ({
     parameters,
     onParametersChange,

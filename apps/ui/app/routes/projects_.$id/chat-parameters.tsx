@@ -70,7 +70,7 @@ import { useKeybinding } from '#hooks/use-keyboard.js';
 import type { KeyCombination } from '#utils/keys.utils.js';
 import { formatKeyCombination } from '#utils/keys.utils.js';
 import { useProject, useMainGraphics } from '#hooks/use-project.js';
-import { Parameters } from '#components/geometry/parameters/parameters.js';
+import { Parameters } from '@taucad/react/parameters';
 import type { cadMachine } from '#machines/cad.machine.js';
 import { createDefaultEntry, getActiveGroupValues } from '#utils/parameter-config.utils.js';
 import { sortGeometryUnitEntries } from '#routes/projects_.$id/geometry-unit.utils.js';

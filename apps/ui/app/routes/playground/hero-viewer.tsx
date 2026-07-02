@@ -11,7 +11,7 @@ import { converterTranscoder } from '@taucad/runtime/transcoder';
 import { downloadBlob } from '@taucad/utils/file';
 import { deriveExportFormatOptions } from '#routes/playground/hero-viewer.utils.js';
 import type { ExportFormatOption } from '#routes/playground/hero-viewer.utils.js';
-import { Parameters } from '#components/geometry/parameters/parameters.js';
+import { Parameters } from '@taucad/react/parameters';
 import { ModelViewer, RenderStatusOverlay } from '#components/model-viewer.js';
 import { useProjectManager } from '#hooks/use-project-manager.js';
 import { useRender } from '@taucad/react';
@@ -21,7 +21,7 @@ import { FileExtensionIcon } from '#components/icons/file-extension-icon.js';
 import { toast } from '#components/ui/sonner.js';
 import { encodeTextFile } from '#utils/filesystem.utils.js';
 import { Loader } from '#components/ui/loader.js';
-import type { Units } from '#components/geometry/parameters/rjsf-context.js';
+import type { Units } from '@taucad/react/rjsf-context';
 import qrcodeScad from '#routes/playground/qrcode.scad?raw';
 
 const heroProjectId = 'hero-qrcode-v2';

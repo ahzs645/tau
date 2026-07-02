@@ -4,7 +4,7 @@ import { RefreshCcw, ChevronRight, Search } from 'lucide-react';
 import { hasJsonSchemaObjectProperties } from '@taucad/utils/schema';
 import { Button } from '#components/ui/button.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
-import { Parameters } from '#components/geometry/parameters/parameters.js';
+import { Parameters } from '@taucad/react/parameters';
 import { cn } from '#utils/ui.utils.js';
 import { useCadPreview } from '#hooks/use-cad-preview.js';
 

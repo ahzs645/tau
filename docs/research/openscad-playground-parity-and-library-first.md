@@ -119,3 +119,10 @@ Staged extraction path, cheapest first:
 3. Publish that as the real `@taucad/react`, and rebuild the playground route on top of it as the
    reference consumer — at that point "use Tau like a library" is literally how this repo's own
    gallery works.
+
+**Status:** the parametric view (step 2 for `parameters/`) is done — `components/geometry/parameters`
+plus its machine, actors, and a vendored copy of the shadcn primitives it needs now live in
+`packages/react` behind granular subpath exports (`@taucad/react/parameters`, `/parameters-number`,
+`/rjsf-theme`, `/rjsf-utils`, `/rjsf-context`, `/tooltip`), and apps/ui consumes them as a library.
+The dependency audit for `cad/` + `graphics/` (~14k LOC) found they must move together (mutual
+imports via `webgl-fallback`) with theme/color/feature-flag hooks injected — that is the next phase.

@@ -3,7 +3,7 @@ import { Box, PenLine, Ruler } from 'lucide-react';
 import { Button } from '#components/ui/button.js';
 import { Tabs, TabsList, TabsTrigger } from '#components/ui/tabs.js';
 import { Switch } from '#components/ui/switch.js';
-import { ParametersNumber } from '#components/geometry/parameters/parameters-number.js';
+import { ParametersNumber } from '@taucad/react/parameters-number';
 import { InfoTooltip } from '#components/ui/info-tooltip.js';
 import { useGraphics, useGraphicsSelector } from '#hooks/use-graphics.js';
 

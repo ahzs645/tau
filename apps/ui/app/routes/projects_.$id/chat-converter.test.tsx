@@ -144,7 +144,7 @@ vi.mock('@rjsf/validator-ajv8', () => ({
   default: {},
 }));
 
-vi.mock('#components/geometry/parameters/rjsf-theme.js', () => ({
+vi.mock('@taucad/react/rjsf-theme', () => ({
   widgets: {},
   templates: {},
 }));

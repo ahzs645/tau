@@ -1,7 +1,7 @@
 {
   "name": "@taucad/react",
   "version": "0.1.0-beta.0",
-  "description": "React hooks for @taucad/runtime",
+  "description": "React hooks and components for @taucad/runtime",
   "type": "module",
   "private": false,
   "repository": {
@@ -23,7 +23,13 @@
   "author": "Richard Fontein",
   "license": "MIT",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./parameters": "./src/components/geometry/parameters/parameters.tsx",
+    "./parameters-number": "./src/components/geometry/parameters/parameters-number.tsx",
+    "./rjsf-theme": "./src/components/geometry/parameters/rjsf-theme.tsx",
+    "./rjsf-utils": "./src/components/geometry/parameters/rjsf-utils.ts",
+    "./rjsf-context": "./src/components/geometry/parameters/rjsf-context.ts",
+    "./tooltip": "./src/components/ui/tooltip.tsx"
   },
   "publishConfig": {
     "access": "public",
@@ -37,6 +43,66 @@
           "types": "./dist/esm/index.d.ts",
           "default": "./dist/esm/index.js"
         }
+      },
+      "./parameters": {
+        "require": {
+          "types": "./dist/cjs/components/geometry/parameters/parameters.d.cts",
+          "default": "./dist/cjs/components/geometry/parameters/parameters.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/components/geometry/parameters/parameters.d.ts",
+          "default": "./dist/esm/components/geometry/parameters/parameters.js"
+        }
+      },
+      "./parameters-number": {
+        "require": {
+          "types": "./dist/cjs/components/geometry/parameters/parameters-number.d.cts",
+          "default": "./dist/cjs/components/geometry/parameters/parameters-number.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/components/geometry/parameters/parameters-number.d.ts",
+          "default": "./dist/esm/components/geometry/parameters/parameters-number.js"
+        }
+      },
+      "./rjsf-theme": {
+        "require": {
+          "types": "./dist/cjs/components/geometry/parameters/rjsf-theme.d.cts",
+          "default": "./dist/cjs/components/geometry/parameters/rjsf-theme.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/components/geometry/parameters/rjsf-theme.d.ts",
+          "default": "./dist/esm/components/geometry/parameters/rjsf-theme.js"
+        }
+      },
+      "./rjsf-utils": {
+        "require": {
+          "types": "./dist/cjs/components/geometry/parameters/rjsf-utils.d.cts",
+          "default": "./dist/cjs/components/geometry/parameters/rjsf-utils.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/components/geometry/parameters/rjsf-utils.d.ts",
+          "default": "./dist/esm/components/geometry/parameters/rjsf-utils.js"
+        }
+      },
+      "./rjsf-context": {
+        "require": {
+          "types": "./dist/cjs/components/geometry/parameters/rjsf-context.d.cts",
+          "default": "./dist/cjs/components/geometry/parameters/rjsf-context.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/components/geometry/parameters/rjsf-context.d.ts",
+          "default": "./dist/esm/components/geometry/parameters/rjsf-context.js"
+        }
+      },
+      "./tooltip": {
+        "require": {
+          "types": "./dist/cjs/components/ui/tooltip.d.cts",
+          "default": "./dist/cjs/components/ui/tooltip.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/components/ui/tooltip.d.ts",
+          "default": "./dist/esm/components/ui/tooltip.js"
+        }
       }
     }
   },
@@ -44,15 +110,38 @@
     "#*": "./src/*"
   },
   "dependencies": {
+    "@rjsf/core": "^5.24.13",
+    "@rjsf/utils": "^5.24.13",
+    "@rjsf/validator-ajv8": "^5.24.13",
     "@taucad/json-schema": "workspace:*",
     "@taucad/runtime": "workspace:*",
-    "@taucad/types": "workspace:*"
+    "@taucad/types": "workspace:*",
+    "@taucad/units": "workspace:*",
+    "@xstate/react": "^5.0.5",
+    "class-variance-authority": "catalog:",
+    "clsx": "^2.1.1",
+    "culori": "catalog:",
+    "deepmerge": "catalog:",
+    "lucide-react": "catalog:",
+    "pluralize": "^8.0.0",
+    "radix-ui": "catalog:",
+    "react-colorful": "^5.7.0",
+    "tailwind-merge": "^3.6.0",
+    "xstate": "catalog:"
   },
   "peerDependencies": {
     "react": ">=18.0.0"
   },
   "devDependencies": {
     "@testing-library/react": "catalog:",
-    "@types/react": "catalog:"
+    "@testing-library/user-event": "^14.6.1",
+    "@types/culori": "^4.0.1",
+    "@types/pluralize": "^0.0.33",
+    "@types/react": "catalog:",
+    "jsdom": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "type-fest": "catalog:",
+    "vitest-mock-extended": "catalog:"
   }
 }
