@@ -69,6 +69,20 @@ describe('PlaygroundGallery', () => {
     expect(screen.getByRole('heading', { name: 'Atmospheric Sampler' })).toBeDefined();
   });
 
+  it('zooms a card image into a lightbox and closes it without navigating', () => {
+    renderGallery();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Preview 3D Rack System' }));
+
+    expect(screen.getByRole('dialog', { name: '3D Rack System preview' })).toBeDefined();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close preview' }));
+
+    expect(screen.queryByRole('dialog')).toBeNull();
+    // The card link is untouched by the zoom interaction.
+    expect(screen.getByRole('link', { name: 'Open 3D Rack System' })).toBeDefined();
+  });
+
   it('matches search terms against project.json tags', () => {
     renderGallery();
 

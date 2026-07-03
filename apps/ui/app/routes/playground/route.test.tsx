@@ -264,29 +264,45 @@ describe('PlaygroundRoot', () => {
   });
 
   it('renders the production playground shell with gallery navigation and parameters', async () => {
+    globalThis.history.replaceState({}, '', '/?editor=on');
+
     renderPlaygroundRoot();
 
-    expect(screen.getByRole('heading', { name: 'Tau CAD Playground' })).toBeDefined();
-    expect(screen.getByRole('link', { name: 'Gallery' }).getAttribute('href')).toBe('/');
-    expect(screen.getByText('OpenSCAD bracket · OpenSCAD')).toBeDefined();
-    expect(screen.getByRole('button', { name: 'Code' }).getAttribute('aria-pressed')).toBe('false');
+    // The header leads with the model itself; the app name lives on the gallery.
+    expect(screen.getByRole('heading', { name: 'OpenSCAD bracket' })).toBeDefined();
+    expect(screen.getAllByRole('link', { name: 'Gallery' })[0]!.getAttribute('href')).toBe('/');
+    expect(screen.getByText('OpenSCAD', { selector: 'p' })).toBeDefined();
+    expect(screen.getAllByRole('button', { name: 'Code' })[0]!.getAttribute('aria-pressed')).toBe('false');
     expect(screen.queryByLabelText('Code editor')).toBeNull();
     expect(screen.getByTestId('cad-preview-viewer')).toBeDefined();
     expect(screen.getByTestId('preview-parameters')).toBeDefined();
     expect(screen.getByRole('button', { name: 'Wide' })).toBeDefined();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Code' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Code' })[0]!);
     expect(await screen.findByLabelText('Code editor')).toBeDefined();
   });
 
-  it('hides the code editor toggle when the URL opts into kiosk mode via ?editor=off', async () => {
+  it('hides the code editor and run controls by default until ?editor=on opts in', async () => {
+    renderPlaygroundRoot();
+
+    expect(screen.getByRole('heading', { name: 'OpenSCAD bracket' })).toBeDefined();
+    expect(screen.queryByRole('button', { name: 'Code' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Run' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Reset' })).toBeNull();
+    // The rest of the playground stays interactive: viewer and parameters still render.
+    expect(screen.getByTestId('cad-preview-viewer')).toBeDefined();
+    await waitFor(() => {
+      expect(screen.getByTestId('preview-parameters')).toBeDefined();
+    });
+  });
+
+  it('keeps legacy kiosk links (?editor=off) on the default editor-less view', async () => {
     globalThis.history.replaceState({}, '', '/?editor=off');
 
     renderPlaygroundRoot();
 
-    expect(screen.getByRole('heading', { name: 'Tau CAD Playground' })).toBeDefined();
+    expect(screen.getByRole('heading', { name: 'OpenSCAD bracket' })).toBeDefined();
     expect(screen.queryByRole('button', { name: 'Code' })).toBeNull();
-    // The rest of the playground stays interactive: viewer and parameters still render.
     expect(screen.getByTestId('cad-preview-viewer')).toBeDefined();
     await waitFor(() => {
       expect(screen.getByTestId('preview-parameters')).toBeDefined();
@@ -298,7 +314,7 @@ describe('PlaygroundRoot', () => {
 
     renderPlaygroundRoot();
 
-    expect(await screen.findByText('OpenCascade direct · OpenCascade')).toBeDefined();
+    expect(await screen.findByRole('heading', { name: 'OpenCascade direct' })).toBeDefined();
     await waitFor(() => {
       expect(providerCalls.at(-1)?.projectId).toBe('root-playground-opencascade-box');
     });
@@ -317,7 +333,7 @@ describe('PlaygroundRoot', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText('3D Rack System · OpenSCAD')).toBeDefined();
+    expect(await screen.findByRole('heading', { name: '3D Rack System' })).toBeDefined();
     await waitFor(() => {
       expect(providerCalls.at(-1)?.projectId).toBe('root-playground-3d-rack-scad');
     });
@@ -328,7 +344,7 @@ describe('PlaygroundRoot', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText('Network Equipment Rack · OpenSCAD')).toBeDefined();
+    expect(await screen.findByRole('heading', { name: 'Network Equipment Rack' })).toBeDefined();
     await waitFor(() => {
       expect(providerCalls.at(-1)?.projectId).toBe('root-playground-networking');
     });
@@ -341,7 +357,7 @@ describe('PlaygroundRoot', () => {
       </MemoryRouter>,
     );
 
-    expect(await screen.findByText('Network Equipment Rack · OpenSCAD')).toBeDefined();
+    expect(await screen.findByRole('heading', { name: 'Network Equipment Rack' })).toBeDefined();
     await waitFor(() => {
       expect(providerCalls.at(-1)?.projectId).toBe('root-playground-networking');
     });
@@ -352,7 +368,7 @@ describe('PlaygroundRoot', () => {
 
     renderPlaygroundRoot();
 
-    expect(await screen.findByText('Atmospheric Sampler · Static')).toBeDefined();
+    expect(await screen.findByRole('heading', { name: 'Atmospheric Sampler' })).toBeDefined();
     expect(screen.getByTestId('static-preview-viewer')).toBeDefined();
     expect(screen.queryByRole('button', { name: 'Code' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Run' })).toBeNull();
@@ -364,6 +380,8 @@ describe('PlaygroundRoot', () => {
   });
 
   it('runs edited code through the preview provider', async () => {
+    globalThis.history.replaceState({}, '', '/?editor=on');
+
     renderPlaygroundRoot();
     await waitFor(() => {
       expect(providerCalls.at(-1)?.projectId).toBe('root-playground-openscad-bracket');
@@ -371,12 +389,12 @@ describe('PlaygroundRoot', () => {
     const initialProjectId = providerCalls.at(-1)?.projectId;
     const initialRootDirectory = fileManagerCalls.at(-1)?.rootDirectory;
 
-    fireEvent.click(screen.getByRole('button', { name: 'Code' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Code' })[0]!);
     const editor = await screen.findByLabelText('Code editor');
     fireEvent.change(editor, { target: { value: 'cube([10, 10, 10]);' } });
     expect(screen.getByText('edited')).toBeDefined();
     expect(screen.getByText('unrun')).toBeDefined();
-    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Run' })[0]!);
 
     await waitFor(() => {
       const lastCall = providerCalls.at(-1);
@@ -388,9 +406,11 @@ describe('PlaygroundRoot', () => {
   });
 
   it('supports source-style keyboard shortcuts for preview and export', async () => {
+    globalThis.history.replaceState({}, '', '/?editor=on');
+
     renderPlaygroundRoot();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Code' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Code' })[0]!);
     const editor = await screen.findByLabelText('Code editor');
     fireEvent.change(editor, { target: { value: 'sphere(10);' } });
     fireEvent.keyDown(globalThis.window, { key: 'F5' });
@@ -413,7 +433,7 @@ describe('PlaygroundRoot', () => {
   it('copies share links using the same model URL behavior as the source app', async () => {
     renderPlaygroundRoot();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Share' })[0]!);
 
     await waitFor(() => {
       expect(mockWriteText).toHaveBeenCalledWith(expect.stringMatching(/\/\?model=openscad-bracket$/));
@@ -426,7 +446,7 @@ describe('PlaygroundRoot', () => {
 
     renderPlaygroundRoot();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Share' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Share' })[0]!);
 
     await waitFor(() => {
       expect(mockWriteText).toHaveBeenCalled();
@@ -463,7 +483,7 @@ describe('PlaygroundRoot', () => {
     renderPlaygroundRoot();
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Share' })).toBeDefined();
+      expect(screen.getAllByRole('button', { name: 'Share' })[0]).toBeDefined();
     });
 
     expect(new URLSearchParams(globalThis.location.search).get('p')).toBeNull();

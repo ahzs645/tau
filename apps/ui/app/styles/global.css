@@ -441,6 +441,20 @@
   }
 }
 
+/*
+ * iOS Safari auto-zooms the page when a focused form control renders text under
+ * 16px. Bumping controls to 16px on touch devices stops the tap-to-zoom jump
+ * without the pinch-zoom/a11y cost of a `maximum-scale=1` viewport. Deliberately
+ * unlayered: it must outrank Tailwind text-* utilities (utilities layer).
+ */
+@media (pointer: coarse) {
+  input,
+  select,
+  textarea {
+    font-size: max(16px, 1em);
+  }
+}
+
 /* FONTS */
 
 /* Self-hosted Geist Fonts */
