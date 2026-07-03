@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
-import { ArrowUpRight, FileCode2, Search } from 'lucide-react';
+import { ArrowUpRight, Box, Search } from 'lucide-react';
 import { projectExamples } from '#routes/playground/projects.js';
 import { cn } from '#utils/ui.utils.js';
 import type { Handle } from '#types/matches.types.js';
@@ -17,8 +17,6 @@ const categoryFilters: readonly string[] = [
     a.localeCompare(b),
   ),
 ];
-/** Tags shown on a card before collapsing into a "+n" chip. */
-const maxVisibleTags = 4;
 
 type EngineFilter = string;
 
@@ -115,9 +113,7 @@ export default function PlaygroundGallery(): React.JSX.Element {
 
         <div className='grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3'>
           {filteredExamples.map((example) => {
-            const visibleTags = example.tags?.slice(0, maxVisibleTags) ?? [];
-            const hiddenTagCount = (example.tags?.length ?? 0) - visibleTags.length;
-            const hasMetadataRow = Boolean(example.category) || visibleTags.length > 0;
+            const presetCount = example.presets?.length ?? 0;
 
             return (
               <Link
@@ -126,67 +122,38 @@ export default function PlaygroundGallery(): React.JSX.Element {
                 aria-label={`Open ${example.name}`}
                 className='group flex min-w-0 flex-col overflow-hidden rounded-md border bg-background transition-colors hover:border-primary/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none'
               >
-                {example.image ? (
-                  <img
-                    src={example.image}
-                    alt=''
-                    loading='lazy'
-                    decoding='async'
-                    className='aspect-video w-full border-b bg-muted/30 object-cover'
-                  />
-                ) : null}
+                {/* Every card gets the same media slot so rows stay aligned; models
+                    without a poster render a placeholder instead of collapsing. */}
+                <div className='relative aspect-video w-full shrink-0 border-b bg-muted/30'>
+                  {example.image ? (
+                    <img
+                      src={example.image}
+                      alt=''
+                      loading='lazy'
+                      decoding='async'
+                      className='size-full object-cover'
+                    />
+                  ) : (
+                    <div className='flex size-full items-center justify-center'>
+                      <Box className='size-8 text-muted-foreground/40' strokeWidth={1.25} aria-hidden />
+                    </div>
+                  )}
+                  <span className='absolute top-2 right-2 rounded-sm border bg-background/80 px-1.5 py-0.5 text-[10px] text-muted-foreground backdrop-blur-sm'>
+                    {example.kernel}
+                  </span>
+                </div>
 
                 <div className='flex flex-1 flex-col p-4'>
-                  <div className='mb-3 flex items-start justify-between gap-3'>
-                    <div className='min-w-0'>
-                      <h2 className='truncate text-sm font-semibold group-hover:text-primary'>{example.name}</h2>
-                      <p className='mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground'>{example.description}</p>
-                    </div>
-                    <span className='shrink-0 rounded-sm bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground'>
-                      {example.kernel}
+                  <h2 className='truncate text-sm font-semibold group-hover:text-primary'>{example.name}</h2>
+                  <p className='mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground'>{example.description}</p>
+
+                  <div className='mt-auto flex items-center justify-between gap-2 pt-4'>
+                    <span className='truncate text-xs text-muted-foreground'>
+                      {[example.category, presetCount > 0 ? `${presetCount} presets` : null]
+                        .filter(Boolean)
+                        .join(' · ')}
                     </span>
-                  </div>
-
-                  {hasMetadataRow ? (
-                    <div className='mb-3 flex flex-wrap items-center gap-1'>
-                      {example.category ? (
-                        <span className='rounded-sm border border-primary/30 bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary'>
-                          {example.category}
-                        </span>
-                      ) : null}
-                      {visibleTags.map((tag) => (
-                        <span
-                          key={tag}
-                          className='rounded-sm bg-muted/70 px-1.5 py-0.5 text-[10px] text-muted-foreground'
-                        >
-                          {tag}
-                        </span>
-                      ))}
-                      {hiddenTagCount > 0 ? (
-                        <span className='px-0.5 text-[10px] text-muted-foreground'>+{hiddenTagCount}</span>
-                      ) : null}
-                    </div>
-                  ) : null}
-
-                  <dl className='grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-2 text-xs'>
-                    <div className='min-w-0 rounded-sm bg-muted/50 px-2 py-1.5'>
-                      <dt className='text-muted-foreground'>File</dt>
-                      <dd className='truncate font-mono'>{example.mainFile}</dd>
-                    </div>
-                    <div className='min-w-0 rounded-sm bg-muted/50 px-2 py-1.5'>
-                      <dt className='text-muted-foreground'>Exports</dt>
-                      <dd className='truncate uppercase'>
-                        {example.exportFormats.length > 0 ? example.exportFormats.join(', ') : 'Static'}
-                      </dd>
-                    </div>
-                  </dl>
-
-                  <div className='mt-3 flex items-center justify-between gap-2'>
-                    <div className='flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground'>
-                      <FileCode2 className='size-3.5 shrink-0' />
-                      <span className='truncate'>{example.presets?.length ?? 0} presets</span>
-                    </div>
-                    <span className='flex items-center gap-1 text-xs font-medium text-primary'>
+                    <span className='flex shrink-0 items-center gap-1 text-xs font-medium text-primary'>
                       Open
                       <ArrowUpRight className='size-3.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5' />
                     </span>

@@ -336,53 +336,59 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
     };
   }, [isEditableExample, runPreview]);
 
+  // Rendered twice: in the header on md+ and in the mobile bottom bar below md,
+  // so actions stay within thumb reach on phones. CSS hides whichever copy is inactive.
+  const actionButtons = (
+    <>
+      {showCodeControls ? (
+        <Button
+          variant={isCodeVisible ? 'default' : 'outline'}
+          size='sm'
+          aria-pressed={isCodeVisible}
+          onClick={() => {
+            setIsCodeVisible((visible) => !visible);
+          }}
+        >
+          <Eye className='size-3.5' />
+          Code
+        </Button>
+      ) : null}
+      <Button variant='outline' size='sm' onClick={copyShareLink}>
+        <Share2 className='size-3.5' />
+        Share
+      </Button>
+      {isEditableExample ? (
+        <>
+          <Button variant='outline' size='sm' onClick={resetExample}>
+            <RotateCcw className='size-3.5' />
+            Reset
+          </Button>
+          <Button size='sm' onClick={runPreview}>
+            <Play className='size-3.5' />
+            Run
+          </Button>
+        </>
+      ) : null}
+    </>
+  );
+
   return (
     <main className='flex h-dvh flex-col overflow-hidden bg-background text-foreground'>
       <header className='flex min-h-14 flex-wrap items-center justify-between gap-3 border-b px-4 py-3 md:px-5'>
         <div className='flex min-w-0 items-center gap-3'>
           <div className='min-w-0'>
-            <h1 className='truncate text-base font-semibold'>Tau CAD Playground</h1>
-            <p className='truncate text-xs text-muted-foreground'>
-              {activeExample.name} · {activeExample.kernel}
-            </p>
+            <h1 className='truncate text-base font-semibold'>{activeExample.name}</h1>
+            <p className='truncate text-xs text-muted-foreground'>{activeExample.kernel}</p>
           </div>
         </div>
-        <div className='flex items-center gap-2'>
+        <div className='flex items-center gap-2 max-md:hidden'>
           <Link to='/' className={buttonVariants({ variant: 'outline', size: 'sm' })}>
             <LayoutGrid className='size-3.5' />
             Gallery
           </Link>
           {/* Desktop export lives in the header; on mobile it moves onto the 3D viewer (below). */}
           <div ref={setExportControlsRef} className='flex items-center gap-1.5 max-xl:hidden' />
-          {showCodeControls ? (
-            <Button
-              variant={isCodeVisible ? 'default' : 'outline'}
-              size='sm'
-              aria-pressed={isCodeVisible}
-              onClick={() => {
-                setIsCodeVisible((visible) => !visible);
-              }}
-            >
-              <Eye className='size-3.5' />
-              Code
-            </Button>
-          ) : null}
-          <Button variant='outline' size='sm' onClick={copyShareLink}>
-            <Share2 className='size-3.5' />
-            Share
-          </Button>
-          {isEditableExample ? (
-            <>
-              <Button variant='outline' size='sm' onClick={resetExample}>
-                <RotateCcw className='size-3.5' />
-                Reset
-              </Button>
-              <Button size='sm' onClick={runPreview}>
-                <Play className='size-3.5' />
-                Run
-              </Button>
-            </>
-          ) : null}
+          {actionButtons}
         </div>
       </header>
 
@@ -461,41 +467,6 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
                   pendingParameters={pendingParameters}
                   onParametersChange={setLiveParameters}
                 />
-                {/* Mobile-only segmented tabs to swap between the 3D model and its parameters.
-                  Hidden on xl+, where both panes show side by side. */}
-                <div className='flex shrink-0 border-b xl:hidden'>
-                  <button
-                    type='button'
-                    aria-pressed={mobilePane === '3d'}
-                    className={cn(
-                      'flex-1 py-2.5 text-sm font-medium transition-colors',
-                      mobilePane === '3d'
-                        ? 'border-b-2 border-primary text-primary'
-                        : 'border-b-2 border-transparent text-muted-foreground',
-                    )}
-                    onClick={() => {
-                      setMobilePane('3d');
-                    }}
-                  >
-                    3D View
-                  </button>
-                  <button
-                    type='button'
-                    aria-pressed={mobilePane === 'params'}
-                    className={cn(
-                      'flex-1 py-2.5 text-sm font-medium transition-colors',
-                      mobilePane === 'params'
-                        ? 'border-b-2 border-primary text-primary'
-                        : 'border-b-2 border-transparent text-muted-foreground',
-                    )}
-                    onClick={() => {
-                      setMobilePane('params');
-                    }}
-                  >
-                    Parameters
-                  </button>
-                </div>
-
                 <section
                   className={cn(
                     'flex min-w-0 flex-col xl:min-h-0 xl:border-r',
@@ -532,7 +503,9 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
                 <section
                   className={cn(
                     'flex min-w-0 flex-col bg-background xl:min-h-0 xl:border-t-0',
-                    mobilePane === 'params' ? 'max-xl:flex-1' : 'max-xl:hidden',
+                    // min-h-0 + overflow keep the list scrolling inside the pane instead of
+                    // running underneath the mobile bottom bar.
+                    mobilePane === 'params' ? 'max-xl:min-h-0 max-xl:flex-1 max-xl:overflow-y-auto' : 'max-xl:hidden',
                   )}
                 >
                   <PlaygroundParameters presets={activeExample.presets ?? []} />
@@ -560,6 +533,55 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
           </section>
         )}
       </div>
+
+      {/* Mobile bottom chrome: the pane switcher (below xl) and the primary actions (below md)
+          anchor to the bottom of the screen, within thumb reach. Hidden entirely on xl+. */}
+      <nav
+        className={cn(
+          'shrink-0 border-t bg-background pb-[env(safe-area-inset-bottom)] xl:hidden',
+          // Static examples have no pane switcher, so from md up the bar would be empty.
+          !isEditableExample && 'md:hidden',
+        )}
+      >
+        {isEditableExample ? (
+          <div className='flex'>
+            <button
+              type='button'
+              aria-pressed={mobilePane === '3d'}
+              className={cn(
+                'flex-1 border-t-2 py-2.5 text-sm font-medium transition-colors',
+                mobilePane === '3d' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground',
+              )}
+              onClick={() => {
+                setMobilePane('3d');
+              }}
+            >
+              3D View
+            </button>
+            <button
+              type='button'
+              aria-pressed={mobilePane === 'params'}
+              className={cn(
+                'flex-1 border-t-2 py-2.5 text-sm font-medium transition-colors',
+                mobilePane === 'params' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground',
+              )}
+              onClick={() => {
+                setMobilePane('params');
+              }}
+            >
+              Parameters
+            </button>
+          </div>
+        ) : null}
+        <div className={cn('flex items-center gap-1.5 px-3 py-2 md:hidden', isEditableExample && 'border-t')}>
+          {/* Icon-only so the full action row fits a phone-width screen. */}
+          <Link to='/' aria-label='Gallery' className={buttonVariants({ variant: 'outline', size: 'sm' })}>
+            <LayoutGrid className='size-3.5' />
+          </Link>
+          <div className='flex-1' />
+          {actionButtons}
+        </div>
+      </nav>
     </main>
   );
 }
