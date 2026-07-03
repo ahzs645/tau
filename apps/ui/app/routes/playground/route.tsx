@@ -320,7 +320,7 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (!isEditableExample) {
+      if (!showCodeControls) {
         return;
       }
 
@@ -334,7 +334,7 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
     return () => {
       globalThis.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isEditableExample, runPreview]);
+  }, [showCodeControls, runPreview]);
 
   // Rendered twice: in the header on md+ and in the mobile bottom bar below md,
   // so actions stay within thumb reach on phones. CSS hides whichever copy is inactive.
@@ -357,7 +357,8 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
         <Share2 className='size-3.5' />
         Share
       </Button>
-      {isEditableExample ? (
+      {/* Run/Reset only matter in code mode — parameter changes apply live without them. */}
+      {showCodeControls ? (
         <>
           <Button variant='outline' size='sm' onClick={resetExample}>
             <RotateCcw className='size-3.5' />
@@ -779,14 +780,16 @@ function PlaygroundExportControls({
 }
 
 /**
- * True when the code editor should be hidden. The `disableCodeEditor` flag covers
- * whole deployments; `?editor=off|0|false` covers a single visit so embeds and
- * shared kiosk links work without any stored state.
+ * True when the code editor should be hidden. The playground is parameter-first, so
+ * the editor is hidden by default; `?editor=on|1|true` opts a single visit into code
+ * mode (embeds and shared links included). The `disableCodeEditor` flag force-hides
+ * it for whole deployments regardless of the URL.
  */
 function useIsCodeEditorDisabled(search: string): boolean {
   const isDisabledByFlag = useFeature('disableCodeEditor');
   const editorParameter = new URLSearchParams(search).get('editor')?.toLowerCase();
-  return isDisabledByFlag || editorParameter === 'off' || editorParameter === '0' || editorParameter === 'false';
+  const isEnabledByParameter = editorParameter === 'on' || editorParameter === '1' || editorParameter === 'true';
+  return isDisabledByFlag || !isEnabledByParameter;
 }
 
 function readInitialExampleIdFromSearch(params: URLSearchParams): string {

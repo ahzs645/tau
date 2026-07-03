@@ -1,11 +1,13 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
-import { ArrowUpRight, Box, Search } from 'lucide-react';
+import { ArrowUpRight, Box, Search, X } from 'lucide-react';
 import { projectExamples } from '#routes/playground/projects.js';
 import { cn } from '#utils/ui.utils.js';
 import type { Handle } from '#types/matches.types.js';
 
 const galleryExamples = projectExamples;
+
+type GalleryExample = (typeof galleryExamples)[number];
 // Build the engine filter list from the kernels actually present in the gallery
 // so OpenCascade / Replicad projects surface their own filter automatically.
 const engineFilters: readonly string[] = ['All', ...new Set(galleryExamples.map((example) => example.kernel))];
@@ -28,6 +30,25 @@ export default function PlaygroundGallery(): React.JSX.Element {
   const [searchTerm, setSearchTerm] = useState('');
   const [engineFilter, setEngineFilter] = useState<EngineFilter>('All');
   const [categoryFilter, setCategoryFilter] = useState('All');
+  // Card image tapped on mobile: shown enlarged in a dismissable lightbox.
+  const [zoomedExample, setZoomedExample] = useState<GalleryExample | undefined>(undefined);
+
+  useEffect(() => {
+    if (!zoomedExample) {
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setZoomedExample(undefined);
+      }
+    };
+
+    globalThis.addEventListener('keydown', handleKeyDown);
+    return () => {
+      globalThis.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [zoomedExample]);
 
   const filteredExamples = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
@@ -115,17 +136,35 @@ export default function PlaygroundGallery(): React.JSX.Element {
           {filteredExamples.map((example) => {
             const presetCount = example.presets?.length ?? 0;
 
+            // The media slot keeps every card the same shape (placeholder when there is no
+            // poster). Below sm the card flips to a compact row with the media on the left.
+            const mediaClasses =
+              'relative shrink-0 bg-muted/30 max-sm:w-28 max-sm:self-stretch max-sm:border-r sm:aspect-video sm:w-full sm:border-b';
+
             return (
-              <Link
+              <article
                 key={example.id}
-                to={`/playground?model=${example.id}`}
-                aria-label={`Open ${example.name}`}
-                className='group flex min-w-0 flex-col overflow-hidden rounded-md border bg-background transition-colors hover:border-primary/60 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none'
+                className='group relative flex min-w-0 overflow-hidden rounded-md border bg-background transition-colors focus-within:border-primary/60 hover:border-primary/60 max-sm:flex-row sm:flex-col'
               >
-                {/* Every card gets the same media slot so rows stay aligned; models
-                    without a poster render a placeholder instead of collapsing. */}
-                <div className='relative aspect-video w-full shrink-0 border-b bg-muted/30'>
-                  {example.image ? (
+                {/* Stretched link: covers the whole card, so everything that isn't its own
+                    control (the mobile zoom button) opens the model. */}
+                <Link
+                  to={`/playground?model=${example.id}`}
+                  aria-label={`Open ${example.name}`}
+                  className='absolute inset-0 rounded-md focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none'
+                />
+
+                {example.image ? (
+                  <button
+                    type='button'
+                    aria-label={`Preview ${example.name}`}
+                    // Zoom is a mobile affordance for the small thumbnail; on sm+ clicks fall
+                    // through to the stretched link and open the model as before.
+                    className={cn(mediaClasses, 'z-10 max-sm:cursor-zoom-in sm:pointer-events-none')}
+                    onClick={() => {
+                      setZoomedExample(example);
+                    }}
+                  >
                     <img
                       src={example.image}
                       alt=''
@@ -133,33 +172,36 @@ export default function PlaygroundGallery(): React.JSX.Element {
                       decoding='async'
                       className='size-full object-cover'
                     />
-                  ) : (
-                    <div className='flex size-full items-center justify-center'>
-                      <Box className='size-8 text-muted-foreground/40' strokeWidth={1.25} aria-hidden />
-                    </div>
-                  )}
-                  <span className='absolute top-2 right-2 rounded-sm border bg-background/80 px-1.5 py-0.5 text-[10px] text-muted-foreground backdrop-blur-sm'>
-                    {example.kernel}
-                  </span>
-                </div>
+                    <span className='absolute top-2 right-2 rounded-sm border bg-background/80 px-1.5 py-0.5 text-[10px] text-muted-foreground backdrop-blur-sm max-sm:hidden'>
+                      {example.kernel}
+                    </span>
+                  </button>
+                ) : (
+                  <div className={cn(mediaClasses, 'flex items-center justify-center')}>
+                    <Box className='size-6 text-muted-foreground/40 sm:size-8' strokeWidth={1.25} aria-hidden />
+                    <span className='absolute top-2 right-2 rounded-sm border bg-background/80 px-1.5 py-0.5 text-[10px] text-muted-foreground backdrop-blur-sm max-sm:hidden'>
+                      {example.kernel}
+                    </span>
+                  </div>
+                )}
 
-                <div className='flex flex-1 flex-col p-4'>
+                <div className='pointer-events-none flex min-w-0 flex-1 flex-col p-3 sm:p-4'>
                   <h2 className='truncate text-sm font-semibold group-hover:text-primary'>{example.name}</h2>
                   <p className='mt-1 line-clamp-2 text-xs leading-5 text-muted-foreground'>{example.description}</p>
 
-                  <div className='mt-auto flex items-center justify-between gap-2 pt-4'>
+                  <div className='mt-auto flex items-center justify-between gap-2 pt-3 sm:pt-4'>
                     <span className='truncate text-xs text-muted-foreground'>
                       {[example.category, presetCount > 0 ? `${presetCount} presets` : null]
                         .filter(Boolean)
                         .join(' · ')}
                     </span>
                     <span className='flex shrink-0 items-center gap-1 text-xs font-medium text-primary'>
-                      Open
+                      <span className='max-sm:hidden'>Open</span>
                       <ArrowUpRight className='size-3.5 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5' />
                     </span>
                   </div>
                 </div>
-              </Link>
+              </article>
             );
           })}
         </div>
@@ -170,6 +212,34 @@ export default function PlaygroundGallery(): React.JSX.Element {
           </div>
         ) : null}
       </section>
+
+      {zoomedExample?.image ? (
+        <div
+          role='dialog'
+          aria-modal='true'
+          aria-label={`${zoomedExample.name} preview`}
+          className='fixed inset-0 z-50 flex items-center justify-center bg-background/90 p-4 backdrop-blur-sm'
+          onClick={() => {
+            setZoomedExample(undefined);
+          }}
+        >
+          <img
+            src={zoomedExample.image}
+            alt={zoomedExample.name}
+            className='max-h-full max-w-full rounded-md border object-contain'
+          />
+          <button
+            type='button'
+            aria-label='Close preview'
+            className='absolute top-4 right-4 rounded-md border bg-background/80 p-2 backdrop-blur-sm'
+            onClick={() => {
+              setZoomedExample(undefined);
+            }}
+          >
+            <X className='size-4' />
+          </button>
+        </div>
+      ) : null}
     </main>
   );
 }

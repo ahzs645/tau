@@ -264,6 +264,8 @@ describe('PlaygroundRoot', () => {
   });
 
   it('renders the production playground shell with gallery navigation and parameters', async () => {
+    globalThis.history.replaceState({}, '', '/?editor=on');
+
     renderPlaygroundRoot();
 
     // The header leads with the model itself; the app name lives on the gallery.
@@ -280,14 +282,27 @@ describe('PlaygroundRoot', () => {
     expect(await screen.findByLabelText('Code editor')).toBeDefined();
   });
 
-  it('hides the code editor toggle when the URL opts into kiosk mode via ?editor=off', async () => {
+  it('hides the code editor and run controls by default until ?editor=on opts in', async () => {
+    renderPlaygroundRoot();
+
+    expect(screen.getByRole('heading', { name: 'OpenSCAD bracket' })).toBeDefined();
+    expect(screen.queryByRole('button', { name: 'Code' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Run' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Reset' })).toBeNull();
+    // The rest of the playground stays interactive: viewer and parameters still render.
+    expect(screen.getByTestId('cad-preview-viewer')).toBeDefined();
+    await waitFor(() => {
+      expect(screen.getByTestId('preview-parameters')).toBeDefined();
+    });
+  });
+
+  it('keeps legacy kiosk links (?editor=off) on the default editor-less view', async () => {
     globalThis.history.replaceState({}, '', '/?editor=off');
 
     renderPlaygroundRoot();
 
     expect(screen.getByRole('heading', { name: 'OpenSCAD bracket' })).toBeDefined();
     expect(screen.queryByRole('button', { name: 'Code' })).toBeNull();
-    // The rest of the playground stays interactive: viewer and parameters still render.
     expect(screen.getByTestId('cad-preview-viewer')).toBeDefined();
     await waitFor(() => {
       expect(screen.getByTestId('preview-parameters')).toBeDefined();
@@ -365,6 +380,8 @@ describe('PlaygroundRoot', () => {
   });
 
   it('runs edited code through the preview provider', async () => {
+    globalThis.history.replaceState({}, '', '/?editor=on');
+
     renderPlaygroundRoot();
     await waitFor(() => {
       expect(providerCalls.at(-1)?.projectId).toBe('root-playground-openscad-bracket');
@@ -389,6 +406,8 @@ describe('PlaygroundRoot', () => {
   });
 
   it('supports source-style keyboard shortcuts for preview and export', async () => {
+    globalThis.history.replaceState({}, '', '/?editor=on');
+
     renderPlaygroundRoot();
 
     fireEvent.click(screen.getAllByRole('button', { name: 'Code' })[0]!);
