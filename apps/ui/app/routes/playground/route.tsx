@@ -336,8 +336,8 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
     };
   }, [showCodeControls, runPreview]);
 
-  // Rendered twice: in the header on md+ and in the mobile bottom bar below md,
-  // so actions stay within thumb reach on phones. CSS hides whichever copy is inactive.
+  // Primary actions (Share, plus Code/Reset/Run in code mode) live in the header at every
+  // breakpoint, next to the model name. The mobile bottom bar keeps only the pane switcher.
   const actionButtons = (
     <>
       {showCodeControls ? (
@@ -382,10 +382,15 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
             <p className='truncate text-xs text-muted-foreground'>{activeExample.kernel}</p>
           </div>
         </div>
-        <div className='flex items-center gap-2 max-md:hidden'>
-          <Link to='/' className={buttonVariants({ variant: 'outline', size: 'sm' })}>
+        <div className='flex items-center gap-2'>
+          <Link
+            to='/'
+            aria-label='Gallery'
+            className={buttonVariants({ variant: 'outline', size: 'sm' })}
+          >
             <LayoutGrid className='size-3.5' />
-            Gallery
+            {/* Icon-only on phones so the header stays within a thumb-width; labelled on md+. */}
+            <span className='max-md:hidden'>Gallery</span>
           </Link>
           {/* Desktop export lives in the header; on mobile it moves onto the 3D viewer (below). */}
           <div ref={setExportControlsRef} className='flex items-center gap-1.5 max-xl:hidden' />
@@ -535,16 +540,10 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
         )}
       </div>
 
-      {/* Mobile bottom chrome: the pane switcher (below xl) and the primary actions (below md)
-          anchor to the bottom of the screen, within thumb reach. Hidden entirely on xl+. */}
-      <nav
-        className={cn(
-          'shrink-0 border-t bg-background pb-[env(safe-area-inset-bottom)] xl:hidden',
-          // Static examples have no pane switcher, so from md up the bar would be empty.
-          !isEditableExample && 'md:hidden',
-        )}
-      >
-        {isEditableExample ? (
+      {/* Mobile bottom chrome: the pane switcher (below xl) anchors to the bottom of the screen,
+          within thumb reach. Static examples have no panes, so the bar is editable-only. */}
+      {isEditableExample ? (
+        <nav className='shrink-0 border-t bg-background pb-[env(safe-area-inset-bottom)] xl:hidden'>
           <div className='flex'>
             <button
               type='button'
@@ -573,16 +572,8 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
               Parameters
             </button>
           </div>
-        ) : null}
-        <div className={cn('flex items-center gap-1.5 px-3 py-2 md:hidden', isEditableExample && 'border-t')}>
-          {/* Icon-only so the full action row fits a phone-width screen. */}
-          <Link to='/' aria-label='Gallery' className={buttonVariants({ variant: 'outline', size: 'sm' })}>
-            <LayoutGrid className='size-3.5' />
-          </Link>
-          <div className='flex-1' />
-          {actionButtons}
-        </div>
-      </nav>
+        </nav>
+      ) : null}
     </main>
   );
 }
