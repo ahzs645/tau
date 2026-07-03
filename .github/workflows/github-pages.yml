@@ -37,7 +37,9 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '24'
+          # 24.18.0 segfaults during Nx startup on ubuntu-latest before copy-assets runs.
+          # Keep Pages on the last known-good Node 24 patch until Nx/Node catches up.
+          node-version: '24.16.0'
 
       - name: Enable corepack
         run: corepack enable
