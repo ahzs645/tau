@@ -8,7 +8,20 @@
     "build": {
       "dependsOn": ["copy-assets", "^copy-assets"],
       "outputs": ["{projectRoot}/build"],
-      "command": "react-router build --sourcemapClient hidden",
+      "inputs": [
+        "default",
+        "^default",
+        { "env": "VITE_COMMIT_SHA" },
+        { "env": "GITHUB_SHA" },
+        { "env": "COMMIT_SHA" },
+        { "env": "VERCEL_GIT_COMMIT_SHA" },
+        { "env": "NETLIFY_COMMIT_REF" },
+        { "env": "CF_PAGES_COMMIT_SHA" },
+        { "env": "VITE_BUILD_TIME" },
+        { "env": "BUILD_TIME" },
+        { "runtime": "git rev-parse HEAD" }
+      ],
+      "command": "node --import @oxc-node/core/register scripts/generate-build-version.mts && react-router build --sourcemapClient hidden",
       "options": {
         "cwd": "{projectRoot}",
         "env": {

@@ -85,6 +85,7 @@ jobs:
         # A healthy build finishes in ~1 min, so cap each attempt at 5 min and retry up to 3 times:
         # a flaky hang is killed early and a later attempt succeeds instead of failing the deploy.
         run: |
+          node --import @oxc-node/core/register scripts/generate-build-version.mts
           for attempt in 1 2 3; do
             echo "::group::React Router build attempt ${attempt}/3"
             if timeout 300 pnpm exec react-router build --sourcemapClient hidden; then
@@ -110,6 +111,7 @@ jobs:
           cp -R build/client/favicon.ico build/client/tau/
           cp -R build/client/favicon.svg build/client/tau/
           cp -R build/client/favicon-96x96.png build/client/tau/
+          cp -R build/client/version.json build/client/tau/
 
       - name: Add custom-domain root redirect
         working-directory: apps/ui

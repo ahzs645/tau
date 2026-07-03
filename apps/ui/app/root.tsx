@@ -32,6 +32,7 @@ import { ChatSessionStoreProvider } from '#hooks/chat-session-store-provider.js'
 import { GlobalChatFlushGuard } from '#components/global-chat-flush-guard.js';
 import { ProjectActivityTracker } from '#hooks/project-activity-tracker.js';
 import { SvgSpriteMount } from '#components/icons/svg-sprite-mount.js';
+import { useAppVersionCheck } from '#hooks/use-app-version-check.js';
 
 export const links: LinksFunction = () => [...globalStylesLinks];
 
@@ -99,6 +100,7 @@ export function Layout({ children }: { readonly children: ReactNode }): React.JS
   const data = useRouteLoaderData<typeof loader>('root');
   // Preserve null for system theme - remix-themes needs null to detect system preference
   const ssrTheme = data?.theme ?? null;
+  useAppVersionCheck();
   const queryClient = useMemo(() => {
     const client = new QueryClient({
       defaultOptions: {

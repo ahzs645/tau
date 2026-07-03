@@ -1,9 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { ArrowUpRight, FileCode2, Search } from 'lucide-react';
-import { toast } from '#components/ui/sonner.js';
 import { projectExamples } from '#routes/playground/projects.js';
-import type { AppVersion } from '#routes/version[.]json.js';
 import { cn } from '#utils/ui.utils.js';
 import type { Handle } from '#types/matches.types.js';
 
@@ -19,9 +17,6 @@ const categoryFilters: readonly string[] = [
     a.localeCompare(b),
   ),
 ];
-/** Milliseconds. */
-const updateCheckInterval = 60_000;
-const updateToastId = 'app-version-update-available';
 /** Tags shown on a card before collapsing into a "+n" chip. */
 const maxVisibleTags = 4;
 
@@ -35,7 +30,6 @@ export default function PlaygroundGallery(): React.JSX.Element {
   const [searchTerm, setSearchTerm] = useState('');
   const [engineFilter, setEngineFilter] = useState<EngineFilter>('All');
   const [categoryFilter, setCategoryFilter] = useState('All');
-  useGalleryVersionCheck();
 
   const filteredExamples = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
@@ -211,66 +205,4 @@ export default function PlaygroundGallery(): React.JSX.Element {
       </section>
     </main>
   );
-}
-
-function useGalleryVersionCheck(): void {
-  useEffect(() => {
-    const currentCommit = import.meta.env['VITE_COMMIT_SHA'] as string | undefined;
-
-    if (!currentCommit) {
-      return;
-    }
-
-    let cancelled = false;
-
-    const checkForUpdate = async (): Promise<void> => {
-      try {
-        const response = await fetch(`${getVersionJsonHref()}?ts=${Date.now()}`, { cache: 'no-store' });
-
-        if (!response.ok) {
-          return;
-        }
-
-        const latest = (await response.json()) as AppVersion;
-
-        if (!cancelled && latest.commit && latest.commit !== currentCommit) {
-          toast.info('New version available', {
-            id: updateToastId,
-            description: 'Refresh to use the latest gallery and project files.',
-            action: {
-              label: 'Refresh',
-              onClick: () => {
-                globalThis.location.reload();
-              },
-            },
-            duration: Number.POSITIVE_INFINITY,
-          });
-        }
-      } catch {
-        // Version checks are best-effort; cached app shells should still remain usable offline.
-      }
-    };
-
-    void checkForUpdate();
-    const updateCheckTimer = globalThis.setInterval(() => {
-      void checkForUpdate();
-    }, updateCheckInterval);
-
-    return () => {
-      cancelled = true;
-      globalThis.clearInterval(updateCheckTimer);
-    };
-  }, []);
-}
-
-function getVersionJsonHref(): string {
-  const frontendUrl = globalThis.window.ENV.TAU_FRONTEND_URL;
-
-  try {
-    const { pathname } = new URL(frontendUrl);
-    const publicBasePath = pathname === '/' ? '' : pathname.replace(/\/$/, '');
-    return `${publicBasePath}/version.json`;
-  } catch {
-    return '/version.json';
-  }
 }

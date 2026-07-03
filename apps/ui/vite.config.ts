@@ -1,5 +1,6 @@
 import path from 'node:path';
 import process from 'node:process';
+import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { reactRouter } from '@react-router/dev/vite';
 import netlifyReactRouter from '@netlify/vite-plugin-react-router';
@@ -18,18 +19,59 @@ import { base64Loader } from '@taucad/vite/base64-loader';
 import { optimizeDepsFromCache } from '@taucad/vite/optimize-deps-from-cache';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const workspaceRoot = path.resolve(__dirname, '../..');
 
 // Sprite generation can slow down the build time, so we disable it by default.
 // Enable it when adding a new icon to regenerate the sprite.
 const enableSpriteGeneration = false;
 
+const firstEnvValue = (names: readonly string[]): string | undefined => {
+  for (const name of names) {
+    const value = process.env[name]?.trim();
+    if (value) {
+      return value;
+    }
+  }
+
+  return undefined;
+};
+
+const gitOutput = (command: string): string | undefined => {
+  try {
+    return execSync(command, { cwd: workspaceRoot, encoding: 'utf8' }).trim();
+  } catch {
+    return undefined;
+  }
+};
+
+const resolveBuildCommit = (): string => {
+  return (
+    firstEnvValue([
+      'VITE_COMMIT_SHA',
+      'GITHUB_SHA',
+      'COMMIT_SHA',
+      'VERCEL_GIT_COMMIT_SHA',
+      'NETLIFY_COMMIT_REF',
+      'CF_PAGES_COMMIT_SHA',
+    ]) ??
+    gitOutput('git rev-parse HEAD') ??
+    'dev'
+  );
+};
+
 export default defineConfig(({ mode }) => {
   const isTest = mode === 'test';
   const isNetlify = process.env['NETLIFY'] === 'true';
+  const buildCommit = resolveBuildCommit();
+  const buildNumber = buildCommit === 'dev' ? 'dev' : buildCommit.slice(0, 7);
 
   return {
     root: __dirname,
     cacheDir: '../../node_modules/.vite/apps/ui',
+    define: {
+      tauBuildCommit: JSON.stringify(buildCommit),
+      tauBuildNumber: JSON.stringify(buildNumber),
+    },
     plugins: [
       // Pre-bundle all deps known from the previous dev session's cache,
       // eliminating cascading "new dependencies optimized → reloading" on cold start.

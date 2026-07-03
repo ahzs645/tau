@@ -26,7 +26,6 @@ export async function listStaticPrerenderPaths(): Promise<string[]> {
     '/',
     '/playground',
     '/manifest.webmanifest',
-    '/version.json',
     '/robots.txt',
     '/sitemap.xml',
     '/llms.txt',

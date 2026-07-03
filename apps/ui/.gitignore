@@ -5,6 +5,7 @@ dist
 # Public
 public/build
 public/entry.worker.js
+public/version.json
 
 # React Router
 .react-router

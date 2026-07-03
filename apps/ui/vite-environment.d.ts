@@ -5,6 +5,9 @@ declare module '*?base64' {
   export = value;
 }
 
+declare const tauBuildCommit: string;
+declare const tauBuildNumber: string;
+
 declare module 'qrcode-terminal' {
   type QrcodeTerminalGenerateOptions = {
     small?: boolean | undefined;

@@ -6,6 +6,7 @@
     "app/**/*.js",
     "app/**/*.jsx",
     "server.ts",
+    "scripts/**/*.mts",
     "react-router.config.ts",
     "vite-environment.d.ts",
     "types/**/*.d.ts",
