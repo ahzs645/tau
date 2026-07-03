@@ -11,6 +11,11 @@ permissions:
   id-token: write
   pages: write
 
+# The Pages build doesn't need the upstream Nx Cloud workspace (nxCloudId in nx.json),
+# and unauthenticated access to it is rejected, which aborts every nx command.
+env:
+  NX_NO_CLOUD: 'true'
+
 concurrency:
   group: github-pages
   cancel-in-progress: false
