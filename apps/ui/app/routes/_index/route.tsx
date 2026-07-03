@@ -82,7 +82,7 @@ export default function PlaygroundGallery(): React.JSX.Element {
   return (
     <main className='h-dvh overflow-x-hidden overflow-y-auto bg-background text-foreground'>
       <section className='mx-auto flex w-full max-w-7xl flex-col gap-4 px-4 py-5 md:px-6'>
-        <div className='flex flex-col gap-3 border-b pb-4 max-md:sticky max-md:top-0 max-md:z-20 max-md:-mx-4 max-md:bg-background/95 max-md:px-4 max-md:py-4 max-md:backdrop-blur md:flex-row md:items-center md:justify-between'>
+        <div className='flex flex-col gap-2.5 border-b pb-4 max-md:sticky max-md:top-0 max-md:z-20 max-md:-mx-4 max-md:bg-background/95 max-md:px-4 max-md:py-3 max-md:backdrop-blur md:flex-row md:items-center md:justify-between md:gap-3'>
           <label className='flex min-h-9 w-full items-center gap-2 rounded-md border bg-background px-3 text-sm md:max-w-md'>
             <Search className='size-3.5 text-muted-foreground' />
             <input
@@ -97,11 +97,11 @@ export default function PlaygroundGallery(): React.JSX.Element {
             />
           </label>
 
-          <div className='flex flex-wrap items-center gap-1.5'>
+          <div className='flex items-center gap-1.5 max-md:w-full'>
             {categoryFilters.length > 1 ? (
               <select
                 aria-label='Filter by category'
-                className='min-h-11 rounded-sm border bg-background px-2.5 py-2 text-xs md:min-h-0 md:py-1.5'
+                className='min-h-9 flex-1 rounded-sm border bg-background px-2.5 text-xs md:min-h-0 md:flex-none md:py-1.5'
                 value={categoryFilter}
                 onChange={(event) => {
                   setCategoryFilter(event.target.value);
@@ -114,21 +114,42 @@ export default function PlaygroundGallery(): React.JSX.Element {
                 ))}
               </select>
             ) : null}
-            {engineFilters.map((filter) => (
-              <button
-                key={filter}
-                type='button'
-                className={cn(
-                  'min-h-11 rounded-sm border px-3 py-2 text-xs transition-colors hover:border-primary/50 md:min-h-0 md:px-2.5 md:py-1.5',
-                  filter === engineFilter ? 'border-primary bg-primary text-primary-foreground' : 'bg-background',
-                )}
-                onClick={() => {
-                  setEngineFilter(filter);
-                }}
-              >
-                {filter}
-              </button>
-            ))}
+
+            {/* Below md the engine chips would wrap onto several rows, so they collapse into a
+                compact dropdown that sits beside the category filter on a single line. */}
+            <select
+              aria-label='Filter by engine'
+              className='min-h-9 flex-1 rounded-sm border bg-background px-2.5 text-xs md:hidden'
+              value={engineFilter}
+              onChange={(event) => {
+                setEngineFilter(event.target.value);
+              }}
+            >
+              {engineFilters.map((filter) => (
+                <option key={filter} value={filter}>
+                  {filter === 'All' ? 'All engines' : filter}
+                </option>
+              ))}
+            </select>
+
+            {/* md+ has room for the full chip row. */}
+            <div className='hidden items-center gap-1.5 md:flex'>
+              {engineFilters.map((filter) => (
+                <button
+                  key={filter}
+                  type='button'
+                  className={cn(
+                    'rounded-sm border px-2.5 py-1.5 text-xs transition-colors hover:border-primary/50',
+                    filter === engineFilter ? 'border-primary bg-primary text-primary-foreground' : 'bg-background',
+                  )}
+                  onClick={() => {
+                    setEngineFilter(filter);
+                  }}
+                >
+                  {filter}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
