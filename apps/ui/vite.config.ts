@@ -62,12 +62,39 @@ const resolveBuildCommit = (): string => {
 export default defineConfig(({ mode }) => {
   const isTest = mode === 'test';
   const isNetlify = process.env['NETLIFY'] === 'true';
+  const isGithubPagesBuild = process.env['GITHUB_PAGES'] === 'true';
   const buildCommit = resolveBuildCommit();
   const buildNumber = buildCommit === 'dev' ? 'dev' : buildCommit.slice(0, 7);
 
   return {
     root: __dirname,
     cacheDir: '../../node_modules/.vite/apps/ui',
+    resolve: {
+      alias: isGithubPagesBuild
+        ? [
+            {
+              find: '#root-shell.js',
+              replacement: path.resolve(__dirname, './app/root-shell.static.tsx'),
+            },
+            {
+              find: '#routes/playground/playground-preview.js',
+              replacement: path.resolve(__dirname, './app/routes/playground/playground-preview.static.tsx'),
+            },
+            {
+              find: '#components/docs/replicad-reference.js',
+              replacement: path.resolve(__dirname, './app/components/docs/replicad-reference.static.tsx'),
+            },
+            {
+              find: '#components/code/code-editor.client.js',
+              replacement: path.resolve(__dirname, './app/components/code/code-editor.client.static.tsx'),
+            },
+            {
+              find: '#components/error-page.js',
+              replacement: path.resolve(__dirname, './app/components/error-page.static.tsx'),
+            },
+          ]
+        : [],
+    },
     define: {
       tauBuildCommit: JSON.stringify(buildCommit),
       tauBuildNumber: JSON.stringify(buildNumber),
@@ -82,7 +109,7 @@ export default defineConfig(({ mode }) => {
        * runtime + WASM-bearing deps from optimizeDeps, keep .wasm out of the
        * inline path, force worker.format to 'es'. See docs/research/runtime-zero-config-bundling.md (R2).
        */
-      ...runtime(),
+      ...(isGithubPagesBuild ? [] : runtime()),
 
       // Resolve .ts files referenced via new URL() in both build and serve modes
       ...tsModuleUrlPlugin(),

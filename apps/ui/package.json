@@ -8,7 +8,6 @@
     "@better-auth-ui/core": "^1.6.15",
     "@better-auth-ui/react": "^1.6.15",
     "@better-auth/api-key": "catalog:",
-    "@firstform/json-url": "file:../../vendor/json-url",
     "@react-router/express": "catalog:",
     "@react-router/node": "catalog:",
     "@tanstack/react-pacer": "catalog:",
@@ -46,6 +45,7 @@
     "react-day-picker": "^10.0.1",
     "sonner": "catalog:",
     "tslib": "catalog:",
+    "uint8array-extras": "catalog:",
     "vscode-uri": "catalog:"
   },
   "devDependencies": {

@@ -2,9 +2,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
-import jsonUrl from '@firstform/json-url';
 import type { FileExtension } from '@taucad/types';
 import PlaygroundRoot, { loader as playgroundRootLoader } from '#routes/playground/route.js';
+import { playgroundShareCodec } from '#routes/playground/share-codec.js';
 
 type CadEventMap = {
   geometryExported: { blob: Blob; format: FileExtension };
@@ -460,7 +460,7 @@ describe('PlaygroundRoot', () => {
     const token = url.searchParams.get('p');
     expect(token).toBeTruthy();
 
-    const decoded = await jsonUrl.createWebShareEngine().tryDecompress(token ?? '', {});
+    const decoded = await playgroundShareCodec.tryDecompress(token ?? '', {});
     expect(decoded).toEqual({ width: 99, style: 'hollow' });
     expect(mockToastSuccess).toHaveBeenCalledWith('Playground link copied with your changes');
   });
@@ -475,7 +475,7 @@ describe('PlaygroundRoot', () => {
     });
 
     const token = new URLSearchParams(globalThis.location.search).get('p');
-    const decoded = await jsonUrl.createWebShareEngine().tryDecompress(token ?? '', {});
+    const decoded = await playgroundShareCodec.tryDecompress(token ?? '', {});
     expect(decoded).toEqual({ width: 42, depth: 17 });
   });
 

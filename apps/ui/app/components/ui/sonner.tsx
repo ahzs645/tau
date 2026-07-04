@@ -1,15 +1,38 @@
 import { Toaster as Sonner } from 'sonner';
 import { useTheme } from '#hooks/use-theme.js';
+import { useIsMobile } from '#hooks/use-mobile.js';
 
 type ToasterProperties = React.ComponentProps<typeof Sonner>;
 
-function Toaster({ ...properties }: ToasterProperties): React.JSX.Element {
+const mobileToastOffset: NonNullable<ToasterProperties['mobileOffset']> = {
+  top: 'calc(env(safe-area-inset-top) + var(--header-height, 3.3rem) + var(--spacing) * 4)',
+  right: 'calc(var(--spacing) * 3)',
+  bottom: 'calc(env(safe-area-inset-bottom) + 7rem)',
+  left: 'calc(var(--spacing) * 3)',
+};
+
+const mobileSwipeDirections: NonNullable<ToasterProperties['swipeDirections']> = ['bottom', 'left', 'right'];
+
+function Toaster({
+  closeButton,
+  mobileOffset,
+  offset,
+  position,
+  swipeDirections,
+  ...properties
+}: ToasterProperties): React.JSX.Element {
   const { theme } = useTheme();
+  const isMobile = useIsMobile();
 
   return (
     <Sonner
       theme={theme as ToasterProperties['theme']}
       className='toaster group'
+      position={position ?? (isMobile ? 'bottom-center' : undefined)}
+      closeButton={closeButton ?? (isMobile ? true : undefined)}
+      offset={offset ?? (isMobile ? mobileToastOffset : undefined)}
+      mobileOffset={mobileOffset ?? mobileToastOffset}
+      swipeDirections={swipeDirections ?? (isMobile ? mobileSwipeDirections : undefined)}
       toastOptions={{
         classNames: {
           toast:

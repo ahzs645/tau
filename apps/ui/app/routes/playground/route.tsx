@@ -1,27 +1,16 @@
-import type { ReactNode, RefCallback } from 'react';
+import type { RefCallback } from 'react';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { Link, useLocation } from 'react-router';
-import { Braces, ChevronDown, Download, Eye, LayoutGrid, Play, RotateCcw, Share2 } from 'lucide-react';
-import jsonUrl from '@firstform/json-url';
-import type { FileExtension } from '@taucad/types';
-import { downloadBlob } from '@taucad/utils/file';
+import { Braces, Eye, LayoutGrid, Play, RotateCcw, Share2 } from 'lucide-react';
 import { toast } from '#components/ui/sonner.js';
-import { CadPreviewStatus, CadPreviewViewer, StaticPreviewViewer } from '#components/cad-preview.js';
 import { Button, buttonVariants } from '#components/ui/button.js';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '#components/ui/dropdown-menu.js';
 import { ClientOnly } from '#components/ui/utils/client-only.js';
-import { FileManagerProvider, SharedWorkerGate } from '#hooks/use-file-manager.js';
-import { CadPreviewProvider, useCadPreview } from '#hooks/use-cad-preview.js';
 import { useFeature } from '#flags/use-feature.js';
 import { playgroundExamples } from '#routes/playground/playground-examples.js';
-import type { PlaygroundExample, PlaygroundPreset } from '#routes/playground/playground-examples.js';
-import { PreviewParameters } from '#routes/projects_.$id_.preview/preview-parameters.js';
+import type { PlaygroundExample } from '#routes/playground/playground-examples.js';
+import { PlaygroundPreviewPane, playgroundPreviewCapabilities } from '#routes/playground/playground-preview.js';
+import type { PlaygroundMobilePane } from '#routes/playground/playground-preview.js';
+import { playgroundShareCodec } from '#routes/playground/share-codec.js';
 import { encodeTextFile } from '#utils/filesystem.utils.js';
 import { cn } from '#utils/ui.utils.js';
 import type { Handle } from '#types/matches.types.js';
@@ -40,18 +29,19 @@ type EditorFallbackProps = {
 
 const defaultExample: PlaygroundExample = playgroundExamples[0]!;
 
-/** Query parameter that carries the json-url-encoded parameter overrides on a shared link. */
+/** Query parameter that carries the encoded parameter overrides on a shared link. */
 const shareParametersKey = 'p';
 
 /** Stable empty record so consumers can rely on referential equality when there are no overrides. */
 const emptyParameters: Record<string, unknown> = Object.freeze({});
 
 /**
- * Web-share codec (json-url): compresses the parameter delta into a compact, URL-safe token
- * (e.g. `1.raw.<base64>`), auto-upgrading to gzip/brotli/lz-string for larger payloads. The token
- * is self-describing, so decoding auto-detects the codec.
+ * Web-share codec: stores the parameter delta in a compact, URL-safe token
+ * (`1.raw.<base64url>`). Kept local so the static Pages build does not pull the
+ * full json-url codec graph, whose optional Node compression branches have
+ * triggered intermittent Rolldown transform stalls in CI.
  */
-const shareCodec = jsonUrl.createWebShareEngine<Record<string, unknown>>();
+const shareCodec = playgroundShareCodec;
 
 /** Canonical, key-order-independent serialization used to compare parameter sets. */
 function canonicalize(value: unknown): string {
@@ -97,7 +87,7 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
   const [isCodeVisible, setIsCodeVisible] = useState(false);
   // Mobile only: which pane the segmented tabs show (the 3D viewer or the parameters).
   // On xl+ both render side by side and this is ignored.
-  const [mobilePane, setMobilePane] = useState<'3d' | 'params'>('3d');
+  const [mobilePane, setMobilePane] = useState<PlaygroundMobilePane>('3d');
   const [exportControlsElement, setExportControlsElement] = useState<HTMLDivElement | undefined>(undefined);
 
   // Live parameter overrides reported up from inside the preview provider (the Share button lives in
@@ -116,6 +106,7 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
   const staticPreviewUrl = activeExample.staticPreview?.glb;
   const previewProjectId = `root-playground-${activeExample.id}`;
   const previewRenderKey = `${previewProjectId}-${previewVersion}`;
+  const showParameterPane = isEditableExample && playgroundPreviewCapabilities.parameters;
   const isDirty = editorValue !== activeExample.code;
   const hasUnrunChanges = editorValue !== previewValue;
 
@@ -383,11 +374,7 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
           </div>
         </div>
         <div className='flex items-center gap-2'>
-          <Link
-            to='/'
-            aria-label='Gallery'
-            className={buttonVariants({ variant: 'outline', size: 'sm' })}
-          >
+          <Link to='/' aria-label='Gallery' className={buttonVariants({ variant: 'outline', size: 'sm' })}>
             <LayoutGrid className='size-3.5' />
             {/* Icon-only on phones so the header stays within a thumb-width; labelled on md+. */}
             <span className='max-md:hidden'>Gallery</span>
@@ -403,7 +390,7 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
           // Mobile: stack as a flex column so the active pane fills the screen.
           // xl+: restore the original side-by-side grid (viewer + parameters).
           'flex min-h-0 flex-1 flex-col xl:grid',
-          isEditableExample ? 'xl:grid-cols-[minmax(520px,1fr)_360px]' : 'xl:grid-cols-1',
+          showParameterPane ? 'xl:grid-cols-[minmax(520px,1fr)_360px]' : 'xl:grid-cols-1',
         )}
       >
         {showCodeSection ? (
@@ -444,105 +431,22 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
           </section>
         ) : null}
 
-        {isEditableExample ? (
-          <SharedWorkerGate>
-            <FileManagerProvider
-              key={previewProjectId}
-              projectId={previewProjectId}
-              rootDirectory={`/projects/${previewProjectId}`}
-              initialBackend='indexeddb'
-            >
-              <CadPreviewProvider
-                key={previewRenderKey}
-                projectId={previewProjectId}
-                mainFile={activeExample.mainFile}
-                files={files}
-                parameters={activeExample.initialParameters}
-              >
-                {exportControlsElement && activeExample.exportFormats.length > 0
-                  ? createPortal(
-                      <PlaygroundExportControls
-                        exampleId={activeExample.id}
-                        formats={activeExample.exportFormats}
-                        buttonSize='sm'
-                      />,
-                      exportControlsElement,
-                    )
-                  : undefined}
-                <PlaygroundParameterBridge
-                  pendingParameters={pendingParameters}
-                  onParametersChange={setLiveParameters}
-                />
-                <section
-                  className={cn(
-                    'flex min-w-0 flex-col xl:min-h-0 xl:border-r',
-                    mobilePane === '3d' ? 'max-xl:flex-1' : 'max-xl:hidden',
-                  )}
-                >
-                  <div className='relative min-h-0 flex-1 bg-muted/30'>
-                    <CadPreviewViewer
-                      className='size-full'
-                      enablePan
-                      enableZoom
-                      staticPreviewUrl={staticPreviewUrl}
-                      stageOptions={{ zoomLevel: 1.25 }}
-                      graphicsOptions={{
-                        enableLines: true,
-                        viewerClassName: 'bg-muted/30',
-                      }}
-                    />
-                    <CadPreviewStatus className='absolute top-3 left-3' />
-
-                    {/* Mobile export: lives on the viewer instead of the crowded header. */}
-                    {activeExample.exportFormats.length > 0 ? (
-                      <div className='absolute right-3 bottom-3 z-10 xl:hidden'>
-                        <PlaygroundExportControls
-                          exampleId={activeExample.id}
-                          formats={activeExample.exportFormats}
-                          buttonSize='sm'
-                        />
-                      </div>
-                    ) : null}
-                  </div>
-                </section>
-
-                <section
-                  className={cn(
-                    'flex min-w-0 flex-col bg-background xl:min-h-0 xl:border-t-0',
-                    // min-h-0 + overflow keep the list scrolling inside the pane instead of
-                    // running underneath the mobile bottom bar.
-                    mobilePane === 'params' ? 'max-xl:min-h-0 max-xl:flex-1 max-xl:overflow-y-auto' : 'max-xl:hidden',
-                  )}
-                >
-                  <PlaygroundParameters presets={activeExample.presets ?? []} />
-                </section>
-              </CadPreviewProvider>
-            </FileManagerProvider>
-          </SharedWorkerGate>
-        ) : (
-          <section className='flex min-h-0 min-w-0 flex-1 flex-col'>
-            <div className='relative min-h-0 flex-1 bg-muted/30'>
-              {staticPreviewUrl ? (
-                <StaticPreviewViewer
-                  className='size-full'
-                  enablePan
-                  enableZoom
-                  staticPreviewUrl={staticPreviewUrl}
-                  stageOptions={{ zoomLevel: 1.25 }}
-                  graphicsOptions={{
-                    enableLines: true,
-                    viewerClassName: 'bg-muted/30',
-                  }}
-                />
-              ) : null}
-            </div>
-          </section>
-        )}
+        <PlaygroundPreviewPane
+          activeExample={activeExample}
+          files={files}
+          pendingParameters={pendingParameters}
+          previewProjectId={previewProjectId}
+          previewRenderKey={previewRenderKey}
+          staticPreviewUrl={staticPreviewUrl}
+          mobilePane={mobilePane}
+          exportControlsElement={exportControlsElement}
+          onParametersChange={setLiveParameters}
+        />
       </div>
 
       {/* Mobile bottom chrome: the pane switcher (below xl) anchors to the bottom of the screen,
           within thumb reach. Static examples have no panes, so the bar is editable-only. */}
-      {isEditableExample ? (
+      {showParameterPane ? (
         <nav className='shrink-0 border-t bg-background pb-[env(safe-area-inset-bottom)] xl:hidden'>
           <div className='flex'>
             <button
@@ -575,198 +479,6 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
         </nav>
       ) : null}
     </main>
-  );
-}
-
-/**
- * Bridges the preview's live parameter overrides out to the header (where the Share button lives,
- * outside the provider) and applies any overrides decoded from a shared `?p=` token once the kernel
- * is ready. Renders nothing.
- */
-function PlaygroundParameterBridge({
-  pendingParameters,
-  onParametersChange,
-}: {
-  readonly pendingParameters: Record<string, unknown> | undefined;
-  readonly onParametersChange: (parameters: Record<string, unknown>) => void;
-}): ReactNode {
-  const { parameters, setParameters, status } = useCadPreview();
-  const liveParameters = parameters;
-
-  // Surface the live overrides to the header so Share can encode them.
-  useEffect(() => {
-    onParametersChange(liveParameters);
-  }, [liveParameters, onParametersChange]);
-
-  // Apply decoded shared parameters exactly once per distinct token, after the kernel is ready.
-  const appliedRef = useRef<Record<string, unknown> | undefined>(undefined);
-  useEffect(() => {
-    if (status !== 'ready' || !pendingParameters || appliedRef.current === pendingParameters) {
-      return;
-    }
-
-    if (Object.keys(pendingParameters).length === 0) {
-      return;
-    }
-
-    appliedRef.current = pendingParameters;
-    setParameters(pendingParameters);
-  }, [pendingParameters, status, setParameters]);
-
-  return undefined;
-}
-
-function PlaygroundParameters({ presets }: { readonly presets: readonly PlaygroundPreset[] }): React.JSX.Element {
-  return (
-    <div className='flex h-full min-h-0 flex-col'>
-      <PreviewParameters headerActions={presets.length > 0 ? <PlaygroundPresetMenu presets={presets} /> : undefined} />
-    </div>
-  );
-}
-
-function PlaygroundPresetMenu({ presets }: { readonly presets: readonly PlaygroundPreset[] }): React.JSX.Element {
-  const { setParameters } = useCadPreview();
-
-  const applyPreset = useCallback(
-    (preset: PlaygroundPreset) => {
-      setParameters(preset.parameters);
-      toast.success(`Applied ${preset.name}`);
-    },
-    [setParameters],
-  );
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant='ghost' size='xs' className='gap-1'>
-          Presets
-          <ChevronDown className='size-3.5' />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align='end'>
-        {presets.map((preset) => (
-          <DropdownMenuItem
-            key={preset.name}
-            onSelect={() => {
-              applyPreset(preset);
-            }}
-          >
-            {preset.name}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
-type ActorSubscription = {
-  readonly unsubscribe: () => void;
-};
-
-function issueMessage(errors: ReadonlyArray<{ readonly message?: unknown }>): string {
-  const message = errors[0]?.message;
-  return typeof message === 'string' ? message : 'Export failed';
-}
-
-function PlaygroundExportControls({
-  exampleId,
-  formats,
-  buttonSize = 'xs',
-}: {
-  readonly exampleId: string;
-  readonly formats: readonly FileExtension[];
-  readonly buttonSize?: 'xs' | 'sm';
-}): React.JSX.Element {
-  const { cadRef, status, geometries } = useCadPreview();
-  const [isExporting, setIsExporting] = useState(false);
-  const isExportEnabled = status === 'ready' && geometries.length > 0 && !isExporting;
-  const primaryFormat = formats[0];
-
-  const exportGeometry = useCallback(
-    (format: FileExtension) => {
-      if (!isExportEnabled) {
-        return;
-      }
-
-      setIsExporting(true);
-
-      // oxlint-disable-next-line tau-lint/no-async-iife -- export completion is delivered through actor events.
-      void (async () => {
-        try {
-          const blob = await new Promise<Blob>((resolve, reject) => {
-            const subscriptions: ActorSubscription[] = [];
-
-            const cleanup = () => {
-              for (const subscription of subscriptions) {
-                subscription.unsubscribe();
-              }
-            };
-
-            subscriptions.push(
-              cadRef.on('geometryExported', (event) => {
-                cleanup();
-                resolve(event.blob);
-              }),
-              cadRef.on('exportFailed', (event) => {
-                cleanup();
-                reject(new Error(issueMessage(event.errors)));
-              }),
-            );
-
-            cadRef.send({ type: 'exportGeometry', format });
-          });
-
-          const filename = `${exampleId}.${format}`;
-          downloadBlob(blob, filename);
-          toast.success(`Downloaded ${filename}`);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : 'Export failed';
-          toast.error(`Failed to export: ${message}`);
-        } finally {
-          setIsExporting(false);
-        }
-      })();
-    },
-    [cadRef, isExportEnabled, exampleId],
-  );
-
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'F7' && primaryFormat) {
-        event.preventDefault();
-        exportGeometry(primaryFormat);
-      }
-    };
-
-    globalThis.addEventListener('keydown', handleKeyDown);
-    return () => {
-      globalThis.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [exportGeometry, primaryFormat]);
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant='outline' size={buttonSize} disabled={!isExportEnabled} title='Export. Shortcut: F7'>
-          <Download className='size-3' />
-          {isExporting ? 'Exporting…' : 'Export'}
-          <ChevronDown className='size-3 opacity-60' />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align='end'>
-        {formats.map((format) => (
-          <DropdownMenuItem
-            key={format}
-            onSelect={() => {
-              exportGeometry(format);
-            }}
-          >
-            <Download className='size-3.5' />
-            {format.toUpperCase()}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }
 

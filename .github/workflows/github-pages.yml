@@ -25,14 +25,12 @@ jobs:
     name: Build static UI
     runs-on: ubuntu-latest
     # Fail fast on a hung build instead of holding the concurrency slot for the 6h default.
-    # The build step retries internally (the Rolldown transform deadlocks intermittently), so allow
-    # headroom for up to three 5-minute attempts plus the install/asset steps.
+    # The build step retries internally, so allow headroom for up to three 5-minute attempts
+    # plus dependency install and artifact upload.
     timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-        with:
-          submodules: recursive
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -44,24 +42,11 @@ jobs:
       - name: Enable corepack
         run: corepack enable
 
-      # vendor/json-url ships its dist/ gitignored, and pnpm copies file: deps into its store at
-      # install time — so json-url must be built BEFORE pnpm install, otherwise the bundler can't
-      # resolve @firstform/json-url and Rolldown deadlocks on the missing import (20-min hang).
-      - name: Build json-url submodule
-        run: pnpm run json-url:build
-
       - name: Install dependencies
         run: pnpm install --no-frozen-lockfile
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
-
-      - name: Copy CAD runtime assets
-        run: |
-          pnpm nx run openscad:copy-assets
-          pnpm nx run converter:copy-assets
-          pnpm nx run runtime:copy-assets
-          pnpm nx run ui:copy-assets
 
       - name: Set build metadata
         run: |
@@ -81,19 +66,21 @@ jobs:
           # Match the canonical Nx build (apps/ui/project.json): the client bundle
           # needs >default heap, and full client source maps cause OOM/GC-thrash hangs.
           NODE_OPTIONS: '--max-old-space-size=8192'
-        # The Rolldown transform intermittently deadlocks at "transforming..." (see commit a4e2af37).
-        # A healthy build finishes in ~1 min, so cap each attempt at 5 min and retry up to 3 times:
-        # a flaky hang is killed early and a later attempt succeeds instead of failing the deploy.
+        # Keep a bounded retry guard around the static Pages build. A healthy build finishes
+        # well under 5 minutes; if this regresses, the log now reports the real timeout status.
         run: |
           node --import @oxc-node/core/register scripts/generate-build-version.mts
           for attempt in 1 2 3; do
             echo "::group::React Router build attempt ${attempt}/3"
-            if timeout 300 pnpm exec react-router build --sourcemapClient hidden; then
+            set +e
+            timeout 300 pnpm exec react-router build --sourcemapClient hidden
+            status=$?
+            set -e
+            if [ "$status" -eq 0 ]; then
               echo "::endgroup::"
               echo "Build succeeded on attempt ${attempt}."
               exit 0
             fi
-            status=$?
             echo "::endgroup::"
             echo "::warning::Build attempt ${attempt} failed or timed out (exit ${status}); retrying."
             rm -rf build
