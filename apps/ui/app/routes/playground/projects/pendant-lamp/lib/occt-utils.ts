@@ -15,6 +15,7 @@ import {
   BRepBuilderAPI_MakePolygon,
   BRepBuilderAPI_Transform,
   BRepPrimAPI_MakeBox,
+  BRepPrimAPI_MakeCone,
   BRepPrimAPI_MakeCylinder,
   BRepPrimAPI_MakePrism,
   BRepPrimAPI_MakeRevol,
@@ -57,6 +58,15 @@ export function boxAt(center: Vec3, dx: number, dy: number, dz: number): TopoDS_
 /** Cylinder along +Z starting at the origin, like `cylinder(r, h)`. */
 export function cylinder(radius: number, height: number): TopoDS_Shape {
   return shapeOf(new BRepPrimAPI_MakeCylinder(radius, height));
+}
+
+/** Conical frustum along +Z starting at the origin — `cylinder(r1, r2, h)`. */
+export function cone(bottomRadius: number, topRadius: number, height: number): TopoDS_Shape {
+  if (Math.abs(bottomRadius - topRadius) < 1e-9) {
+    return cylinder(bottomRadius, height);
+  }
+
+  return shapeOf(new BRepPrimAPI_MakeCone(bottomRadius, topRadius, height));
 }
 
 /**
@@ -212,6 +222,10 @@ export function rotateZ(shape: TopoDS_Shape, degrees: number): TopoDS_Shape {
 
 export function rotateX(shape: TopoDS_Shape, degrees: number): TopoDS_Shape {
   return rotated(shape, [1, 0, 0], degrees);
+}
+
+export function rotateY(shape: TopoDS_Shape, degrees: number): TopoDS_Shape {
+  return rotated(shape, [0, 1, 0], degrees);
 }
 
 type MultiBooleanOperation = new () => {

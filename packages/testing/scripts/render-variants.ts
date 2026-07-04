@@ -27,6 +27,10 @@ const specs: VariantSpec[] = [
   { project: 'catan-insert', variant: 'opencascade', entry: 'main.occt.ts' },
   { project: 'pendant-lamp', variant: 'openscad', entry: 'Main.scad' },
   { project: 'pendant-lamp', variant: 'opencascade', entry: 'main.occt.ts' },
+  { project: 'vane-trap', variant: 'openscad', entry: 'main.scad' },
+  { project: 'vane-trap', variant: 'opencascade', entry: 'main.occt.ts' },
+  { project: 'pre-chamber-nozzle-insert', variant: 'openscad', entry: 'prechamber_nozzle_insert_BOSL2_threads.scad' },
+  { project: 'pre-chamber-nozzle-insert', variant: 'opencascade', entry: 'main.occt.ts' },
 ];
 
 function projectFiles(project: string): Record<string, string> {

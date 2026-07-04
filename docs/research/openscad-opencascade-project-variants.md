@@ -1,6 +1,6 @@
 # OpenSCAD ⇄ OpenCASCADE project variants
 
-Status: implemented for two pilot projects (catan-insert, pendant-lamp), 2026-07-04.
+Status: implemented for four projects (catan-insert, pendant-lamp, vane-trap, pre-chamber-nozzle-insert), 2026-07-04.
 
 ## Goal
 
@@ -104,27 +104,55 @@ covers everything else the gallery actually uses.
   `SetArguments(NCollection_List_TopoDS_Shape)` + `SetTools(...)` + `Build()`,
   which is what `lib/occt-utils.ts` uses.
 
+## Thread helpers
+
+`lib/threads.ts` (shipped with the vane-trap and pre-chamber ports) is the
+cq_warehouse-inspired thread implementation:
+
+- `helicalRidge()` — BOSL2's `thread_helix()`: a trapezoidal profile swept
+  along a sampled-BSpline helix spine with `BRepOffsetAPI_MakePipeShell` in
+  Frenet mode, root sunk slightly below the base surface for watertight
+  booleans, ends trimmed flush (`blunt_start=false` semantics).
+- `threadedRod()` — BOSL2's `threaded_rod()`: ISO 68-1 60° profile
+  (depth = 0.5413·pitch, crest flat = pitch/8) fused onto a core cylinder.
+  The same solid doubles as the internal-thread cutter
+  (`threaded_rod(internal=true)`), verified by cutting a nut probe that
+  shows clean female thread grooves.
+
+Cost: an M14×1.25 × 21.5 mm thread (17 turns) sweeps and booleans in a few
+seconds inside the kernel — comparable to BOSL2's own helical threads.
+
 ## Verification
 
-Both pilot variants were rendered headlessly through the real kernels
+All variants render headlessly through the real kernels
 (`packages/testing/scripts/render-variants.ts`) and compared:
 
-| Project      | OpenSCAD bbox (mm)    | OpenCASCADE bbox (mm) | Render time   |
-| ------------ | --------------------- | --------------------- | ------------- |
-| catan-insert | 230 × 285 × 75        | 230 × 285 × 75        | 1.7 s / 4.3 s |
-| pendant-lamp | 200.4 × 200.4 × 183.3 | 200.4 × 200.4 × 183.3 | 44 s / 13 s   |
+| Project                   | OpenSCAD bbox (mm)    | OpenCASCADE bbox (mm) | Render time   |
+| ------------------------- | --------------------- | --------------------- | ------------- |
+| catan-insert              | 230 × 285 × 75        | 230 × 285 × 75        | 1.7 s / 4.3 s |
+| pendant-lamp              | 200.4 × 200.4 × 183.3 | 200.4 × 200.4 × 183.3 | 44 s / 13 s   |
+| vane-trap                 | 130 × 130 × 184       | 130 × 130 × 184       | 5.7 s / 2.0 s |
+| pre-chamber-nozzle-insert | 18.54 × 18.54 × 35    | 18.54 × 18.54 × 35    | 26 s / 29 s   |
 
 Bounding boxes match to 0.1 mm and side-by-side renders are visually
 identical. Notably the OpenCASCADE pendant-lamp renders ~3.5× faster than
 the OpenSCAD original (65 exact tori beat $fn=100 mesh CSG), while the
 boolean-heavy catan-insert is faster in OpenSCAD's mesh engine.
 
+### Found while porting: vane-trap's threads cut nothing
+
+vane-trap's `make_jar_threads()` mask is anchored at z ≈ 0 going _up_ into
+the already-hollow cone cavity, while the solid jar collar sits at
+z ∈ [−8, 0] — and its key-slot cuts sit at the top-rim radius where the
+tapered wall no longer reaches. Both subtractions are no-ops in the
+original OpenSCAD render, and the port reproduces them verbatim for
+parity. Fixing the model (translating the mask down into a bored collar)
+would change the OpenSCAD original, left for a separate pass.
+
 ## Open follow-ups
 
 - Port more OpenSCAD projects; promote `lib/occt-utils.ts` into
   `libs/tau-examples` (or a kernel builtin module) once ≥3 projects share it.
-- Thread helper (`externalThread`/`internalThread`) ported from cq_warehouse
-  for vane-trap and pre-chamber-nozzle-insert.
 - Evaluate CascadeStudio's OpenSCAD transpiler for an automated first-pass
   conversion of simple projects.
 - `tray-scad`, `wham`, and `saboteur-card-holder` reference include files
