@@ -5,5 +5,9 @@
   "category": "Games & Hobbies",
   "tags": ["catan", "board-game", "insert", "storage", "organization"],
   "created": "2026-07-04",
-  "author": "OpenSCAD Playground"
+  "author": "OpenSCAD Playground",
+  "variants": [
+    { "id": "openscad", "entry": "main.scad" },
+    { "id": "opencascade", "entry": "main.occt.ts" }
+  ]
 }

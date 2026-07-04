@@ -2226,6 +2226,12 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       tracer: this.tracer,
     };
 
+    // Failures from routes that were attempted but did not produce a result.
+    // Surfaced instead of the generic "no route" error, which would misreport
+    // a failing conversion (e.g. a transcoder wasm that cannot initialise) as
+    // a missing registration.
+    const attemptedRouteIssues: KernelIssue[] = [];
+
     /* oxlint-disable no-await-in-loop -- Sequential candidate evaluation: each route runs source export + transcode */
     for (const route of candidateRoutes) {
       const transcoder = this.loadedTranscoders.get(route.transcoderId!);
@@ -2251,6 +2257,14 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
 
       const kernelResult = await this.onExportGeometry(sourceInput, runtime);
       if (!kernelResult.success) {
+        attemptedRouteIssues.push({
+          message:
+            `Source export "${route.sourceFormat}" for route ${route.sourceFormat} → ${input.format} ` +
+            `via "${route.transcoderId}" failed: ${kernelResult.issues.map((issue) => issue.message).join('; ')}`,
+          code: 'RUNTIME',
+          type: 'runtime',
+          severity: 'error',
+        });
         continue;
       }
 
@@ -2285,8 +2299,21 @@ export abstract class KernelWorker<Options extends Record<string, unknown> = Rec
       if (transcodeResult.success) {
         return transcodeResult;
       }
+
+      attemptedRouteIssues.push({
+        message:
+          `Transcode route ${route.sourceFormat} → ${input.format} via "${route.transcoderId}" failed: ` +
+          transcodeResult.issues.map((issue) => issue.message).join('; '),
+        code: 'RUNTIME',
+        type: 'runtime',
+        severity: 'error',
+      });
     }
     /* oxlint-enable no-await-in-loop */
+
+    if (attemptedRouteIssues.length > 0) {
+      return { success: false, issues: attemptedRouteIssues };
+    }
 
     const nativeFormats = kernelFormats?.join(', ') ?? 'none';
     return {

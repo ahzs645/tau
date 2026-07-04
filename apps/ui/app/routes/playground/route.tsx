@@ -7,7 +7,7 @@ import { Button, buttonVariants } from '#components/ui/button.js';
 import { ClientOnly } from '#components/ui/utils/client-only.js';
 import { useFeature } from '#flags/use-feature.js';
 import { playgroundExamples } from '#routes/playground/playground-examples.js';
-import type { PlaygroundExample } from '#routes/playground/playground-examples.js';
+import type { PlaygroundExample, PlaygroundVariant } from '#routes/playground/playground-examples.js';
 import { PlaygroundPreviewPane, playgroundPreviewCapabilities } from '#routes/playground/playground-preview.js';
 import type { PlaygroundMobilePane } from '#routes/playground/playground-preview.js';
 import { playgroundShareCodec } from '#routes/playground/share-codec.js';
@@ -31,6 +31,9 @@ const defaultExample: PlaygroundExample = playgroundExamples[0]!;
 
 /** Query parameter that carries the encoded parameter overrides on a shared link. */
 const shareParametersKey = 'p';
+
+/** Query parameter that selects a non-default kernel variant of a project. */
+const variantKey = 'variant';
 
 /** Stable empty record so consumers can rely on referential equality when there are no overrides. */
 const emptyParameters: Record<string, unknown> = Object.freeze({});
@@ -80,6 +83,10 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
   const location = useLocation();
   const loaderExampleId = props.loaderData?.activeExampleId ?? defaultExample.id;
   const [activeExampleId, setActiveExampleId] = useState(loaderExampleId);
+  // Non-default kernel variant of the active project (e.g. the OpenCASCADE port of an
+  // OpenSCAD original). Seeded undefined for hydration parity with the static prerender;
+  // the `location.search` effect below applies any `?variant=` from the URL after mount.
+  const [activeVariantId, setActiveVariantId] = useState<PlaygroundVariant['id'] | undefined>(undefined);
   const initialExample = playgroundExamples.find((example) => example.id === activeExampleId) ?? defaultExample;
   const [editorValue, setEditorValue] = useState(initialExample.code);
   const [previewValue, setPreviewValue] = useState(initialExample.code);
@@ -99,12 +106,16 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
   // Kiosk / viewer-only mode: hide the editor and its toggle entirely.
   const isCodeEditorDisabled = useIsCodeEditorDisabled(location.search);
 
-  const activeExample = playgroundExamples.find((example) => example.id === activeExampleId) ?? defaultExample;
+  const baseExample = playgroundExamples.find((example) => example.id === activeExampleId) ?? defaultExample;
+  const { activeVariant, activeRenderIdentity, projectIdSuffix } = resolveActiveVariant(baseExample, activeVariantId);
+  const activeExample = useMemo(() => applyVariant(baseExample, activeVariant), [baseExample, activeVariant]);
   const isEditableExample = activeExample.mode !== 'static';
   const showCodeControls = isEditableExample && !isCodeEditorDisabled;
   const showCodeSection = isCodeVisible && showCodeControls;
   const staticPreviewUrl = activeExample.staticPreview?.glb;
-  const previewProjectId = `root-playground-${activeExample.id}`;
+  // The variant is part of the project id so each variant gets its own IndexedDB
+  // filesystem namespace and the preview provider remounts into a clean kernel.
+  const previewProjectId = `root-playground-${activeExample.id}${projectIdSuffix}`;
   const previewRenderKey = `${previewProjectId}-${previewVersion}`;
   const showParameterPane = isEditableExample && playgroundPreviewCapabilities.parameters;
   const isDirty = editorValue !== activeExample.code;
@@ -165,6 +176,11 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
         const url = new URL(browserWindow.location.href);
         url.searchParams.set('model', activeExample.id);
         url.searchParams.delete('example');
+        if (activeVariant) {
+          url.searchParams.set(variantKey, activeVariant.id);
+        } else {
+          url.searchParams.delete(variantKey);
+        }
 
         if (hasParameterChanges) {
           // Encode only the changed parameters (the delta) into a compact, URL-safe token.
@@ -179,11 +195,31 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
         toast.error('Unable to copy playground link');
       }
     })();
-  }, [activeExample.id, activeExample.initialParameters, liveParameters]);
+  }, [activeExample.id, activeExample.initialParameters, activeVariant, liveParameters]);
+
+  const switchVariant = useCallback(
+    (variantId: PlaygroundVariant['id']) => {
+      const target = baseExample.variants?.find((variant) => variant.id === variantId);
+      if (!target || variantId === (activeVariant?.id ?? defaultVariantIdFor(baseExample))) {
+        return;
+      }
+
+      setActiveVariantId(target.isDefault ? undefined : target.id);
+      // Both the live overrides and any shared token belong to the previous variant's
+      // parameter schema, so a switch starts from the new variant's defaults.
+      setLiveParameters(emptyParameters);
+      setPendingParameters(undefined);
+      writeVariantSwitchToUrl(baseExample.id, target);
+    },
+    [activeVariant, baseExample],
+  );
 
   useEffect(() => {
-    const searchExampleId = readInitialExampleIdFromSearch(new URLSearchParams(location.search));
+    const params = new URLSearchParams(location.search);
+    const searchExampleId = readInitialExampleIdFromSearch(params);
+    const searchExample = playgroundExamples.find((example) => example.id === searchExampleId) ?? defaultExample;
     setActiveExampleId(searchExampleId);
+    setActiveVariantId(readVariantIdFromSearch(params, searchExample));
   }, [loaderExampleId, location.search]);
 
   // Decode any `?p=` token from the URL into the overrides that should be applied to the preview.
@@ -215,17 +251,17 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
   // preview start on the default code regardless of the `?model=` param. When the active
   // example changes (e.g. opening a project from the gallery), load its code into the editor
   // and preview so the rendered model matches the selected example.
-  const loadedExampleIdRef = useRef(activeExample.id);
+  const loadedExampleIdRef = useRef(activeRenderIdentity);
   useEffect(() => {
-    if (loadedExampleIdRef.current === activeExample.id) {
+    if (loadedExampleIdRef.current === activeRenderIdentity) {
       return;
     }
 
-    loadedExampleIdRef.current = activeExample.id;
+    loadedExampleIdRef.current = activeRenderIdentity;
     setEditorValue(activeExample.code);
     setPreviewValue(activeExample.code);
     setPreviewVersion((version) => version + 1);
-  }, [activeExample]);
+  }, [activeExample, activeRenderIdentity]);
 
   useEffect(() => {
     const currentExampleId = readInitialExampleIdFromSearch(new URLSearchParams(location.search));
@@ -233,14 +269,14 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
       return;
     }
 
-    writeExampleToUrl(activeExample.id, { replace: true });
-  }, [activeExample.id, location.search]);
+    writeExampleToUrl(activeExample.id, { replace: true, variantId: activeVariant?.id });
+  }, [activeExample.id, activeVariant, location.search]);
 
   // Keep the address bar's `?p=` token in sync with live parameter edits: add/update it when the
   // overrides differ from the example baseline, remove it when they match. Written via raw
   // history.replaceState so it does not re-trigger the loader or the decode effect above.
   const urlSyncHydratedRef = useRef(false);
-  const urlSyncModelRef = useRef(activeExample.id);
+  const urlSyncModelRef = useRef(activeRenderIdentity);
   const urlSyncInitialTokenRef = useRef<string | undefined>(undefined);
   useEffect(() => {
     const browserWindow = getBrowserWindow();
@@ -248,9 +284,10 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
       return;
     }
 
-    // Restart hydration gating whenever the active model changes.
-    if (urlSyncModelRef.current !== activeExample.id) {
-      urlSyncModelRef.current = activeExample.id;
+    // Restart hydration gating whenever the active model or variant changes — a `?p=`
+    // token captured against one variant's parameter schema is meaningless in the other.
+    if (urlSyncModelRef.current !== activeRenderIdentity) {
+      urlSyncModelRef.current = activeRenderIdentity;
       urlSyncHydratedRef.current = false;
       urlSyncInitialTokenRef.current = undefined;
     }
@@ -307,7 +344,7 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
     return () => {
       cancelled = true;
     };
-  }, [liveParameters, activeExample.id, activeExample.initialParameters]);
+  }, [liveParameters, activeExample.id, activeExample.initialParameters, activeRenderIdentity]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -331,6 +368,7 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
   // breakpoint, next to the model name. The mobile bottom bar keeps only the pane switcher.
   const actionButtons = (
     <>
+      <VariantToggle example={baseExample} activeVariant={activeVariant} onSwitch={switchVariant} />
       {showCodeControls ? (
         <Button
           variant={isCodeVisible ? 'default' : 'outline'}
@@ -504,7 +542,88 @@ function readInitialExampleIdFromSearch(params: URLSearchParams): string {
   return defaultExample.id;
 }
 
-function buildExampleUrl(exampleId: string): string | undefined {
+/** Resolve `?variant=` to a non-default variant of the example, or undefined for the default. */
+function readVariantIdFromSearch(
+  params: URLSearchParams,
+  example: PlaygroundExample,
+): PlaygroundVariant['id'] | undefined {
+  const candidate = params.get(variantKey);
+  if (!candidate) {
+    return undefined;
+  }
+
+  const match = example.variants?.find((variant) => variant.id === candidate);
+  return match && !match.isDefault ? match.id : undefined;
+}
+
+function defaultVariantIdFor(example: PlaygroundExample): PlaygroundVariant['id'] | undefined {
+  return example.variants?.find((variant) => variant.isDefault)?.id;
+}
+
+type ResolvedVariant = {
+  readonly activeVariant: PlaygroundVariant | undefined;
+  /** Distinguishes reloads across both project and variant switches (editor code + URL sync gating). */
+  readonly activeRenderIdentity: string;
+  readonly projectIdSuffix: string;
+};
+
+function resolveActiveVariant(
+  example: PlaygroundExample,
+  activeVariantId: PlaygroundVariant['id'] | undefined,
+): ResolvedVariant {
+  const activeVariant = example.variants?.find((variant) => variant.id === activeVariantId && !variant.isDefault);
+  return {
+    activeVariant,
+    activeRenderIdentity: `${example.id}::${activeVariant?.id ?? 'default'}`,
+    projectIdSuffix: activeVariant ? `-${activeVariant.id}` : '',
+  };
+}
+
+/**
+ * Push the post-switch URL: the variant param reflects the new selection and
+ * any `?p=` token is dropped — it encoded the previous variant's parameters.
+ */
+function writeVariantSwitchToUrl(exampleId: string, target: PlaygroundVariant): void {
+  const browserWindow = getBrowserWindow();
+  if (!browserWindow) {
+    return;
+  }
+
+  const url = new URL(browserWindow.location.href);
+  url.searchParams.set('model', exampleId);
+  url.searchParams.delete('example');
+  url.searchParams.delete(shareParametersKey);
+  if (target.isDefault) {
+    url.searchParams.delete(variantKey);
+  } else {
+    url.searchParams.set(variantKey, target.id);
+  }
+
+  browserWindow.history.pushState({}, '', url.toString());
+}
+
+/**
+ * Materialize a non-default variant as the effective example: the variant's entry
+ * file drives the editor, kernel selection, and export formats. Presets and initial
+ * parameters are dropped — they are authored against the default variant's schema.
+ */
+function applyVariant(example: PlaygroundExample, variant: PlaygroundVariant | undefined): PlaygroundExample {
+  if (!variant) {
+    return example;
+  }
+
+  const { initialParameters: _initialParameters, presets: _presets, ...rest } = example;
+  return {
+    ...rest,
+    kernel: variant.kernel,
+    mainFile: variant.mainFile,
+    language: variant.language,
+    exportFormats: variant.exportFormats,
+    code: example.sourceFiles?.[variant.mainFile] ?? example.code,
+  };
+}
+
+function buildExampleUrl(exampleId: string, variantId?: PlaygroundVariant['id']): string | undefined {
   const browserWindow = getBrowserWindow();
   if (!browserWindow) {
     return undefined;
@@ -513,16 +632,25 @@ function buildExampleUrl(exampleId: string): string | undefined {
   const url = new URL(browserWindow.location.href);
   url.searchParams.set('model', exampleId);
   url.searchParams.delete('example');
+  if (variantId) {
+    url.searchParams.set(variantKey, variantId);
+  } else {
+    url.searchParams.delete(variantKey);
+  }
+
   return url.toString();
 }
 
-function writeExampleToUrl(exampleId: string, options: { readonly replace?: boolean } = {}): void {
+function writeExampleToUrl(
+  exampleId: string,
+  options: { readonly replace?: boolean; readonly variantId?: PlaygroundVariant['id'] } = {},
+): void {
   const browserWindow = getBrowserWindow();
   if (!browserWindow) {
     return;
   }
 
-  const url = buildExampleUrl(exampleId);
+  const url = buildExampleUrl(exampleId, options.variantId);
   if (!url) {
     return;
   }
@@ -547,6 +675,47 @@ function getBrowserWindow(): Window | undefined {
     readonly window?: Window;
   };
   return maybeGlobal.window;
+}
+
+type VariantToggleProps = {
+  readonly example: PlaygroundExample;
+  readonly activeVariant: PlaygroundVariant | undefined;
+  readonly onSwitch: (variantId: PlaygroundVariant['id']) => void;
+};
+
+/**
+ * Kernel variant switcher — only projects that ship more than one
+ * implementation (e.g. an OpenSCAD original plus an OpenCASCADE port)
+ * render the segmented control.
+ */
+function VariantToggle({ example, activeVariant, onSwitch }: VariantToggleProps): React.JSX.Element | undefined {
+  if (!example.variants || example.variants.length < 2) {
+    return undefined;
+  }
+
+  const selectedVariantId = activeVariant?.id ?? defaultVariantIdFor(example);
+  return (
+    <div role='group' aria-label='Kernel variant' className='flex items-center overflow-hidden rounded-md border'>
+      {example.variants.map((variant) => (
+        <button
+          key={variant.id}
+          type='button'
+          aria-pressed={variant.id === selectedVariantId}
+          className={cn(
+            'px-2.5 py-1.5 text-xs font-medium transition-colors',
+            variant.id === selectedVariantId
+              ? 'bg-primary text-primary-foreground'
+              : 'text-muted-foreground hover:text-foreground',
+          )}
+          onClick={() => {
+            onSwitch(variant.id);
+          }}
+        >
+          {variant.label}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 function EditorFallback({ value, onChange }: EditorFallbackProps): React.JSX.Element {
