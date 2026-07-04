@@ -147,6 +147,28 @@ identical. Notably the OpenCASCADE pendant-lamp renders ~3.5× faster than
 the OpenSCAD original (65 exact tori beat $fn=100 mesh CSG), while the
 boolean-heavy catan-insert is faster in OpenSCAD's mesh engine.
 
+### Export coverage
+
+All export formats the variants advertise were exercised end-to-end for the
+OpenCASCADE ports (`packages/testing/src/geometry/opencascade-export-formats.test.ts`
+covers the pipeline as a regression test):
+
+- **glb, stl, step** — kernel-native, verified for all four ports. The STEP
+  files are true BRep (analytic spheres/tori/planes; the threaded parts carry
+  the B-spline thread surfaces from the sweep).
+- **3mf, obj** — no native kernel support; they route through the converter
+  transcoder (kernel glb → `@taucad/converter`). Verified under vitest/Vite
+  module resolution — the same pipeline the browser app uses. (Plain `tsx`
+  scripts mis-interop assimpjs's CJS default export, so test through vitest.)
+- **gltf** — the kernel's gltf schema currently returns binary GLB bytes; the
+  playground does not advertise gltf, so nothing user-facing is affected.
+
+Two pitfalls found while testing: a failing transcoder route used to be
+swallowed and misreported as `No export route found` (fixed in
+`kernel-worker.ts` — attempted-route failures now surface their real
+errors), and two OCCT wasm instances in one process reject each other's
+shapes, so tests must share one runtime client per process.
+
 ### Found while porting: vane-trap's threads cut nothing
 
 vane-trap's `make_jar_threads()` mask is anchored at z ≈ 0 going _up_ into
