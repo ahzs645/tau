@@ -49,10 +49,14 @@ function positiveBody(p: Params): TopoDS_Shape {
   // OpenSCAD's hex `cylinder(d, $fn=6)` takes the vertex-to-vertex diameter;
   // across-flats = √3 · radius.
   const hexVertexRadius = p.hexAcrossFlats / Math.sqrt(3);
+  // Stacked parts overlap by a hair instead of touching face-to-face:
+  // exactly coincident seams in the fuse poison later cuts (tool material
+  // leaks into the result around the seam).
+  const seamOverlap = 0.01;
 
   return fuse(
-    // Conical nozzle end.
-    cone(p.noseTipFlatDiameter / 2, p.externalThreadMajorDiameter / 2, p.noseLength),
+    // Conical nozzle end, extended a hair into the threaded body.
+    cone(p.noseTipFlatDiameter / 2, p.externalThreadMajorDiameter / 2, p.noseLength + seamOverlap),
     // M14x1.25 external threaded body.
     translate(
       threadedRod({
@@ -63,12 +67,16 @@ function positiveBody(p: Params): TopoDS_Shape {
       [0, 0, p.noseLength],
     ),
     // Round collar immediately below the hex.
-    translate(cylinder(p.collarDiameter / 2, p.collarHeight), [0, 0, p.noseLength + p.threadedLength]),
+    translate(cylinder(p.collarDiameter / 2, p.collarHeight + seamOverlap), [
+      0,
+      0,
+      p.noseLength + p.threadedLength - seamOverlap,
+    ]),
     // Hex end.
-    translate(rotateZ(regularPrism(hexVertexRadius, hexHeight, 6), 30), [
+    translate(rotateZ(regularPrism(hexVertexRadius, hexHeight + seamOverlap, 6), 30), [
       0,
       0,
-      p.noseLength + p.threadedLength + p.collarHeight,
+      p.noseLength + p.threadedLength + p.collarHeight - seamOverlap,
     ]),
   );
 }

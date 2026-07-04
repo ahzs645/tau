@@ -52,9 +52,16 @@ function funnel(p: Params): TopoDS_Shape {
 
 /** Outer cone (`hull()` of the two rim disks) plus the jar collar below z = 0. */
 function funnelShell(p: Params): TopoDS_Shape {
+  // The collar reaches a hair past z = 0 into the cone: exactly coincident
+  // seams in a fuse can poison later cuts (see the porting notes).
+  const seamOverlap = 0.01;
   return fuse(
     cone(p.funnelTopDiameter / 2, p.funnelBottomDiameter / 2 + p.wallThickness, p.funnelHeight + 0.5),
-    translate(cylinder(p.jarThreadOuterDiameter / 2 + p.wallThickness, p.jarThreadLength), [0, 0, -p.jarThreadLength]),
+    translate(cylinder(p.jarThreadOuterDiameter / 2 + p.wallThickness, p.jarThreadLength + seamOverlap), [
+      0,
+      0,
+      -p.jarThreadLength,
+    ]),
   );
 }
 

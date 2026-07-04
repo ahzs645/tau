@@ -96,6 +96,14 @@ covers everything else the gallery actually uses.
 - Emscripten OCCT objects need explicit `.delete()`; the helpers in
   `lib/occt-utils.ts` free intermediates so ported code mostly reads like the
   OpenSCAD original (`translate(box(...))`, `cut(a, b)`, `fuse(...)`).
+- **Give stacked parts a hair of overlap (0.01 mm) instead of letting them
+  touch face-to-face.** Fusing solids whose faces are exactly coincident
+  (e.g. a cone whose top plane equals the next segment's bottom plane) can
+  poison _later_ cuts: the boolean leaves tool material around the seam
+  region (observed on the nozzle insert, where the side-hole cutters
+  survived as solid tubes at the tip). The remnants sit inside the body's
+  bounding box and stay attached to it, so bbox and connected-component
+  checks miss them — inspect renders visually.
 - **Do not pass a `TopoDS_Compound` as a boolean operand** in this
   opencascade.js build — `Cut` with a compound tool and `Fuse` with a
   compound argument both silently return wrong shapes (observed: the cut
