@@ -1,0 +1,9 @@
+{
+  "title": "Catan Box Insert",
+  "entry": "main.scad",
+  "description": "Parametric storage insert for Catan game tiles, cards, player tokens, and border pieces",
+  "category": "Games & Hobbies",
+  "tags": ["catan", "board-game", "insert", "storage", "organization"],
+  "created": "2026-07-04",
+  "author": "OpenSCAD Playground"
+}
