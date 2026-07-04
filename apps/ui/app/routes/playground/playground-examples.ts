@@ -11,6 +11,22 @@ export type PlaygroundStaticPreview = {
   readonly glb: string;
 };
 
+/**
+ * Alternate implementation of the same model in a different kernel
+ * (e.g. an OpenSCAD original alongside a hand-ported OpenCASCADE
+ * version). Switching variants swaps the active entry file; kernel
+ * selection follows the file automatically.
+ */
+export type PlaygroundVariant = {
+  readonly id: 'openscad' | 'replicad' | 'opencascade';
+  readonly label: string;
+  readonly kernel: PlaygroundExample['kernel'];
+  readonly mainFile: string;
+  readonly language: string;
+  readonly exportFormats: readonly FileExtension[];
+  readonly isDefault: boolean;
+};
+
 export type PlaygroundExample = {
   readonly id: string;
   readonly name: string;
@@ -28,6 +44,8 @@ export type PlaygroundExample = {
   readonly initialParameters?: Record<string, unknown>;
   readonly presets?: readonly PlaygroundPreset[];
   readonly staticPreview?: PlaygroundStaticPreview;
+  /** Alternate kernel implementations; when present, includes the default variant. */
+  readonly variants?: readonly PlaygroundVariant[];
   readonly code: string;
   readonly sourceFiles?: Record<string, string>;
 };

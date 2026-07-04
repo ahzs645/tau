@@ -1,15 +1,39 @@
 import type { FileExtension } from '@taucad/types';
 import { replicadExampleCode } from '@taucad/tau-examples';
 import { z } from 'zod';
-import type { PlaygroundExample } from '#routes/playground/playground-examples.js';
+import type { PlaygroundExample, PlaygroundVariant } from '#routes/playground/playground-examples.js';
 
 const meshExportFormats = ['glb', 'stl', '3mf', 'obj'] as const;
 const solidExportFormats = ['glb', 'stl', '3mf', 'step'] as const;
 const exportFormats = ['glb', 'stl', '3mf', 'obj', 'step'] as const satisfies readonly FileExtension[];
 
+const variantKernels = {
+  openscad: 'OpenSCAD',
+  replicad: 'Replicad',
+  opencascade: 'OpenCascade',
+} as const satisfies Record<string, PlaygroundExample['kernel']>;
+
+const variantLabels = {
+  openscad: 'OpenSCAD',
+  replicad: 'Replicad',
+  opencascade: 'OpenCASCADE',
+} as const;
+
+const projectVariantSchema = z.object({
+  id: z.enum(['openscad', 'replicad', 'opencascade']),
+  label: z.string().min(1).optional(),
+  entry: z.string().min(1),
+  language: z.string().min(1).optional(),
+  exportFormats: z.array(z.enum(exportFormats)).optional(),
+});
+
 export const projectMetadataSchema = z.looseObject({
   title: z.string().min(1),
   entry: z.string().min(1),
+  // Alternate implementations of the same model (e.g. an OpenSCAD original and
+  // a hand-ported OpenCASCADE version). The variant whose entry matches the
+  // project `entry` is the default shown when the project loads.
+  variants: z.array(projectVariantSchema).min(1).optional(),
   description: z.string(),
   type: z.enum(['scad', 'static']).optional(),
   mainFile: z.string().min(1).optional(),
@@ -100,15 +124,11 @@ export const projectExamples: readonly PlaygroundExample[] = Object.entries(proj
     }
 
     const code = sourceFiles[mainFile] ?? sourceFiles[entryFile];
+    const variants = variantsForProject(projectId, metadata, sourceFiles);
     const staticPreview = staticPreviewForProject(projectId, metadata);
     const image = imageForProject(projectId, metadata);
     const mode = modeFromMetadata(metadata);
-    const galleryMetadata = {
-      ...(metadata.category ? { category: metadata.category } : {}),
-      ...(metadata.tags && metadata.tags.length > 0 ? { tags: metadata.tags } : {}),
-      ...(metadata.author ? { author: metadata.author } : {}),
-      ...(image ? { image } : {}),
-    };
+    const galleryMetadata = galleryMetadataFor(metadata, image);
 
     if (mode === 'static') {
       if (!staticPreview) {
@@ -147,6 +167,7 @@ export const projectExamples: readonly PlaygroundExample[] = Object.entries(proj
         language: languageFromMetadata(metadata, mainFile),
         description: metadata.description,
         exportFormats: metadata.exportFormats ?? exportFormatsFromMetadata(metadata),
+        ...(variants ? { variants } : {}),
         ...(metadata.initialParameters ? { initialParameters: metadata.initialParameters } : {}),
         ...(presets ? { presets } : {}),
         ...(staticPreview ? { staticPreview } : {}),
@@ -254,6 +275,18 @@ function modeFromMetadata(metadata: ProjectMetadata): NonNullable<PlaygroundExam
   return metadata.type === 'static' ? 'static' : 'editable';
 }
 
+function galleryMetadataFor(
+  metadata: ProjectMetadata,
+  image: string | undefined,
+): Partial<Pick<PlaygroundExample, 'category' | 'tags' | 'author' | 'image'>> {
+  return {
+    ...(metadata.category ? { category: metadata.category } : {}),
+    ...(metadata.tags && metadata.tags.length > 0 ? { tags: metadata.tags } : {}),
+    ...(metadata.author ? { author: metadata.author } : {}),
+    ...(image ? { image } : {}),
+  };
+}
+
 function kernelFromMetadata(metadata: ProjectMetadata): PlaygroundExample['kernel'] {
   if (metadata.kernel) {
     return metadata.kernel;
@@ -278,11 +311,15 @@ function languageFromMetadata(metadata: ProjectMetadata, mainFile: string): stri
     return metadata.language;
   }
 
-  if (mainFile.endsWith('.glb') || mainFile.endsWith('.gltf')) {
+  return languageForEntry(mainFile);
+}
+
+function languageForEntry(entry: string): string {
+  if (entry.endsWith('.glb') || entry.endsWith('.gltf')) {
     return 'gltf';
   }
 
-  if (mainFile.endsWith('.ts') || mainFile.endsWith('.js')) {
+  if (entry.endsWith('.ts') || entry.endsWith('.js')) {
     return 'typescript';
   }
 
@@ -291,4 +328,37 @@ function languageFromMetadata(metadata: ProjectMetadata, mainFile: string): stri
 
 function exportFormatsFromMetadata(metadata: ProjectMetadata): readonly FileExtension[] {
   return kernelFromMetadata(metadata) === 'OpenSCAD' ? meshExportFormats : solidExportFormats;
+}
+
+function variantsForProject(
+  projectId: string,
+  metadata: ProjectMetadata,
+  sourceFiles: Record<string, string>,
+): readonly PlaygroundVariant[] | undefined {
+  if (!metadata.variants || metadata.variants.length === 0) {
+    return undefined;
+  }
+
+  const variants = metadata.variants.map((variant): PlaygroundVariant => {
+    if (!sourceFiles[variant.entry]) {
+      throw new Error(`Project "${projectId}" variant "${variant.id}" is missing source for entry "${variant.entry}"`);
+    }
+
+    const kernel = variantKernels[variant.id];
+    return {
+      id: variant.id,
+      label: variant.label ?? variantLabels[variant.id],
+      kernel,
+      mainFile: variant.entry,
+      language: variant.language ?? languageForEntry(variant.entry),
+      exportFormats: variant.exportFormats ?? (kernel === 'OpenSCAD' ? meshExportFormats : solidExportFormats),
+      isDefault: variant.entry === metadata.entry,
+    };
+  });
+
+  if (!variants.some((variant) => variant.isDefault)) {
+    throw new Error(`Project "${projectId}" variants must include one whose entry matches "${metadata.entry}"`);
+  }
+
+  return variants;
 }

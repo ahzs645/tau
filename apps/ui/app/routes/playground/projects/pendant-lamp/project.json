@@ -5,5 +5,15 @@
   "category": "Home & Decor",
   "tags": ["lamp", "lighting", "pendant", "pleated", "customizable"],
   "created": "2024-01-01",
-  "author": "OpenSCAD Playground"
+  "author": "OpenSCAD Playground",
+  "variants": [
+    {
+      "id": "openscad",
+      "entry": "Main.scad"
+    },
+    {
+      "id": "opencascade",
+      "entry": "main.occt.ts"
+    }
+  ]
 }
