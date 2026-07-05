@@ -99,6 +99,8 @@ type CadInput = {
   logRef?: ActorRefFrom<typeof logMachine>;
   fileManagerRef?: ActorRefFrom<typeof fileManagerMachine>;
   kernelOptionsFactory: LazyKernelOptionsFactory;
+  /** Milliseconds. */
+  renderTimeout?: number;
   renderOptions?: Record<string, unknown>;
 };
 
@@ -106,10 +108,12 @@ type ConnectKernelInput = {
   kernelOptionsFactory: LazyKernelOptionsFactory;
   fileManagerRef?: ActorRefFrom<typeof fileManagerMachine>;
   machineRef: AnyActorRef;
+  /** Milliseconds. */
+  renderTimeout: number;
 };
 
 const connectKernelActor = fromSafeAsync<KernelConnectedEvent, ConnectKernelInput>(async ({ input, signal }) => {
-  const { kernelOptionsFactory: lazyKernelOptionsFactory, fileManagerRef, machineRef } = input;
+  const { kernelOptionsFactory: lazyKernelOptionsFactory, fileManagerRef, machineRef, renderTimeout } = input;
 
   if (!fileManagerRef) {
     throw new Error('File manager not initialized');
@@ -133,7 +137,7 @@ const connectKernelActor = fromSafeAsync<KernelConnectedEvent, ConnectKernelInpu
     fileSystem: fromChannelFs(snapshot.context.worker),
     filePoolBuffer: snapshot.context.filePoolBuffer,
   });
-  const client = createRuntimeClient(kernelOptions);
+  const client = createRuntimeClient({ ...kernelOptions, renderTimeout });
   const cleanups: Array<() => void> = [];
 
   const teardown = () => {
@@ -474,7 +478,7 @@ export const cadMachine = setup({
     jsonSchema: undefined,
     renderPhase: undefined,
     telemetryEntries: [],
-    renderTimeout: 30_000,
+    renderTimeout: input.renderTimeout ?? 30_000,
     renderOptions: input.renderOptions,
     kernelClient: undefined,
     capabilities: undefined,
@@ -495,6 +499,7 @@ export const cadMachine = setup({
             kernelOptionsFactory: context.kernelOptionsFactory,
             fileManagerRef: context.fileManagerRef,
             machineRef: self,
+            renderTimeout: context.renderTimeout,
           };
         },
         onDone: 'idle',

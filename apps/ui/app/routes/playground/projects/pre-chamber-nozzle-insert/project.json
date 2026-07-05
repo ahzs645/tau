@@ -17,7 +17,9 @@
     },
     {
       "id": "opencascade",
-      "entry": "main.occt.ts"
+      "entry": "main.occt.ts",
+      "renderTimeout": 120000,
+      "showPreviewLines": false
     }
   ]
 }

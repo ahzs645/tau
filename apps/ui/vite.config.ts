@@ -77,10 +77,6 @@ export default defineConfig(({ mode }) => {
               replacement: path.resolve(__dirname, './app/root-shell.static.tsx'),
             },
             {
-              find: '#routes/playground/playground-preview.js',
-              replacement: path.resolve(__dirname, './app/routes/playground/playground-preview.static.tsx'),
-            },
-            {
               find: '#components/docs/replicad-reference.js',
               replacement: path.resolve(__dirname, './app/components/docs/replicad-reference.static.tsx'),
             },

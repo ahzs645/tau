@@ -1,11 +1,12 @@
 import type { RefCallback } from 'react';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router';
-import { Braces, Eye, LayoutGrid, Play, RotateCcw, Share2 } from 'lucide-react';
+import { Braces, Eye, Laptop, LayoutGrid, Moon, Play, RotateCcw, Share2, Sun } from 'lucide-react';
 import { toast } from '#components/ui/sonner.js';
 import { Button, buttonVariants } from '#components/ui/button.js';
 import { ClientOnly } from '#components/ui/utils/client-only.js';
 import { useFeature } from '#flags/use-feature.js';
+import { useTheme } from '#hooks/use-theme.js';
 import { playgroundExamples } from '#routes/playground/playground-examples.js';
 import type { PlaygroundExample, PlaygroundVariant } from '#routes/playground/playground-examples.js';
 import { PlaygroundPreviewPane, playgroundPreviewCapabilities } from '#routes/playground/playground-preview.js';
@@ -417,6 +418,7 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
           </div>
         </div>
         <div className='flex items-center gap-2'>
+          <PlaygroundThemeButton />
           <Link to='/' aria-label='Gallery' className={buttonVariants({ variant: 'outline', size: 'sm' })}>
             <LayoutGrid className='size-3.5' />
             {/* Icon-only on phones so the header stays within a thumb-width; labelled on md+. */}
@@ -525,6 +527,26 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
   );
 }
 
+function PlaygroundThemeButton(): React.JSX.Element {
+  const { themeWithSystem, currentOption, cycleTheme } = useTheme();
+
+  return (
+    <Button
+      variant='outline'
+      size='sm'
+      className='group relative size-8 overflow-hidden p-0'
+      data-theme={themeWithSystem ?? 'system'}
+      aria-label={`Switch theme, currently ${currentOption.name}`}
+      title={`Theme: ${currentOption.name}`}
+      onClick={cycleTheme}
+    >
+      <Sun className='size-3.5 origin-right -translate-x-[400%] rotate-[-180deg] transition-transform duration-500 group-data-[theme=light]:translate-x-0 group-data-[theme=light]:rotate-0' />
+      <Moon className='absolute size-3.5 origin-left translate-x-[400%] rotate-[180deg] transition-transform duration-500 group-data-[theme=dark]:translate-x-0 group-data-[theme=dark]:rotate-0' />
+      <Laptop className='absolute size-3.5 origin-top translate-y-[400%] transition-transform duration-500 group-data-[theme=system]:translate-y-0' />
+    </Button>
+  );
+}
+
 /**
  * True when the code editor should be hidden. The playground is parameter-first, so
  * the editor is hidden by default; `?editor=on|1|true` opts a single visit into code
@@ -624,6 +646,8 @@ function applyVariant(example: PlaygroundExample, variant: PlaygroundVariant | u
     mainFile: variant.mainFile,
     language: variant.language,
     exportFormats: variant.exportFormats,
+    ...(variant.renderTimeout ? { renderTimeout: variant.renderTimeout } : {}),
+    ...(typeof variant.showPreviewLines === 'boolean' ? { showPreviewLines: variant.showPreviewLines } : {}),
     code: example.sourceFiles?.[variant.mainFile] ?? example.code,
   };
 }

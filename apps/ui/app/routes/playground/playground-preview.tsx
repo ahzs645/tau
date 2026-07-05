@@ -86,6 +86,7 @@ export function PlaygroundPreviewPane({
           mainFile={activeExample.mainFile}
           files={files}
           parameters={activeExample.initialParameters}
+          renderTimeout={activeExample.renderTimeout}
         >
           {exportControlsElement && activeExample.exportFormats.length > 0
             ? createPortal(
@@ -112,7 +113,7 @@ export function PlaygroundPreviewPane({
                 staticPreviewUrl={staticPreviewUrl}
                 stageOptions={{ zoomLevel: 1.25 }}
                 graphicsOptions={{
-                  enableLines: true,
+                  enableLines: activeExample.showPreviewLines ?? true,
                   viewerClassName: 'bg-muted/30',
                 }}
               />
@@ -125,6 +126,7 @@ export function PlaygroundPreviewPane({
                     exampleId={activeExample.id}
                     formats={activeExample.exportFormats}
                     buttonSize='sm'
+                    enableShortcut={false}
                   />
                 </div>
               ) : null}
@@ -241,10 +243,12 @@ function PlaygroundExportControls({
   exampleId,
   formats,
   buttonSize = 'xs',
+  enableShortcut = true,
 }: {
   readonly exampleId: string;
   readonly formats: readonly FileExtension[];
   readonly buttonSize?: 'xs' | 'sm';
+  readonly enableShortcut?: boolean;
 }): React.JSX.Element {
   const { cadRef, status, geometries } = useCadPreview();
   const [isExporting, setIsExporting] = useState(false);
@@ -300,6 +304,10 @@ function PlaygroundExportControls({
   );
 
   useEffect(() => {
+    if (!enableShortcut) {
+      return undefined;
+    }
+
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'F7' && primaryFormat) {
         event.preventDefault();
@@ -311,7 +319,7 @@ function PlaygroundExportControls({
     return () => {
       globalThis.removeEventListener('keydown', handleKeyDown);
     };
-  }, [exportGeometry, primaryFormat]);
+  }, [enableShortcut, exportGeometry, primaryFormat]);
 
   return (
     <DropdownMenu>

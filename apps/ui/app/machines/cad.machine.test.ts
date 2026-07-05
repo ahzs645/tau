@@ -26,6 +26,7 @@ function createTestActor(options?: {
   }>;
   connectError?: Error;
   shouldInitializeKernelOnStart?: boolean;
+  renderTimeout?: number;
 }) {
   const mockClient = createMockRuntimeClient();
   const cleanups: Array<() => void> = [];
@@ -54,6 +55,7 @@ function createTestActor(options?: {
     input: {
       shouldInitializeKernelOnStart: options?.shouldInitializeKernelOnStart ?? false,
       kernelOptionsFactory,
+      renderTimeout: options?.renderTimeout,
     },
   });
 
@@ -992,6 +994,14 @@ describe('cadMachine', () => {
     it('should default renderTimeout to 30_000ms (30 seconds)', async () => {
       const { actor } = await startAndConnect();
       expect(actor.getSnapshot().context.renderTimeout).toBe(30_000);
+      actor.stop();
+    });
+
+    it('should initialize renderTimeout from machine input', async () => {
+      const { actor, mockClient } = await startAndConnect({ renderTimeout: 120_000 });
+
+      expect(actor.getSnapshot().context.renderTimeout).toBe(120_000);
+      expect(mockClient.setOptions).toHaveBeenCalledWith({ renderTimeout: 120_000 });
       actor.stop();
     });
   });

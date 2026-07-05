@@ -50,6 +50,8 @@ export type CadPreviewProviderProps = {
   /** Whether the rendering should be triggered (default: true) */
   readonly isEnabled?: boolean;
   readonly kernelOptionsFactory?: LazyKernelOptionsFactory;
+  /** Milliseconds. */
+  readonly renderTimeout?: number;
   readonly renderOptions?: Record<string, unknown>;
   readonly children: ReactNode;
 };
@@ -105,6 +107,7 @@ export function CadPreviewProvider({
   parameters,
   isEnabled = true,
   kernelOptionsFactory = defaultKernelOptions,
+  renderTimeout,
   renderOptions,
   children,
 }: CadPreviewProviderProps): React.JSX.Element {
@@ -115,6 +118,7 @@ export function CadPreviewProvider({
       shouldInitializeKernelOnStart: false,
       fileManagerRef,
       kernelOptionsFactory,
+      renderTimeout,
       renderOptions,
     },
   });

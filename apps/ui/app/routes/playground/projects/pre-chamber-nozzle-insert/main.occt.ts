@@ -8,7 +8,7 @@
  * Z = 0 is the conical nozzle tip; +Z runs toward the hex.
  */
 import type { TopoDS_Shape } from 'opencascade.js';
-import { cone, cut, cylinder, fuse, regularPrism, rotateY, rotateZ, translate } from './lib/occt-utils.js';
+import { cone, cut, cylinder, facetedCone, fuse, regularPrism, rotateY, rotateZ, translate } from './lib/occt-utils.js';
 import { threadedRod } from './lib/threads.js';
 
 export const defaultParams = {
@@ -55,8 +55,9 @@ function positiveBody(p: Params): TopoDS_Shape {
   const seamOverlap = 0.01;
 
   return fuse(
-    // Conical nozzle end, extended a hair into the threaded body.
-    cone(p.noseTipFlatDiameter / 2, p.externalThreadMajorDiameter / 2, p.noseLength + seamOverlap),
+    // OpenSCAD renders the nozzle as a 96-sided frustum; keeping that topology
+    // avoids OCCT's fragile tiny oblique-cylinder cuts on one analytic cone face.
+    facetedCone(p.noseTipFlatDiameter / 2, p.externalThreadMajorDiameter / 2, p.noseLength + seamOverlap, 96),
     // M14x1.25 external threaded body.
     translate(
       threadedRod({

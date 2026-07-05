@@ -25,6 +25,8 @@ const projectVariantSchema = z.object({
   entry: z.string().min(1),
   language: z.string().min(1).optional(),
   exportFormats: z.array(z.enum(exportFormats)).optional(),
+  renderTimeout: z.number().int().positive().optional(),
+  showPreviewLines: z.boolean().optional(),
 });
 
 export const projectMetadataSchema = z.looseObject({
@@ -52,6 +54,8 @@ export const projectMetadataSchema = z.looseObject({
   image: z.string().min(1).optional(),
   hidden: z.boolean().optional(),
   exportFormats: z.array(z.enum(exportFormats)).optional(),
+  renderTimeout: z.number().int().positive().optional(),
+  showPreviewLines: z.boolean().optional(),
   initialParameters: z.record(z.string(), z.unknown()).optional(),
   previewGlb: z.string().min(1).optional(),
   staticPreview: z
@@ -167,6 +171,8 @@ export const projectExamples: readonly PlaygroundExample[] = Object.entries(proj
         language: languageFromMetadata(metadata, mainFile),
         description: metadata.description,
         exportFormats: metadata.exportFormats ?? exportFormatsFromMetadata(metadata),
+        ...(metadata.renderTimeout ? { renderTimeout: metadata.renderTimeout } : {}),
+        ...(typeof metadata.showPreviewLines === 'boolean' ? { showPreviewLines: metadata.showPreviewLines } : {}),
         ...(variants ? { variants } : {}),
         ...(metadata.initialParameters ? { initialParameters: metadata.initialParameters } : {}),
         ...(presets ? { presets } : {}),
@@ -352,6 +358,8 @@ function variantsForProject(
       mainFile: variant.entry,
       language: variant.language ?? languageForEntry(variant.entry),
       exportFormats: variant.exportFormats ?? (kernel === 'OpenSCAD' ? meshExportFormats : solidExportFormats),
+      ...(variant.renderTimeout ? { renderTimeout: variant.renderTimeout } : {}),
+      ...(typeof variant.showPreviewLines === 'boolean' ? { showPreviewLines: variant.showPreviewLines } : {}),
       isDefault: variant.entry === metadata.entry,
     };
   });

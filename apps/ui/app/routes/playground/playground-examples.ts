@@ -25,6 +25,9 @@ export type PlaygroundVariant = {
   readonly mainFile: string;
   readonly language: string;
   readonly exportFormats: readonly FileExtension[];
+  /** Milliseconds. */
+  readonly renderTimeout?: number;
+  readonly showPreviewLines?: boolean;
   readonly isDefault: boolean;
 };
 
@@ -42,6 +45,9 @@ export type PlaygroundExample = {
   /** Resolved URL of an optional gallery card thumbnail. */
   readonly image?: string;
   readonly exportFormats: readonly FileExtension[];
+  /** Milliseconds. */
+  readonly renderTimeout?: number;
+  readonly showPreviewLines?: boolean;
   readonly initialParameters?: Record<string, unknown>;
   readonly presets?: readonly PlaygroundPreset[];
   readonly staticPreview?: PlaygroundStaticPreview;

@@ -28,6 +28,7 @@ const {
   mockWriteText,
   fileManagerCalls,
   providerCalls,
+  viewerCalls,
   resetProviderCalls,
 } = vi.hoisted(() => {
   const handlers: CadEventHandlers = {
@@ -65,6 +66,9 @@ const {
       mainFile: string;
       files: Record<string, { content: Uint8Array<ArrayBuffer> }>;
     }>,
+    viewerCalls: [] as Array<{
+      graphicsOptions: { readonly enableLines?: boolean } | undefined;
+    }>,
     resetProviderCalls: () => {
       handlers.geometryExported.length = 0;
       handlers.exportFailed.length = 0;
@@ -76,6 +80,7 @@ const {
       mockWriteText.mockClear();
       fileManagerCalls.length = 0;
       providerCalls.length = 0;
+      viewerCalls.length = 0;
       state.parameters = {};
     },
   };
@@ -89,6 +94,23 @@ vi.mock('#components/ui/sonner.js', () => ({
   toast: {
     error: mockToastError,
     success: mockToastSuccess,
+  },
+}));
+
+vi.mock('#hooks/use-theme.js', () => ({
+  useTheme() {
+    return {
+      theme: 'light',
+      ssrTheme: 'light',
+      themeWithSystem: 'light',
+      currentOption: {
+        id: 'light',
+        name: 'Light',
+        description: 'A bright, clean look',
+      },
+      setTheme: vi.fn(),
+      cycleTheme: vi.fn(),
+    };
   },
 }));
 
@@ -107,7 +129,8 @@ vi.mock('#components/code/code-editor.client.js', () => ({
 }));
 
 vi.mock('#components/cad-preview.js', () => ({
-  CadPreviewViewer() {
+  CadPreviewViewer({ graphicsOptions }: { readonly graphicsOptions?: { readonly enableLines?: boolean } }) {
+    viewerCalls.push({ graphicsOptions });
     return <div data-testid='cad-preview-viewer'>viewer</div>;
   },
   StaticPreviewViewer({ staticPreviewUrl }: { readonly staticPreviewUrl: string }) {
@@ -326,6 +349,19 @@ describe('PlaygroundRoot', () => {
     expect(providerCalls.at(-1)?.files['main.ts']).toBeDefined();
   });
 
+  it('suppresses preview edge lines for the OpenCascade pre-chamber variant', async () => {
+    globalThis.history.replaceState({}, '', '/?model=pre-chamber-nozzle-insert&variant=opencascade');
+
+    renderPlaygroundRoot();
+
+    expect(await screen.findByRole('heading', { name: 'Pre-Chamber Nozzle Insert' })).toBeDefined();
+    await waitFor(() => {
+      expect(providerCalls.at(-1)?.projectId).toBe('root-playground-pre-chamber-nozzle-insert-opencascade');
+    });
+    expect(providerCalls.at(-1)?.mainFile).toBe('main.occt.ts');
+    expect(viewerCalls.at(-1)?.graphicsOptions?.enableLines).toBe(false);
+  });
+
   it('updates the active model when route loader data changes on client navigation', async () => {
     const { rerender } = render(
       <MemoryRouter key='3d-rack-scad' initialEntries={['/?model=3d-rack-scad']}>
@@ -428,6 +464,8 @@ describe('PlaygroundRoot', () => {
       });
       expect(mockDownloadBlob).toHaveBeenCalledWith(expect.any(Blob), 'openscad-bracket.glb');
     });
+    expect(mockCadSend).toHaveBeenCalledTimes(1);
+    expect(mockDownloadBlob).toHaveBeenCalledTimes(1);
   });
 
   it('copies share links using the same model URL behavior as the source app', async () => {

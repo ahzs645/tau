@@ -21,6 +21,7 @@ import {
   BRepPrimAPI_MakeRevol,
   BRepPrimAPI_MakeSphere,
   BRepPrimAPI_MakeTorus,
+  BRepOffsetAPI_ThruSections,
   gp_Ax1,
   gp_Ax2,
   gp_Dir,
@@ -29,7 +30,7 @@ import {
   gp_Vec,
   NCollection_List_TopoDS_Shape,
 } from 'opencascade.js';
-import type { TopoDS_Shape } from 'opencascade.js';
+import type { TopoDS_Shape, TopoDS_Wire } from 'opencascade.js';
 
 export type Vec3 = readonly [number, number, number];
 
@@ -67,6 +68,40 @@ export function cone(bottomRadius: number, topRadius: number, height: number): T
   }
 
   return shapeOf(new BRepPrimAPI_MakeCone(bottomRadius, topRadius, height));
+}
+
+/** Ruled polygonal frustum matching OpenSCAD `cylinder(d1, d2, $fn=sides)`. */
+export function facetedCone(bottomRadius: number, topRadius: number, height: number, sides: number): TopoDS_Shape {
+  if (sides < 3) {
+    throw new Error('facetedCone() needs at least 3 sides');
+  }
+
+  const bottom = regularWire(bottomRadius, 0, sides);
+  const top = regularWire(topRadius, height, sides);
+  const loft = new BRepOffsetAPI_ThruSections(true, true, 1e-6);
+  loft.AddWire(bottom);
+  loft.AddWire(top);
+  loft.Build();
+  const shape = loft.Shape();
+  loft.delete();
+  bottom.delete();
+  top.delete();
+  return shape;
+}
+
+function regularWire(radius: number, z: number, sides: number): TopoDS_Wire {
+  const polygon = new BRepBuilderAPI_MakePolygon();
+  for (let index = 0; index < sides; index += 1) {
+    const angle = degToRad((index * 360) / sides);
+    const point = new gp_Pnt(radius * Math.cos(angle), radius * Math.sin(angle), z);
+    polygon.Add(point);
+    point.delete();
+  }
+
+  polygon.Close();
+  const wire = polygon.Wire();
+  polygon.delete();
+  return wire;
 }
 
 /**
