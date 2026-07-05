@@ -60,6 +60,7 @@ describe('project examples discovery', () => {
       sourceFiles: {},
     });
     expect(examplesById.get('atmospheric-sampler')?.staticPreview).toBeDefined();
+    expect(examplesById.get('pre-chamber-nozzle-insert')?.staticPreview).toBeDefined();
     expect(examplesById.has('wham')).toBe(false);
   });
 

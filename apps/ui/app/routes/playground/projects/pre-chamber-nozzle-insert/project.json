@@ -7,6 +7,9 @@
   "tags": ["spark-plug", "pre-chamber", "jet-ignition", "BOSL2", "threads", "M14", "M10", "metal", "static"],
   "author": "Reverse-engineered starter CAD",
   "image": "poster.webp",
+  "staticPreview": {
+    "glb": "pre-chamber-nozzle-insert.glb"
+  },
   "variants": [
     {
       "id": "openscad",

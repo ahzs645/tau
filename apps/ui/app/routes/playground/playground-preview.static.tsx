@@ -2,6 +2,8 @@ import type { ComponentProps } from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Box, ChevronDown } from 'lucide-react';
 import { Parameters } from '@taucad/react/parameters';
+import type { Geometry } from '@taucad/types';
+import { ModelViewer } from '#components/model-viewer.js';
 import type { PlaygroundExample, PlaygroundPreset } from '#routes/playground/playground-examples.js';
 import type { PlaygroundMobilePane } from '#routes/playground/playground-preview.js';
 import { Button } from '#components/ui/button.js';
@@ -37,6 +39,18 @@ type ParseState = {
   index: number;
 };
 type ParseResult = { readonly success: true; readonly value: unknown } | { readonly success: false };
+type StaticParameterGroup = {
+  readonly key: string;
+  readonly title: string;
+  readonly parameterKeys: readonly string[];
+};
+type StaticParameterView = {
+  readonly defaultParameters: Record<string, unknown>;
+  readonly jsonSchema: ParameterSchema;
+  readonly presets: readonly PlaygroundPreset[];
+  readonly toUiParameters: (parameters: Record<string, unknown>) => Record<string, unknown>;
+  readonly toModelParameters: (parameters: Record<string, unknown>) => Record<string, unknown>;
+};
 
 const parameterUnits = {
   length: {
@@ -44,6 +58,55 @@ const parameterUnits = {
     factor: 1,
   },
 } as const satisfies ParameterUnits;
+
+const descriptorTerms = new Set([
+  'add',
+  'angle',
+  'angular',
+  'axial',
+  'bottom',
+  'clearance',
+  'count',
+  'd',
+  'deg',
+  'depth',
+  'diameter',
+  'dimension',
+  'direction',
+  'enable',
+  'external',
+  'from',
+  'height',
+  'horizontal',
+  'internal',
+  'large',
+  'len',
+  'length',
+  'major',
+  'minor',
+  'model',
+  'num',
+  'od',
+  'offset',
+  'pitch',
+  'radius',
+  'show',
+  'side',
+  'slop',
+  'small',
+  'start',
+  'thick',
+  'thickness',
+  'tilt',
+  'tip',
+  'top',
+  'total',
+  'w',
+  'width',
+  'x',
+  'y',
+  'z',
+]);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -334,12 +397,14 @@ const findDefaultParamsInitializer = (source: string): number | undefined => {
 
 const extractDefaultParametersFromSource = (source: string): Record<string, unknown> | undefined => {
   const initializerIndex = findDefaultParamsInitializer(source);
-  if (initializerIndex === undefined) {
-    return undefined;
+  if (initializerIndex !== undefined) {
+    const result = parseObjectLiteral({ source, index: initializerIndex });
+    if (result.success && isRecord(result.value)) {
+      return result.value;
+    }
   }
 
-  const result = parseObjectLiteral({ source, index: initializerIndex });
-  return result.success && isRecord(result.value) ? result.value : undefined;
+  return extractOpenScadParametersFromSource(source);
 };
 
 const deriveDefaultParameters = (example: PlaygroundExample): Record<string, unknown> => {
@@ -351,6 +416,78 @@ const deriveDefaultParameters = (example: PlaygroundExample): Record<string, unk
   }
 
   return defaults;
+};
+
+const stripOpenScadLineComment = (line: string): string => {
+  let quote: string | undefined;
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    const nextCharacter = line[index + 1];
+    if (character === undefined) {
+      break;
+    }
+
+    if (quote) {
+      if (character === '\\') {
+        index += 1;
+        continue;
+      }
+
+      if (character === quote) {
+        quote = undefined;
+      }
+
+      continue;
+    }
+
+    if (character === '"' || character === "'") {
+      quote = character;
+      continue;
+    }
+
+    if (character === '/' && nextCharacter === '/') {
+      return line.slice(0, index);
+    }
+  }
+
+  return line;
+};
+
+const readOpenScadDeclarationPrefix = (source: string): string => {
+  const hiddenSectionIndex = source.search(/\/\*\s*\[Hidden\]\s*\*\//u);
+  const moduleIndex = source.search(/^\s*(?:function|module)\s+[$\w]+\s*\(/mu);
+  const endCandidates = [hiddenSectionIndex, moduleIndex].filter((index) => index >= 0);
+  const endIndex = endCandidates.length > 0 ? Math.min(...endCandidates) : source.length;
+  return source.slice(0, endIndex);
+};
+
+const parseStandaloneLiteral = (expression: string): unknown | undefined => {
+  const state: ParseState = { source: expression.trim(), index: 0 };
+  const result = parseValue(state);
+  if (!result.success) {
+    return undefined;
+  }
+
+  skipIgnored(state);
+  return state.index === state.source.length ? result.value : undefined;
+};
+
+const extractOpenScadParametersFromSource = (source: string): Record<string, unknown> | undefined => {
+  const parameters: Record<string, unknown> = {};
+  for (const rawLine of readOpenScadDeclarationPrefix(source).split('\n')) {
+    const line = stripOpenScadLineComment(rawLine).trim();
+    const match = /^([A-Z_a-z]\w*)\s*=\s*(.+);$/u.exec(line);
+    if (!match?.[1] || !match[2]) {
+      continue;
+    }
+
+    const value = parseStandaloneLiteral(match[2]);
+    if (value !== undefined) {
+      parameters[match[1]] = value;
+    }
+  }
+
+  return Object.keys(parameters).length > 0 ? parameters : undefined;
 };
 
 const readableTitle = (key: string): string =>
@@ -366,6 +503,122 @@ const firstDefined = (values: readonly unknown[]): unknown => values.find((value
 const uniqueStrings = (values: readonly unknown[]): string[] => [
   ...new Set(values.filter((value): value is string => typeof value === 'string')),
 ];
+
+const parameterTerms = (key: string): string[] =>
+  key
+    .replaceAll(/([\da-z])([A-Z])/gu, '$1 $2')
+    .toLowerCase()
+    .split(/[\s_-]+/u)
+    .filter((term) => term.length > 1);
+
+const primaryParameterTerm = (key: string): string | undefined => {
+  const normalizedKey = key.toLowerCase();
+  if (normalizedKey.includes('prechamber') || normalizedKey.includes('pre_chamber')) {
+    return 'preChamber';
+  }
+
+  const terms = parameterTerms(key);
+  for (const preferredTerm of ['thread', 'side', 'hole', 'nose', 'collar', 'hex'] as const) {
+    if (terms.includes(preferredTerm)) {
+      return preferredTerm;
+    }
+  }
+
+  return terms.find((term) => !descriptorTerms.has(term)) ?? terms[0];
+};
+
+const groupFlatParameters = (parameters: Record<string, unknown>): readonly StaticParameterGroup[] | undefined => {
+  if (Object.values(parameters).some((value) => isRecord(value))) {
+    return undefined;
+  }
+
+  const entriesByGroup = new Map<string, string[]>();
+  for (const key of Object.keys(parameters)) {
+    const groupKey = primaryParameterTerm(key) ?? 'general';
+    entriesByGroup.set(groupKey, [...(entriesByGroup.get(groupKey) ?? []), key]);
+  }
+
+  const groupedKeys = new Set(
+    [...entriesByGroup.entries()].filter(([, keys]) => keys.length > 1).map(([groupKey]) => groupKey),
+  );
+  if (groupedKeys.size === 0) {
+    return undefined;
+  }
+
+  const groups: StaticParameterGroup[] = [];
+  const generalKeys: string[] = [];
+  for (const [groupKey, keys] of entriesByGroup) {
+    if (!groupedKeys.has(groupKey)) {
+      generalKeys.push(...keys);
+      continue;
+    }
+
+    groups.push({
+      key: groupKey,
+      title: readableTitle(groupKey),
+      parameterKeys: keys,
+    });
+  }
+
+  if (generalKeys.length > 0) {
+    groups.unshift({
+      key: 'general',
+      title: 'General',
+      parameterKeys: generalKeys,
+    });
+  }
+
+  return groups;
+};
+
+const groupParameterRecord = (
+  parameters: Record<string, unknown>,
+  groups: readonly StaticParameterGroup[],
+): Record<string, unknown> => {
+  const grouped: Record<string, unknown> = {};
+  for (const group of groups) {
+    const values: Record<string, unknown> = {};
+    for (const key of group.parameterKeys) {
+      if (parameters[key] !== undefined) {
+        values[key] = cloneParameterValue(parameters[key]);
+      }
+    }
+
+    if (Object.keys(values).length > 0) {
+      grouped[group.key] = values;
+    }
+  }
+
+  return grouped;
+};
+
+const ungroupParameterRecord = (
+  parameters: Record<string, unknown>,
+  groups: readonly StaticParameterGroup[],
+): Record<string, unknown> => {
+  const flat: Record<string, unknown> = {};
+  const groupKeys = new Set(groups.map((group) => group.key));
+  for (const [key, value] of Object.entries(parameters)) {
+    if (!groupKeys.has(key)) {
+      flat[key] = cloneParameterValue(value);
+    }
+  }
+
+  for (const group of groups) {
+    const groupValue = parameters[group.key];
+    if (!isRecord(groupValue)) {
+      continue;
+    }
+
+    for (const key of group.parameterKeys) {
+      if (groupValue[key] !== undefined) {
+        flat[key] = cloneParameterValue(groupValue[key]);
+      }
+    }
+  }
+
+  return flat;
+};
 
 const inferArrayItemSchema = (values: readonly unknown[]): ParameterSchema => {
   const firstArray = values.find((value): value is readonly unknown[] => isUnknownArray(value));
@@ -435,8 +688,8 @@ const inferSchemaForValue = (value: unknown, samples: readonly unknown[], title:
 const buildParameterSchema = (
   example: PlaygroundExample,
   defaultParameters: Record<string, unknown>,
+  presets: readonly PlaygroundPreset[],
 ): ParameterSchema => {
-  const presets = example.presets ?? [];
   const keys = [
     ...new Set([
       ...Object.keys(defaultParameters),
@@ -456,8 +709,122 @@ const buildParameterSchema = (
   } satisfies ParameterSchema;
 };
 
+const deriveStaticParameterView = (example: PlaygroundExample): StaticParameterView => {
+  const modelDefaultParameters = deriveDefaultParameters(example);
+  const groups = groupFlatParameters(modelDefaultParameters);
+  if (!groups) {
+    const presets = example.presets ?? [];
+    return {
+      defaultParameters: modelDefaultParameters,
+      jsonSchema: buildParameterSchema(example, modelDefaultParameters, presets),
+      presets,
+      toUiParameters: (parameters) => cloneParameterValue(parameters) as Record<string, unknown>,
+      toModelParameters: (parameters) => cloneParameterValue(parameters) as Record<string, unknown>,
+    };
+  }
+
+  const defaultParameters = groupParameterRecord(modelDefaultParameters, groups);
+  const presets = (example.presets ?? []).map((preset) => ({
+    ...preset,
+    parameters: groupParameterRecord(preset.parameters, groups),
+  }));
+
+  return {
+    defaultParameters,
+    jsonSchema: buildParameterSchema(example, defaultParameters, presets),
+    presets,
+    toUiParameters(parameters) {
+      return groupParameterRecord(ungroupParameterRecord(parameters, groups), groups);
+    },
+    toModelParameters(parameters) {
+      return ungroupParameterRecord(parameters, groups);
+    },
+  };
+};
+
+async function loadStaticPreviewGeometry(url: string, signal?: AbortSignal): Promise<Geometry> {
+  const response = await fetch(url, { signal });
+  if (!response.ok) {
+    throw new Error(`Failed to load static preview GLB: ${response.status}`);
+  }
+
+  return {
+    format: 'gltf',
+    content: new Uint8Array(await response.arrayBuffer()),
+    hash: `static-playground:${url}`,
+  };
+}
+
+function StaticPlaygroundViewer({
+  image,
+  staticPreviewUrl,
+}: {
+  readonly image: string | undefined;
+  readonly staticPreviewUrl: string | undefined;
+}): React.JSX.Element {
+  const [geometry, setGeometry] = useState<Geometry | undefined>(undefined);
+  const [error, setError] = useState<Error | undefined>(undefined);
+
+  useEffect(() => {
+    if (!staticPreviewUrl) {
+      setGeometry(undefined);
+      setError(undefined);
+      return;
+    }
+
+    const controller = new AbortController();
+    setGeometry(undefined);
+    setError(undefined);
+
+    // oxlint-disable-next-line tau-lint/no-async-iife -- static preview fetch is the render source.
+    void (async () => {
+      try {
+        setGeometry(await loadStaticPreviewGeometry(staticPreviewUrl, controller.signal));
+      } catch (error) {
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          return;
+        }
+
+        setError(error instanceof Error ? error : new Error('Failed to load static preview'));
+      }
+    })();
+
+    return () => {
+      controller.abort();
+    };
+  }, [staticPreviewUrl]);
+
+  if (staticPreviewUrl) {
+    return (
+      <ModelViewer
+        className='size-full'
+        enablePan
+        enableZoom
+        geometries={geometry ? [geometry] : []}
+        error={error}
+        stageOptions={{ zoomLevel: 1.25 }}
+        graphicsOptions={{
+          enableLines: true,
+          viewerClassName: 'bg-muted/30',
+        }}
+      />
+    );
+  }
+
+  if (image) {
+    return <img src={image} alt='' loading='eager' decoding='async' className='size-full object-contain' />;
+  }
+
+  return (
+    <div className='flex size-full items-center justify-center'>
+      <Box className='size-12 text-muted-foreground/40' strokeWidth={1.25} aria-hidden />
+    </div>
+  );
+}
+
 export function PlaygroundPreviewPane({
   activeExample,
+  staticPreviewUrl,
   pendingParameters,
   mobilePane,
   onParametersChange,
@@ -471,19 +838,9 @@ export function PlaygroundPreviewPane({
         )}
       >
         <div className='relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-muted/30'>
-          {activeExample.image ? (
-            <img
-              src={activeExample.image}
-              alt=''
-              loading='eager'
-              decoding='async'
-              className='size-full object-contain'
-            />
-          ) : (
-            <div className='flex size-full items-center justify-center'>
-              <Box className='size-12 text-muted-foreground/40' strokeWidth={1.25} aria-hidden />
-            </div>
-          )}
+          <ClientOnly fallback={<StaticPlaygroundViewer image={activeExample.image} staticPreviewUrl={undefined} />}>
+            <StaticPlaygroundViewer image={activeExample.image} staticPreviewUrl={staticPreviewUrl} />
+          </ClientOnly>
         </div>
       </section>
 
@@ -514,25 +871,21 @@ function StaticPlaygroundParameters({
   readonly pendingParameters: Record<string, unknown> | undefined;
   readonly onParametersChange: (parameters: Record<string, unknown>) => void;
 }): React.JSX.Element {
-  const defaultParameters = useMemo(() => deriveDefaultParameters(activeExample), [activeExample]);
-  const jsonSchema = useMemo(
-    () => buildParameterSchema(activeExample, defaultParameters),
-    [activeExample, defaultParameters],
-  );
+  const parameterView = useMemo(() => deriveStaticParameterView(activeExample), [activeExample]);
   const [parameters, setParameters] = useState<Record<string, unknown>>({});
 
   useEffect(() => {
-    const nextParameters = pendingParameters ?? {};
-    setParameters(nextParameters);
-    onParametersChange(nextParameters);
-  }, [activeExample.id, onParametersChange, pendingParameters]);
+    const nextModelParameters = parameterView.toModelParameters(pendingParameters ?? {});
+    setParameters(parameterView.toUiParameters(nextModelParameters));
+    onParametersChange(nextModelParameters);
+  }, [activeExample.id, onParametersChange, parameterView, pendingParameters]);
 
   const handleParametersChange = useCallback(
     (nextParameters: Record<string, unknown>) => {
       setParameters(nextParameters);
-      onParametersChange(nextParameters);
+      onParametersChange(parameterView.toModelParameters(nextParameters));
     },
-    [onParametersChange],
+    [onParametersChange, parameterView],
   );
 
   const applyPreset = useCallback(
@@ -546,7 +899,7 @@ function StaticPlaygroundParameters({
     <div className='flex h-full min-h-0 flex-col'>
       <div className='flex items-center justify-between border-b p-2'>
         <h3 className='text-sm font-semibold'>Parameters</h3>
-        {activeExample.presets && activeExample.presets.length > 0 ? (
+        {parameterView.presets.length > 0 ? (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant='ghost' size='xs' className='gap-1'>
@@ -555,7 +908,7 @@ function StaticPlaygroundParameters({
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align='end'>
-              {activeExample.presets.map((preset) => (
+              {parameterView.presets.map((preset) => (
                 <DropdownMenuItem
                   key={preset.name}
                   onSelect={() => {
@@ -573,8 +926,8 @@ function StaticPlaygroundParameters({
         <ClientOnly fallback={<div data-slot='parameters' className='h-full w-full' />}>
           <Parameters
             parameters={parameters}
-            defaultParameters={defaultParameters}
-            jsonSchema={jsonSchema}
+            defaultParameters={parameterView.defaultParameters}
+            jsonSchema={parameterView.jsonSchema}
             units={parameterUnits}
             emptyDescription='This model has no parameters'
             onParametersChange={handleParametersChange}
