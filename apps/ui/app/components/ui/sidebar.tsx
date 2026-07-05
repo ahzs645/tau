@@ -49,13 +49,11 @@ function useSidebar(): SidebarContextProperties {
   return context;
 }
 
-function SidebarProvider({
-  onOpenChange: setOpenProperty,
-  className,
-  style,
+function SidebarStateProvider({
   children,
-  ...properties
-}: React.ComponentProps<'div'> & {
+  onOpenChange,
+}: {
+  readonly children: React.ReactNode;
   readonly onOpenChange?: (open: boolean) => void;
 }): React.JSX.Element {
   const isMobile = useIsMobile();
@@ -68,13 +66,13 @@ function SidebarProvider({
   const setOpen = React.useCallback(
     (value: boolean | ((value: boolean) => boolean)) => {
       const openState = typeof value === 'function' ? value(open) : value;
-      if (setOpenProperty) {
-        setOpenProperty(openState);
+      if (onOpenChange) {
+        onOpenChange(openState);
       } else {
         _setOpen(openState);
       }
     },
-    [open, setOpenProperty, _setOpen],
+    [open, onOpenChange, _setOpen],
   );
 
   // Helper to toggle the sidebar.
@@ -116,22 +114,40 @@ function SidebarProvider({
     [state, open, setOpen, isMobile, openMobile, setOpenMobile, toggleSidebar],
   );
 
+  return <SidebarContext.Provider value={contextValue}>{children}</SidebarContext.Provider>;
+}
+
+function SidebarWrapper({ className, style, children, ...properties }: React.ComponentProps<'div'>): React.JSX.Element {
+  const { isMobile, open } = useSidebar();
+
   return (
-    <SidebarContext.Provider value={contextValue}>
-      <div
-        data-slot='sidebar-wrapper'
-        style={{
-          '--sidebar-width': sidebarWidth,
-          '--sidebar-width-icon': sidebarWidthIcon,
-          '--sidebar-width-current': isMobile ? sidebarWidthMobile : open ? sidebarWidth : sidebarWidthIcon,
-          ...style,
-        }}
-        className={cn('group/sidebar-wrapper flex min-h-svh w-full', className)}
-        {...properties}
-      >
-        {children}
-      </div>
-    </SidebarContext.Provider>
+    <div
+      data-slot='sidebar-wrapper'
+      style={{
+        '--sidebar-width': sidebarWidth,
+        '--sidebar-width-icon': sidebarWidthIcon,
+        '--sidebar-width-current': isMobile ? sidebarWidthMobile : open ? sidebarWidth : sidebarWidthIcon,
+        ...style,
+      }}
+      className={cn('group/sidebar-wrapper flex min-h-svh w-full', className)}
+      {...properties}
+    >
+      {children}
+    </div>
+  );
+}
+
+function SidebarProvider({
+  onOpenChange,
+  children,
+  ...properties
+}: React.ComponentProps<'div'> & {
+  readonly onOpenChange?: (open: boolean) => void;
+}): React.JSX.Element {
+  return (
+    <SidebarStateProvider onOpenChange={onOpenChange}>
+      <SidebarWrapper {...properties}>{children}</SidebarWrapper>
+    </SidebarStateProvider>
   );
 }
 
@@ -679,6 +695,7 @@ export {
   SidebarProvider,
   SidebarRail,
   SidebarSeparator,
+  SidebarStateProvider,
   SidebarTrigger,
   useSidebar,
 };

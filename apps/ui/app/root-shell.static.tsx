@@ -4,7 +4,7 @@ import { ThemeProvider } from 'remix-themes';
 import { ColorProvider } from '#hooks/use-color.js';
 import { KeyboardProvider } from '#hooks/use-keyboard.js';
 import type { ThemeWithSystem } from '#hooks/use-theme.js';
-import { SidebarProvider } from '#components/ui/sidebar.js';
+import { SidebarStateProvider } from '#components/ui/sidebar.js';
 import { TooltipProvider } from '#components/ui/tooltip.js';
 import { useTypedMatches } from '#hooks/use-typed-matches.js';
 import { cn } from '#utils/ui.utils.js';
@@ -23,7 +23,7 @@ export function RootProviders({ children, ssrTheme }: RootProvidersProps): React
       <ColorProvider>
         <TooltipProvider>
           <KeyboardProvider>
-            <SidebarProvider>{children}</SidebarProvider>
+            <SidebarStateProvider>{children}</SidebarStateProvider>
           </KeyboardProvider>
         </TooltipProvider>
       </ColorProvider>

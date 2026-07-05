@@ -31,9 +31,8 @@ const cookieStore = () => {
   };
 
   const get = <T>(cookieName: string): T | undefined => {
-    const value = cache.get(cookieName);
-    if (value) {
-      return value as T;
+    if (cache.has(cookieName)) {
+      return cache.get(cookieName) as T;
     }
 
     const cookieValue = Cookies.get(cookieName);
@@ -84,44 +83,53 @@ export const useCookie = <T>(name: CookieName, defaultValue: T) => {
   // Get the latest cookie value from route data on each render
   const data = useRouteLoaderData<typeof loader>('root');
 
-  const [selector, update, remove] = useMemo(
-    () => [
-      (): T => {
-        // On client, use the store's already parsed value
-        // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- can be undefined on server
-        if (globalThis.document !== undefined) {
-          const cookieValue = store.get<T>(cookieName);
-          if (cookieValue === undefined) {
-            // If the cookie value is undefined, return the default value
-            return defaultValue;
-          }
+  const { getClientSnapshot, getServerSnapshot, update, remove } = useMemo(() => {
+    const getServerSnapshot = (): T => {
+      // On server, parse from route data
+      const serverCookie = Cookies.parse(data?.cookie ?? '')[cookieName];
+      if (serverCookie === undefined) {
+        // If the cookie value is undefined, return the default value
+        return defaultValue;
+      }
 
-          return cookieValue;
-        }
+      // We need to parse the cookie from the server as stringification occurs when setting cookie.
+      return JSON.parse(serverCookie) as T;
+    };
 
-        // On server, parse from route data
-        const serverCookie = Cookies.parse(data?.cookie ?? '')[cookieName];
-        if (serverCookie === undefined) {
-          // If the cookie value is undefined, return the default value
-          return defaultValue;
-        }
+    const getClientSnapshot = (): T => {
+      // oxlint-disable-next-line @typescript-eslint/no-unnecessary-condition -- can be undefined on server
+      if (globalThis.document === undefined) {
+        return getServerSnapshot();
+      }
 
-        // We need to parse the cookie from the server as stringification occurs when setting cookie.
-        return JSON.parse(serverCookie) as T;
-      },
-      (valueOrFunction: T | ((previous: T) => T)) => {
-        const currentValue = selector();
+      const cookieValue = store.get<T>(cookieName);
+      if (cookieValue === undefined) {
+        // If the cookie value is undefined, return the default value
+        return defaultValue;
+      }
+
+      return cookieValue;
+    };
+
+    return {
+      getClientSnapshot,
+      getServerSnapshot,
+      update: (valueOrFunction: T | ((previous: T) => T)) => {
+        const currentValue = getClientSnapshot();
         const updateValue: T = isFunction(valueOrFunction) ? valueOrFunction(currentValue) : valueOrFunction;
         store.update<T>(cookieName, updateValue);
       },
-      () => {
+      remove: () => {
         store.remove(cookieName);
       },
-    ],
-    [cookieName, data?.cookie, defaultValue],
-  );
+    };
+  }, [cookieName, data?.cookie, defaultValue]);
 
-  const value = useSyncExternalStore((listener) => store.subscribe(cookieName, listener), selector, selector);
+  const value = useSyncExternalStore(
+    (listener) => store.subscribe(cookieName, listener),
+    getClientSnapshot,
+    getServerSnapshot,
+  );
 
   return [value, update, remove] as const;
 };
