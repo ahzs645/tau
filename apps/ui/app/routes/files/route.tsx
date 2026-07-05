@@ -25,7 +25,6 @@ import { useFileManager } from '#hooks/use-file-manager.js';
 import { coerceFilesystemBackendCookie } from '#components/filesystem/backend-selector.js';
 import { useProjects } from '#hooks/use-projects.js';
 import { cookieName } from '#constants/cookie.constants.js';
-import { isFileSystemAccessSupported } from '#constants/browser.constants.js';
 import type { Handle } from '#types/matches.types.js';
 import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.js';
 import { cn } from '#utils/ui.utils.js';
@@ -83,9 +82,38 @@ const fixedColumns: FixedColumnMeta[] = [
     label: 'OPFS',
     icon: HardDrive,
     description: 'Origin Private File System',
-    isSupported: typeof navigator !== 'undefined' && 'storage' in navigator,
+    isSupported: false,
   },
 ];
+
+type BrowserCapabilitySupport = {
+  opfs: boolean;
+  fileSystemAccess: boolean;
+};
+
+const serverSafeBrowserCapabilitySupport: BrowserCapabilitySupport = {
+  opfs: false,
+  fileSystemAccess: false,
+};
+
+const detectBrowserCapabilitySupport = (): BrowserCapabilitySupport => {
+  // oxlint-disable-next-line unicorn/no-typeof-undefined -- window/navigator can be undefined during SSR
+  if (typeof globalThis.window === 'undefined' || typeof globalThis.navigator === 'undefined') {
+    return serverSafeBrowserCapabilitySupport;
+  }
+
+  const { storage } = globalThis.navigator as {
+    readonly storage?: { readonly getDirectory?: unknown };
+  };
+  const { showDirectoryPicker } = globalThis.window as {
+    readonly showDirectoryPicker?: unknown;
+  };
+
+  return {
+    opfs: typeof storage?.getDirectory === 'function',
+    fileSystemAccess: typeof showDirectoryPicker === 'function',
+  };
+};
 
 type ItemAction = {
   value: string;
@@ -478,12 +506,25 @@ export default function FilesRoute(): React.JSX.Element {
   const [rootLoading, setRootLoading] = useState<Record<string, boolean>>({});
   const inflightRef = useRef<Set<string>>(new Set());
 
+  const [browserCapabilitySupport, setBrowserCapabilitySupport] = useState(serverSafeBrowserCapabilitySupport);
   const [workspaceColumns, setWorkspaceColumns] = useState<WorkspaceColumnState[]>([]);
   const [isLoadingWorkspaces, setIsLoadingWorkspaces] = useState(true);
   const [busyWorkspaceId, setBusyWorkspaceId] = useState<string | undefined>(undefined);
   const telemetry = useWorkspaceTelemetry();
 
   const projectsMap = useMemo(() => new Map(projects.map((project) => [project.id, project])), [projects]);
+  const hydratedFixedColumns = useMemo(
+    () =>
+      fixedColumns.map((column) =>
+        column.key === 'opfs' ? { ...column, isSupported: browserCapabilitySupport.opfs } : column,
+      ),
+    [browserCapabilitySupport.opfs],
+  );
+  const isFileSystemAccessAvailable = browserCapabilitySupport.fileSystemAccess;
+
+  useEffect(() => {
+    setBrowserCapabilitySupport(detectBrowserCapabilitySupport());
+  }, []);
 
   const reloadWorkspaceColumns = useCallback(async (): Promise<void> => {
     try {
@@ -643,12 +684,12 @@ export default function FilesRoute(): React.JSX.Element {
   // Load fixed columns on mount; load each connected workspace column as
   // permission flips to `connected`.
   useEffect(() => {
-    for (const column of fixedColumns) {
+    for (const column of hydratedFixedColumns) {
       if (column.isSupported) {
         void loadColumnTree(column.key);
       }
     }
-  }, [loadColumnTree]);
+  }, [hydratedFixedColumns, loadColumnTree]);
 
   useEffect(() => {
     for (const column of workspaceColumns) {
@@ -672,7 +713,7 @@ export default function FilesRoute(): React.JSX.Element {
   );
 
   const handleAddWorkspace = useCallback(async () => {
-    if (!isFileSystemAccessSupported) {
+    if (!isFileSystemAccessAvailable) {
       return;
     }
     try {
@@ -693,11 +734,11 @@ export default function FilesRoute(): React.JSX.Element {
       toast.error('Failed to connect workspace.');
       throw error;
     }
-  }, [reloadWorkspaceColumns, telemetry, workspaceColumns.length]);
+  }, [isFileSystemAccessAvailable, reloadWorkspaceColumns, telemetry, workspaceColumns.length]);
 
   const handleChangeWorkspaceFolder = useCallback(
     async (workspaceId: string) => {
-      if (!isFileSystemAccessSupported) {
+      if (!isFileSystemAccessAvailable) {
         return;
       }
       setBusyWorkspaceId(workspaceId);
@@ -731,7 +772,7 @@ export default function FilesRoute(): React.JSX.Element {
         setBusyWorkspaceId(undefined);
       }
     },
-    [reloadWorkspaceColumns, telemetry, workspace],
+    [isFileSystemAccessAvailable, reloadWorkspaceColumns, telemetry, workspace],
   );
 
   const handleGrantWorkspaceAccess = useCallback(
@@ -863,7 +904,7 @@ export default function FilesRoute(): React.JSX.Element {
       </div>
 
       <div className='grid min-h-0 flex-1 auto-rows-fr grid-cols-1 gap-4 overflow-x-auto md:grid-cols-[repeat(auto-fit,minmax(280px,1fr))]'>
-        {fixedColumns.map((column) => {
+        {hydratedFixedColumns.map((column) => {
           const cacheKey = makeBackendKey(column.key);
           return (
             <ColumnShell
@@ -890,7 +931,7 @@ export default function FilesRoute(): React.JSX.Element {
           );
         })}
 
-        {isFileSystemAccessSupported ? (
+        {isFileSystemAccessAvailable ? (
           isLoadingWorkspaces ? (
             <div className='flex items-center justify-center rounded-lg border bg-card p-4'>
               <Loader className='size-5' />
