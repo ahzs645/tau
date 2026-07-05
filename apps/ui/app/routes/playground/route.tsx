@@ -69,6 +69,11 @@ function sameParameters(a: Record<string, unknown>, b: Record<string, unknown>):
   return canonicalize(a) === canonicalize(b);
 }
 
+/** The parameter pane emits override deltas; an empty record means "use defaults." */
+function hasParameterOverrides(parameters: Record<string, unknown>, baseline: Record<string, unknown>): boolean {
+  return Object.keys(parameters).length > 0 && !sameParameters(parameters, baseline);
+}
+
 export const handle: Handle = {
   enablePageWrapper: false,
 };
@@ -168,7 +173,7 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
     // "Changes" means the live overrides differ from the example's own baseline parameters — so loading
     // an example and sharing it without touching anything yields the same plain link as before.
     const baseline = activeExample.initialParameters ?? emptyParameters;
-    const hasParameterChanges = !sameParameters(liveParameters, baseline);
+    const hasParameterChanges = hasParameterOverrides(liveParameters, baseline);
 
     // oxlint-disable-next-line tau-lint/no-async-iife -- clipboard writes are event-driven and report via toast.
     void (async () => {
@@ -301,7 +306,7 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
     }
 
     const baseline = activeExample.initialParameters ?? emptyParameters;
-    const hasParameterChanges = !sameParameters(liveParameters, baseline);
+    const hasParameterChanges = hasParameterOverrides(liveParameters, baseline);
 
     // On initial load from a shared link, wait until the decoded params are applied before touching
     // the URL — otherwise we would wipe the token before hydration completes.

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/naming-convention -- parameter keys mirror the source model APIs, including OpenSCAD snake_case names */
 import type { FileExtension } from '@taucad/types';
 import { legacyPlaygroundExamples } from '#routes/playground/legacy-playground-examples.js';
 import { projectExamples } from '#routes/playground/projects.js';
@@ -59,6 +60,11 @@ const curatedPlaygroundExamples: readonly PlaygroundExample[] = [
     language: 'scad',
     description: 'Boolean plate with posts and through holes.',
     exportFormats: ['glb'],
+    initialParameters: {
+      plate: [70, 38, 6],
+      post_radius: 8,
+      hole_radius: 3.2,
+    },
     presets: [
       {
         name: 'Wide',
@@ -104,6 +110,21 @@ difference() {
     language: 'scad',
     description: 'Ported lab comb from the old playground gallery.',
     exportFormats: ['glb'],
+    initialParameters: {
+      tooth_count: 28,
+      tooth_length: 20,
+      tooth_width: 3,
+      tooth_thickness: 0.8,
+      tooth_gap: 1.5,
+      bar_height: 18,
+      bar_thickness: 1.2,
+      side_overhang: 4,
+      slot_count: 2,
+      slot_height: 3,
+      slot_gap: 4,
+      slot_side_margin: 6,
+      show_side_hooks: true,
+    },
     presets: [
       {
         name: 'Dense',
@@ -203,6 +224,14 @@ union() {
     language: 'typescript',
     description: 'Editable rounded tray using Tau’s Replicad kernel.',
     exportFormats: ['step', 'stl', 'glb'],
+    initialParameters: {
+      width: 90,
+      depth: 55,
+      height: 18,
+      wall: 3,
+      radius: 6,
+      style: 'open',
+    },
     presets: [
       {
         name: 'Desk tray',
@@ -289,6 +318,18 @@ export default function main(params = {}): Shape3D {
     language: 'scad',
     description: 'Ported network equipment rack from the old gallery.',
     exportFormats: ['glb'],
+    initialParameters: {
+      rack_width: 120,
+      rack_depth: 80,
+      rack_height: 100,
+      wall_thickness: 2,
+      poe_switch_width: 100,
+      poe_switch_height: 25,
+      patch_panel_width: 100,
+      patch_panel_height: 20,
+      vent_hole_size: 3,
+      vent_spacing: 8,
+    },
     presets: [
       {
         name: 'Tall rack',
@@ -369,6 +410,13 @@ networking_rack();`,
     language: 'typescript',
     description: 'Raw opencascade.js shape returned through Tau.',
     exportFormats: ['step', 'stl', 'glb'],
+    initialParameters: {
+      width: 52,
+      depth: 34,
+      height: 20,
+      fillet: 3,
+      profile: 'soft',
+    },
     presets: [
       {
         name: 'Sharp',
