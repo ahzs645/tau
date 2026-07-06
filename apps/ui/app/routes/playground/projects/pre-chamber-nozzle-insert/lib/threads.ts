@@ -124,6 +124,11 @@ export type ThreadedRodOptions = {
   endOverrun?: number;
 };
 
+export type ThreadedRodWithExtendedCoreOptions = ThreadedRodOptions & {
+  /** Length of the root cylinder under and beyond the visible threaded band. */
+  coreLength: number;
+};
+
 /**
  * ISO 60° threaded rod along +Z from the origin — BOSL2's `threaded_rod()`.
  * The same solid is the internal-thread mask: subtract it from a body to cut
@@ -136,6 +141,29 @@ export function threadedRod(options: ThreadedRodOptions): TopoDS_Shape {
   const coreRadius = options.majorDiameter / 2 - depth + clearance;
   return fuse(
     cylinder(coreRadius, options.length),
+    helicalRidge({
+      baseRadius: coreRadius,
+      pitch: options.pitch,
+      length: options.length,
+      depth,
+      startOverrun: options.startOverrun,
+      endOverrun: options.endOverrun,
+    }),
+  );
+}
+
+/**
+ * External threaded rod whose root cylinder continues beyond the visible
+ * thread. This keeps collar/hex fuses from creating an internal disk at the
+ * end of the threaded band while preserving the helical ridge run-out.
+ */
+export function threadedRodWithExtendedCore(options: ThreadedRodWithExtendedCoreOptions): TopoDS_Shape {
+  const clearance = options.clearance ?? 0;
+  const depth = 0.5413 * options.pitch;
+  const coreRadius = options.majorDiameter / 2 - depth + clearance;
+
+  return fuse(
+    cylinder(coreRadius, Math.max(options.length, options.coreLength)),
     helicalRidge({
       baseRadius: coreRadius,
       pitch: options.pitch,

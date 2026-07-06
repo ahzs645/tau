@@ -9,6 +9,8 @@
  * fresh shape per use like an OpenSCAD module call instead of reusing one.
  */
 import {
+  BOPAlgo_GlueEnum,
+  BRepFeat_MakeCylindricalHole,
   BRepAlgoAPI_Common,
   BRepAlgoAPI_Cut,
   BRepAlgoAPI_Fuse,
@@ -88,8 +90,13 @@ export function segmentedCone(
   bottomRadius: number,
   topRadius: number,
   height: number,
-  segments = 3,
+  options: {
+    readonly segments?: number;
+    readonly seamOffsetTurns?: number;
+  } = {},
 ): TopoDS_Shape {
+  const segments = options.segments ?? 3;
+  const seamOffsetTurns = options.seamOffsetTurns ?? 0;
   if (segments < 1) {
     throw new Error('segmentedCone() needs at least one segment');
   }
@@ -110,7 +117,15 @@ export function segmentedCone(
   };
 
   for (let index = 0; index < segments; index += 1) {
-    addFace(conicalPatch(bottomRadius, semiAngle, slantHeight, index / segments, (index + 1) / segments));
+    addFace(
+      conicalPatch(
+        bottomRadius,
+        semiAngle,
+        slantHeight,
+        seamOffsetTurns + index / segments,
+        seamOffsetTurns + (index + 1) / segments,
+      ),
+    );
   }
   addFace(circularFace(bottomRadius, 0));
   addFace(circularFace(topRadius, height));
@@ -379,12 +394,46 @@ export function rotateY(shape: TopoDS_Shape, degrees: number): TopoDS_Shape {
   return rotated(shape, [0, 1, 0], degrees);
 }
 
+export function drillCylindricalHole(base: TopoDS_Shape, origin: Vec3, direction: Vec3, radius: number): TopoDS_Shape {
+  const length = Math.hypot(direction[0], direction[1], direction[2]);
+  if (length < 1e-9) {
+    throw new Error('drillCylindricalHole() needs a non-zero direction');
+  }
+
+  const center = new gp_Pnt(origin[0], origin[1], origin[2]);
+  const axisDirection = new gp_Dir(direction[0] / length, direction[1] / length, direction[2] / length);
+  const axis = new gp_Ax1(center, axisDirection);
+  const hole = new BRepFeat_MakeCylindricalHole();
+  hole.Init(base, axis);
+  // Local feature drilling keeps an analytic cylindrical face where a generic
+  // cut with an analytic cylinder leaves retained cutter/chamber faces.
+  hole.PerformUntilEnd(radius, false);
+  const result = hole.Shape();
+
+  hole.delete();
+  axis.delete();
+  axisDirection.delete();
+  center.delete();
+  base.delete();
+  return result;
+}
+
 type MultiBooleanOperation = new () => {
   SetArguments(shapes: NCollection_List_TopoDS_Shape): void;
+  SetFuzzyValue?(value: number): void;
+  SetGlue?(glue: (typeof BOPAlgo_GlueEnum)[keyof typeof BOPAlgo_GlueEnum]): void;
   SetTools(shapes: NCollection_List_TopoDS_Shape): void;
   Build(): void;
+  SimplifyResult?(unifyEdges?: boolean, unifyFaces?: boolean, angularTolerance?: number): void;
   Shape(): TopoDS_Shape;
   delete(): void;
+};
+
+type BooleanOptions = {
+  /** Additional OCCT coincidence tolerance in model units (millimeters). */
+  readonly fuzzyValue?: number;
+  readonly glue?: (typeof BOPAlgo_GlueEnum)[keyof typeof BOPAlgo_GlueEnum];
+  readonly simplifyResult?: boolean;
 };
 
 function shapeList(shapes: ReadonlyArray<TopoDS_Shape>): NCollection_List_TopoDS_Shape {
@@ -405,13 +454,23 @@ function booleanOf(
   Operation: MultiBooleanOperation,
   args: ReadonlyArray<TopoDS_Shape>,
   tools: ReadonlyArray<TopoDS_Shape>,
+  options: BooleanOptions = {},
 ): TopoDS_Shape {
   const operation = new Operation();
   const argList = shapeList(args);
   const toolList = shapeList(tools);
+  if (options.fuzzyValue !== undefined) {
+    operation.SetFuzzyValue?.(options.fuzzyValue);
+  }
+  if (options.glue !== undefined) {
+    operation.SetGlue?.(options.glue);
+  }
   operation.SetArguments(argList);
   operation.SetTools(toolList);
   operation.Build();
+  if (options.simplifyResult) {
+    operation.SimplifyResult?.(true, true, 1e-5);
+  }
   const result = operation.Shape();
   operation.delete();
   argList.delete();
@@ -433,9 +492,35 @@ export function fuse(...shapes: TopoDS_Shape[]): TopoDS_Shape {
   return rest.length === 0 ? first : booleanOf(BRepAlgoAPI_Fuse, [first], rest);
 }
 
+/** `union()` with OCCT same-domain healing for top-level body seams. */
+export function healedFuse(...shapes: TopoDS_Shape[]): TopoDS_Shape {
+  const [first, ...rest] = shapes;
+  if (!first) {
+    throw new Error('healedFuse() needs at least one shape');
+  }
+
+  return rest.length === 0
+    ? first
+    : booleanOf(BRepAlgoAPI_Fuse, [first], rest, {
+        fuzzyValue: 1e-4,
+        glue: BOPAlgo_GlueEnum.BOPAlgo_GlueShift,
+        simplifyResult: true,
+      });
+}
+
 /** `difference()` — subtracts every tool from the base in one boolean. */
 export function cut(base: TopoDS_Shape, ...tools: TopoDS_Shape[]): TopoDS_Shape {
   return tools.length === 0 ? base : booleanOf(BRepAlgoAPI_Cut, [base], tools);
+}
+
+/** `difference()` applied one tool at a time for overlapping cutter sets. */
+export function cutSequentially(base: TopoDS_Shape, ...tools: TopoDS_Shape[]): TopoDS_Shape {
+  let result = base;
+  for (const tool of tools) {
+    result = booleanOf(BRepAlgoAPI_Cut, [result], [tool]);
+  }
+
+  return result;
 }
 
 /** `intersection()` of two solids. */

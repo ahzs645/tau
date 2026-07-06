@@ -8,8 +8,19 @@
  * Z = 0 is the conical nozzle tip; +Z runs toward the hex.
  */
 import type { TopoDS_Shape } from 'opencascade.js';
-import { cone, cut, cylinder, fuse, regularPrism, rotateY, rotateZ, segmentedCone, translate } from './lib/occt-utils.js';
-import { threadedRod } from './lib/threads.js';
+import {
+  cone,
+  cutSequentially,
+  cylinder,
+  drillCylindricalHole,
+  fuse,
+  healedFuse,
+  regularPrism,
+  rotateZ,
+  segmentedCone,
+  translate,
+} from './lib/occt-utils.js';
+import { threadedRod, threadedRodWithExtendedCore } from './lib/threads.js';
 
 export const defaultParams = {
   overallLength: 35,
@@ -41,7 +52,9 @@ const eps = 0.03;
 
 export default function main(params: Params = defaultParams): TopoDS_Shape {
   const p = { ...defaultParams, ...params };
-  return cut(positiveBody(p), ...subtractiveFeatures(p));
+  const bodyWithCenterBore = cutSequentially(positiveBody(p), centerBoreCutter(p));
+  const bodyWithSideHoles = drillSideHoles(bodyWithCenterBore, p);
+  return cutSequentially(bodyWithSideHoles, ...rearSubtractiveFeatures(p));
 }
 
 function positiveBody(p: Params): TopoDS_Shape {
@@ -56,30 +69,29 @@ function positiveBody(p: Params): TopoDS_Shape {
   // exactly coincident seams in the fuse poison later cuts (tool material
   // leaks into the result around the seam).
   const seamOverlap = 0.01;
-  // The clipped helical runout needs more than a face-touch at the cone/thread
-  // transition; otherwise OCCT's fuse can drop the threaded body and return only
-  // the cone. This overlap is hidden under the thread root.
-  const threadSeamOverlap = 0.1;
-
-  return fuse(
+  const threadedBase = healedFuse(
     // Split the analytic conical surface into a few face domains so OCCT can
-    // cut the three oblique nozzle ports without leaving tool artifacts.
-    segmentedCone(
-      p.noseTipFlatDiameter / 2,
-      p.externalThreadMajorDiameter / 2,
-      p.noseLength + threadSeamOverlap,
-    ),
+    // cut the three oblique nozzle ports without leaving tool artifacts. Keep
+    // the patch seams between the 0/120/240-degree side-hole cutters.
+    segmentedCone(p.noseTipFlatDiameter / 2, p.externalThreadMajorDiameter / 2, p.noseLength, {
+      seamOffsetTurns: -1 / 6,
+    }),
     // M14x1.25 external threaded body.
     translate(
-      threadedRod({
+      threadedRodWithExtendedCore({
         majorDiameter: p.externalThreadMajorDiameter,
         length: p.threadedLength,
         pitch: p.externalThreadPitch,
         startOverrun: externalThreadRunout,
         endOverrun: externalThreadRunout,
+        coreLength: p.overallLength - p.noseLength,
       }),
       [0, 0, p.noseLength],
     ),
+  );
+
+  return fuse(
+    threadedBase,
     // Round collar immediately below the hex.
     translate(cylinder(p.collarDiameter / 2, p.collarHeight + seamOverlap), [
       0,
@@ -95,16 +107,17 @@ function positiveBody(p: Params): TopoDS_Shape {
   );
 }
 
-function subtractiveFeatures(p: Params): TopoDS_Shape[] {
+function rearSubtractiveFeatures(p: Params): TopoDS_Shape[] {
   const internalThreadStartZ = p.overallLength - p.internalThreadDepth;
-  const preChamberEndZ = internalThreadStartZ + 0.6;
   const internalThreadRunout = p.internalThreadPitch;
 
   return [
-    // 2.5 mm axial tip/orifice hole.
-    translate(cylinder(p.axialHoleDiameter / 2, p.preChamberStartZ + 2 * eps), [0, 0, -eps]),
-    // Internal pre-chamber behind the axial tip orifice.
-    translate(cylinder(p.preChamberDiameter / 2, preChamberEndZ - p.preChamberStartZ), [0, 0, p.preChamberStartZ]),
+    // Rear bore lead-in chamfer.
+    translate(cone((p.internalThreadMajorDiameter + 1.7) / 2, (p.internalThreadMajorDiameter + 0.3) / 2, 1.4), [
+      0,
+      0,
+      p.overallLength - 1.1,
+    ]),
     // Rear M10x1.0 internal thread mask (`threaded_rod(internal=true)`).
     translate(
       threadedRod({
@@ -116,25 +129,37 @@ function subtractiveFeatures(p: Params): TopoDS_Shape[] {
       }),
       [0, 0, internalThreadStartZ - eps],
     ),
-    // Angled side holes in the conical nozzle end: one large, two small.
-    angledRadialHole(p, p.sideLargeHoleDiameter, 0),
-    angledRadialHole(p, p.sideSmallHoleDiameter, 120),
-    angledRadialHole(p, p.sideSmallHoleDiameter, 240),
-    // Rear bore lead-in chamfer.
-    translate(cone((p.internalThreadMajorDiameter + 1.7) / 2, (p.internalThreadMajorDiameter + 0.3) / 2, 1.4), [
-      0,
-      0,
-      p.overallLength - 1.1,
-    ]),
   ];
 }
 
-/**
- * Side-hole cutter starting near the pre-chamber and exiting outward, tilted
- * from horizontal so the outside opening sits toward the tip.
- */
-function angledRadialHole(p: Params, diameter: number, azimuthDeg: number): TopoDS_Shape {
+function centerBoreCutter(p: Params): TopoDS_Shape {
+  const internalThreadStartZ = p.overallLength - p.internalThreadDepth;
+  const preChamberEndZ = internalThreadStartZ + 0.6;
+
+  return healedFuse(
+    translate(rotateZ(cylinder(p.axialHoleDiameter / 2, p.preChamberStartZ + 2 * eps), 60), [0, 0, -eps]),
+    translate(rotateZ(cylinder(p.preChamberDiameter / 2, preChamberEndZ - p.preChamberStartZ), 60), [
+      0,
+      0,
+      p.preChamberStartZ,
+    ]),
+  );
+}
+
+function drillSideHoles(base: TopoDS_Shape, p: Params): TopoDS_Shape {
+  let result = drillAngledRadialHole(base, p, p.sideLargeHoleDiameter, 0);
+  result = drillAngledRadialHole(result, p, p.sideSmallHoleDiameter, 120);
+  return drillAngledRadialHole(result, p, p.sideSmallHoleDiameter, 240);
+}
+
+function drillAngledRadialHole(base: TopoDS_Shape, p: Params, diameter: number, azimuthDeg: number): TopoDS_Shape {
   const elevationDeg = -p.sideHoleTiltDeg;
-  const bore = translate(cylinder(diameter / 2, p.sideHoleCutLength + 0.6), [0, 0, -0.6]);
-  return rotateZ(translate(rotateY(bore, 90 - elevationDeg), [0, 0, p.sideHoleZ]), azimuthDeg);
+  const elevationRad = (elevationDeg * Math.PI) / 180;
+  const azimuthRad = (azimuthDeg * Math.PI) / 180;
+  const direction = [
+    Math.cos(elevationRad) * Math.cos(azimuthRad),
+    Math.cos(elevationRad) * Math.sin(azimuthRad),
+    Math.sin(elevationRad),
+  ] as const;
+  return drillCylindricalHole(base, [0, 0, p.sideHoleZ], direction, diameter / 2);
 }
