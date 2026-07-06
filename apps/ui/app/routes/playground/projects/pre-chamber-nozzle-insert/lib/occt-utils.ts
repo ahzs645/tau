@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/naming-convention -- OCCT C++ classes/methods use PascalCase. */
 /**
  * Minimal OpenCASCADE helpers for the OpenCASCADE variant of this project.
  *
@@ -11,9 +12,13 @@ import {
   BRepAlgoAPI_Common,
   BRepAlgoAPI_Cut,
   BRepAlgoAPI_Fuse,
+  BRepBuilderAPI_MakeEdge,
   BRepBuilderAPI_MakeFace,
   BRepBuilderAPI_MakePolygon,
   BRepBuilderAPI_Transform,
+  BRepBuilderAPI_MakeSolid,
+  BRepBuilderAPI_MakeWire,
+  BRepBuilderAPI_Sewing,
   BRepPrimAPI_MakeBox,
   BRepPrimAPI_MakeCone,
   BRepPrimAPI_MakeCylinder,
@@ -24,11 +29,15 @@ import {
   BRepOffsetAPI_ThruSections,
   gp_Ax1,
   gp_Ax2,
+  gp_Ax3,
+  gp_Circ,
+  gp_Cone,
   gp_Dir,
   gp_Pnt,
   gp_Trsf,
   gp_Vec,
   NCollection_List_TopoDS_Shape,
+  TopoDS,
 } from 'opencascade.js';
 import type { TopoDS_Shape, TopoDS_Wire } from 'opencascade.js';
 
@@ -68,6 +77,113 @@ export function cone(bottomRadius: number, topRadius: number, height: number): T
   }
 
   return shapeOf(new BRepPrimAPI_MakeCone(bottomRadius, topRadius, height));
+}
+
+/**
+ * Analytic conical frustum built from several bounded conical faces sewn into
+ * one solid. This keeps circular cross-sections while avoiding OCCT boolean
+ * failures caused by cutting several oblique ports through one conical face.
+ */
+export function segmentedCone(
+  bottomRadius: number,
+  topRadius: number,
+  height: number,
+  segments = 3,
+): TopoDS_Shape {
+  if (segments < 1) {
+    throw new Error('segmentedCone() needs at least one segment');
+  }
+  if (bottomRadius <= 0 || topRadius <= 0) {
+    return cone(bottomRadius, topRadius, height);
+  }
+  if (Math.abs(bottomRadius - topRadius) < 1e-9) {
+    return cylinder(bottomRadius, height);
+  }
+
+  const semiAngle = Math.atan((topRadius - bottomRadius) / height);
+  const slantHeight = height / Math.cos(semiAngle);
+  const sewing = new BRepBuilderAPI_Sewing(1e-6, true, true, true, false);
+  const faces: TopoDS_Shape[] = [];
+  const addFace = (face: TopoDS_Shape): void => {
+    faces.push(face);
+    sewing.Add(face);
+  };
+
+  for (let index = 0; index < segments; index += 1) {
+    addFace(conicalPatch(bottomRadius, semiAngle, slantHeight, index / segments, (index + 1) / segments));
+  }
+  addFace(circularFace(bottomRadius, 0));
+  addFace(circularFace(topRadius, height));
+
+  sewing.Perform();
+  const sewed = sewing.SewedShape();
+  const shell = TopoDS.Shell(sewed);
+  const solidMaker = new BRepBuilderAPI_MakeSolid(shell);
+  const solid = solidMaker.Solid();
+
+  solidMaker.delete();
+  shell.delete();
+  sewed.delete();
+  sewing.delete();
+  for (const face of faces) {
+    face.delete();
+  }
+
+  return solid;
+}
+
+function conicalPatch(
+  bottomRadius: number,
+  semiAngle: number,
+  slantHeight: number,
+  startTurn: number,
+  endTurn: number,
+): TopoDS_Shape {
+  const origin = new gp_Pnt(0, 0, 0);
+  const zDirection = new gp_Dir(0, 0, 1);
+  const xDirection = new gp_Dir(1, 0, 0);
+  const axes = new gp_Ax3(origin, zDirection, xDirection);
+  const coneSurface = new gp_Cone(axes, semiAngle, bottomRadius);
+  const faceMaker = new BRepBuilderAPI_MakeFace(
+    coneSurface,
+    startTurn * 2 * Math.PI,
+    endTurn * 2 * Math.PI,
+    0,
+    slantHeight,
+  );
+  const face = faceMaker.Face();
+
+  faceMaker.delete();
+  coneSurface.delete();
+  axes.delete();
+  xDirection.delete();
+  zDirection.delete();
+  origin.delete();
+  return face;
+}
+
+function circularFace(radius: number, z: number): TopoDS_Shape {
+  const center = new gp_Pnt(0, 0, z);
+  const zDirection = new gp_Dir(0, 0, 1);
+  const axes = new gp_Ax2(center, zDirection);
+  const circle = new gp_Circ(axes, radius);
+  const edgeMaker = new BRepBuilderAPI_MakeEdge(circle);
+  const edge = edgeMaker.Edge();
+  const wireMaker = new BRepBuilderAPI_MakeWire(edge);
+  const wire = wireMaker.Wire();
+  const faceMaker = new BRepBuilderAPI_MakeFace(wire, true);
+  const face = faceMaker.Face();
+
+  faceMaker.delete();
+  wire.delete();
+  wireMaker.delete();
+  edge.delete();
+  edgeMaker.delete();
+  circle.delete();
+  axes.delete();
+  zDirection.delete();
+  center.delete();
+  return face;
 }
 
 /** Ruled polygonal frustum matching OpenSCAD `cylinder(d1, d2, $fn=sides)`. */

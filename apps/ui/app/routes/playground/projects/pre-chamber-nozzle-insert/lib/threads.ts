@@ -5,8 +5,9 @@
  * (https://github.com/gumyr/cq_warehouse, Apache-2.0): sweep a trapezoidal
  * thread profile along a helix and boolean it with the core. Here the helix
  * is a sampled BSpline spine swept with `BRepOffsetAPI_MakePipeShell` in
- * Frenet mode, then trimmed flush at both ends — the equivalent of BOSL2's
- * `blunt_start=false` thread run-out.
+ * Frenet mode. BOSL2-style non-blunt starts are modeled by sweeping past the
+ * nominal band and then trimming back to it, so the visible end is a cut through
+ * an ongoing helix rather than the pipe shell's raw cap.
  */
 import {
   BRepBuilderAPI_MakeEdge,
@@ -32,6 +33,10 @@ export type HelicalRidgeOptions = {
   flankAngleDeg?: number;
   /** Axial width of the flat at the thread crest. ISO metric = pitch / 8. */
   apexWidth?: number;
+  /** Extra helix generated before z=0 before trimming, matching BOSL2's non-blunt thread run-out. */
+  startOverrun?: number;
+  /** Extra helix generated after z=length before trimming, matching BOSL2's non-blunt thread run-out. */
+  endOverrun?: number;
 };
 
 /**
@@ -42,18 +47,23 @@ export function helicalRidge(options: HelicalRidgeOptions): TopoDS_Shape {
   const { baseRadius, pitch, length, depth } = options;
   const flankAngleDeg = options.flankAngleDeg ?? 30;
   const apexWidth = options.apexWidth ?? pitch / 8;
+  const startOverrun = options.startOverrun ?? 0;
+  const endOverrun = options.endOverrun ?? 0;
+  const spineStartZ = -startOverrun;
+  const spineLength = length + startOverrun + endOverrun;
   const rootWidth = apexWidth + 2 * depth * Math.tan((flankAngleDeg * Math.PI) / 180);
   // Sink the root slightly under the surface so booleans against the core are watertight.
   const rootInset = Math.min(0.2, depth * 0.25);
 
-  const turns = length / pitch;
+  const turns = spineLength / pitch;
   const samplesPerTurn = 48;
   const totalSamples = Math.max(2, Math.ceil(turns * samplesPerTurn)) + 1;
   const points = new NCollection_Array1_gp_Pnt(1, totalSamples);
   for (let index = 1; index <= totalSamples; index += 1) {
     const t = (index - 1) / (totalSamples - 1);
-    const angle = 2 * Math.PI * turns * t;
-    const point = new gp_Pnt(baseRadius * Math.cos(angle), baseRadius * Math.sin(angle), length * t);
+    const z = spineStartZ + spineLength * t;
+    const angle = (2 * Math.PI * z) / pitch;
+    const point = new gp_Pnt(baseRadius * Math.cos(angle), baseRadius * Math.sin(angle), z);
     points.SetValue(index, point);
     point.delete();
   }
@@ -62,9 +72,11 @@ export function helicalRidge(options: HelicalRidgeOptions): TopoDS_Shape {
   const spineEdge = new BRepBuilderAPI_MakeEdge(approximation.Curve());
   const spineWire = new BRepBuilderAPI_MakeWire(spineEdge.Edge());
 
-  // Trapezoid cross-section in the XZ plane at the helix start (r, 0, 0),
-  // where the spine tangent is ~+Y.
+  // Trapezoid cross-section in the radial/Z plane at the helix start.
   const profile = new BRepBuilderAPI_MakePolygon();
+  const startAngle = (2 * Math.PI * spineStartZ) / pitch;
+  const radialX = Math.cos(startAngle);
+  const radialY = Math.sin(startAngle);
   const profilePoints: ReadonlyArray<readonly [number, number]> = [
     [baseRadius - rootInset, -rootWidth / 2],
     [baseRadius + depth, -apexWidth / 2],
@@ -72,7 +84,7 @@ export function helicalRidge(options: HelicalRidgeOptions): TopoDS_Shape {
     [baseRadius - rootInset, rootWidth / 2],
   ];
   for (const [radius, z] of profilePoints) {
-    const point = new gp_Pnt(radius, 0, z);
+    const point = new gp_Pnt(radius * radialX, radius * radialY, spineStartZ + z);
     profile.Add(point);
     point.delete();
   }
@@ -95,7 +107,7 @@ export function helicalRidge(options: HelicalRidgeOptions): TopoDS_Shape {
   approximation.delete();
   points.delete();
 
-  // Trim the ridge run-out flush with the z = [0, length] band.
+  // Trim the over-generated helix flush with the z = [0, length] band.
   return intersect(ridge, cylinder(baseRadius + depth + 1, length));
 }
 
@@ -106,6 +118,10 @@ export type ThreadedRodOptions = {
   pitch: number;
   /** Extra radial clearance, like BOSL2's `$slop`. */
   clearance?: number;
+  /** Extra helix generated before z=0 before trimming. Use one pitch for BOSL2 `blunt_start=false`. */
+  startOverrun?: number;
+  /** Extra helix generated after z=length before trimming. Use one pitch for BOSL2 `blunt_start=false`. */
+  endOverrun?: number;
 };
 
 /**
@@ -125,6 +141,8 @@ export function threadedRod(options: ThreadedRodOptions): TopoDS_Shape {
       pitch: options.pitch,
       length: options.length,
       depth,
+      startOverrun: options.startOverrun,
+      endOverrun: options.endOverrun,
     }),
   );
 }

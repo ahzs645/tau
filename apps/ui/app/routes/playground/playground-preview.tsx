@@ -1,11 +1,12 @@
-import type { ReactNode } from 'react';
+import type { ReactNode, RefCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronDown, Download } from 'lucide-react';
-import type { FileExtension } from '@taucad/types';
+import type { FileExtension, Geometry } from '@taucad/types';
 import { downloadBlob } from '@taucad/utils/file';
 import { toast } from '#components/ui/sonner.js';
-import { CadPreviewStatus, CadPreviewViewer, StaticPreviewViewer } from '#components/cad-preview.js';
+import { StaticPreviewViewer } from '#components/cad-preview.js';
+import { ModelViewer, RenderStatusOverlay } from '#components/model-viewer.js';
 import { Button } from '#components/ui/button.js';
 import {
   DropdownMenu,
@@ -15,6 +16,7 @@ import {
 } from '#components/ui/dropdown-menu.js';
 import { FileManagerProvider, SharedWorkerGate } from '#hooks/use-file-manager.js';
 import { CadPreviewProvider, useCadPreview } from '#hooks/use-cad-preview.js';
+import type { CadPreviewStatus } from '#hooks/use-cad-preview.js';
 import { PreviewParameters } from '#routes/projects_.$id_.preview/preview-parameters.js';
 import type { PlaygroundExample, PlaygroundPreset } from '#routes/playground/playground-examples.js';
 import { cn } from '#utils/ui.utils.js';
@@ -27,28 +29,76 @@ export const playgroundPreviewCapabilities = {
 
 type PlaygroundPreviewPaneProps = {
   readonly activeExample: PlaygroundExample;
+  readonly cachedGeometries: readonly Geometry[] | undefined;
   readonly files: Record<string, { content: Uint8Array<ArrayBuffer> }>;
   readonly pendingParameters: Record<string, unknown> | undefined;
+  readonly previewGeometryCacheKey: string;
   readonly previewProjectId: string;
   readonly previewRenderKey: string;
   readonly staticPreviewUrl: string | undefined;
   readonly mobilePane: PlaygroundMobilePane;
   readonly exportControlsElement: HTMLDivElement | undefined;
+  readonly onGeometriesReady: (geometries: readonly Geometry[]) => void;
   readonly onParametersChange: (parameters: Record<string, unknown>) => void;
+};
+
+type PlaygroundPreviewSnapshot = {
+  readonly cacheKey: string;
+  readonly error: Error | undefined;
+  readonly geometries: readonly Geometry[];
+  readonly status: CadPreviewStatus;
 };
 
 export function PlaygroundPreviewPane({
   activeExample,
+  cachedGeometries,
   files,
   pendingParameters,
+  previewGeometryCacheKey,
   previewProjectId,
   previewRenderKey,
   staticPreviewUrl,
   mobilePane,
   exportControlsElement,
+  onGeometriesReady,
   onParametersChange,
 }: PlaygroundPreviewPaneProps): React.JSX.Element {
   const isEditableExample = activeExample.mode !== 'static';
+  const [mobileExportControlsElement, setMobileExportControlsElement] = useState<HTMLDivElement | undefined>();
+  const [previewSnapshot, setPreviewSnapshot] = useState<PlaygroundPreviewSnapshot | undefined>();
+  const setMobileExportControlsRef = useCallback<RefCallback<HTMLDivElement>>((node) => {
+    setMobileExportControlsElement(node ?? undefined);
+  }, []);
+
+  const isCurrentPreviewSnapshot = previewSnapshot !== undefined && previewSnapshot.cacheKey === previewGeometryCacheKey;
+  const displayGeometries =
+    isCurrentPreviewSnapshot && previewSnapshot.geometries.length > 0
+      ? [...previewSnapshot.geometries]
+      : (cachedGeometries ? [...cachedGeometries] : []);
+  const displayStatus: CadPreviewStatus = isCurrentPreviewSnapshot ? previewSnapshot.status : 'loading';
+  const displayError =
+    isCurrentPreviewSnapshot && previewSnapshot.status === 'error'
+      ? (previewSnapshot.error ?? new Error('Failed to render preview'))
+      : undefined;
+  const handlePreviewStateChange = useCallback(
+    ({
+      error,
+      geometries,
+      status,
+    }: {
+      readonly error: Error | undefined;
+      readonly geometries: readonly Geometry[];
+      readonly status: CadPreviewStatus;
+    }) => {
+      setPreviewSnapshot({
+        cacheKey: previewGeometryCacheKey,
+        error,
+        geometries,
+        status,
+      });
+    },
+    [previewGeometryCacheKey],
+  );
 
   if (!isEditableExample) {
     return (
@@ -74,6 +124,51 @@ export function PlaygroundPreviewPane({
 
   return (
     <SharedWorkerGate>
+      <section
+        className={cn(
+          'flex min-w-0 flex-col xl:min-h-0 xl:border-r',
+          mobilePane === '3d' ? 'max-xl:flex-1' : 'max-xl:hidden',
+        )}
+      >
+        <div className='relative min-h-0 flex-1 bg-muted/30'>
+          {displayGeometries.length === 0 && !displayError && staticPreviewUrl ? (
+            <StaticPreviewViewer
+              className='size-full'
+              enablePan
+              enableZoom
+              staticPreviewUrl={staticPreviewUrl}
+              stageOptions={{ zoomLevel: 1.25 }}
+              graphicsOptions={{
+                enableLines: activeExample.showPreviewLines ?? true,
+                viewerClassName: 'bg-muted/30',
+              }}
+            />
+          ) : (
+            <ModelViewer
+              geometries={displayGeometries}
+              className='size-full'
+              enablePan
+              enableZoom
+              stageOptions={{ zoomLevel: 1.25 }}
+              graphicsOptions={{
+                enableLines: activeExample.showPreviewLines ?? true,
+                viewerClassName: 'bg-muted/30',
+              }}
+              error={displayError}
+            />
+          )}
+          <RenderStatusOverlay
+            status={displayStatus === 'loading' && displayGeometries.length === 0 ? 'loading' : 'idle'}
+            className='absolute top-3 left-3'
+          />
+
+          {/* Mobile export: lives on the viewer instead of the crowded header. */}
+          {activeExample.exportFormats.length > 0 ? (
+            <div ref={setMobileExportControlsRef} className='absolute right-3 bottom-3 z-10 xl:hidden' />
+          ) : null}
+        </div>
+      </section>
+
       <FileManagerProvider
         key={previewProjectId}
         projectId={previewProjectId}
@@ -98,40 +193,22 @@ export function PlaygroundPreviewPane({
                 exportControlsElement,
               )
             : undefined}
+          {mobileExportControlsElement && activeExample.exportFormats.length > 0
+            ? createPortal(
+                <PlaygroundExportControls
+                  exampleId={activeExample.id}
+                  formats={activeExample.exportFormats}
+                  buttonSize='sm'
+                  enableShortcut={false}
+                />,
+                mobileExportControlsElement,
+              )
+            : undefined}
+          <PlaygroundPreviewStateBridge
+            onGeometriesReady={onGeometriesReady}
+            onPreviewStateChange={handlePreviewStateChange}
+          />
           <PlaygroundParameterBridge pendingParameters={pendingParameters} onParametersChange={onParametersChange} />
-          <section
-            className={cn(
-              'flex min-w-0 flex-col xl:min-h-0 xl:border-r',
-              mobilePane === '3d' ? 'max-xl:flex-1' : 'max-xl:hidden',
-            )}
-          >
-            <div className='relative min-h-0 flex-1 bg-muted/30'>
-              <CadPreviewViewer
-                className='size-full'
-                enablePan
-                enableZoom
-                staticPreviewUrl={staticPreviewUrl}
-                stageOptions={{ zoomLevel: 1.25 }}
-                graphicsOptions={{
-                  enableLines: activeExample.showPreviewLines ?? true,
-                  viewerClassName: 'bg-muted/30',
-                }}
-              />
-              <CadPreviewStatus className='absolute top-3 left-3' />
-
-              {/* Mobile export: lives on the viewer instead of the crowded header. */}
-              {activeExample.exportFormats.length > 0 ? (
-                <div className='absolute right-3 bottom-3 z-10 xl:hidden'>
-                  <PlaygroundExportControls
-                    exampleId={activeExample.id}
-                    formats={activeExample.exportFormats}
-                    buttonSize='sm'
-                    enableShortcut={false}
-                  />
-                </div>
-              ) : null}
-            </div>
-          </section>
 
           <section
             className={cn(
@@ -147,6 +224,30 @@ export function PlaygroundPreviewPane({
       </FileManagerProvider>
     </SharedWorkerGate>
   );
+}
+
+function PlaygroundPreviewStateBridge({
+  onGeometriesReady,
+  onPreviewStateChange,
+}: {
+  readonly onGeometriesReady: (geometries: readonly Geometry[]) => void;
+  readonly onPreviewStateChange: (snapshot: {
+    readonly error: Error | undefined;
+    readonly geometries: readonly Geometry[];
+    readonly status: CadPreviewStatus;
+  }) => void;
+}): ReactNode {
+  const { error, geometries, status } = useCadPreview();
+
+  useEffect(() => {
+    onPreviewStateChange({ error, geometries, status });
+
+    if (status === 'ready' && geometries.length > 0) {
+      onGeometriesReady(geometries);
+    }
+  }, [error, geometries, status, onGeometriesReady, onPreviewStateChange]);
+
+  return undefined;
 }
 
 /**
@@ -250,7 +351,7 @@ function PlaygroundExportControls({
   readonly buttonSize?: 'xs' | 'sm';
   readonly enableShortcut?: boolean;
 }): React.JSX.Element {
-  const { cadRef, status, geometries } = useCadPreview();
+  const { cadRef, geometries, status } = useCadPreview();
   const [isExporting, setIsExporting] = useState(false);
   const isExportEnabled = status === 'ready' && geometries.length > 0 && !isExporting;
   const primaryFormat = formats[0];

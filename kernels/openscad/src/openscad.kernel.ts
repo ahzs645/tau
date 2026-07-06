@@ -55,6 +55,7 @@ type OpenScadContext = {
 const maxIncludeDepth = 50;
 const useIncludeRegex = /^\s*(?:use|include)\s*["<]([^">]+)[">]/gm;
 const tessellationSpecialVariables = ['$fn', '$fa', '$fs'] as const;
+const bundledOpenScadLibraryPrefixes = ['BOSL2/'] as const;
 
 const fontsConfig = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">
@@ -84,9 +85,27 @@ function resolveFromRoot(relativePath: string, basePath: string): string {
   return joinPath(basePath, relativePath);
 }
 
+function normalizeOpenScadRelativePath(path: string): string {
+  const segments = path.split('/');
+  const resolved: string[] = [];
+  for (const segment of segments) {
+    if (segment === '..') {
+      resolved.pop();
+    } else if (segment !== '.' && segment !== '') {
+      resolved.push(segment);
+    }
+  }
+
+  return resolved.join('/');
+}
+
 function getBasename(filename: string): string {
   const lastSlash = filename.lastIndexOf('/');
   return lastSlash === -1 ? filename : filename.slice(lastSlash + 1);
+}
+
+function isBundledOpenScadLibraryPath(filePath: string): boolean {
+  return bundledOpenScadLibraryPrefixes.some((prefix) => filePath.startsWith(prefix));
 }
 
 // =============================================================================
@@ -108,20 +127,15 @@ function parseUseIncludeStatements(code: string): string[] {
 }
 
 function resolveIncludePath(baseFilePath: string, relativePath: string): string {
+  const rootRelativePath = relativePath.replace(/^\/+/, '');
+  if (isBundledOpenScadLibraryPath(rootRelativePath)) {
+    return normalizeOpenScadRelativePath(rootRelativePath);
+  }
+
   const lastSlash = baseFilePath.lastIndexOf('/');
   const baseDirectory = lastSlash === -1 ? '' : baseFilePath.slice(0, lastSlash);
   const combinedPath = baseDirectory ? joinRelativePath(baseDirectory, relativePath) : relativePath;
-  const segments = combinedPath.split('/');
-  const resolved: string[] = [];
-  for (const segment of segments) {
-    if (segment === '..') {
-      resolved.pop();
-    } else if (segment !== '.' && segment !== '') {
-      resolved.push(segment);
-    }
-  }
-
-  return resolved.join('/');
+  return normalizeOpenScadRelativePath(combinedPath);
 }
 
 function isGzipPayload(payload: Uint8Array<ArrayBuffer>): boolean {
@@ -156,7 +170,7 @@ async function loadBundledOpenScadLibraryFiles(): Promise<Readonly<Record<string
 }
 
 async function readBundledOpenScadLibraryFile(filePath: string): Promise<string | undefined> {
-  if (!filePath.startsWith('BOSL2/')) {
+  if (!isBundledOpenScadLibraryPath(filePath)) {
     return undefined;
   }
 
@@ -785,7 +799,7 @@ export default defineKernel({
         args.push(`-D${key}=${formatValue(value)}`);
       }
 
-      const renderOptions = openscadRenderSchema.parse(options ?? {});
+      const renderOptions = openscadRenderSchema.parse(options);
       const { tessellation } = renderOptions;
       const shouldEnablePreview = renderOptions.preview && !('$preview' in flattenedParameters);
       instance.FS.writeFile(relativeFilePath, shouldEnablePreview ? `$preview=true; ${code}` : code);

@@ -18,6 +18,7 @@ type CadPreviewViewerProps = {
   readonly stageOptions?: StageOptions;
   readonly graphicsOptions?: CadPreviewGraphicsOptions;
   readonly staticPreviewUrl?: string;
+  readonly fallbackGeometries?: readonly Geometry[];
 };
 
 export async function loadStaticPreviewGeometry(url: string, signal?: AbortSignal): Promise<Geometry> {
@@ -58,6 +59,7 @@ export const CadPreviewViewer = memo(function CadPreviewViewer({
   stageOptions,
   graphicsOptions,
   staticPreviewUrl,
+  fallbackGeometries,
 }: CadPreviewViewerProps): React.JSX.Element {
   const { geometries, graphicsRef, status, error } = useCadPreview();
   const [staticPreviewGeometry, setStaticPreviewGeometry] = useState<Geometry | undefined>(undefined);
@@ -93,12 +95,16 @@ export const CadPreviewViewer = memo(function CadPreviewViewer({
       return geometries;
     }
 
+    if (status !== 'error' && fallbackGeometries && fallbackGeometries.length > 0) {
+      return [...fallbackGeometries];
+    }
+
     if (status === 'error' || !staticPreviewGeometry) {
       return [];
     }
 
     return [staticPreviewGeometry];
-  }, [geometries, status, staticPreviewGeometry]);
+  }, [geometries, status, fallbackGeometries, staticPreviewGeometry]);
 
   return (
     <ModelViewer

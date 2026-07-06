@@ -17,10 +17,84 @@ import {
 import { Theme, useTheme } from '#hooks/use-theme.js';
 import { darkModeIntensityScale } from '#components/geometry/graphics/three/utils/lights.utils.js';
 import { useThreeGraphicsBackend } from '#components/geometry/graphics/three/three-graphics-backend-context.js';
+import type { ResolvedGraphicsBackend } from '#constants/editor.constants.js';
 
 // Module-scoped GLTFLoader instance. GLTFLoader is stateless and fully reusable,
 // so creating a fresh instance per parse wastes initialization overhead and GC pressure.
 const gltfLoader = new GLTFLoader();
+const maxParsedGltfSceneCacheEntries = 8;
+
+type ParsedGltfSceneCacheEntry = {
+  readonly originalMaterials: Map<number, Material | Material[]>;
+  readonly scene: Group;
+};
+
+const parsedGltfSceneCache = new Map<string, ParsedGltfSceneCacheEntry>();
+
+function cloneSavedMaterialSnapshot(material: Material | Material[]): Material | Material[] {
+  return Array.isArray(material) ? material.map((entry) => entry.clone()) : material.clone();
+}
+
+function cloneSavedMaterials(saved: ReadonlyMap<number, Material | Material[]>): Map<number, Material | Material[]> {
+  const cloned = new Map<number, Material | Material[]>();
+  for (const [id, material] of saved) {
+    cloned.set(id, cloneSavedMaterialSnapshot(material));
+  }
+  return cloned;
+}
+
+function disposeParsedGltfSceneCacheEntry(entry: ParsedGltfSceneCacheEntry): void {
+  disposeSceneResources(entry.scene);
+  disposeSavedMaterials(entry.originalMaterials);
+}
+
+function readParsedGltfSceneCache(cacheKey: string | undefined): ParsedGltfSceneCacheEntry | undefined {
+  if (!cacheKey) {
+    return undefined;
+  }
+
+  const cached = parsedGltfSceneCache.get(cacheKey);
+  if (!cached) {
+    return undefined;
+  }
+
+  parsedGltfSceneCache.delete(cacheKey);
+  parsedGltfSceneCache.set(cacheKey, cached);
+  return cached;
+}
+
+function writeParsedGltfSceneCache(cacheKey: string, entry: ParsedGltfSceneCacheEntry): void {
+  const previous = parsedGltfSceneCache.get(cacheKey);
+  if (previous && previous.scene !== entry.scene) {
+    disposeParsedGltfSceneCacheEntry(previous);
+  }
+
+  parsedGltfSceneCache.delete(cacheKey);
+  parsedGltfSceneCache.set(cacheKey, entry);
+
+  while (parsedGltfSceneCache.size > maxParsedGltfSceneCacheEntries) {
+    const oldestKey = parsedGltfSceneCache.keys().next().value;
+    if (oldestKey === undefined) {
+      return;
+    }
+
+    const oldest = parsedGltfSceneCache.get(oldestKey);
+    if (oldest) {
+      disposeParsedGltfSceneCacheEntry(oldest);
+    }
+    parsedGltfSceneCache.delete(oldestKey);
+  }
+}
+
+function buildParsedGltfSceneCacheKey({
+  geometryHash,
+  graphicsBackend,
+}: {
+  readonly geometryHash: string | undefined;
+  readonly graphicsBackend: ResolvedGraphicsBackend;
+}): string | undefined {
+  return geometryHash ? `${graphicsBackend}:${geometryHash}` : undefined;
+}
 
 function isFatLineSegmentsMesh(child: Object3D): boolean {
   return child.type === 'LineSegments2';
@@ -236,6 +310,10 @@ function disposeSavedMaterials(saved: Map<number, Material | Material[]>): void 
 
 type GltfMeshDisplayProperties = {
   /**
+   * Stable hash for the GLTF geometry bytes.
+   */
+  readonly geometryHash?: string;
+  /**
    * The GLTF file to load.
    */
   readonly gltfFile: Uint8Array<ArrayBuffer>;
@@ -299,17 +377,28 @@ function updateVisibility(scene: Group, enableSurfaces: boolean, enableLines: bo
  * @returns A React component with Three.js primitives that renders the GLTF mesh
  */
 export function GltfMesh({
+  geometryHash,
   gltfFile,
   enableMatcap = false,
   enableSurfaces = true,
   enableLines = true,
 }: GltfMeshDisplayProperties): React.JSX.Element | undefined {
   const graphicsBackendThree = useThreeGraphicsBackend();
+  const parsedSceneCacheKey = buildParsedGltfSceneCacheKey({
+    geometryHash,
+    graphicsBackend: graphicsBackendThree,
+  });
+  const initialCachedSceneKeyRef = useRef<string | undefined>(undefined);
+  const initialCachedSceneRef = useRef<ParsedGltfSceneCacheEntry | undefined>(undefined);
+  if (initialCachedSceneKeyRef.current === undefined && parsedSceneCacheKey) {
+    initialCachedSceneKeyRef.current = parsedSceneCacheKey;
+    initialCachedSceneRef.current = readParsedGltfSceneCache(parsedSceneCacheKey);
+  }
   // The "base scene" is the parsed GLTF with line segments converted but no material overrides.
   // It serves as the template from which material modes (matcap/original) are derived.
-  const [baseScene, setBaseScene] = useState<Group | undefined>(undefined);
+  const [baseScene, setBaseScene] = useState<Group | undefined>(() => initialCachedSceneRef.current?.scene);
   // The rendered scene has material mode applied and is what <primitive> displays.
-  const [scene, setScene] = useState<Group | undefined>(undefined);
+  const [scene, setScene] = useState<Group | undefined>(() => initialCachedSceneRef.current?.scene);
   const { size, invalidate, gl, camera } = useThree();
   const { theme } = useTheme();
   const matcapTint = theme === Theme.DARK ? darkModeIntensityScale : 1;
@@ -318,7 +407,12 @@ export function GltfMesh({
   const resolutionRef = useRef(new Vector2(size.width, size.height));
 
   // Saved clones of the original materials so we can restore them after matcap is toggled off.
-  const originalMaterialsRef = useRef<Map<number, Material | Material[]>>(new Map());
+  const originalMaterialsRef = useRef<Map<number, Material | Material[]>>(
+    initialCachedSceneRef.current
+      ? cloneSavedMaterials(initialCachedSceneRef.current.originalMaterials)
+      : new Map<number, Material | Material[]>(),
+  );
+  const componentOwnedBaseSceneRef = useRef<Group | undefined>(undefined);
 
   // Update resolution when size changes. Deferred via requestAnimationFrame
   // so that rapid resize events (e.g. dragging a Dockview divider) batch into
@@ -354,6 +448,32 @@ export function GltfMesh({
     const cancellation = { cancelled: false };
     const isCancelled = (): boolean => cancellation.cancelled;
 
+    const disposeComponentOwnedBaseScene = (): void => {
+      if (componentOwnedBaseSceneRef.current) {
+        disposeSceneResources(componentOwnedBaseSceneRef.current);
+        componentOwnedBaseSceneRef.current = undefined;
+      }
+    };
+
+    const cached = readParsedGltfSceneCache(parsedSceneCacheKey);
+    disposeComponentOwnedBaseScene();
+    disposeSavedMaterials(originalMaterialsRef.current);
+
+    if (cached) {
+      originalMaterialsRef.current = cloneSavedMaterials(cached.originalMaterials);
+      setBaseScene(cached.scene);
+      setScene(cached.scene);
+      invalidate();
+
+      return () => {
+        cancellation.cancelled = true;
+      };
+    }
+
+    originalMaterialsRef.current = new Map();
+    setBaseScene(undefined);
+    setScene(undefined);
+
     const loadGltf = async (): Promise<void> => {
       try {
         const gltf = await gltfLoader.parseAsync(gltfFile.buffer, '');
@@ -370,8 +490,7 @@ export function GltfMesh({
         applyFatLineSegments(gltf, resolutionRef.current, graphicsBackendThree, edgeColor);
 
         // Save clones of the original materials before any overrides
-        disposeSavedMaterials(originalMaterialsRef.current);
-        originalMaterialsRef.current = saveOriginalMaterials(gltf.scene);
+        const savedMaterials = saveOriginalMaterials(gltf.scene);
 
         // R4: pipeline pre-warm. The `Line2NodeMaterial` for edges (and the surface mesh
         // pipelines) would otherwise pay `createRenderPipelineAsync` latency on the first
@@ -393,8 +512,19 @@ export function GltfMesh({
           }
           if (isCancelled()) {
             disposeSceneResources(gltf.scene);
+            disposeSavedMaterials(savedMaterials);
             return;
           }
+        }
+
+        originalMaterialsRef.current = savedMaterials;
+        if (parsedSceneCacheKey) {
+          writeParsedGltfSceneCache(parsedSceneCacheKey, {
+            originalMaterials: cloneSavedMaterials(savedMaterials),
+            scene: gltf.scene,
+          });
+        } else {
+          componentOwnedBaseSceneRef.current = gltf.scene;
         }
 
         setBaseScene(gltf.scene);
@@ -406,22 +536,12 @@ export function GltfMesh({
       }
     };
 
-    // Dispose previous base scene and saved materials before loading new one
-    setBaseScene((previous) => {
-      if (previous) {
-        disposeSceneResources(previous);
-      }
-
-      return undefined;
-    });
-    setScene(undefined);
-
     void loadGltf();
 
     return () => {
       cancellation.cancelled = true;
     };
-  }, [gltfFile, graphicsBackendThree, invalidate, gl, camera]);
+  }, [gltfFile, parsedSceneCacheKey, graphicsBackendThree, invalidate, gl, camera]);
 
   // Theme-aware edge tint without re-parsing the GLTF binary.
   useEffect(() => {
@@ -438,6 +558,10 @@ export function GltfMesh({
   useEffect(
     () => () => {
       disposeSavedMaterials(originalMaterialsRef.current);
+      if (componentOwnedBaseSceneRef.current) {
+        disposeSceneResources(componentOwnedBaseSceneRef.current);
+        componentOwnedBaseSceneRef.current = undefined;
+      }
     },
     [],
   );

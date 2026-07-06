@@ -89,6 +89,13 @@ describe('CadPreviewViewer', () => {
     expect(screen.getByTestId('model-viewer')).toHaveAttribute('data-hash', 'live-preview');
   });
 
+  it('uses cached fallback geometry while live preview is empty', () => {
+    render(<CadPreviewViewer fallbackGeometries={[liveGeometry]} />);
+
+    expect(screen.getByTestId('model-viewer')).toHaveAttribute('data-count', '1');
+    expect(screen.getByTestId('model-viewer')).toHaveAttribute('data-hash', 'live-preview');
+  });
+
   it('loads a standalone static preview without CAD preview context', async () => {
     render(<StaticPreviewViewer staticPreviewUrl='/static/demo.glb' />);
 

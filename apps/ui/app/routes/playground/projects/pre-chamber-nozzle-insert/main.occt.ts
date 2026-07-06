@@ -8,7 +8,7 @@
  * Z = 0 is the conical nozzle tip; +Z runs toward the hex.
  */
 import type { TopoDS_Shape } from 'opencascade.js';
-import { cone, cut, cylinder, facetedCone, fuse, regularPrism, rotateY, rotateZ, translate } from './lib/occt-utils.js';
+import { cone, cut, cylinder, fuse, regularPrism, rotateY, rotateZ, segmentedCone, translate } from './lib/occt-utils.js';
 import { threadedRod } from './lib/threads.js';
 
 export const defaultParams = {
@@ -49,21 +49,34 @@ function positiveBody(p: Params): TopoDS_Shape {
   // OpenSCAD's hex `cylinder(d, $fn=6)` takes the vertex-to-vertex diameter;
   // across-flats = √3 · radius.
   const hexVertexRadius = p.hexAcrossFlats / Math.sqrt(3);
+  // BOSL2 `blunt_start=false` generates about one extra pitch and clips back to
+  // the nominal band, avoiding a raw sweep cap at the thread/cone boundary.
+  const externalThreadRunout = p.externalThreadPitch;
   // Stacked parts overlap by a hair instead of touching face-to-face:
   // exactly coincident seams in the fuse poison later cuts (tool material
   // leaks into the result around the seam).
   const seamOverlap = 0.01;
+  // The clipped helical runout needs more than a face-touch at the cone/thread
+  // transition; otherwise OCCT's fuse can drop the threaded body and return only
+  // the cone. This overlap is hidden under the thread root.
+  const threadSeamOverlap = 0.1;
 
   return fuse(
-    // OpenSCAD renders the nozzle as a 96-sided frustum; keeping that topology
-    // avoids OCCT's fragile tiny oblique-cylinder cuts on one analytic cone face.
-    facetedCone(p.noseTipFlatDiameter / 2, p.externalThreadMajorDiameter / 2, p.noseLength + seamOverlap, 96),
+    // Split the analytic conical surface into a few face domains so OCCT can
+    // cut the three oblique nozzle ports without leaving tool artifacts.
+    segmentedCone(
+      p.noseTipFlatDiameter / 2,
+      p.externalThreadMajorDiameter / 2,
+      p.noseLength + threadSeamOverlap,
+    ),
     // M14x1.25 external threaded body.
     translate(
       threadedRod({
         majorDiameter: p.externalThreadMajorDiameter,
         length: p.threadedLength,
         pitch: p.externalThreadPitch,
+        startOverrun: externalThreadRunout,
+        endOverrun: externalThreadRunout,
       }),
       [0, 0, p.noseLength],
     ),
@@ -85,6 +98,7 @@ function positiveBody(p: Params): TopoDS_Shape {
 function subtractiveFeatures(p: Params): TopoDS_Shape[] {
   const internalThreadStartZ = p.overallLength - p.internalThreadDepth;
   const preChamberEndZ = internalThreadStartZ + 0.6;
+  const internalThreadRunout = p.internalThreadPitch;
 
   return [
     // 2.5 mm axial tip/orifice hole.
@@ -97,6 +111,8 @@ function subtractiveFeatures(p: Params): TopoDS_Shape[] {
         majorDiameter: p.internalThreadMajorDiameter,
         length: p.internalThreadDepth + 2 * eps,
         pitch: p.internalThreadPitch,
+        startOverrun: internalThreadRunout,
+        endOverrun: internalThreadRunout,
       }),
       [0, 0, internalThreadStartZ - eps],
     ),

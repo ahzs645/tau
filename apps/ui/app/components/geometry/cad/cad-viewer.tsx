@@ -51,6 +51,7 @@ export const CadViewer = memo(
                 return (
                   <GltfMesh
                     key={geometry.hash}
+                    geometryHash={geometry.hash}
                     gltfFile={geometry.content}
                     enableMatcap={enableMatcap}
                     enableSurfaces={enableSurfaces}

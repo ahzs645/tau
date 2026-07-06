@@ -1038,6 +1038,40 @@ describe('OpenSCAD Kernel', () => {
         await geometryHelpers.expectMeshCount(result, 1);
         await geometryHelpers.expectBoundingBoxSize(result, [0.01, 0.014, 0.012], 0.001);
       });
+
+      it('should resolve bundled BOSL2 includes from nested project files', async () => {
+        const result = await createGeometry(
+          {
+            'models/main.scad': `
+              include <BOSL2/std.scad>
+              cuboid([8, 10, 12]);
+            `,
+          },
+          'models/main.scad',
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+      });
+
+      it('should render bundled BOSL2 threaded_rod without project copies', async () => {
+        const result = await createGeometry(
+          {
+            'main.scad': `
+              $fn = 12;
+              include <BOSL2/std.scad>
+              include <BOSL2/threading.scad>
+              threaded_rod(d=8, l=6, pitch=1.5);
+            `,
+          },
+          'main.scad',
+        );
+
+        expect(result.success).toBe(true);
+        await geometryHelpers.expectValidGltf(result);
+        await geometryHelpers.expectMeshCount(result, 1);
+      });
     });
 
     describe('Geometry validation', () => {

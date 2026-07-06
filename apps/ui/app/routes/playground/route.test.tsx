@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
-import type { FileExtension } from '@taucad/types';
+import type { FileExtension, Geometry } from '@taucad/types';
 import PlaygroundRoot, { loader as playgroundRootLoader } from '#routes/playground/route.js';
 import { playgroundShareCodec } from '#routes/playground/share-codec.js';
 
@@ -36,8 +36,11 @@ const {
     exportFailed: [],
   };
 
-  // Mutable preview state the useCadPreview mock reads from; tests set `parameters` to simulate overrides.
-  const state: { parameters: Record<string, unknown> } = { parameters: {} };
+  // Mutable preview state the useCadPreview mock reads from; tests set fields to simulate preview changes.
+  const state: { parameters: Record<string, unknown>; geometries: Geometry[] } = {
+    parameters: {},
+    geometries: [{ format: 'gltf', content: new Uint8Array([1]), hash: 'mock-geometry' }],
+  };
 
   return {
     cadEventHandlers: handlers,
@@ -68,6 +71,7 @@ const {
     }>,
     viewerCalls: [] as Array<{
       graphicsOptions: { readonly enableLines?: boolean } | undefined;
+      fallbackGeometries: readonly Geometry[] | undefined;
     }>,
     resetProviderCalls: () => {
       handlers.geometryExported.length = 0;
@@ -82,6 +86,7 @@ const {
       providerCalls.length = 0;
       viewerCalls.length = 0;
       state.parameters = {};
+      state.geometries = [{ format: 'gltf', content: new Uint8Array([1]), hash: 'mock-geometry' }];
     },
   };
 });
@@ -129,10 +134,6 @@ vi.mock('#components/code/code-editor.client.js', () => ({
 }));
 
 vi.mock('#components/cad-preview.js', () => ({
-  CadPreviewViewer({ graphicsOptions }: { readonly graphicsOptions?: { readonly enableLines?: boolean } }) {
-    viewerCalls.push({ graphicsOptions });
-    return <div data-testid='cad-preview-viewer'>viewer</div>;
-  },
   StaticPreviewViewer({ staticPreviewUrl }: { readonly staticPreviewUrl: string }) {
     return (
       <div data-testid='static-preview-viewer' data-url={staticPreviewUrl}>
@@ -140,7 +141,20 @@ vi.mock('#components/cad-preview.js', () => ({
       </div>
     );
   },
-  CadPreviewStatus() {
+}));
+
+vi.mock('#components/model-viewer.js', () => ({
+  ModelViewer({
+    geometries,
+    graphicsOptions,
+  }: {
+    readonly geometries: readonly Geometry[];
+    readonly graphicsOptions?: { readonly enableLines?: boolean };
+  }) {
+    viewerCalls.push({ fallbackGeometries: geometries, graphicsOptions });
+    return <div data-testid='cad-preview-viewer'>viewer</div>;
+  },
+  RenderStatusOverlay() {
     return <div data-testid='cad-preview-status'>status</div>;
   },
 }));
@@ -232,7 +246,7 @@ vi.mock('#hooks/use-cad-preview.js', () => ({
         depth: 55,
       },
       error: undefined,
-      geometries: [{}],
+      geometries: mockState.geometries,
       parameters: mockState.parameters,
       setParameters: mockSetParameters,
       status: 'ready',
@@ -349,7 +363,7 @@ describe('PlaygroundRoot', () => {
     expect(providerCalls.at(-1)?.files['main.ts']).toBeDefined();
   });
 
-  it('suppresses preview edge lines for the OpenCascade pre-chamber variant', async () => {
+  it('shows preview edge lines for the OpenCascade pre-chamber variant', async () => {
     globalThis.history.replaceState({}, '', '/?model=pre-chamber-nozzle-insert&variant=opencascade');
 
     renderPlaygroundRoot();
@@ -359,7 +373,33 @@ describe('PlaygroundRoot', () => {
       expect(providerCalls.at(-1)?.projectId).toBe('root-playground-pre-chamber-nozzle-insert-opencascade');
     });
     expect(providerCalls.at(-1)?.mainFile).toBe('main.occt.ts');
-    expect(viewerCalls.at(-1)?.graphicsOptions?.enableLines).toBe(false);
+    expect(viewerCalls.at(-1)?.graphicsOptions?.enableLines).toBe(true);
+  });
+
+  it('shows cached variant geometry immediately when switching back', async () => {
+    globalThis.history.replaceState({}, '', '/?model=vane-trap');
+    mockState.geometries = [{ format: 'gltf', content: new Uint8Array([1, 2, 3]), hash: 'openscad-render' }];
+
+    renderPlaygroundRoot();
+
+    expect(await screen.findByRole('heading', { name: 'Vane Trap Device' })).toBeDefined();
+    await waitFor(() => {
+      expect(providerCalls.at(-1)?.projectId).toBe('root-playground-vane-trap');
+    });
+
+    mockState.geometries = [{ format: 'gltf', content: new Uint8Array([4, 5, 6]), hash: 'opencascade-render' }];
+    fireEvent.click(screen.getByRole('button', { name: 'OpenCASCADE' }));
+
+    await waitFor(() => {
+      expect(providerCalls.at(-1)?.projectId).toBe('root-playground-vane-trap-opencascade');
+    });
+
+    mockState.geometries = [];
+    fireEvent.click(screen.getByRole('button', { name: 'OpenSCAD' }));
+
+    await waitFor(() => {
+      expect(viewerCalls.at(-1)?.fallbackGeometries?.[0]?.hash).toBe('openscad-render');
+    });
   });
 
   it('updates the active model when route loader data changes on client navigation', async () => {

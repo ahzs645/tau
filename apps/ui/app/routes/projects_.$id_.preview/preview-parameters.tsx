@@ -8,6 +8,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '#components/ui/tooltip.
 import { Parameters } from '@taucad/react/parameters';
 import { cn } from '#utils/ui.utils.js';
 import { useCadPreview } from '#hooks/use-cad-preview.js';
+import type { CadPreviewContextValue } from '#hooks/use-cad-preview.js';
 
 type ParameterSchema = NonNullable<ComponentProps<typeof Parameters>['jsonSchema']>;
 
@@ -279,7 +280,29 @@ const createParameterView = ({
 export function PreviewParameters({
   headerActions,
 }: { readonly headerActions?: React.ReactNode } = {}): React.JSX.Element {
-  const { graphicsRef, parameters, defaultParameters, jsonSchema, setParameters } = useCadPreview();
+  const preview = useCadPreview({ optional: true });
+  if (!preview) {
+    return (
+      <div className='flex h-full flex-col'>
+        <div className='flex items-center justify-between border-b p-2'>
+          <h3 className='text-sm font-semibold'>Parameters</h3>
+          <div className='flex items-center gap-1'>{headerActions}</div>
+        </div>
+      </div>
+    );
+  }
+
+  return <PreviewParametersContent headerActions={headerActions} preview={preview} />;
+}
+
+function PreviewParametersContent({
+  headerActions,
+  preview,
+}: {
+  readonly headerActions?: React.ReactNode;
+  readonly preview: CadPreviewContextValue;
+}): React.JSX.Element {
+  const { graphicsRef, parameters, defaultParameters, jsonSchema, setParameters } = preview;
   const units = useSelector(graphicsRef, (state) => state.context.units);
 
   const [isSearchVisible, setIsSearchVisible] = useState(false);

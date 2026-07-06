@@ -3,6 +3,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { Link, useLocation } from 'react-router';
 import { Braces, Eye, Laptop, LayoutGrid, Moon, Play, RotateCcw, Share2, Sun } from 'lucide-react';
 import { toast } from '#components/ui/sonner.js';
+import type { Geometry } from '@taucad/types';
 import { Button, buttonVariants } from '#components/ui/button.js';
 import { ClientOnly } from '#components/ui/utils/client-only.js';
 import { useFeature } from '#flags/use-feature.js';
@@ -39,6 +40,9 @@ const variantKey = 'variant';
 /** Stable empty record so consumers can rely on referential equality when there are no overrides. */
 const emptyParameters: Record<string, unknown> = Object.freeze({});
 
+/** Bound the in-memory preview cache to a few recent model/variant/code/parameter combinations. */
+const maxPreviewGeometryCacheEntries = 8;
+
 /**
  * Web-share codec: stores the parameter delta in a compact, URL-safe token
  * (`1.raw.<base64url>`). Kept local so the static Pages build does not pull the
@@ -68,6 +72,87 @@ function canonicalize(value: unknown): string {
 /** True when two parameter records are deeply equal regardless of key order. */
 function sameParameters(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
   return canonicalize(a) === canonicalize(b);
+}
+
+function cloneGltfContent(content: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer> {
+  const copy = new Uint8Array(content.byteLength);
+  copy.set(content);
+  return copy;
+}
+
+function cloneCacheableGeometry(geometry: Geometry): Geometry | undefined {
+  switch (geometry.format) {
+    case 'gltf': {
+      return { ...geometry, content: cloneGltfContent(geometry.content) };
+    }
+
+    case 'svg': {
+      return { ...geometry, paths: [...geometry.paths] };
+    }
+
+    case 'webrtc': {
+      return undefined;
+    }
+  }
+}
+
+function cloneCacheableGeometries(geometries: readonly Geometry[]): Geometry[] | undefined {
+  const cloned: Geometry[] = [];
+  for (const geometry of geometries) {
+    const copy = cloneCacheableGeometry(geometry);
+    if (!copy) {
+      return undefined;
+    }
+    cloned.push(copy);
+  }
+
+  return cloned.length > 0 ? cloned : undefined;
+}
+
+function buildPreviewGeometryCacheKey({
+  activeRenderIdentity,
+  mainFile,
+  parameters,
+  previewValue,
+}: {
+  readonly activeRenderIdentity: string;
+  readonly mainFile: string;
+  readonly parameters: Record<string, unknown>;
+  readonly previewValue: string;
+}): string {
+  return canonicalize({
+    activeRenderIdentity,
+    mainFile,
+    parameters,
+    previewValue,
+  });
+}
+
+function cachePreviewGeometries(
+  cache: Map<string, Geometry[]>,
+  cacheKey: string,
+  geometries: readonly Geometry[],
+): void {
+  const cloned = cloneCacheableGeometries(geometries);
+  if (!cloned) {
+    return;
+  }
+
+  cache.delete(cacheKey);
+  cache.set(cacheKey, cloned);
+
+  while (cache.size > maxPreviewGeometryCacheEntries) {
+    const oldestKey = cache.keys().next().value;
+    if (oldestKey === undefined) {
+      return;
+    }
+    cache.delete(oldestKey);
+  }
+}
+
+function readCachedPreviewGeometries(cache: Map<string, Geometry[]>, cacheKey: string): Geometry[] | undefined {
+  const cached = cache.get(cacheKey);
+  return cached ? cloneCacheableGeometries(cached) : undefined;
 }
 
 /** The parameter pane emits override deltas; an empty record means "use defaults." */
@@ -119,6 +204,34 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
   const showCodeControls = isEditableExample && !isCodeEditorDisabled;
   const showCodeSection = isCodeVisible && showCodeControls;
   const staticPreviewUrl = activeExample.staticPreview?.glb;
+  const activePreviewParameters = useMemo(() => {
+    if (Object.keys(liveParameters).length > 0) {
+      return liveParameters;
+    }
+
+    return activeExample.initialParameters ?? emptyParameters;
+  }, [activeExample.initialParameters, liveParameters]);
+  const previewGeometryCacheRef = useRef(new Map<string, Geometry[]>());
+  const previewGeometryCacheKey = useMemo(
+    () =>
+      buildPreviewGeometryCacheKey({
+        activeRenderIdentity,
+        mainFile: activeExample.mainFile,
+        parameters: activePreviewParameters,
+        previewValue,
+      }),
+    [activeExample.mainFile, activePreviewParameters, activeRenderIdentity, previewValue],
+  );
+  const cachedPreviewGeometries = readCachedPreviewGeometries(
+    previewGeometryCacheRef.current,
+    previewGeometryCacheKey,
+  );
+  const handlePreviewGeometriesReady = useCallback(
+    (geometries: readonly Geometry[]) => {
+      cachePreviewGeometries(previewGeometryCacheRef.current, previewGeometryCacheKey, geometries);
+    },
+    [previewGeometryCacheKey],
+  );
   // The variant is part of the project id so each variant gets its own IndexedDB
   // filesystem namespace and the preview provider remounts into a clean kernel.
   const previewProjectId = `root-playground-${activeExample.id}${projectIdSuffix}`;
@@ -478,13 +591,16 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
 
         <PlaygroundPreviewPane
           activeExample={activeExample}
+          cachedGeometries={cachedPreviewGeometries}
           files={files}
           pendingParameters={pendingParameters}
+          previewGeometryCacheKey={previewGeometryCacheKey}
           previewProjectId={previewProjectId}
           previewRenderKey={previewRenderKey}
           staticPreviewUrl={staticPreviewUrl}
           mobilePane={mobilePane}
           exportControlsElement={exportControlsElement}
+          onGeometriesReady={handlePreviewGeometriesReady}
           onParametersChange={setLiveParameters}
         />
       </div>
