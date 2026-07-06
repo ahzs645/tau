@@ -1,4 +1,4 @@
-/* oxlint-disable eslint(new-cap) -- OpenCascade API uses PascalCase method names */
+/* oxlint-disable new-cap -- OpenCascade API uses PascalCase method names */
 /**
  * OpenCascade shape meshing and native GLB export via RWGltf_CafWriter.
  *
@@ -6,17 +6,37 @@
  * directly, eliminating manual vertex extraction and the gltf-transform dependency.
  */
 
-import { NodeIO } from '@gltf-transform/core';
+import { Accessor, NodeIO } from '@gltf-transform/core';
+import { KHRMaterialsUnlit } from '@gltf-transform/extensions';
 import { cadMaterialDefaults } from '@taucad/types/constants';
-import type { OpenCascadeInstance } from '#kernels/opencascade/wasm/opencascade_full.js';
+import type { OpenCascadeInstance, TopoDS_Edge, gp_Pnt } from '#kernels/opencascade/wasm/opencascade_full.js';
 import type { ShapeEntry } from '#kernels/opencascade/opencascade.types.js';
 import { srgbToLinear } from '#utils/color-space.js';
+import { nativeEdgesNodeName } from '#utils/merge-gltf-edges.js';
 
 type MeshOptions = {
   linearTolerance: number;
   angularTolerance: number;
   coordinateSystem?: 'y-up' | 'z-up';
+  includeBrepEdges?: boolean;
 };
+
+type BrepEdgeSamplingContext = {
+  oc: OpenCascadeInstance;
+  options: MeshOptions;
+  output: number[];
+};
+
+type AddNativeBrepEdgesOptions = {
+  oc: OpenCascadeInstance;
+  glb: Uint8Array<ArrayBuffer>;
+  shapes: ShapeEntry[];
+  options: MeshOptions;
+};
+
+const edgeColor: [number, number, number, number] = [0, 0, 0, 1];
+const primitiveModeLines = 1;
+const millimetersToMeters = 0.001;
 
 /**
  * RWGltf_CafWriter may merge or reorder meshes relative to `ShapeEntry` order.
@@ -24,6 +44,8 @@ type MeshOptions = {
  * then propagate mesh names to parent nodes when nodes are anonymous — mirrors
  * the invariants `analyzeGlb` relies on for per-part feedback.
  *
+ * @param glb - GLB bytes emitted by RWGltf_CafWriter.
+ * @param entries - Source shape entries whose names should annotate meshes.
  * @returns The tagged GLB.
  */
 const tagGlbMeshAndNodesFromShapeEntries = async (
@@ -52,6 +74,143 @@ const tagGlbMeshAndNodesFromShapeEntries = async (
   }
   return io.writeBinary(document);
 };
+
+function pushTransformedPoint(
+  point: gp_Pnt,
+  coordinateSystem: MeshOptions['coordinateSystem'],
+  output: number[],
+): void {
+  const x = point.X();
+  const y = point.Y();
+  const z = point.Z();
+
+  if (coordinateSystem === 'z-up') {
+    output.push(x * millimetersToMeters, y * millimetersToMeters, z * millimetersToMeters);
+    return;
+  }
+
+  // OpenCASCADE authoring space is Z-up/mm. RWGltf_CafWriter exports glTF
+  // Y-up/meters with x'=x, y'=z, z'=-y, so sampled native edges must match.
+  output.push(x * millimetersToMeters, z * millimetersToMeters, -y * millimetersToMeters);
+}
+
+function sampleBrepEdge(edge: TopoDS_Edge, context: BrepEdgeSamplingContext): void {
+  const { oc, options, output } = context;
+  if (oc.BRep_Tool.Degenerated(edge)) {
+    return;
+  }
+
+  const curve = new oc.BRepAdaptor_Curve(edge);
+  const first = curve.FirstParameter();
+  const last = curve.LastParameter();
+  if (!Number.isFinite(first) || !Number.isFinite(last) || Math.abs(last - first) <= Number.EPSILON) {
+    curve.delete();
+    return;
+  }
+
+  const deflection = Math.max(options.linearTolerance, 0.01);
+  const sampler = new oc.GCPnts_QuasiUniformDeflection(curve, deflection, first, last, oc.GeomAbs_Shape.GeomAbs_C1);
+  if (!sampler.IsDone() || sampler.NbPoints() < 2) {
+    const start = curve.EvalD0(first);
+    const end = curve.EvalD0(last);
+    pushTransformedPoint(start, options.coordinateSystem, output);
+    pushTransformedPoint(end, options.coordinateSystem, output);
+    start.delete();
+    end.delete();
+    sampler.delete();
+    curve.delete();
+    return;
+  }
+
+  let previousPoint = sampler.Value(1);
+  for (let index = 2; index <= sampler.NbPoints(); index += 1) {
+    const point = sampler.Value(index);
+    pushTransformedPoint(previousPoint, options.coordinateSystem, output);
+    pushTransformedPoint(point, options.coordinateSystem, output);
+    previousPoint.delete();
+    previousPoint = point;
+  }
+  previousPoint.delete();
+  sampler.delete();
+  curve.delete();
+}
+
+function sampleBrepEdges(
+  oc: OpenCascadeInstance,
+  shapes: ShapeEntry[],
+  options: MeshOptions,
+): Float32Array<ArrayBuffer> | undefined {
+  const positions: number[] = [];
+  const context: BrepEdgeSamplingContext = { oc, options, output: positions };
+
+  for (const entry of shapes) {
+    if (entry.shape.IsNull()) {
+      continue;
+    }
+
+    const explorer = new oc.TopExp_Explorer(
+      entry.shape,
+      oc.TopAbs_ShapeEnum.TopAbs_EDGE,
+      oc.TopAbs_ShapeEnum.TopAbs_SHAPE,
+    );
+    while (explorer.More()) {
+      const edge = oc.TopoDS.Edge(explorer.Current());
+      sampleBrepEdge(edge, context);
+      explorer.Next();
+    }
+    explorer.delete();
+  }
+
+  if (positions.length === 0) {
+    return undefined;
+  }
+
+  return new Float32Array(positions);
+}
+
+async function addNativeBrepEdgesToGlb({
+  oc,
+  glb,
+  shapes,
+  options,
+}: AddNativeBrepEdgesOptions): Promise<Uint8Array<ArrayBuffer>> {
+  const positions = sampleBrepEdges(oc, shapes, options);
+  if (!positions) {
+    return glb;
+  }
+
+  const io = new NodeIO().registerExtensions([KHRMaterialsUnlit]);
+  const document = await io.readBinary(glb);
+  const buffer = document.getRoot().listBuffers()[0] ?? document.createBuffer();
+  const unlitExtension = document.createExtension(KHRMaterialsUnlit);
+  const material = document
+    .createMaterial('tau-edge-material')
+    .setBaseColorFactor(edgeColor)
+    .setMetallicFactor(0)
+    .setRoughnessFactor(1)
+    .setDoubleSided(true)
+    .setExtension('KHR_materials_unlit', unlitExtension.createUnlit());
+
+  const primitive = document
+    .createPrimitive()
+    .setMode(primitiveModeLines)
+    .setMaterial(material)
+    .setAttribute(
+      'POSITION',
+      document
+        .createAccessor('tau-native-brep-edge-positions')
+        .setBuffer(buffer)
+        .setType(Accessor.Type['VEC3']!)
+        .setArray(positions),
+    );
+
+  const mesh = document.createMesh(nativeEdgesNodeName).addPrimitive(primitive);
+  const node = document.createNode(nativeEdgesNodeName).setMesh(mesh);
+  const scene = document.getRoot().listScenes()[0] ?? document.createScene();
+  scene.addChild(node);
+
+  return io.writeBinary(document);
+}
 
 /**
  * Parse a hex color string into an RGB tuple.
@@ -206,5 +365,10 @@ export async function meshShapesToGltf(
   documentName.delete();
   document.delete();
 
-  return tagGlbMeshAndNodesFromShapeEntries(result, shapes);
+  const taggedResult = await tagGlbMeshAndNodesFromShapeEntries(result, shapes);
+  if (options.includeBrepEdges) {
+    return addNativeBrepEdgesToGlb({ oc, glb: taggedResult, shapes, options });
+  }
+
+  return taggedResult;
 }

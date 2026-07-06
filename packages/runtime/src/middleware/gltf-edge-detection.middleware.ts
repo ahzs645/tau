@@ -1,10 +1,10 @@
-import type { Document, Primitive } from '@gltf-transform/core';
+import type { Document, Mesh } from '@gltf-transform/core';
 import { KHRMaterialsUnlit } from '@gltf-transform/extensions';
 import { createNodeIo } from '@taucad/converter';
 import type { GeometryGltf } from '@taucad/types';
 import { z } from 'zod';
 import { detectEdges } from '#utils/edge-detection.js';
-import { mergeGltfLineSegments } from '#utils/merge-gltf-edges.js';
+import { mergeGltfLineSegments, nativeEdgesNodeName } from '#utils/merge-gltf-edges.js';
 import { defineMiddleware } from '#middleware/runtime-middleware.js';
 
 /**
@@ -22,6 +22,88 @@ const primitiveModeTriangles = 4;
  * Primitive mode for lines in glTF.
  */
 const primitiveModeLines = 1;
+
+type MeshTriangleGeometry = {
+  positions: Float32Array<ArrayBuffer>;
+  indices: Uint32Array<ArrayBuffer>;
+};
+
+function collectTriangleGeometry(mesh: Mesh): MeshTriangleGeometry | undefined {
+  const positions: number[] = [];
+  const indices: number[] = [];
+  let vertexOffset = 0;
+
+  for (const primitive of mesh.listPrimitives()) {
+    if (primitive.getMode() !== primitiveModeTriangles) {
+      continue;
+    }
+
+    const positionAccessor = primitive.getAttribute('POSITION');
+    if (!positionAccessor) {
+      continue;
+    }
+
+    const positionArray = positionAccessor.getArray();
+    if (!(positionArray instanceof Float32Array)) {
+      continue;
+    }
+
+    for (const value of positionArray) {
+      positions.push(value);
+    }
+
+    const indexAccessor = primitive.getIndices();
+    if (indexAccessor) {
+      for (let index = 0; index < indexAccessor.getCount(); index += 1) {
+        indices.push(indexAccessor.getScalar(index) + vertexOffset);
+      }
+    } else {
+      for (let index = 0; index < positionAccessor.getCount(); index += 1) {
+        indices.push(vertexOffset + index);
+      }
+    }
+
+    vertexOffset += positionAccessor.getCount();
+  }
+
+  if (positions.length === 0 || indices.length === 0) {
+    return undefined;
+  }
+
+  return {
+    positions: new Float32Array(positions),
+    indices: new Uint32Array(indices),
+  };
+}
+
+function hasNativeEdgeSource(document: Document): boolean {
+  for (const mesh of document.getRoot().listMeshes()) {
+    if (mesh.getName() !== nativeEdgesNodeName) {
+      continue;
+    }
+
+    if (mesh.listPrimitives().some((primitive) => primitive.getMode() === primitiveModeLines)) {
+      return true;
+    }
+  }
+
+  for (const node of document.getRoot().listNodes()) {
+    if (node.getName() !== nativeEdgesNodeName) {
+      continue;
+    }
+
+    if (
+      node
+        .getMesh()
+        ?.listPrimitives()
+        .some((primitive) => primitive.getMode() === primitiveModeLines)
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
 
 /**
  * Create edge primitives for triangle meshes in a glTF document that don't already have edges.
@@ -72,62 +154,33 @@ function addEdgePrimitivesToDocument(document: Document, thresholdDegrees: numbe
       continue;
     }
 
-    const primitivesToAdd: Primitive[] = [];
-
-    for (const primitive of mesh.listPrimitives()) {
-      // Only process triangle primitives
-      if (primitive.getMode() !== primitiveModeTriangles) {
-        continue;
-      }
-
-      // Get position accessor
-      const positionAccessor = primitive.getAttribute('POSITION');
-      if (!positionAccessor) {
-        continue;
-      }
-
-      const positions = positionAccessor.getArray();
-      if (!(positions instanceof Float32Array)) {
-        continue;
-      }
-
-      // Get index accessor (optional)
-      const indexAccessor = primitive.getIndices();
-      let indices: Uint32Array | Uint16Array | undefined;
-      if (indexAccessor) {
-        const indexArray = indexAccessor.getArray();
-        if (indexArray instanceof Uint32Array || indexArray instanceof Uint16Array) {
-          indices = indexArray;
-        }
-      }
-
-      // Run edge detection
-      const edgeResult = detectEdges(positions, indices, thresholdDegrees);
-
-      // Skip if no edges detected
-      if (edgeResult.positions.length === 0) {
-        continue;
-      }
-
-      // Create edge primitive
-      const edgePrimitive = document
-        .createPrimitive()
-        .setMode(primitiveModeLines)
-        .setMaterial(getEdgeMaterial())
-        .setAttribute(
-          'POSITION',
-          document.createAccessor('edge-positions').setType('VEC3').setArray(edgeResult.positions),
-        )
-        .setIndices(document.createAccessor('edge-indices').setType('SCALAR').setArray(edgeResult.indices));
-
-      primitivesToAdd.push(edgePrimitive);
+    const triangleGeometry = collectTriangleGeometry(mesh);
+    if (!triangleGeometry) {
+      continue;
     }
 
-    // Add edge primitives to mesh
-    for (const edgePrimitive of primitivesToAdd) {
-      mesh.addPrimitive(edgePrimitive);
-      edgesAdded = true;
+    // Run edge detection across the whole mesh, not primitive-by-primitive.
+    // OCCT's GLB writer often splits one smooth CAD face/shell into many
+    // triangle primitives; local detection treats every primitive edge as an
+    // open boundary and draws fake hatch lines across cylindrical surfaces.
+    const edgeResult = detectEdges(triangleGeometry.positions, triangleGeometry.indices, thresholdDegrees);
+
+    if (edgeResult.positions.length === 0) {
+      continue;
     }
+
+    const edgePrimitive = document
+      .createPrimitive()
+      .setMode(primitiveModeLines)
+      .setMaterial(getEdgeMaterial())
+      .setAttribute(
+        'POSITION',
+        document.createAccessor('edge-positions').setType('VEC3').setArray(edgeResult.positions),
+      )
+      .setIndices(document.createAccessor('edge-indices').setType('SCALAR').setArray(edgeResult.indices));
+
+    mesh.addPrimitive(edgePrimitive);
+    edgesAdded = true;
   }
 
   return edgesAdded;
@@ -164,7 +217,8 @@ async function addEdgePrimitivesToGltf(geometry: GeometryGltf, thresholdDegrees:
 
   const document = await io.readBinary(geometry.content);
 
-  const hadEdgesAdded = addEdgePrimitivesToDocument(document, thresholdDegrees);
+  const hasNativeEdges = hasNativeEdgeSource(document);
+  const hadEdgesAdded = hasNativeEdges ? false : addEdgePrimitivesToDocument(document, thresholdDegrees);
   const mergeResult = mergeGltfLineSegments(document);
 
   if (!hadEdgesAdded && !mergeResult.merged) {

@@ -11,19 +11,13 @@
  */
 
 /**
- * Precision multiplier for vertex position hashing.
+ * Coincidence tolerance for matching tessellated CAD vertices, in glTF meters.
  *
- * Three.js EdgesGeometry uses 10^4 = 10000, but that assumes geometry
- * is in "typical" units where 1 unit ≈ 1 meter and features are 0.01m+.
- *
- * GLTF files are in meters per spec, so small objects like PCB text might
- * have features at 0.0001m (0.1mm) scale. With 10^4 precision, these would
- * hash to values like 1, causing collisions.
- *
- * We use 10^7 to handle features down to 0.0001mm (0.1 micrometer) which
- * is sufficient for CAD geometry including fine text and small details.
+ * Kernel exporters often duplicate vertices at face boundaries. Those vertices
+ * should still classify as one shared edge for preview outlines when they are
+ * coincident within normal CAD tessellation noise.
  */
-const hashPrecisionMultiplier = 10_000_000;
+const vertexWeldTolerance = 1e-5;
 
 /**
  * Degrees to radians conversion factor.
@@ -58,26 +52,100 @@ type EdgeData = {
   normal: Vertex3;
 };
 
-/**
- * Hash a vertex position to a string key with fixed precision.
- * This handles floating-point precision issues when matching vertices.
- *
- * Uses the same approach as Three.js EdgesGeometry: multiply by precision
- * and round to integer to avoid floating-point comparison issues.
- *
- * @param x - X coordinate
- * @param y - Y coordinate
- * @param z - Z coordinate
- * @returns Hash string in format "x,y,z"
- */
-function hashVertex(x: number, y: number, z: number): string {
-  return `${Math.round(x * hashPrecisionMultiplier)},${Math.round(y * hashPrecisionMultiplier)},${Math.round(z * hashPrecisionMultiplier)}`;
-}
+type TriangleEdge = {
+  hash: string;
+  reverseHash: string;
+  index0: number;
+  index1: number;
+};
+
+type EdgeProcessingState = {
+  edgeData: Map<string, EdgeData | undefined>;
+  edgeVertices: number[];
+  thresholdCos: number;
+  vertices: readonly Vertex3[];
+};
 
 /**
  * A 3D vertex as [x, y, z] tuple.
  */
 type Vertex3 = [number, number, number];
+type GridCell = [number, number, number];
+
+function gridCell(position: Vertex3, gridSize: number): GridCell {
+  const [x, y, z] = position;
+  return [Math.round(x / gridSize), Math.round(y / gridSize), Math.round(z / gridSize)];
+}
+
+function cellKey(cell: GridCell): string {
+  return `${cell[0]},${cell[1]},${cell[2]}`;
+}
+
+type WeldedVertexContext = {
+  positions: readonly Vertex3[];
+  positionToCanonical: Map<string, number>;
+  toleranceSquared: number;
+  gridSize: number;
+};
+
+function findCanonicalVertex(position: Vertex3, context: WeldedVertexContext): number {
+  const [x, y, z] = position;
+  const [cx, cy, cz] = gridCell(position, context.gridSize);
+
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        const candidate = context.positionToCanonical.get(`${cx + dx},${cy + dy},${cz + dz}`);
+        if (candidate === undefined) {
+          continue;
+        }
+
+        const other = context.positions[candidate];
+        if (!other) {
+          continue;
+        }
+
+        const ox = x - other[0];
+        const oy = y - other[1];
+        const oz = z - other[2];
+        if (ox * ox + oy * oy + oz * oz <= context.toleranceSquared) {
+          return candidate;
+        }
+      }
+    }
+  }
+
+  return -1;
+}
+
+function weldVertices(positions: Float32Array): { vertices: Vertex3[]; vertexMap: Int32Array } {
+  const vertexCount = Math.floor(positions.length / 3);
+  const vertices: Vertex3[] = [];
+  const vertexMap = new Int32Array(vertexCount);
+  const context: WeldedVertexContext = {
+    positions: vertices,
+    positionToCanonical: new Map(),
+    toleranceSquared: vertexWeldTolerance * vertexWeldTolerance,
+    gridSize: vertexWeldTolerance * 2,
+  };
+
+  for (let index = 0; index < vertexCount; index += 1) {
+    const offset = index * 3;
+    const vertex: Vertex3 = [positions[offset] ?? 0, positions[offset + 1] ?? 0, positions[offset + 2] ?? 0];
+    vertices.push(vertex);
+
+    const canonical = findCanonicalVertex(vertex, context);
+    if (canonical === -1) {
+      context.positionToCanonical.set(cellKey(gridCell(vertex, context.gridSize)), index);
+      vertexMap[index] = index;
+      continue;
+    }
+
+    vertexMap[index] = canonical;
+  }
+
+  return { vertices, vertexMap };
+}
 
 /**
  * Compute the normal of a triangle defined by three vertices.
@@ -128,6 +196,49 @@ function dot(a: Vertex3, b: Vertex3): number {
   return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
 
+function getVertex(state: Pick<EdgeProcessingState, 'vertices'>, index: number): Vertex3 {
+  return state.vertices[index] ?? [0, 0, 0];
+}
+
+function pushEdgeVertices(state: EdgeProcessingState, index0: number, index1: number): void {
+  const [x0, y0, z0] = getVertex(state, index0);
+  const [x1, y1, z1] = getVertex(state, index1);
+  state.edgeVertices.push(x0, y0, z0, x1, y1, z1);
+}
+
+function processTriangleEdge(edge: TriangleEdge, normal: Vertex3, state: EdgeProcessingState): void {
+  const existingEdge = state.edgeData.get(edge.reverseHash);
+
+  if (existingEdge !== undefined) {
+    const dotProduct = dot(normal, existingEdge.normal);
+    if (dotProduct <= state.thresholdCos) {
+      pushEdgeVertices(state, existingEdge.index0, existingEdge.index1);
+    }
+
+    // Mark the edge as processed by setting to undefined (not deleting), matching Three.js EdgesGeometry.
+    state.edgeData.set(edge.reverseHash, undefined);
+    return;
+  }
+
+  if (state.edgeData.has(edge.hash)) {
+    return;
+  }
+
+  state.edgeData.set(edge.hash, {
+    index0: edge.index0,
+    index1: edge.index1,
+    normal,
+  });
+}
+
+function addBoundaryEdges(state: EdgeProcessingState): void {
+  for (const edge of state.edgeData.values()) {
+    if (edge !== undefined) {
+      pushEdgeVertices(state, edge.index0, edge.index1);
+    }
+  }
+}
+
 /**
  * Detect edges in a triangle mesh using dihedral angle thresholding.
  *
@@ -161,16 +272,12 @@ export function detectEdges(
   // Convert threshold to cosine for dot product comparison
   const thresholdCos = Math.cos(thresholdDegrees * degreesToRadians);
 
-  // Map from edge hash to edge data (null means edge was matched and processed)
-  const edgeData = new Map<string, EdgeData | undefined>();
-
-  // Collected edge vertices for output
-  const edgeVertices: number[] = [];
-
-  // Helper to get vertex position by index
-  const getVertex = (index: number): Vertex3 => {
-    const index_ = index * 3;
-    return [positions[index_] ?? 0, positions[index_ + 1] ?? 0, positions[index_ + 2] ?? 0];
+  const { vertices, vertexMap } = weldVertices(positions);
+  const state: EdgeProcessingState = {
+    edgeData: new Map(),
+    edgeVertices: [],
+    thresholdCos,
+    vertices,
   };
 
   // Determine number of triangles
@@ -185,98 +292,59 @@ export function detectEdges(
     const i2 = indices ? (indices[t * 3 + 2] ?? 0) : t * 3 + 2;
 
     // Get vertex positions
-    const a = getVertex(index0);
-    const b = getVertex(i1);
-    const c = getVertex(i2);
+    const a = getVertex(state, index0);
+    const b = getVertex(state, i1);
+    const c = getVertex(state, i2);
 
     // Compute face normal
     const normal = computeNormal({ a, b, c });
 
-    // Hash vertex positions
-    const hashA = hashVertex(a[0], a[1], a[2]);
-    const hashB = hashVertex(b[0], b[1], b[2]);
-    const hashC = hashVertex(c[0], c[1], c[2]);
+    // Welded vertex ids classify duplicated face-boundary vertices as shared.
+    const vertexA = vertexMap[index0] ?? index0;
+    const vertexB = vertexMap[i1] ?? i1;
+    const vertexC = vertexMap[i2] ?? i2;
 
-    // Skip degenerate triangles (where any two vertices hash to the same value)
+    // Skip degenerate triangles (where any two vertices weld to the same point)
     // This is critical for complex geometry like text where degenerate triangles
     // can create spurious edges between letters
-    if (hashA === hashB || hashB === hashC || hashC === hashA) {
+    if (vertexA === vertexB || vertexB === vertexC || vertexC === vertexA) {
       continue;
     }
 
     // Process three edges of the triangle
-    const edges: Array<{
-      hash: string;
-      reverseHash: string;
-      index0: number;
-      index1: number;
-    }> = [
+    const edges: TriangleEdge[] = [
       {
-        hash: `${hashA}_${hashB}`,
-        reverseHash: `${hashB}_${hashA}`,
+        hash: `${vertexA}_${vertexB}`,
+        reverseHash: `${vertexB}_${vertexA}`,
         index0,
         index1: i1,
       },
       {
-        hash: `${hashB}_${hashC}`,
-        reverseHash: `${hashC}_${hashB}`,
+        hash: `${vertexB}_${vertexC}`,
+        reverseHash: `${vertexC}_${vertexB}`,
         index0: i1,
         index1: i2,
       },
       {
-        hash: `${hashC}_${hashA}`,
-        reverseHash: `${hashA}_${hashC}`,
+        hash: `${vertexC}_${vertexA}`,
+        reverseHash: `${vertexA}_${vertexC}`,
         index0: i2,
         index1: index0,
       },
     ];
 
     for (const edge of edges) {
-      // Check if the reverse edge exists and hasn't been processed yet
-      // (meaning this edge is shared by two faces)
-      const existingEdge = edgeData.get(edge.reverseHash);
-
-      if (existingEdge !== undefined) {
-        // Edge is shared by two faces - check dihedral angle
-        const dotProduct = dot(normal, existingEdge.normal);
-
-        // If angle exceeds threshold (dot product below threshold), add edge
-        if (dotProduct <= thresholdCos) {
-          // Add edge vertices
-          const [x0, y0, z0] = getVertex(existingEdge.index0);
-          const [x1, y1, z1] = getVertex(existingEdge.index1);
-          edgeVertices.push(x0, y0, z0, x1, y1, z1);
-        }
-
-        // Mark the edge as processed by setting to undefined (not deleting!)
-        // This prevents subsequent triangles from re-using this edge hash
-        // which matches Three.js behavior with edgeData[key] = null
-        edgeData.set(edge.reverseHash, undefined);
-      } else if (!edgeData.has(edge.hash)) {
-        // Only store if we haven't already seen this edge (including processed ones)
-        // This prevents overwriting when the same edge appears twice
-        edgeData.set(edge.hash, {
-          index0: edge.index0,
-          index1: edge.index1,
-          normal,
-        });
-      }
+      processTriangleEdge(edge, normal, state);
     }
   }
 
   // Add remaining edges as boundary edges (edges with only one adjacent face)
   // Skip processed edges (those set to undefined after matching)
-  for (const edge of edgeData.values()) {
-    if (edge !== undefined) {
-      const [x0, y0, z0] = getVertex(edge.index0);
-      const [x1, y1, z1] = getVertex(edge.index1);
-      edgeVertices.push(x0, y0, z0, x1, y1, z1);
-    }
-  }
+  addBoundaryEdges(state);
 
   // Create output arrays
-  const edgeCount = edgeVertices.length / 6; // 6 floats per edge (2 vertices × 3 coords)
-  const outputPositions = new Float32Array(edgeVertices);
+  const edgeCount = state.edgeVertices.length / 6; // 6 floats per edge (2 vertices × 3 coords)
+  const outputPositions = new Float32Array(state.edgeVertices);
   const outputIndices = new Uint32Array(edgeCount * 2);
 
   // Generate sequential indices for LINES mode

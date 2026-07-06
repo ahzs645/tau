@@ -10,7 +10,7 @@ import { KHRMaterialsUnlit } from '@gltf-transform/extensions';
 import type { GeometryGltf, GeometrySvg } from '@taucad/types';
 import type { KernelMiddlewareRuntime } from '#types/runtime-middleware.types.js';
 import { gltfEdgeDetectionMiddleware } from '#middleware/gltf-edge-detection.middleware.js';
-import { mergedEdgesNodeName } from '#utils/merge-gltf-edges.js';
+import { mergedEdgesNodeName, nativeEdgesNodeName } from '#utils/merge-gltf-edges.js';
 import {
   createMockCreateGeometryHandler,
   createMockRuntime,
@@ -134,6 +134,69 @@ async function createCubeGltfWithoutLines(): Promise<Uint8Array<ArrayBuffer>> {
 }
 
 /**
+ * Create one square as two coplanar triangle primitives in the same mesh.
+ * Edge detection must not draw the shared diagonal just because it crosses a
+ * glTF primitive boundary.
+ */
+async function createSplitPrimitiveSquareGltf(): Promise<Uint8Array<ArrayBuffer>> {
+  const io = new NodeIO();
+  const document = new Document();
+  const buffer = document.createBuffer();
+
+  // prettier-ignore -- preserve vertex coordinate alignment
+  const positions = new Float32Array([
+    0,
+    0,
+    0, // 0
+    1,
+    0,
+    0, // 1
+    1,
+    1,
+    0, // 2
+    0,
+    1,
+    0, // 3
+  ]);
+
+  const positionAccessor = document
+    .createAccessor()
+    .setBuffer(buffer)
+    .setType(Accessor.Type['VEC3']!)
+    .setArray(positions);
+
+  const firstTriangle = document
+    .createPrimitive()
+    .setMode(primitiveModeTriangles)
+    .setAttribute('POSITION', positionAccessor)
+    .setIndices(
+      document
+        .createAccessor()
+        .setBuffer(buffer)
+        .setType(Accessor.Type['SCALAR']!)
+        .setArray(new Uint16Array([0, 1, 2])),
+    );
+
+  const secondTriangle = document
+    .createPrimitive()
+    .setMode(primitiveModeTriangles)
+    .setAttribute('POSITION', positionAccessor)
+    .setIndices(
+      document
+        .createAccessor()
+        .setBuffer(buffer)
+        .setType(Accessor.Type['SCALAR']!)
+        .setArray(new Uint16Array([0, 2, 3])),
+    );
+
+  const mesh = document.createMesh().addPrimitive(firstTriangle).addPrimitive(secondTriangle);
+  const node = document.createNode().setMesh(mesh);
+  document.createScene().addChild(node);
+
+  return io.writeBinary(document);
+}
+
+/**
  * Create a GLTF binary with a cube mesh that already has LINE primitives.
  * Simulates replicad's meshEdges() output embedded in the GLTF.
  *
@@ -193,6 +256,29 @@ async function createCubeGltfWithLines(): Promise<Uint8Array<ArrayBuffer>> {
   const mesh = document.createMesh().addPrimitive(trianglePrimitive).addPrimitive(linePrimitive);
   const node = document.createNode().setMesh(mesh);
   document.createScene().addChild(node);
+
+  return io.writeBinary(document);
+}
+
+async function createCubeGltfWithNativeEdgeSource(): Promise<Uint8Array<ArrayBuffer>> {
+  const io = new NodeIO();
+  const gltfData = await createCubeGltfWithoutLines();
+  const document = await io.readBinary(gltfData);
+  const buffer = document.getRoot().listBuffers()[0] ?? document.createBuffer();
+
+  const linePositions = new Float32Array([0, 0, 0, 1, 0, 0]);
+  const linePrimitive = document
+    .createPrimitive()
+    .setMode(primitiveModeLines)
+    .setAttribute(
+      'POSITION',
+      document.createAccessor().setBuffer(buffer).setType(Accessor.Type['VEC3']!).setArray(linePositions),
+    );
+
+  const nativeMesh = document.createMesh(nativeEdgesNodeName).addPrimitive(linePrimitive);
+  const nativeNode = document.createNode(nativeEdgesNodeName).setMesh(nativeMesh);
+  const scene = document.getRoot().listScenes()[0] ?? document.createScene();
+  scene.addChild(nativeNode);
 
   return io.writeBinary(document);
 }
@@ -408,6 +494,31 @@ describe('gltfEdgeDetectionMiddleware', () => {
         }
       });
 
+      it('should not draw coplanar edges that only exist because a mesh is split across primitives', async () => {
+        const gltfData = await createSplitPrimitiveSquareGltf();
+        const handlerResult = createSuccessResult([{ format: 'gltf', content: gltfData }]);
+        const { input, runtime } = createEdgeDetectionContext();
+        const handler = createMockCreateGeometryHandler(handlerResult);
+
+        const { wrapCreateGeometry } = gltfEdgeDetectionMiddleware;
+        const result = await wrapCreateGeometry!(input, handler, runtime);
+
+        if (result.success) {
+          const geometry = result.data[0] as GeometryGltf;
+          const meshes = await analyzeGltfPrimitives(geometry.content);
+
+          const sourceMesh = meshes.find((m) => m.meshName !== mergedEdgesNodeName);
+          expect(sourceMesh).toBeDefined();
+          expect(sourceMesh!.triangleCount).toBe(2);
+
+          const mergedMesh = meshes.find((m) => m.meshName === mergedEdgesNodeName);
+          expect(mergedMesh).toBeDefined();
+          const edgeVertexCount = mergedMesh!.linePrimitiveVertexCounts[0]!;
+          const edgeCount = edgeVertexCount / 2;
+          expect(edgeCount).toBe(4);
+        }
+      });
+
       it('should produce a new GLTF binary (not return original)', async () => {
         const gltfData = await createCubeGltfWithoutLines();
         const handlerResult = createSuccessResult([{ format: 'gltf', content: gltfData }]);
@@ -480,6 +591,34 @@ describe('gltfEdgeDetectionMiddleware', () => {
           expect(result.data[0]).not.toBe(originalGeometry);
           const geometry = result.data[0] as GeometryGltf;
           expect(geometry.content).not.toBe(gltfData);
+        }
+      });
+    });
+
+    describe('native edge source marker', () => {
+      it('should merge native BRep edges without adding synthetic mesh edges', async () => {
+        const gltfData = await createCubeGltfWithNativeEdgeSource();
+        const handlerResult = createSuccessResult([{ format: 'gltf', content: gltfData }]);
+        const { input, runtime } = createEdgeDetectionContext();
+        const handler = createMockCreateGeometryHandler(handlerResult);
+
+        const { wrapCreateGeometry } = gltfEdgeDetectionMiddleware;
+        const result = await wrapCreateGeometry!(input, handler, runtime);
+
+        expect(result.success).toBe(true);
+
+        if (result.success) {
+          const geometry = result.data[0] as GeometryGltf;
+          const meshes = await analyzeGltfPrimitives(geometry.content);
+
+          const sourceMesh = meshes.find((mesh) => mesh.triangleCount > 0);
+          expect(sourceMesh).toBeDefined();
+          expect(sourceMesh!.lineCount).toBe(0);
+
+          const mergedMesh = meshes.find((mesh) => mesh.meshName === mergedEdgesNodeName);
+          expect(mergedMesh).toBeDefined();
+          expect(mergedMesh!.lineCount).toBe(1);
+          expect(mergedMesh!.linePrimitiveVertexCounts[0]).toBe(2);
         }
       });
     });

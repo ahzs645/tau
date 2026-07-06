@@ -1,5 +1,4 @@
-/* eslint-disable new-cap -- OpenCascade API uses PascalCase method names */
-/* oxlint-disable eslint(new-cap) -- OpenCascade API uses PascalCase method names */
+/* oxlint-disable new-cap -- OpenCascade API uses PascalCase method names */
 /**
  * OpenCascade Kernel Module
  *
@@ -516,6 +515,7 @@ export default defineKernel({
       const gltfData = await meshShapesToGltf(context.oc, shapeEntries, {
         linearTolerance,
         angularTolerance: angularTolerance * (Math.PI / 180),
+        includeBrepEdges: true,
       });
       meshSpan.end();
 

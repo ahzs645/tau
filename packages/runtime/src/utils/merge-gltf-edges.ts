@@ -7,6 +7,13 @@ import type { Document, Primitive, Node as GltfNode, Mesh as GltfMesh, Material,
 export const mergedEdgesNodeName = 'tau-merged-edges';
 
 /**
+ * Mesh/node name used by kernels that emit native BRep/topology edge lines before
+ * the generic edge middleware runs. When present, the middleware should merge
+ * those native lines and skip synthetic mesh-dihedral edge detection for the GLB.
+ */
+export const nativeEdgesNodeName = 'tau-native-brep-edges';
+
+/**
  * GlTF primitive mode for LINES (1).
  *
  * @see https://github.com/KhronosGroup/glTF/blob/main/specification/2.0/README.md#primitivemode
