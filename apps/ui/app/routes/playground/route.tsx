@@ -222,10 +222,7 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
       }),
     [activeExample.mainFile, activePreviewParameters, activeRenderIdentity, previewValue],
   );
-  const cachedPreviewGeometries = readCachedPreviewGeometries(
-    previewGeometryCacheRef.current,
-    previewGeometryCacheKey,
-  );
+  const cachedPreviewGeometries = readCachedPreviewGeometries(previewGeometryCacheRef.current, previewGeometryCacheKey);
   const handlePreviewGeometriesReady = useCallback(
     (geometries: readonly Geometry[]) => {
       cachePreviewGeometries(previewGeometryCacheRef.current, previewGeometryCacheKey, geometries);
@@ -764,6 +761,7 @@ function applyVariant(example: PlaygroundExample, variant: PlaygroundVariant | u
     exportFormats: variant.exportFormats,
     ...(variant.renderTimeout ? { renderTimeout: variant.renderTimeout } : {}),
     ...(typeof variant.showPreviewLines === 'boolean' ? { showPreviewLines: variant.showPreviewLines } : {}),
+    ...(variant.renderOptions ? { renderOptions: variant.renderOptions } : {}),
     code: example.sourceFiles?.[variant.mainFile] ?? example.code,
   };
 }

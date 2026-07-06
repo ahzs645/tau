@@ -12,14 +12,24 @@
 import { z } from 'zod';
 import { coordinateSystemSchema } from '#types/export-option-schemas.js';
 
-/** OCCT tessellation fragment for render options (coarse defaults for preview). */
+/**
+ * OCCT tessellation fragment for render options (preview quality).
+ *
+ * These are the live-preview mesh deflection limits, applied *after* all
+ * booleans/healing — refining them cannot affect BRep topology or STEP export,
+ * only how finely the preview mesh (and native BRep edge polylines) are sampled.
+ * The previous `0.1mm / 30°` defaults facet a ~7mm-radius circle into a visible
+ * ~19-gon; `0.05mm / 15°` roughly doubles the angular resolution app-wide while
+ * staying cheap. Per-example previews can override this (e.g. threaded models
+ * that need smoother crests at close zoom) via the playground `renderOptions`.
+ */
 const occtRenderOptionSchema = z.object({
   tessellation: z
     .object({
-      linearTolerance: z.number().positive().default(0.1).describe('Linear tolerance (distance) for tessellation'),
-      angularTolerance: z.number().positive().default(30).describe('Angular tolerance (degrees) for tessellation'),
+      linearTolerance: z.number().positive().default(0.05).describe('Linear tolerance (distance) for tessellation'),
+      angularTolerance: z.number().positive().default(15).describe('Angular tolerance (degrees) for tessellation'),
     })
-    .default({ linearTolerance: 0.1, angularTolerance: 30 })
+    .default({ linearTolerance: 0.05, angularTolerance: 15 })
     .describe('Tessellation quality for preview rendering'),
 });
 

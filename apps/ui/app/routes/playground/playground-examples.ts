@@ -28,6 +28,8 @@ export type PlaygroundVariant = {
   /** Milliseconds. */
   readonly renderTimeout?: number;
   readonly showPreviewLines?: boolean;
+  /** Kernel render-option overrides for the live preview (e.g. finer OCCT tessellation). */
+  readonly renderOptions?: Record<string, unknown>;
   readonly isDefault: boolean;
 };
 
@@ -48,6 +50,8 @@ export type PlaygroundExample = {
   /** Milliseconds. */
   readonly renderTimeout?: number;
   readonly showPreviewLines?: boolean;
+  /** Kernel render-option overrides for the live preview (e.g. finer OCCT tessellation). */
+  readonly renderOptions?: Record<string, unknown>;
   readonly initialParameters?: Record<string, unknown>;
   readonly presets?: readonly PlaygroundPreset[];
   readonly staticPreview?: PlaygroundStaticPreview;

@@ -3,20 +3,33 @@
  *
  * The construction follows the approach proven by cq_warehouse's IsoThread
  * (https://github.com/gumyr/cq_warehouse, Apache-2.0): sweep a trapezoidal
- * thread profile along a helix and boolean it with the core. Here the helix
- * is a sampled BSpline spine swept with `BRepOffsetAPI_MakePipeShell` in
- * Frenet mode. BOSL2-style non-blunt starts are modeled by sweeping past the
- * nominal band and then trimming back to it, so the visible end is a cut through
- * an ongoing helix rather than the pipe shell's raw cap.
+ * thread profile along a helix and boolean it with the core. The helix is a
+ * true analytic helix — a straight line in the parameter space of a
+ * `Geom_CylindricalSurface` (u = angle, v = axial height), so the spine is
+ * defined exactly instead of fitted through sampled points — swept with
+ * `BRepOffsetAPI_MakePipeShell` in Frenet mode. BOSL2-style non-blunt starts
+ * are modeled by sweeping past the nominal band and then trimming back to it,
+ * so the visible end is a cut through an ongoing helix rather than the pipe
+ * shell's raw cap.
+ *
+ * A helix is transcendental, so OCCT still stores the swept faces as B-splines
+ * (it has no analytic helicoid surface type); the win over a sampled spine is an
+ * exact path with no sampling error and no `samplesPerTurn` knob whose value
+ * traded off boolean/export robustness against smoothness.
  */
 import {
   BRepBuilderAPI_MakeEdge,
   BRepBuilderAPI_MakeWire,
   BRepBuilderAPI_MakePolygon,
+  BRepLib,
   BRepOffsetAPI_MakePipeShell,
-  GeomAPI_PointsToBSpline,
-  NCollection_Array1_gp_Pnt,
+  Geom2d_Line,
+  Geom_CylindricalSurface,
+  gp_Ax3,
+  gp_Dir,
+  gp_Dir2d,
   gp_Pnt,
+  gp_Pnt2d,
 } from 'opencascade.js';
 import type { TopoDS_Shape } from 'opencascade.js';
 import { cylinder, fuse, intersect } from './occt-utils.js';
@@ -55,22 +68,30 @@ export function helicalRidge(options: HelicalRidgeOptions): TopoDS_Shape {
   // Sink the root slightly under the surface so booleans against the core are watertight.
   const rootInset = Math.min(0.2, depth * 0.25);
 
-  const turns = spineLength / pitch;
-  const samplesPerTurn = 48;
-  const totalSamples = Math.max(2, Math.ceil(turns * samplesPerTurn)) + 1;
-  const points = new NCollection_Array1_gp_Pnt(1, totalSamples);
-  for (let index = 1; index <= totalSamples; index += 1) {
-    const t = (index - 1) / (totalSamples - 1);
-    const z = spineStartZ + spineLength * t;
-    const angle = (2 * Math.PI * z) / pitch;
-    const point = new gp_Pnt(baseRadius * Math.cos(angle), baseRadius * Math.sin(angle), z);
-    points.SetValue(index, point);
-    point.delete();
-  }
-
-  const approximation = new GeomAPI_PointsToBSpline(points, 3, 8, 4 /* GeomAbs_C2 */, 1e-4);
-  const spineEdge = new BRepBuilderAPI_MakeEdge(approximation.Curve());
+  // Exact helix: a straight line in the (u, v) parameter space of a cylinder of
+  // radius `baseRadius`, where u is the angle and v the axial height. Advancing
+  // u by 2π advances v by one pitch, so the pcurve direction is (2π/pitch, 1).
+  // `BRepLib.BuildCurve3d` realises the 3D edge the pipe shell follows.
+  const helixOrigin = new gp_Pnt(0, 0, 0);
+  const helixAxisDir = new gp_Dir(0, 0, 1);
+  const helixRefDir = new gp_Dir(1, 0, 0);
+  const helixAxes = new gp_Ax3(helixOrigin, helixAxisDir, helixRefDir);
+  const cylinderSurface = new Geom_CylindricalSurface(helixAxes, baseRadius);
+  const pcurveStart = new gp_Pnt2d((2 * Math.PI * spineStartZ) / pitch, spineStartZ);
+  const pcurveDir = new gp_Dir2d((2 * Math.PI) / pitch, 1);
+  const pcurve = new Geom2d_Line(pcurveStart, pcurveDir);
+  // gp_Dir2d normalises its direction, so the edge parameter runs in (u, v) arc
+  // length: one unit of v costs `pcurveMagnitude` of parameter.
+  const pcurveMagnitude = Math.hypot((2 * Math.PI) / pitch, 1);
+  const spineEdge = new BRepBuilderAPI_MakeEdge(pcurve, cylinderSurface, 0, spineLength * pcurveMagnitude);
+  BRepLib.BuildCurve3d(spineEdge.Edge());
   const spineWire = new BRepBuilderAPI_MakeWire(spineEdge.Edge());
+  helixOrigin.delete();
+  helixAxisDir.delete();
+  helixRefDir.delete();
+  helixAxes.delete();
+  pcurveStart.delete();
+  pcurveDir.delete();
 
   // Trapezoid cross-section in the radial/Z plane at the helix start.
   const profile = new BRepBuilderAPI_MakePolygon();
@@ -104,8 +125,8 @@ export function helicalRidge(options: HelicalRidgeOptions): TopoDS_Shape {
   profile.delete();
   spineWire.delete();
   spineEdge.delete();
-  approximation.delete();
-  points.delete();
+  pcurve.delete();
+  cylinderSurface.delete();
 
   // Trim the over-generated helix flush with the z = [0, length] band.
   return intersect(ridge, cylinder(baseRadius + depth + 1, length));

@@ -19,6 +19,25 @@ const variantLabels = {
   opencascade: 'OpenCASCADE',
 } as const;
 
+/**
+ * Per-preview OCCT mesh deflection override. Applied only to the live preview
+ * (never to exports or BRep topology), so a threaded model can render smoother
+ * crests at close zoom without touching booleans. Lower = finer/slower.
+ */
+const previewTessellationSchema = z
+  .object({
+    linearTolerance: z.number().positive().optional(),
+    angularTolerance: z.number().positive().optional(),
+  })
+  .optional();
+
+/** Wrap a `previewTessellation` override into the kernel `renderOptions` shape the preview provider consumes. */
+function renderOptionsFromTessellation(
+  tessellation: z.infer<typeof previewTessellationSchema>,
+): Record<string, unknown> | undefined {
+  return tessellation ? { tessellation } : undefined;
+}
+
 const projectVariantSchema = z.object({
   id: z.enum(['openscad', 'replicad', 'opencascade']),
   label: z.string().min(1).optional(),
@@ -27,6 +46,7 @@ const projectVariantSchema = z.object({
   exportFormats: z.array(z.enum(exportFormats)).optional(),
   renderTimeout: z.number().int().positive().optional(),
   showPreviewLines: z.boolean().optional(),
+  previewTessellation: previewTessellationSchema,
 });
 
 export const projectMetadataSchema = z.looseObject({
@@ -56,6 +76,7 @@ export const projectMetadataSchema = z.looseObject({
   exportFormats: z.array(z.enum(exportFormats)).optional(),
   renderTimeout: z.number().int().positive().optional(),
   showPreviewLines: z.boolean().optional(),
+  previewTessellation: previewTessellationSchema,
   initialParameters: z.record(z.string(), z.unknown()).optional(),
   previewGlb: z.string().min(1).optional(),
   staticPreview: z
@@ -173,6 +194,9 @@ export const projectExamples: readonly PlaygroundExample[] = Object.entries(proj
         exportFormats: metadata.exportFormats ?? exportFormatsFromMetadata(metadata),
         ...(metadata.renderTimeout ? { renderTimeout: metadata.renderTimeout } : {}),
         ...(typeof metadata.showPreviewLines === 'boolean' ? { showPreviewLines: metadata.showPreviewLines } : {}),
+        ...(renderOptionsFromTessellation(metadata.previewTessellation)
+          ? { renderOptions: renderOptionsFromTessellation(metadata.previewTessellation) }
+          : {}),
         ...(variants ? { variants } : {}),
         ...(metadata.initialParameters ? { initialParameters: metadata.initialParameters } : {}),
         ...(presets ? { presets } : {}),
@@ -360,6 +384,9 @@ function variantsForProject(
       exportFormats: variant.exportFormats ?? (kernel === 'OpenSCAD' ? meshExportFormats : solidExportFormats),
       ...(variant.renderTimeout ? { renderTimeout: variant.renderTimeout } : {}),
       ...(typeof variant.showPreviewLines === 'boolean' ? { showPreviewLines: variant.showPreviewLines } : {}),
+      ...(renderOptionsFromTessellation(variant.previewTessellation)
+        ? { renderOptions: renderOptionsFromTessellation(variant.previewTessellation) }
+        : {}),
       isDefault: variant.entry === metadata.entry,
     };
   });

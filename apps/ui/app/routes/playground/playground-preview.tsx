@@ -70,11 +70,14 @@ export function PlaygroundPreviewPane({
     setMobileExportControlsElement(node ?? undefined);
   }, []);
 
-  const isCurrentPreviewSnapshot = previewSnapshot !== undefined && previewSnapshot.cacheKey === previewGeometryCacheKey;
+  const isCurrentPreviewSnapshot =
+    previewSnapshot !== undefined && previewSnapshot.cacheKey === previewGeometryCacheKey;
   const displayGeometries =
     isCurrentPreviewSnapshot && previewSnapshot.geometries.length > 0
       ? [...previewSnapshot.geometries]
-      : (cachedGeometries ? [...cachedGeometries] : []);
+      : cachedGeometries
+        ? [...cachedGeometries]
+        : [];
   const displayStatus: CadPreviewStatus = isCurrentPreviewSnapshot ? previewSnapshot.status : 'loading';
   const displayError =
     isCurrentPreviewSnapshot && previewSnapshot.status === 'error'
@@ -182,6 +185,7 @@ export function PlaygroundPreviewPane({
           files={files}
           parameters={activeExample.initialParameters}
           renderTimeout={activeExample.renderTimeout}
+          renderOptions={activeExample.renderOptions}
         >
           {exportControlsElement && activeExample.exportFormats.length > 0
             ? createPortal(

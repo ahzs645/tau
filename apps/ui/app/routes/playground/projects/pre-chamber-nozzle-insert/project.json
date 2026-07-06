@@ -18,7 +18,11 @@
     {
       "id": "opencascade",
       "entry": "main.occt.ts",
-      "renderTimeout": 120000
+      "renderTimeout": 120000,
+      "previewTessellation": {
+        "linearTolerance": 0.02,
+        "angularTolerance": 8
+      }
     }
   ]
 }
