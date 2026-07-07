@@ -61,30 +61,39 @@ jobs:
           TAU_FRONTEND_URL: https://3dd.ahmadjalil.com/tau
           TAU_WEBSOCKET_URL: wss://api.taucad.dev
           TAU_DISABLE_CODE_EDITOR: 'true'
-          VITE_COMMIT_SHA: ${{ env.VITE_COMMIT_SHA }}
-          VITE_BUILD_TIME: ${{ env.VITE_BUILD_TIME }}
           # Match the canonical Nx build (apps/ui/project.json): the client bundle
           # needs >default heap, and full client source maps cause OOM/GC-thrash hangs.
           NODE_OPTIONS: '--max-old-space-size=8192'
         # Keep a bounded retry guard around the static Pages build. A healthy build finishes
-        # well under 5 minutes; if this regresses, the log now reports the real timeout status.
+        # well under 5 minutes; if this regresses, print the failing command log outside the
+        # collapsed retry group so the Actions summary contains the actual build error.
         run: |
+          set -euo pipefail
+
           node --import @oxc-node/core/register scripts/generate-build-version.mts
+
           for attempt in 1 2 3; do
+            log_file="${RUNNER_TEMP}/react-router-build-${attempt}.log"
+
             echo "::group::React Router build attempt ${attempt}/3"
             set +e
-            timeout 300 pnpm exec react-router build --sourcemapClient hidden
-            status=$?
+            timeout 300 pnpm exec react-router build --sourcemapClient hidden 2>&1 | tee "${log_file}"
+            status=${PIPESTATUS[0]}
             set -e
+
             if [ "$status" -eq 0 ]; then
               echo "::endgroup::"
               echo "Build succeeded on attempt ${attempt}."
               exit 0
             fi
+
             echo "::endgroup::"
             echo "::warning::Build attempt ${attempt} failed or timed out (exit ${status}); retrying."
+            echo "Last 200 lines from failed React Router build attempt ${attempt}:"
+            tail -n 200 "${log_file}"
             rm -rf build
           done
+
           echo "::error::React Router build failed after 3 attempts."
           exit 1
 
