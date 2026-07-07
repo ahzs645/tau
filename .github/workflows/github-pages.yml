@@ -69,8 +69,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          node --import @oxc-node/core/register scripts/generate-build-version.mts
-
           for attempt in 1 2 3; do
             log_file="${RUNNER_TEMP}/react-router-build-${attempt}.log"
 
