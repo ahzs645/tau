@@ -31,6 +31,15 @@ const occtRenderOptionSchema = z.object({
     })
     .default({ linearTolerance: 0.05, angularTolerance: 15 })
     .describe('Tessellation quality for preview rendering'),
+  // Emit exact native BRep topology edges (one line per topological edge). When
+  // false, the preview falls back to the shared dihedral-angle edge-detection
+  // middleware (the same clean feature-edge pass the OpenSCAD/mesh kernels use).
+  // Native edges are crisper on simple bodies but draw every crease of a dense
+  // body (e.g. a many-turn thread), so busy models can opt into dihedral edges.
+  brepEdges: z
+    .boolean()
+    .default(true)
+    .describe('Emit native BRep topology edges; false = mesh dihedral edge detection'),
 });
 
 /** OCCT tessellation fragment for export options (fine defaults for export). */

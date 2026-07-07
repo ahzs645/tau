@@ -31,11 +31,24 @@ const previewTessellationSchema = z
   })
   .optional();
 
-/** Wrap a `previewTessellation` override into the kernel `renderOptions` shape the preview provider consumes. */
-function renderOptionsFromTessellation(
-  tessellation: z.infer<typeof previewTessellationSchema>,
-): Record<string, unknown> | undefined {
-  return tessellation ? { tessellation } : undefined;
+/**
+ * Build the kernel `renderOptions` the preview provider consumes from a
+ * variant/metadata's preview settings. `previewTessellation` maps to OCCT mesh
+ * deflection; `previewNativeEdges: false` swaps native BRep edges for the shared
+ * dihedral edge-detection pass (the same clean feature lines the mesh kernels show).
+ */
+function buildPreviewRenderOptions(source: {
+  readonly previewTessellation?: z.infer<typeof previewTessellationSchema>;
+  readonly previewNativeEdges?: boolean;
+}): Record<string, unknown> | undefined {
+  const renderOptions: Record<string, unknown> = {};
+  if (source.previewTessellation) {
+    renderOptions['tessellation'] = source.previewTessellation;
+  }
+  if (source.previewNativeEdges !== undefined) {
+    renderOptions['brepEdges'] = source.previewNativeEdges;
+  }
+  return Object.keys(renderOptions).length > 0 ? renderOptions : undefined;
 }
 
 const projectVariantSchema = z.object({
@@ -47,6 +60,7 @@ const projectVariantSchema = z.object({
   renderTimeout: z.number().int().positive().optional(),
   showPreviewLines: z.boolean().optional(),
   previewTessellation: previewTessellationSchema,
+  previewNativeEdges: z.boolean().optional(),
 });
 
 export const projectMetadataSchema = z.looseObject({
@@ -77,6 +91,7 @@ export const projectMetadataSchema = z.looseObject({
   renderTimeout: z.number().int().positive().optional(),
   showPreviewLines: z.boolean().optional(),
   previewTessellation: previewTessellationSchema,
+  previewNativeEdges: z.boolean().optional(),
   initialParameters: z.record(z.string(), z.unknown()).optional(),
   previewGlb: z.string().min(1).optional(),
   staticPreview: z
@@ -194,9 +209,7 @@ export const projectExamples: readonly PlaygroundExample[] = Object.entries(proj
         exportFormats: metadata.exportFormats ?? exportFormatsFromMetadata(metadata),
         ...(metadata.renderTimeout ? { renderTimeout: metadata.renderTimeout } : {}),
         ...(typeof metadata.showPreviewLines === 'boolean' ? { showPreviewLines: metadata.showPreviewLines } : {}),
-        ...(renderOptionsFromTessellation(metadata.previewTessellation)
-          ? { renderOptions: renderOptionsFromTessellation(metadata.previewTessellation) }
-          : {}),
+        ...(buildPreviewRenderOptions(metadata) ? { renderOptions: buildPreviewRenderOptions(metadata) } : {}),
         ...(variants ? { variants } : {}),
         ...(metadata.initialParameters ? { initialParameters: metadata.initialParameters } : {}),
         ...(presets ? { presets } : {}),
@@ -384,9 +397,7 @@ function variantsForProject(
       exportFormats: variant.exportFormats ?? (kernel === 'OpenSCAD' ? meshExportFormats : solidExportFormats),
       ...(variant.renderTimeout ? { renderTimeout: variant.renderTimeout } : {}),
       ...(typeof variant.showPreviewLines === 'boolean' ? { showPreviewLines: variant.showPreviewLines } : {}),
-      ...(renderOptionsFromTessellation(variant.previewTessellation)
-        ? { renderOptions: renderOptionsFromTessellation(variant.previewTessellation) }
-        : {}),
+      ...(buildPreviewRenderOptions(variant) ? { renderOptions: buildPreviewRenderOptions(variant) } : {}),
       isDefault: variant.entry === metadata.entry,
     };
   });

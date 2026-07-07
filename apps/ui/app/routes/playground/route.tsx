@@ -524,7 +524,6 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
         <div className='flex min-w-0 items-center gap-3'>
           <div className='min-w-0'>
             <h1 className='truncate text-base font-semibold'>{activeExample.name}</h1>
-            <p className='truncate text-xs text-muted-foreground'>{activeExample.kernel}</p>
           </div>
         </div>
         <div className='flex items-center gap-2'>

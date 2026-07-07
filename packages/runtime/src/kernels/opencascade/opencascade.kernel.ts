@@ -510,12 +510,14 @@ export default defineKernel({
         phase: 'computingGeometry',
       });
 
-      const { tessellation } = options;
+      const { tessellation, brepEdges } = options;
       const { linearTolerance, angularTolerance } = tessellation;
       const gltfData = await meshShapesToGltf(context.oc, shapeEntries, {
         linearTolerance,
         angularTolerance: angularTolerance * (Math.PI / 180),
-        includeBrepEdges: true,
+        // When native BRep edges are disabled the gltfEdgeDetection middleware
+        // supplies dihedral-angle feature edges instead (matching the mesh kernels).
+        includeBrepEdges: brepEdges,
       });
       meshSpan.end();
 
