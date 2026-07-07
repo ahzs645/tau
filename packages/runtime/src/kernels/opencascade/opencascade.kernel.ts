@@ -164,7 +164,7 @@ async function resolveWasm(
     };
   }
 
-  const moduleExports = await import('#kernels/opencascade/wasm/opencascade_full.js');
+  const moduleExports = await import('./wasm/opencascade_full.js');
   return {
     wasmUrl: fullWasmUrl,
     bindingsFactory: moduleExports.default,
