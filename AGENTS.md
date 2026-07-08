@@ -3,6 +3,7 @@
 ## Commands
 
 ```bash
+pnpm nx run-many -t copy-assets           # After install / fresh clone: provision gitignored generated assets (kernel wasm, fonts, Draco)
 pnpm nx lint <project>                    # Lint (oxlint then eslint)
 pnpm nx lint <project> --files=<path>     # Lint specific file(s) or glob
 pnpm nx test <project> --watch=false      # Test
@@ -100,6 +101,10 @@ Project skills in `.agent/skills/` provide guided workflows. Read the relevant `
 
 <!-- Capped at 12 bullets, ≤200 chars each. Cross-cutting only.
      Project-scoped facts route to .cursor/rules/learned-<project>.mdc. -->
+
+- Fresh clone: run `pnpm nx run-many -t copy-assets` after install — kernel wasm, OpenSCAD fonts, and Draco decoders are gitignored generated assets, and missing ones fail silently at runtime.
+- `converter:copy-assets` downloads Draco from gstatic.com via Node; in proxied sandboxes it can fail and block the `nx test ui` dependency graph — run vitest directly in `apps/ui` to bypass.
+- `canvas` postinstall needs the pangocairo system lib; if `pnpm install` dies there, `pnpm install --ignore-scripts` completes linking, then run the copy-assets targets you need.
 
 <!-- nx configuration start-->
 <!-- Leave the start & end comments to automatically receive updates. -->
