@@ -23,6 +23,8 @@ const outDirectory = process.argv[2] ?? resolve(import.meta.dirname, '../renders
 type VariantSpec = { project: string; variant: string; entry: string };
 
 const specs: VariantSpec[] = [
+  { project: '3d-rack-scad', variant: 'openscad', entry: 'main.scad' },
+  { project: '3d-rack-scad', variant: 'opencascade', entry: 'main.occt.ts' },
   { project: 'catan-insert', variant: 'openscad', entry: 'main.scad' },
   { project: 'catan-insert', variant: 'opencascade', entry: 'main.occt.ts' },
   { project: 'pendant-lamp', variant: 'openscad', entry: 'Main.scad' },
