@@ -1,6 +1,6 @@
 # OpenSCAD ⇄ OpenCASCADE project variants
 
-Status: implemented for five projects (catan-insert, pendant-lamp, vane-trap, pre-chamber-nozzle-insert, 3d-rack-scad), 2026-07-08.
+Status: implemented for six projects (catan-insert, pendant-lamp, vane-trap, pre-chamber-nozzle-insert, 3d-rack-scad, parametric-gel-comb), 2026-07-08.
 
 ## Goal
 
@@ -35,6 +35,7 @@ No. An audit of the playground gallery's actual BOSL2 usage:
 | pendant-lamp              | none — includes `BOSL2/std.scad` but only calls vanilla OpenSCAD |
 | pre-chamber-nozzle-insert | `threaded_rod()`                                                 |
 | vane-trap                 | `thread_helix()`                                                 |
+| parametric-gel-comb       | none — vanilla `hull()` (rounded rectangles) and `offset()` (hook corner molding) |
 | all others                | no BOSL2                                                         |
 
 Most of what BOSL2 compensates for in OpenSCAD (rounding, fillets, chamfers)
@@ -83,6 +84,19 @@ covers everything else the gallery actually uses.
 
 - OpenSCAD `cylinder(d, h, $fn=6)` is a _circumscribed_ hexagonal prism —
   port as a polygonal prism with circumradius `d/2`, not a cylinder.
+- `hull()` of four corner circles is the ubiquitous `rounded_rect_2d`. Build it
+  constructively as a cross of two slabs plus quarter-round corner rods (the
+  gel-comb's `roundedRectPrism`); when the radius equals half the shorter side
+  the two centres on that axis collapse, giving a proper stadium/obround (the
+  comb's fully-rounded upper slots) — dedupe those coincident corner rods so no
+  zero-height cylinder is built. A tiny `offset(r) offset(-r)` corner molding
+  (the comb's 0.4 mm hook radius) is within `$fn` tolerance and can be dropped.
+- Keep mutually **disjoint** groups unfused. The gel-comb's 38 teeth (1.5 mm
+  gaps) and its two ridge bands never touch each other, so pre-fusing a group
+  builds a `TopoDS_Compound`, which then silently drops components when handed
+  to the next boolean (see below). Instead pass every tooth/band as an
+  individual solid to one final `fuse` whose base (the bar) overlaps them all —
+  the union comes out as a single connected, watertight solid.
 - `hull()` of two spheres is a capsule: cylinder + two sphere caps. OCCT has
   no general convex hull of solids; model the intent instead.
 - `rotate_extrude()` of a translated circle is exactly `BRepPrimAPI_MakeTorus`;
@@ -156,11 +170,21 @@ All variants render headlessly through the real kernels
 | vane-trap                 | 130 × 130 × 184       | 130 × 130 × 184       | 5.7 s / 2.0 s |
 | pre-chamber-nozzle-insert | 18.54 × 18.54 × 35    | 18.54 × 18.54 × 35    | 26 s / 29 s   |
 | 3d-rack-scad              | 229.6 × 222.4 × 249   | 229.6 × 222.4 × 249   | 19 s / 12 s   |
+| parametric-gel-comb       | 178.92 × 38 × 1.2     | 178.92 × 38 × 1.2     | — / 4.5 s     |
 
 Bounding boxes match to 0.1 mm and side-by-side renders are visually
 identical. Notably the OpenCASCADE pendant-lamp renders ~3.5× faster than
 the OpenSCAD original (65 exact tori beat $fn=100 mesh CSG), while the
 boolean-heavy catan-insert is faster in OpenSCAD's mesh engine.
+
+The gel-comb OpenCASCADE variant was validated directly against the exact
+`@taucad/opencascade.js` build the kernel loads: the default model comes back a
+single closed solid with bbox 178.92 × 38 × 1.2 mm and volume 4388.7 mm³ (the
+volume confirms all 38 teeth survived the union — a compound-operand drop would
+read ≈2800 mm³), STEP export writes a valid ISO-10303-21 file, and the hook /
+ridge / label / multi-slot parameter paths each still yield one closed solid.
+The OpenSCAD column is the analytically identical construction (same tooth
+pitch, bar, and hook-angle math); its bbox is not separately re-rendered here.
 
 ### Export coverage
 
