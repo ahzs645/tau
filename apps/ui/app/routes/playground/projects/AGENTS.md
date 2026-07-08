@@ -53,6 +53,40 @@ Optional fields include:
 Accepted `kernel` values are `OpenSCAD`, `Replicad`, and `OpenCascade`. Imported OpenSCAD Playground
 metadata may use `engine`: `openscad`, `replicad`, `opencascade`, or `occt`.
 
+## Kernel Variants
+
+A project can ship the same model in more than one kernel (e.g. an OpenSCAD original plus a
+hand-ported OpenCASCADE version) via a `variants` array; the playground then shows a segmented
+kernel toggle and round-trips the selection through `?variant=`:
+
+```json
+{
+  "entry": "main.scad",
+  "variants": [
+    { "id": "openscad", "entry": "main.scad" },
+    { "id": "opencascade", "entry": "main.occt.ts", "renderTimeout": 120000 }
+  ]
+}
+```
+
+- The variant whose `entry` matches the project `entry` is the default. Per-variant
+  `exportFormats` default by kernel (mesh formats for OpenSCAD; mesh + STEP for BRep kernels).
+  Variants may also override `previewTessellation` / `previewNativeEdges`.
+- Kernel selection needs no extra metadata — a `.ts` entry importing `'opencascade.js'` routes to
+  the OpenCascade kernel automatically.
+- OCCT ports follow a shared shape: `main.occt.ts` with a camelCase `defaultParams` export, plus a
+  per-project `lib/occt-utils.ts` helper set (existing ports: vane-trap, catan-insert,
+  pendant-lamp, pre-chamber-nozzle-insert, 3d-rack-scad — copy the closest one). Engraved text has
+  no OCCT font engine (`Font_BRepFont` is excluded from the wasm build); reuse 3d-rack-scad's
+  `lib/text.ts` stroke-digit font. Parameters/presets do not carry across a variant switch.
+- Porting pitfalls (seam overlap, never pass compounds to booleans, BOPAlgo list API, thread
+  helpers) are catalogued in `docs/research/openscad-opencascade-project-variants.md`.
+- Verify a new variant headlessly: add the project to `specs` in
+  `packages/testing/scripts/render-variants.ts`, run it via `npx tsx` from `packages/testing`, and
+  compare bounding boxes and screenshots against the original — not just render success. Run
+  `pnpm nx run-many -t copy-assets` first or the OCCT kernel wasm and OpenSCAD `text()` fonts are
+  missing and both fail silently.
+
 ## Source Files
 
 The loader imports raw text source files with these extensions:
