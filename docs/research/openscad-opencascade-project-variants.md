@@ -1,6 +1,6 @@
 # OpenSCAD ⇄ OpenCASCADE project variants
 
-Status: implemented for four projects (catan-insert, pendant-lamp, vane-trap, pre-chamber-nozzle-insert), 2026-07-04.
+Status: implemented for five projects (catan-insert, pendant-lamp, vane-trap, pre-chamber-nozzle-insert, 3d-rack-scad), 2026-07-08.
 
 ## Goal
 
@@ -31,7 +31,7 @@ No. An audit of the playground gallery's actual BOSL2 usage:
 
 | Project                   | BOSL2 calls                                                      |
 | ------------------------- | ---------------------------------------------------------------- |
-| 3d-rack-scad              | `cuboid()` (rounded box), `xcyl()`, `up()`                       |
+| 3d-rack-scad              | `cuboid()` (rounded box), `xcyl()`, `up()` — plus vanilla `text()` for the engraved hole numbers |
 | pendant-lamp              | none — includes `BOSL2/std.scad` but only calls vanilla OpenSCAD |
 | pre-chamber-nozzle-insert | `threaded_rod()`                                                 |
 | vane-trap                 | `thread_helix()`                                                 |
@@ -112,6 +112,20 @@ covers everything else the gallery actually uses.
   `SetArguments(NCollection_List_TopoDS_Shape)` + `SetTools(...)` + `Build()`,
   which is what `lib/occt-utils.ts` uses.
 
+## Text helper
+
+The 3d-rack-scad port needed OpenSCAD's `text()` for its engraved hole
+numbers, and the OCCT wasm build excludes `Font_BRepFont` (see
+`docs/research/occt-unbound-symbols-audit.md`), so there is no font engine to
+call. Its `lib/text.ts` renders digits as a compact vector stroke font
+instead: each of '0'–'9' is a short polyline whose segments become
+square-capped box prisms sized to match `text(size = s)` metrics
+(cap height ≈ 0.7·s). The solids are returned unfused so a plate with dozens
+of labels can hand every box — together with the hole cylinders and dot
+markers — to one multi-tool BOPAlgo cut. The default assembly engraves
+2 × 35 labels (~300 boxes per plate) and still renders in ~12 s, faster than
+the OpenSCAD original (~19 s).
+
 ## Thread helpers
 
 `lib/threads.ts` (shipped with the vane-trap and pre-chamber ports) is the
@@ -141,6 +155,7 @@ All variants render headlessly through the real kernels
 | pendant-lamp              | 200.4 × 200.4 × 183.3 | 200.4 × 200.4 × 183.3 | 44 s / 13 s   |
 | vane-trap                 | 130 × 130 × 184       | 130 × 130 × 184       | 5.7 s / 2.0 s |
 | pre-chamber-nozzle-insert | 18.54 × 18.54 × 35    | 18.54 × 18.54 × 35    | 26 s / 29 s   |
+| 3d-rack-scad              | 229.6 × 222.4 × 249   | 229.6 × 222.4 × 249   | 19 s / 12 s   |
 
 Bounding boxes match to 0.1 mm and side-by-side renders are visually
 identical. Notably the OpenCASCADE pendant-lamp renders ~3.5× faster than

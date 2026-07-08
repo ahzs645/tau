@@ -6,5 +6,16 @@
   "tags": ["rack", "organization", "modular", "storage"],
   "created": "2024-01-01",
   "author": "OpenSCAD Playground",
-  "image": "poster.jpg"
+  "image": "poster.jpg",
+  "variants": [
+    {
+      "id": "openscad",
+      "entry": "main.scad"
+    },
+    {
+      "id": "opencascade",
+      "entry": "main.occt.ts",
+      "renderTimeout": 120000
+    }
+  ]
 }
