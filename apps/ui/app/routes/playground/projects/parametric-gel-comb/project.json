@@ -6,5 +6,9 @@
   "tags": ["gel-comb", "lab", "parametric", "customizable"],
   "created": "2026-05-29",
   "author": "OpenSCAD Playground",
-  "image": "poster.jpg"
+  "image": "poster.jpg",
+  "variants": [
+    { "id": "openscad", "entry": "main.scad" },
+    { "id": "opencascade", "entry": "main.occt.ts" }
+  ]
 }
