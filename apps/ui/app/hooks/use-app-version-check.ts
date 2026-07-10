@@ -108,11 +108,11 @@ export const useAppVersionCheck = (): void => {
       return;
     }
 
-    const currentBuildNumber = tauBuildNumber;
+    const currentBuildNumber = globalThis.window.tauBuildMetadata?.buildNumber;
     if (!hasUsableBuildNumber(currentBuildNumber)) {
       return;
     }
-    const currentCommit = tauBuildCommit;
+    const currentCommit = globalThis.window.tauBuildMetadata?.commit;
 
     removeCacheBustParameter();
 

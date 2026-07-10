@@ -10,9 +10,23 @@ type PackageJson = {
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const uiRoot = join(scriptDirectory, '..');
 const workspaceRoot = join(uiRoot, '../..');
-const publicDirectory = join(uiRoot, 'public');
-const versionJsonPath = join(publicDirectory, 'version.json');
 const packageJsonPath = join(uiRoot, 'package.json');
+
+const readArgument = (name: string): string | undefined => {
+  const prefix = `${name}=`;
+  const inline = process.argv.find((argument) => argument.startsWith(prefix));
+  if (inline) {
+    return inline.slice(prefix.length);
+  }
+
+  const index = process.argv.indexOf(name);
+  return index === -1 ? undefined : process.argv[index + 1];
+};
+
+const isPlaceholder = process.argv.includes('--placeholder');
+const outputDirectory = join(uiRoot, readArgument('--output') ?? 'public');
+const versionJsonPath = join(outputDirectory, 'version.json');
+const versionScriptPath = join(outputDirectory, 'version.js');
 
 const commitEnvNames = [
   'VITE_COMMIT_SHA',
@@ -60,10 +74,12 @@ const gitOutput = (command: string): string | undefined => {
   }
 };
 
-const commitSha = firstEnvValue(commitEnvNames) ?? gitOutput('git rev-parse HEAD') ?? 'dev';
+const commitSha = isPlaceholder ? 'dev' : (firstEnvValue(commitEnvNames) ?? gitOutput('git rev-parse HEAD') ?? 'dev');
 const buildNumber = commitSha === 'dev' ? 'dev' : commitSha.slice(0, 7);
-const buildTime = process.env['VITE_BUILD_TIME']?.trim() ?? process.env['BUILD_TIME']?.trim() ?? new Date().toISOString();
-const branch = firstEnvValue(branchEnvNames) ?? gitOutput('git branch --show-current');
+const buildTime = isPlaceholder
+  ? 'dev'
+  : (process.env['VITE_BUILD_TIME']?.trim() ?? process.env['BUILD_TIME']?.trim() ?? new Date().toISOString());
+const branch = isPlaceholder ? undefined : (firstEnvValue(branchEnvNames) ?? gitOutput('git branch --show-current'));
 const version = readPackageVersion();
 
 const versionJson = {
@@ -76,10 +92,11 @@ const versionJson = {
   buildTime,
 };
 
-if (!existsSync(publicDirectory)) {
-  mkdirSync(publicDirectory, { recursive: true });
+if (!existsSync(outputDirectory)) {
+  mkdirSync(outputDirectory, { recursive: true });
 }
 
 writeFileSync(versionJsonPath, `${JSON.stringify(versionJson, null, 2)}\n`);
+writeFileSync(versionScriptPath, `globalThis.tauBuildMetadata=${JSON.stringify(versionJson)};\n`);
 
-console.log(`[ui:build-version] Generated version.json ${version} (${buildNumber}) at ${buildTime}`);
+console.log(`[ui:build-version] Generated version metadata ${version} (${buildNumber}) at ${buildTime}`);

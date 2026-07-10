@@ -9,19 +9,8 @@
       "from": "./node_modules/rhino3dm/rhino3dm.js",
       "to": "src/assets/rhino3dm/rhino3dm.js"
     },
-    // Draco3d - https://github.com/google/draco
-    {
-      "from": "https://www.gstatic.com/draco/versioned/decoders/1.5.7/draco_decoder_gltf.js",
-      "to": "src/assets/draco3d/gltf/draco_decoder_gltf.js"
-    },
-    {
-      "from": "https://www.gstatic.com/draco/versioned/decoders/1.5.7/draco_decoder_gltf.wasm",
-      "to": "src/assets/draco3d/gltf/draco_decoder_gltf.wasm"
-    },
-    {
-      "from": "https://www.gstatic.com/draco/versioned/decoders/1.5.7/draco_wasm_wrapper_gltf.js",
-      "to": "src/assets/draco3d/gltf/draco_wasm_wrapper_gltf.js"
-    },
+    // Draco decoder 1.5.7 files are vendored beside the encoder. Keeping the
+    // immutable browser artifacts in git avoids a remote download during builds.
     {
       "from": "./node_modules/draco3dgltf/draco_encoder.wasm",
       "to": "src/assets/draco3d/gltf/draco_encoder.wasm"

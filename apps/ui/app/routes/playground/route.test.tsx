@@ -308,7 +308,6 @@ describe('PlaygroundRoot', () => {
     // The header leads with the model itself; the app name lives on the gallery.
     expect(screen.getByRole('heading', { name: 'OpenSCAD bracket' })).toBeDefined();
     expect(screen.getAllByRole('link', { name: 'Gallery' })[0]!.getAttribute('href')).toBe('/');
-    expect(screen.getByText('OpenSCAD', { selector: 'p' })).toBeDefined();
     expect(screen.getAllByRole('button', { name: 'Code' })[0]!.getAttribute('aria-pressed')).toBe('false');
     expect(screen.queryByLabelText('Code editor')).toBeNull();
     expect(screen.getByTestId('cad-preview-viewer')).toBeDefined();
@@ -373,7 +372,9 @@ describe('PlaygroundRoot', () => {
       expect(providerCalls.at(-1)?.projectId).toBe('root-playground-pre-chamber-nozzle-insert-opencascade');
     });
     expect(providerCalls.at(-1)?.mainFile).toBe('main.occt.ts');
-    expect(viewerCalls.at(-1)?.graphicsOptions?.enableLines).toBe(true);
+    await waitFor(() => {
+      expect(viewerCalls.at(-1)?.graphicsOptions?.enableLines).toBe(true);
+    });
   });
 
   it('shows cached variant geometry immediately when switching back', async () => {

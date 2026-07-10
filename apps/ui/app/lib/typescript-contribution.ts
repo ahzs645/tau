@@ -25,7 +25,7 @@ export const tsContribution: LanguageContribution = {
     const disposables: Monaco.IDisposable[] = [];
 
     setTsCompilerOptions(monaco);
-    disposables.push(ensureAtaBoot(monaco, context.fileManagerRef));
+    disposables.push(ensureAtaBoot(monaco));
     disposables.push(registerMaterializingTsProviders({ monaco, workspaceFs }));
 
     return { disposables };

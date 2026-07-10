@@ -4,8 +4,8 @@
  * Manages TypeScript/JavaScript type declarations for Monaco Editor IntelliSense.
  * Handles two categories of types:
  *
- * 1. **Static types**: Built-in packages (replicad, @jscad/modeling) whose `.d.ts`
- *    content is bundled at build time and injected immediately during activation.
+ * 1. **Built-in types**: Kernel packages (replicad, @jscad/modeling, etc.) whose
+ *    `.d.ts` content is emitted as lazy build assets and loaded on first import.
  *
  * 2. **Dynamic types**: User-imported packages (lodash, three, etc.) whose types
  *    are fetched from esm.sh CDN on demand when detected in editor content.
@@ -40,8 +40,10 @@ export type StaticTypeDefinition = {
 };
 
 export type TypeAcquisitionConfig = {
-  /** Static type definitions to inject immediately on initialization */
-  staticTypes: StaticTypeDefinition[];
+  /** Static type definitions to inject immediately on initialization. */
+  staticTypes?: readonly StaticTypeDefinition[];
+  /** Built-in packages whose declarations are loaded only after an import is observed. */
+  builtinTypeLoaders?: Readonly<Record<string, () => Promise<readonly StaticTypeDefinition[]>>>;
 };
 
 // =============================================================================
@@ -82,6 +84,7 @@ export class TypeAcquisitionService {
   // --- Static types (addExtraLib disposables) ---
   private readonly staticDisposables: Monaco.IDisposable[] = [];
   private readonly builtinTypePackages = new Set<string>();
+  private readonly builtinTypeLoaders = new Map<string, () => Promise<readonly StaticTypeDefinition[]>>();
 
   // --- Dynamic types ---
   private readonly dynamicLibs = new Map<string, Monaco.IDisposable[]>();
@@ -109,26 +112,12 @@ export class TypeAcquisitionService {
     this.monaco = monaco;
     this.abortController = new AbortController();
 
-    // Register static types via addExtraLib on both defaults
-    for (const staticType of config.staticTypes) {
-      const content = staticType.prewrapped
-        ? staticType.content
-        : `declare module '${staticType.packageName}' {\n${staticType.content}\n}`;
-      const filePath = `file:///node_modules/${staticType.packageName}/index.d.ts`;
+    for (const staticType of config.staticTypes ?? []) {
+      this.injectStaticType(staticType);
+    }
 
-      // Register on both TS and JS defaults so .js files also get type info
-      const tsDisposable = monaco.typescript.typescriptDefaults.addExtraLib(content, filePath);
-      const jsDisposable = monaco.typescript.javascriptDefaults.addExtraLib(content, filePath);
-
-      this.staticDisposables.push(tsDisposable, jsDisposable);
-      this.builtinTypePackages.add(staticType.packageName);
-      this.acquiredTypes.add(staticType.packageName);
-
-      const packageJsonPath = `file:///node_modules/${staticType.packageName}/package.json`;
-      const packageJsonContent = JSON.stringify({ name: staticType.packageName, types: 'index.d.ts' });
-      const tsPackageDisposable = monaco.typescript.typescriptDefaults.addExtraLib(packageJsonContent, packageJsonPath);
-      const jsPackageDisposable = monaco.typescript.javascriptDefaults.addExtraLib(packageJsonContent, packageJsonPath);
-      this.staticDisposables.push(tsPackageDisposable, jsPackageDisposable);
+    for (const [packageName, loader] of Object.entries(config.builtinTypeLoaders ?? {})) {
+      this.builtinTypeLoaders.set(packageName, loader);
     }
   }
 
@@ -265,6 +254,7 @@ export class TypeAcquisitionService {
     // Clear all tracking state
     this.acquiredTypes.clear();
     this.builtinTypePackages.clear();
+    this.builtinTypeLoaders.clear();
     this.fetchCache.clear();
     this.pendingFetches.clear();
     this.failedPackages.clear();
@@ -407,6 +397,23 @@ export class TypeAcquisitionService {
 
     const promise = (async (): Promise<void> => {
       try {
+        const builtinLoader = this.builtinTypeLoaders.get(packageName);
+        if (builtinLoader) {
+          try {
+            const definitions = await builtinLoader();
+            if (this.sessionEpoch !== currentEpoch) {
+              return;
+            }
+            for (const definition of definitions) {
+              this.injectStaticType(definition);
+            }
+          } catch (error) {
+            ataLog('built-in types load failed:', packageName, error);
+            this.failedPackages.set(packageName, Date.now());
+          }
+          return;
+        }
+
         await this.fetchAndInjectTypes(packageName, currentEpoch, signal);
       } finally {
         this.pendingFetches.delete(packageName);
@@ -591,6 +598,34 @@ export class TypeAcquisitionService {
         }
       }
     }
+  }
+
+  private injectStaticType(staticType: StaticTypeDefinition): void {
+    if (!this.monaco || this.acquiredTypes.has(staticType.packageName)) {
+      return;
+    }
+
+    const content = staticType.prewrapped
+      ? staticType.content
+      : `declare module '${staticType.packageName}' {\n${staticType.content}\n}`;
+    const filePath = `file:///node_modules/${staticType.packageName}/index.d.ts`;
+    const tsDisposable = this.monaco.typescript.typescriptDefaults.addExtraLib(content, filePath);
+    const jsDisposable = this.monaco.typescript.javascriptDefaults.addExtraLib(content, filePath);
+
+    const packageJsonPath = `file:///node_modules/${staticType.packageName}/package.json`;
+    const packageJsonContent = JSON.stringify({ name: staticType.packageName, types: 'index.d.ts' });
+    const tsPackageDisposable = this.monaco.typescript.typescriptDefaults.addExtraLib(
+      packageJsonContent,
+      packageJsonPath,
+    );
+    const jsPackageDisposable = this.monaco.typescript.javascriptDefaults.addExtraLib(
+      packageJsonContent,
+      packageJsonPath,
+    );
+
+    this.staticDisposables.push(tsDisposable, jsDisposable, tsPackageDisposable, jsPackageDisposable);
+    this.builtinTypePackages.add(staticType.packageName);
+    this.acquiredTypes.add(staticType.packageName);
   }
 }
 

@@ -105,6 +105,7 @@ jobs:
           cp -R build/client/favicon.svg build/client/tau/
           cp -R build/client/favicon-96x96.png build/client/tau/
           cp -R build/client/version.json build/client/tau/
+          cp -R build/client/version.js build/client/tau/
 
       - name: Add custom-domain root redirect
         working-directory: apps/ui
@@ -127,6 +128,8 @@ jobs:
 
       - name: Prepare Pages artifact
         run: |
+          node --import @oxc-node/core/register apps/ui/scripts/check-client-bundle-budget.mts
+          find apps/ui/build/client -type f -name '*.map' -delete
           touch apps/ui/build/client/.nojekyll
           printf '3dd.ahmadjalil.com\n' > apps/ui/build/client/CNAME
 

@@ -5,10 +5,11 @@ import { describe, expect, it } from 'vitest';
 
 const workerSource = readFileSync(fileURLToPath(new URL('file-manager.worker.ts', import.meta.url)), 'utf8');
 
-describe('file-manager.worker api-extractor import boundary', () => {
-  it('imports kernel types from the dedicated subpath, not the mixed root entry', () => {
-    expect(workerSource).toContain('@taucad/api-extractor/kernel-types');
-    expect(workerSource).not.toMatch(/from ["']@taucad\/api-extractor["']/);
+describe('file-manager.worker declaration boundary', () => {
+  it('does not embed kernel declarations in the filesystem startup path', () => {
+    expect(workerSource).not.toContain('@taucad/api-extractor');
+    expect(workerSource).not.toContain('kernelTypeMaps');
+    expect(workerSource).not.toContain('populateBundledTypesMount');
   });
 
   it('does not reference KCL markdown assets directly', () => {

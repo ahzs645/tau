@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { projectExamples, projectMetadataSchema, projectPresetsSchema } from '#routes/playground/projects.js';
+import {
+  loadProjectExample,
+  projectExamples,
+  projectMetadataSchema,
+  projectPresetsSchema,
+} from '#routes/playground/projects.js';
 
 describe('project examples discovery', () => {
   it('validates project metadata before building examples', () => {
@@ -39,8 +44,9 @@ describe('project examples discovery', () => {
     ).toBe(true);
   });
 
-  it('builds playground examples from project folders', () => {
+  it('builds a lightweight catalog and loads project source on demand', async () => {
     const examplesById = new Map(projectExamples.map((example) => [example.id, example]));
+    const keyguard = await loadProjectExample('keyguard-with-raised-tabs');
 
     expect(examplesById.get('3d-rack-scad')).toMatchObject({
       name: '3D Rack System',
@@ -48,7 +54,8 @@ describe('project examples discovery', () => {
       mainFile: 'main.scad',
     });
 
-    expect(examplesById.get('keyguard-with-raised-tabs')?.sourceFiles).toHaveProperty('openings_and_additions.txt');
+    expect(examplesById.get('keyguard-with-raised-tabs')?.sourceFiles).toBeUndefined();
+    expect(keyguard?.sourceFiles).toHaveProperty('openings_and_additions.txt');
     expect(examplesById.get('atmospheric-sampler')).toMatchObject({
       name: 'Atmospheric Sampler',
       kernel: 'Static',
@@ -64,19 +71,23 @@ describe('project examples discovery', () => {
     expect(examplesById.has('wham')).toBe(false);
   });
 
-  it('keeps metadata-only fields from project.json', () => {
-    const example = projectExamples.find((candidate) => candidate.id === 'pet-bottle-opener');
+  it('keeps metadata-only fields in the catalog and materializes source lazily', async () => {
+    const catalogExample = projectExamples.find((candidate) => candidate.id === 'pet-bottle-opener');
+    const example = await loadProjectExample('pet-bottle-opener');
 
-    expect(example).toMatchObject({
+    expect(catalogExample).toMatchObject({
       name: 'Modular PET Bottle Opener (OpenCascade)',
       kernel: 'Replicad',
       mainFile: 'main.ts',
       language: 'typescript',
       initialParameters: { lower: { module: 'none' } },
     });
+    expect(catalogExample?.code).toBe('');
+    expect(catalogExample?.sourceFiles).toBeUndefined();
     expect(example?.exportFormats).toContain('step');
     expect(example?.presets).toHaveLength(7);
     expect(example?.sourceFiles).toHaveProperty('main.ts', example?.code);
+    expect(example?.sourceFiles).toHaveProperty('lib/melded-neck.ts');
     expect(example?.sourceFiles).not.toHaveProperty('presets.json');
     // The project owns its source locally (no libSource indirection): the
     // loader reads main.ts straight from this project folder.

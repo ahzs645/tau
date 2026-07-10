@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/naming-convention -- parameter keys mirror the source model APIs, including OpenSCAD snake_case names */
 import type { FileExtension } from '@taucad/types';
 import { legacyPlaygroundExamples } from '#routes/playground/legacy-playground-examples.js';
-import { projectExamples } from '#routes/playground/projects.js';
+import { isProjectExampleId, loadProjectExample, projectExamples } from '#routes/playground/projects.js';
 
 export type PlaygroundPreset = {
   readonly name: string;
@@ -511,3 +511,12 @@ export const playgroundExamples: readonly PlaygroundExample[] = [
   ...projectExamples,
   ...legacyPlaygroundExamples,
 ] as const;
+
+/** Resolve a catalog entry, loading project-owned source files only when selected. */
+export async function loadPlaygroundExample(exampleId: string): Promise<PlaygroundExample | undefined> {
+  if (isProjectExampleId(exampleId)) {
+    return loadProjectExample(exampleId);
+  }
+
+  return playgroundExamples.find((example) => example.id === exampleId);
+}

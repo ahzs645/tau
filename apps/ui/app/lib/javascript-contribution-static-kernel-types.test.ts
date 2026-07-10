@@ -1,9 +1,9 @@
 /**
- * Ensures TS/JS contributions read kernel typings from the FM `/node_modules`
- * mount and pass them through {@link TypeAcquisitionService}, which then
- * registers each package's `index.d.ts` plus a synthetic `package.json`.
+ * Ensures TS/JS contributions configure import-driven kernel declaration
+ * loaders without touching the file-manager mount or registering every
+ * declaration during language activation.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ActivationContext } from '#lib/monaco-language-registry.js';
 import type { MonacoTestStub } from '#lib/testing/monaco-language-stub.js';
 import { tsContribution } from '#lib/typescript-contribution.js';
@@ -12,32 +12,9 @@ import { LanguageContributionRegistry } from '#lib/monaco-language-registry.js';
 import { TypeAcquisitionService } from '#lib/type-acquisition-service.js';
 import { createMonacoTestStub } from '#lib/testing/monaco-language-stub.js';
 import { attachTypescriptShim } from '#lib/testing/monaco-typescript-shim.js';
-import type { FileManagerRef, FileManagerProxy } from '#machines/file-manager.machine.types.js';
 
-const packageDtsPattern = /^\/node_modules\/([^/]+)\/index\.d\.ts$/;
-
-function createMountProxy(packages: Record<string, string>): FileManagerProxy {
-  return {
-    readdir: vi.fn(async (path: string) => {
-      if (path === '/node_modules') {
-        return Object.keys(packages);
-      }
-      throw new Error(`unexpected readdir: ${path}`);
-    }),
-    readFile: vi.fn(async (path: string) => {
-      const match = packageDtsPattern.exec(path);
-      const content = match ? packages[match[1]!] : undefined;
-      if (content === undefined) {
-        throw new Error(`ENOENT: ${path}`);
-      }
-      return new TextEncoder().encode(content);
-    }),
-  } as unknown as FileManagerProxy;
-}
-
-function createMockContext(stub: MonacoTestStub, proxy: FileManagerProxy): ActivationContext {
-  // oxlint-disable-next-line @typescript-eslint/consistent-type-assertions -- minimal context for contribution.activate
-  return {
+const createMockContext = (stub: MonacoTestStub): ActivationContext =>
+  ({
     monaco: stub.monaco,
     fileManager: {
       readFile: vi.fn(async () => new Uint8Array()),
@@ -45,10 +22,7 @@ function createMockContext(stub: MonacoTestStub, proxy: FileManagerProxy): Activ
       readdir: vi.fn(async () => []),
       getDirectoryStat: vi.fn(),
     },
-    fileManagerRef: {
-      getSnapshot: () => ({ context: { proxy } }),
-      subscribe: () => ({ unsubscribe: () => undefined }),
-    } as unknown as FileManagerRef,
+    fileManagerRef: {},
     workspaceFs: {
       registerFileSystemProvider: vi.fn(() => ({ dispose: vi.fn() })),
       registerTextDocumentContentProvider: vi.fn(() => ({ dispose: vi.fn() })),
@@ -64,10 +38,12 @@ function createMockContext(stub: MonacoTestStub, proxy: FileManagerProxy): Activ
       bindModelService: vi.fn(),
       dispose: vi.fn(),
     },
-  } as unknown as ActivationContext;
-}
+  }) as unknown as ActivationContext;
 
-describe('tsContribution static kernel types', () => {
+describe.each([
+  ['TypeScript', tsContribution, 'typescript'],
+  ['JavaScript', jsContribution, 'javascript'],
+] as const)('%s contribution kernel declarations', (_name, contribution, languageId) => {
   let stub: MonacoTestStub;
   let registry: LanguageContributionRegistry;
 
@@ -75,92 +51,37 @@ describe('tsContribution static kernel types', () => {
     stub = createMonacoTestStub();
     attachTypescriptShim(stub);
     registry = new LanguageContributionRegistry();
-    vi.spyOn(TypeAcquisitionService.prototype, 'startWatching').mockImplementation(() => undefined);
   });
 
   afterEach(() => {
-    vi.restoreAllMocks();
     registry.dispose();
     stub.__reset();
-    vi.clearAllMocks();
+    vi.restoreAllMocks();
   });
 
-  it('registers index.d.ts and synthetic package.json for each kernel discovered on the mount', async () => {
-    const proxy = createMountProxy({ replicad: 'export declare const stubKernel: 1;' });
-    const context = createMockContext(stub, proxy);
-    registry.addContribution(tsContribution);
-    registry.activate(context);
-    stub.__createModel('inmemory://t/kernel', 'typescript');
-
-    const tsAdd = stub.monaco.typescript.typescriptDefaults.addExtraLib as unknown as ReturnType<typeof vi.fn>;
-    const jsAdd = stub.monaco.typescript.javascriptDefaults.addExtraLib as unknown as ReturnType<typeof vi.fn>;
-
-    await vi.waitFor(() => {
-      expect(tsAdd.mock.calls.length).toBeGreaterThan(0);
-    });
-
-    const tsPaths = tsAdd.mock.calls.map((c) => c[1] as string);
-    expect(tsPaths).toContain('file:///node_modules/replicad/index.d.ts');
-    expect(tsPaths).toContain('file:///node_modules/replicad/package.json');
-
-    const jsPaths = jsAdd.mock.calls.map((c) => c[1] as string);
-    expect(jsPaths).toContain('file:///node_modules/replicad/index.d.ts');
-    expect(jsPaths).toContain('file:///node_modules/replicad/package.json');
-
-    const packageCall = tsAdd.mock.calls.find((c) => c[1] === 'file:///node_modules/replicad/package.json');
-    expect(packageCall).toBeDefined();
-    expect(JSON.parse(packageCall![0] as string)).toEqual({ name: 'replicad', types: 'index.d.ts' });
-  });
-
-  it('uses /node_modules bytes from the FM proxy for each package', async () => {
-    const proxy = createMountProxy({ replicad: 'export declare const fromMount: 42;' });
-    const context = createMockContext(stub, proxy);
-    registry.addContribution(tsContribution);
-    registry.activate(context);
-    stub.__createModel('inmemory://t/kernel2', 'typescript');
-
-    const tsAdd = stub.monaco.typescript.typescriptDefaults.addExtraLib as unknown as ReturnType<typeof vi.fn>;
-    await vi.waitFor(() => {
-      expect(tsAdd).toHaveBeenCalled();
-    });
-
-    const dtsCall = tsAdd.mock.calls.find((c) => c[1] === 'file:///node_modules/replicad/index.d.ts');
-    expect(dtsCall).toBeDefined();
-    expect(dtsCall![0] as string).toContain('fromMount');
-  });
-});
-
-describe('jsContribution static kernel types', () => {
-  let stub: MonacoTestStub;
-  let registry: LanguageContributionRegistry;
-
-  beforeEach(() => {
-    stub = createMonacoTestStub();
-    attachTypescriptShim(stub);
-    registry = new LanguageContributionRegistry();
+  it('registers lazy loaders without eagerly adding kernel declarations', async () => {
+    const initialize = vi.spyOn(TypeAcquisitionService.prototype, 'initialize');
     vi.spyOn(TypeAcquisitionService.prototype, 'startWatching').mockImplementation(() => undefined);
-  });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-    registry.dispose();
-    stub.__reset();
-    vi.clearAllMocks();
-  });
+    registry.addContribution(contribution);
+    registry.activate(createMockContext(stub));
+    stub.__createModel(`inmemory://${languageId}/kernel`, languageId);
 
-  it('registers kernel mount extras when a javascript model opens', async () => {
-    const proxy = createMountProxy({ replicad: 'export declare const stubKernel: 1;' });
-    const context = createMockContext(stub, proxy);
-    registry.addContribution(jsContribution);
-    registry.activate(context);
-    stub.__createModel('inmemory://j/kernel', 'javascript');
-
-    const tsAdd = stub.monaco.typescript.typescriptDefaults.addExtraLib as unknown as ReturnType<typeof vi.fn>;
     await vi.waitFor(() => {
-      expect(tsAdd.mock.calls.length).toBeGreaterThan(0);
+      expect(initialize).toHaveBeenCalledOnce();
     });
 
-    const tsPaths = tsAdd.mock.calls.map((c) => c[1] as string);
-    expect(tsPaths).toContain('file:///node_modules/replicad/index.d.ts');
+    const config = initialize.mock.calls[0]![1];
+    expect(Object.keys(config.builtinTypeLoaders ?? {})).toEqual([
+      'opencascade.js',
+      'replicad',
+      '@jscad/modeling',
+      'manifold-3d',
+    ]);
+    expect(stub.monaco.typescript.typescriptDefaults.addExtraLib).not.toHaveBeenCalled();
+
+    const replicadDefinitions = await config.builtinTypeLoaders?.['replicad']?.();
+    expect(replicadDefinitions?.map((definition) => definition.packageName)).toContain('replicad');
+    expect(replicadDefinitions?.[0]?.content.length).toBeGreaterThan(100);
   });
 });

@@ -383,6 +383,58 @@ describe('TypeAcquisitionService', () => {
       // Fetch should NOT have been called for replicad (it's static)
       expect(mockFetch).not.toHaveBeenCalled();
     });
+
+    it('should load built-in types only after their package is imported', async () => {
+      const builtinLoader = vi.fn(async () => [staticReplicad]);
+      const mockFetch = vi.fn();
+      vi.stubGlobal('fetch', mockFetch);
+      service.initialize(mockMonaco.monaco, {
+        builtinTypeLoaders: { replicad: builtinLoader },
+      });
+
+      expect(builtinLoader).not.toHaveBeenCalled();
+      expect(mockMonaco.monaco.typescript.typescriptDefaults.addExtraLib).not.toHaveBeenCalled();
+
+      const { model } = createMockModel({ content: "import { draw } from 'replicad';" });
+      mockMonaco.monaco._addModel(model);
+      service.startWatching();
+
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(builtinLoader).toHaveBeenCalledOnce();
+      expect(mockFetch).not.toHaveBeenCalled();
+      expect(mockMonaco.monaco.typescript.typescriptDefaults.addExtraLib).toHaveBeenCalledWith(
+        expect.stringContaining("declare module 'replicad'"),
+        'file:///node_modules/replicad/index.d.ts',
+      );
+    });
+
+    it('should retry a failed built-in loader after the backoff window', async () => {
+      const builtinLoader = vi
+        .fn<() => Promise<StaticTypeDefinition[]>>()
+        .mockRejectedValueOnce(new Error('Chunk unavailable'))
+        .mockResolvedValueOnce([staticReplicad]);
+      service.initialize(mockMonaco.monaco, {
+        builtinTypeLoaders: { replicad: builtinLoader },
+      });
+
+      const { model, fireContentChange } = createMockModel({ content: "import { draw } from 'replicad';" });
+      mockMonaco.monaco._addModel(model);
+      service.startWatching();
+      await vi.advanceTimersByTimeAsync(10);
+
+      expect(builtinLoader).toHaveBeenCalledOnce();
+
+      vi.advanceTimersByTime(61_000);
+      fireContentChange();
+      await vi.advanceTimersByTimeAsync(600);
+
+      expect(builtinLoader).toHaveBeenCalledTimes(2);
+      expect(mockMonaco.monaco.typescript.typescriptDefaults.addExtraLib).toHaveBeenCalledWith(
+        expect.stringContaining("declare module 'replicad'"),
+        'file:///node_modules/replicad/index.d.ts',
+      );
+    });
   });
 
   // =========================================================================

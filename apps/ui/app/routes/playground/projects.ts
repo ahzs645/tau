@@ -1,5 +1,4 @@
 import type { FileExtension } from '@taucad/types';
-import { replicadExampleCode } from '@taucad/tau-examples';
 import { z } from 'zod';
 import type { PlaygroundExample, PlaygroundVariant } from '#routes/playground/playground-examples.js';
 
@@ -121,8 +120,7 @@ const projectPresetsByPath = import.meta.glob<unknown>('./projects/*/presets.jso
   import: 'default',
 });
 
-const projectSourceByPath = import.meta.glob<string>('./projects/**/*.{js,ts,json,scad,svg,txt}', {
-  eager: true,
+const projectSourceLoadersByPath = import.meta.glob<string>('./projects/**/*.{js,ts,json,scad,svg,txt}', {
   import: 'default',
   query: '?raw',
 });
@@ -148,23 +146,9 @@ export const projectExamples: readonly PlaygroundExample[] = Object.entries(proj
 
     const projectId = projectIdFromMetadataPath(metadataPath);
     const presets = presetsForProject(projectId);
-    const sourceFiles = sourceFilesForProject(projectId, metadata);
     const mainFile = metadata.mainFile ?? metadata.entry;
     const entryFile = metadata.entry;
-
-    // Projects with `libSource` pull their canonical code from @taucad/tau-examples
-    // rather than carrying a duplicate copy in this app's project folder.
-    if (metadata.libSource) {
-      const libCode = replicadExampleCode[metadata.libSource];
-      if (!libCode) {
-        throw new Error(`Project "${projectId}" references unknown libSource "${metadata.libSource}"`);
-      }
-      sourceFiles[mainFile] = libCode;
-      sourceFiles[entryFile] = libCode;
-    }
-
-    const code = sourceFiles[mainFile] ?? sourceFiles[entryFile];
-    const variants = variantsForProject(projectId, metadata, sourceFiles);
+    const variants = variantsForProject(projectId, metadata);
     const staticPreview = staticPreviewForProject(projectId, metadata);
     const image = imageForProject(projectId, metadata);
     const mode = modeFromMetadata(metadata);
@@ -193,7 +177,7 @@ export const projectExamples: readonly PlaygroundExample[] = Object.entries(proj
       ];
     }
 
-    if (!code) {
+    if (!metadata.libSource && !hasProjectSource(projectId, entryFile)) {
       throw new Error(`Project "${projectId}" is missing source for entry "${entryFile}"`);
     }
 
@@ -215,8 +199,7 @@ export const projectExamples: readonly PlaygroundExample[] = Object.entries(proj
         ...(presets ? { presets } : {}),
         ...(staticPreview ? { staticPreview } : {}),
         ...galleryMetadata,
-        code,
-        sourceFiles,
+        code: '',
       },
     ];
   })
@@ -254,11 +237,19 @@ function presetsForProject(projectId: string): ProjectPresets | undefined {
   throw new Error(`Invalid root playground project presets at "${presetsPath}": ${z.prettifyError(result.error)}`);
 }
 
-function sourceFilesForProject(projectId: string, metadata: ProjectMetadata): Record<string, string> {
+async function sourceFilesForProject(projectId: string, metadata: ProjectMetadata): Promise<Record<string, string>> {
   const prefix = `./projects/${projectId}/`;
   const sourceFiles: Record<string, string> = {};
 
-  for (const [sourcePath, source] of Object.entries(projectSourceByPath)) {
+  const matchingLoaders = Object.entries(projectSourceLoadersByPath).filter(
+    ([sourcePath]) =>
+      sourcePath.startsWith(prefix) && sourcePath !== `${prefix}project.json` && sourcePath !== `${prefix}presets.json`,
+  );
+  const loadedSources = await Promise.all(
+    matchingLoaders.map(async ([sourcePath, load]) => [sourcePath, await load()] as const),
+  );
+
+  for (const [sourcePath, source] of loadedSources) {
     if (
       !sourcePath.startsWith(prefix) ||
       sourcePath === `${prefix}project.json` ||
@@ -279,6 +270,10 @@ function sourceFilesForProject(projectId: string, metadata: ProjectMetadata): Re
   }
 
   return sourceFiles;
+}
+
+function hasProjectSource(projectId: string, relativePath: string): boolean {
+  return `./projects/${projectId}/${relativePath}` in projectSourceLoadersByPath;
 }
 
 function staticPreviewForProject(
@@ -373,17 +368,13 @@ function exportFormatsFromMetadata(metadata: ProjectMetadata): readonly FileExte
   return kernelFromMetadata(metadata) === 'OpenSCAD' ? meshExportFormats : solidExportFormats;
 }
 
-function variantsForProject(
-  projectId: string,
-  metadata: ProjectMetadata,
-  sourceFiles: Record<string, string>,
-): readonly PlaygroundVariant[] | undefined {
+function variantsForProject(projectId: string, metadata: ProjectMetadata): readonly PlaygroundVariant[] | undefined {
   if (!metadata.variants || metadata.variants.length === 0) {
     return undefined;
   }
 
   const variants = metadata.variants.map((variant): PlaygroundVariant => {
-    if (!sourceFiles[variant.entry]) {
+    if (!hasProjectSource(projectId, variant.entry)) {
       throw new Error(`Project "${projectId}" variant "${variant.id}" is missing source for entry "${variant.entry}"`);
     }
 
@@ -407,4 +398,53 @@ function variantsForProject(
   }
 
   return variants;
+}
+
+function metadataForProject(projectId: string): ProjectMetadata | undefined {
+  const metadataPath = `./projects/${projectId}/project.json`;
+  const rawMetadata = projectMetadataByPath[metadataPath];
+  return rawMetadata === undefined ? undefined : parseProjectMetadata(metadataPath, rawMetadata);
+}
+
+/** True when an id belongs to the generated project catalog rather than a curated example. */
+export function isProjectExampleId(projectId: string): boolean {
+  return projectExamples.some((example) => example.id === projectId);
+}
+
+/**
+ * Materialize one editable project on demand. The gallery imports only the
+ * metadata catalog; Vite emits each raw source as a separate lazy chunk and
+ * this function fetches only files belonging to the selected project.
+ */
+export async function loadProjectExample(projectId: string): Promise<PlaygroundExample | undefined> {
+  const catalogExample = projectExamples.find((example) => example.id === projectId);
+  if (!catalogExample || catalogExample.mode === 'static') {
+    return catalogExample;
+  }
+
+  const metadata = metadataForProject(projectId);
+  if (!metadata) {
+    return undefined;
+  }
+
+  const sourceFiles = await sourceFilesForProject(projectId, metadata);
+  const mainFile = metadata.mainFile ?? metadata.entry;
+  const entryFile = metadata.entry;
+
+  if (metadata.libSource) {
+    const { replicadExampleCode } = await import('@taucad/tau-examples');
+    const libCode = replicadExampleCode[metadata.libSource];
+    if (!libCode) {
+      throw new Error(`Project "${projectId}" references unknown libSource "${metadata.libSource}"`);
+    }
+    sourceFiles[mainFile] = libCode;
+    sourceFiles[entryFile] = libCode;
+  }
+
+  const code = sourceFiles[mainFile] ?? sourceFiles[entryFile];
+  if (!code) {
+    throw new Error(`Project "${projectId}" is missing source for entry "${entryFile}"`);
+  }
+
+  return { ...catalogExample, code, sourceFiles };
 }

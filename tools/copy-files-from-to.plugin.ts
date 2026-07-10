@@ -14,11 +14,16 @@ const createCopyTarget = (configFilePath: string): CreateNodesResult | undefined
     return undefined;
   }
 
-  const json: { copyFiles: Array<{ to: string | { dest: string } }> } = readJsonFile(configFilePath);
+  const json: { copyFiles: Array<{ from: string; to: string | { dest: string } }> } = readJsonFile(configFilePath);
   const outputs = json.copyFiles.map((file) => {
     const to = typeof file.to === 'string' ? file.to : file.to.dest;
     return join('{projectRoot}', to).replaceAll('\\', '/');
   });
+  const sourceInputs = json.copyFiles.flatMap((file) =>
+    file.from.startsWith('http')
+      ? []
+      : [`{workspaceRoot}/${join(projectRoot, file.from).replaceAll('\\', '/')}`],
+  );
 
   const copyAssetsDependsOn = { dependsOn: ['copy-assets', '^copy-assets'] };
 
@@ -29,7 +34,12 @@ const createCopyTarget = (configFilePath: string): CreateNodesResult | undefined
           'copy-assets': {
             executor: 'nx:run-commands',
             outputs,
-            cache: false,
+            cache: true,
+            inputs: [
+              '{projectRoot}/copy-files-from-to.cjson',
+              '{workspaceRoot}/pnpm-lock.yaml',
+              ...sourceInputs,
+            ],
             options: {
               command: 'pnpm copy-files-from-to --when-file-exists overwrite',
               cwd: projectRoot,

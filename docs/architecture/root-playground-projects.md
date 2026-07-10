@@ -20,6 +20,7 @@ Each public project lives in its own directory:
 apps/ui/app/routes/playground/projects/<project-id>/
   project.json
   main.scad
+  lib/                  (optional project-local source modules)
   presets.json          (optional)
   poster.webp           (optional gallery thumbnail)
   optional-extra-file.txt
@@ -62,8 +63,8 @@ Use `kernel` for the displayed and executed kernel when it is not OpenSCAD. Acce
 `OpenSCAD`, `Replicad`, and `OpenCascade`. `engine` is accepted for imported OpenSCAD Playground
 metadata and maps `replicad`, `opencascade`, or `occt` to the corresponding kernel.
 
-`mainFile` is only for compatibility aliases. For example, `pet-bottle-opener` stores TypeScript as
-`main.txt` so Vite treats it as raw text, then exposes it to the runtime as `main.ts`.
+`mainFile` is only for compatibility aliases. TypeScript projects can store their entry directly as
+`main.ts`; Vite loads project source files as raw text before the CAD runtime executes them.
 
 ### Gallery metadata
 
@@ -94,8 +95,22 @@ They surface as a dropdown in the playground's Parameters header.
 The loader includes raw text files under the project folder with these extensions:
 
 ```text
-.js, .json, .scad, .svg, .txt
+.js, .ts, .json, .scad, .svg, .txt
 ```
+
+### Project-local modeling utilities
+
+Keep reusable modeling helpers in the owning project's `lib/` folder and import them with a `.js`
+specifier from TypeScript source. The loader preserves relative paths in `sourceFiles`, so the CAD
+runtime can resolve imports such as `./lib/melded-neck.js` without adding a central project registry.
+
+Playground projects are intentionally self-contained. Do not put design-specific geometry helpers
+in `@taucad/runtime`; copy or promote a helper only when another model actually needs the same
+contract. `pet-bottle-opener/lib/melded-neck.ts` is the reference pattern for joining two round or
+faceted modules with a tangent-curved waist: calculate attachment points against each profile's
+inscribed radius, overlap the unfinished bodies, fuse all solids, then apply one shared exterior
+fillet or chamfer. Finishing each module before fusing recreates visible seams and interrupted
+bevels.
 
 Binary assets such as `.stl` and `.glb` are not loaded into the code editor by this path. Static
 (`"type": "static"`) projects reference a pre-rendered `.glb` via `previewGlb` / `staticPreview`

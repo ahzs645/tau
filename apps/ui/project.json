@@ -5,28 +5,36 @@
   "projectType": "application",
   "tags": ["scope:ui", "type:app"],
   "targets": {
-    "build": {
-      "dependsOn": ["copy-assets", "^copy-assets"],
+    "version-placeholder": {
+      "executor": "nx:run-commands",
+      "cache": true,
+      "inputs": ["{projectRoot}/scripts/generate-build-version.mts", "{projectRoot}/package.json"],
+      "outputs": ["{projectRoot}/public/version.json", "{projectRoot}/public/version.js"],
+      "options": {
+        "cwd": "{projectRoot}",
+        "command": "node --import @oxc-node/core/register scripts/generate-build-version.mts --placeholder"
+      }
+    },
+    "bundle": {
+      "dependsOn": ["version-placeholder", "copy-assets", "^copy-assets"],
       "outputs": ["{projectRoot}/build"],
-      "inputs": [
-        "default",
-        "^default",
-        { "env": "VITE_COMMIT_SHA" },
-        { "env": "GITHUB_SHA" },
-        { "env": "COMMIT_SHA" },
-        { "env": "VERCEL_GIT_COMMIT_SHA" },
-        { "env": "NETLIFY_COMMIT_REF" },
-        { "env": "CF_PAGES_COMMIT_SHA" },
-        { "env": "VITE_BUILD_TIME" },
-        { "env": "BUILD_TIME" },
-        { "runtime": "git rev-parse HEAD" }
-      ],
-      "command": "node --import @oxc-node/core/register scripts/generate-build-version.mts && react-router build --sourcemapClient hidden",
+      "inputs": ["production", "^production", { "env": "GITHUB_PAGES" }, { "env": "NETLIFY" }],
+      "command": "react-router build --sourcemapClient hidden",
       "options": {
         "cwd": "{projectRoot}",
         "env": {
           "NODE_OPTIONS": "--max-old-space-size=8192"
         }
+      }
+    },
+    "build": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "dependsOn": ["bundle"],
+      "outputs": [],
+      "options": {
+        "cwd": "{projectRoot}",
+        "command": "node --import @oxc-node/core/register scripts/generate-build-version.mts --output build/client"
       }
     },
     "size": {
@@ -39,6 +47,20 @@
         "cwd": "{projectRoot}",
         "command": "node --import @oxc-node/core/register scripts/check-ssr-bundle-budget.mts"
       }
+    },
+    "static-client-size": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["build"],
+      "cache": true,
+      "inputs": ["{projectRoot}/build/client/**", "{projectRoot}/scripts/check-client-bundle-budget.mts"],
+      "outputs": [],
+      "options": {
+        "cwd": "{projectRoot}",
+        "command": "node --import @oxc-node/core/register scripts/check-client-bundle-budget.mts"
+      }
+    },
+    "dev": {
+      "dependsOn": ["version-placeholder", "copy-assets", "^copy-assets"]
     },
     "bootstrap-https-certs": {
       "executor": "nx:run-commands",
@@ -77,7 +99,15 @@
     "typegen": {
       "executor": "nx:run-commands",
       "cache": true,
-      "inputs": ["{projectRoot}/app/**/*.tsx", "{projectRoot}/app/**/*.ts", "{projectRoot}/react-router.config.ts"],
+      "inputs": [
+        "{projectRoot}/app/**/*.tsx",
+        "{projectRoot}/app/**/*.ts",
+        "!{projectRoot}/app/**/*.test.ts",
+        "!{projectRoot}/app/**/*.test.tsx",
+        "!{projectRoot}/app/**/*.spec.ts",
+        "!{projectRoot}/app/**/*.spec.tsx",
+        "{projectRoot}/react-router.config.ts"
+      ],
       "outputs": ["{projectRoot}/.react-router/types/**"],
       "options": {
         "command": "react-router typegen",

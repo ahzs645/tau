@@ -5,8 +5,14 @@ declare module '*?base64' {
   export = value;
 }
 
-declare const tauBuildCommit: string;
-declare const tauBuildNumber: string;
+/* oxlint-disable typescript/consistent-type-definitions -- Window must use interface merging */
+interface Window {
+  readonly tauBuildMetadata?: {
+    readonly buildNumber?: string;
+    readonly commit?: string;
+  };
+}
+/* oxlint-enable typescript/consistent-type-definitions */
 
 declare module 'qrcode-terminal' {
   type QrcodeTerminalGenerateOptions = {

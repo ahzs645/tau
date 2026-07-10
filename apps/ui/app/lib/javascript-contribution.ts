@@ -23,7 +23,7 @@ export const jsContribution: LanguageContribution = {
     const disposables: Monaco.IDisposable[] = [];
 
     setJsCompilerOptions(monaco);
-    disposables.push(ensureAtaBoot(monaco, context.fileManagerRef));
+    disposables.push(ensureAtaBoot(monaco));
     disposables.push(registerMaterializingJsProviders({ monaco, workspaceFs }));
 
     return { disposables };

@@ -124,8 +124,20 @@
     "enabled": false
   },
   "namedInputs": {
-    "sharedGlobals": ["{workspaceRoot}/.github/workflows/ci.yml"],
-    "default": ["{projectRoot}/**/*", "sharedGlobals"]
+    "default": ["{projectRoot}/**/*"],
+    "production": [
+      "default",
+      "!{projectRoot}/**/*.{spec,test}.{ts,tsx,js,jsx,mts,mjs}",
+      "!{projectRoot}/README.md",
+      "!{projectRoot}/CHANGELOG.md",
+      "!{projectRoot}/docs/**/*",
+      "!{projectRoot}/coverage/**/*",
+      "!{projectRoot}/out-tsc/**/*",
+      "!{projectRoot}/**/*.tsbuildinfo",
+      "!{projectRoot}/.react-router/types/**/*",
+      "!{projectRoot}/public/version.json",
+      "!{projectRoot}/public/version.js"
+    ]
   },
   "release": {
     "projects": ["packages/*"],

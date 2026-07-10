@@ -9,8 +9,6 @@
 
 import { exposeFileSystem, workerReadyMessageType } from '@taucad/runtime/transport-internals';
 
-import { populateBundledTypesMount } from '@taucad/filesystem/bundled-types-mount';
-import type { BundledTypesMountEntry } from '@taucad/filesystem/bundled-types-mount';
 import { FileSystemAccessProvider } from '@taucad/filesystem/backend';
 import {
   ChangeEventBus,
@@ -22,7 +20,6 @@ import {
   WorkspaceFileService,
 } from '@taucad/filesystem';
 import { SharedPool } from '@taucad/memory';
-import { kernelTypeMaps } from '@taucad/api-extractor/kernel-types';
 import type { SyncFsWorkspaceAdapter } from '@taucad/lsp-fs/sync';
 import { attachSyncFsServer } from '@taucad/lsp-fs/sync';
 import { metaConfig } from '#constants/meta.constants.js';
@@ -126,18 +123,6 @@ async function createNodeModulesMount(): Promise<void> {
   }
 }
 
-function buildBundledTypesPayload(): readonly BundledTypesMountEntry[] {
-  return kernelTypeMaps.flatMap((typesMap) =>
-    Object.entries(typesMap).map(
-      (entry): BundledTypesMountEntry => ({
-        packageName: entry[0],
-        content: entry[1],
-        prewrapped: true,
-      }),
-    ),
-  );
-}
-
 const fileService = new WorkspaceFileService({
   providerRegistry,
   resourceQueue,
@@ -159,14 +144,6 @@ try {
   await createNodeModulesMount();
 } catch (error) {
   postWorkerInitError('createNodeModulesMount', error);
-  throw error;
-}
-
-try {
-  await populateBundledTypesMount(fileService, buildBundledTypesPayload());
-  console.debug(`[FM-Worker] bundled types populated +${(performance.now() - t0).toFixed(1)}ms`);
-} catch (error) {
-  postWorkerInitError('populateBundledTypesMount', error);
   throw error;
 }
 

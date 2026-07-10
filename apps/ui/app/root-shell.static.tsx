@@ -3,7 +3,6 @@ import { Outlet } from 'react-router';
 import { ThemeProvider } from 'remix-themes';
 import { ColorProvider } from '#hooks/use-color.js';
 import { KeyboardProvider } from '#hooks/use-keyboard.js';
-import { FileManagerProvider } from '#hooks/use-file-manager.js';
 import type { ThemeWithSystem } from '#hooks/use-theme.js';
 import { SidebarStateProvider } from '#components/ui/sidebar.js';
 import { TooltipProvider } from '#components/ui/tooltip.js';
@@ -24,9 +23,7 @@ export function RootProviders({ children, ssrTheme }: RootProvidersProps): React
       <ColorProvider>
         <TooltipProvider>
           <KeyboardProvider>
-            <FileManagerProvider rootDirectory='/' initialBackend='indexeddb'>
-              <SidebarStateProvider>{children}</SidebarStateProvider>
-            </FileManagerProvider>
+            <SidebarStateProvider>{children}</SidebarStateProvider>
           </KeyboardProvider>
         </TooltipProvider>
       </ColorProvider>

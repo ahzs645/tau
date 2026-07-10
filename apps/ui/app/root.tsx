@@ -110,6 +110,7 @@ function LayoutDocument({
         <PreventFlashOnWrongTheme ssrTheme={ssrTheme !== null} />
         <Links />
         <link rel='manifest' href={`${publicBasePath}${webManifestHref}`} />
+        <script src={`${publicBasePath}/version.js`} />
       </head>
       <body>
         <script

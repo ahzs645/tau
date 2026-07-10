@@ -8,8 +8,10 @@ import { Button, buttonVariants } from '#components/ui/button.js';
 import { ClientOnly } from '#components/ui/utils/client-only.js';
 import { useFeature } from '#flags/use-feature.js';
 import { useTheme } from '#hooks/use-theme.js';
-import { playgroundExamples } from '#routes/playground/playground-examples.js';
+import { FileManagerProvider } from '#hooks/use-file-manager.js';
+import { loadPlaygroundExample, playgroundExamples } from '#routes/playground/playground-examples.js';
 import type { PlaygroundExample, PlaygroundVariant } from '#routes/playground/playground-examples.js';
+import { isProjectExampleId } from '#routes/playground/projects.js';
 import { PlaygroundPreviewPane, playgroundPreviewCapabilities } from '#routes/playground/playground-preview.js';
 import type { PlaygroundMobilePane } from '#routes/playground/playground-preview.js';
 import { playgroundShareCodec } from '#routes/playground/share-codec.js';
@@ -173,14 +175,78 @@ export function loader({ request }: Route.LoaderArgs): { activeExampleId: string
 export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}): React.JSX.Element {
   const location = useLocation();
   const loaderExampleId = props.loaderData?.activeExampleId ?? defaultExample.id;
-  const [activeExampleId, setActiveExampleId] = useState(loaderExampleId);
+  const activeExampleId = readInitialExampleIdFromSearch(new URLSearchParams(location.search), loaderExampleId);
+  const catalogExample = playgroundExamples.find((example) => example.id === activeExampleId) ?? defaultExample;
+  const [loadedExample, setLoadedExample] = useState<PlaygroundExample | undefined>(() =>
+    isProjectExampleId(activeExampleId) && catalogExample.mode !== 'static' ? undefined : catalogExample,
+  );
+  const [loadError, setLoadError] = useState<Error | undefined>();
+
+  useEffect(() => {
+    if (!isProjectExampleId(activeExampleId) || catalogExample.mode === 'static') {
+      setLoadedExample(catalogExample);
+      setLoadError(undefined);
+      return;
+    }
+
+    let cancelled = false;
+    setLoadedExample(undefined);
+    setLoadError(undefined);
+    const loadSelectedExample = async (): Promise<void> => {
+      try {
+        const example = await loadPlaygroundExample(activeExampleId);
+        if (!cancelled) {
+          setLoadedExample(example);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setLoadError(error instanceof Error ? error : new Error(String(error)));
+        }
+      }
+    };
+    void loadSelectedExample();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeExampleId, catalogExample]);
+
+  if (loadError) {
+    return (
+      <main className='flex h-dvh items-center justify-center bg-background p-6 text-foreground'>
+        <p className='max-w-lg text-sm text-destructive'>{loadError.message}</p>
+      </main>
+    );
+  }
+
+  if (!loadedExample || loadedExample.id !== activeExampleId) {
+    return (
+      <main className='flex h-dvh items-center justify-center bg-background text-sm text-muted-foreground'>
+        Loading model…
+      </main>
+    );
+  }
+
+  const playground = <PlaygroundLoaded key={loadedExample.id} baseExample={loadedExample} />;
+  if (loadedExample.mode === 'static') {
+    return playground;
+  }
+
+  return (
+    <FileManagerProvider rootDirectory='/' initialBackend='indexeddb'>
+      {playground}
+    </FileManagerProvider>
+  );
+}
+
+function PlaygroundLoaded({ baseExample }: { readonly baseExample: PlaygroundExample }): React.JSX.Element {
+  const location = useLocation();
   // Non-default kernel variant of the active project (e.g. the OpenCASCADE port of an
   // OpenSCAD original). Seeded undefined for hydration parity with the static prerender;
   // the `location.search` effect below applies any `?variant=` from the URL after mount.
   const [activeVariantId, setActiveVariantId] = useState<PlaygroundVariant['id'] | undefined>(undefined);
-  const initialExample = playgroundExamples.find((example) => example.id === activeExampleId) ?? defaultExample;
-  const [editorValue, setEditorValue] = useState(initialExample.code);
-  const [previewValue, setPreviewValue] = useState(initialExample.code);
+  const [editorValue, setEditorValue] = useState(baseExample.code);
+  const [previewValue, setPreviewValue] = useState(baseExample.code);
   const [previewVersion, setPreviewVersion] = useState(0);
   const [isCodeVisible, setIsCodeVisible] = useState(false);
   // Mobile only: which pane the segmented tabs show (the 3D viewer or the parameters).
@@ -197,7 +263,6 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
   // Kiosk / viewer-only mode: hide the editor and its toggle entirely.
   const isCodeEditorDisabled = useIsCodeEditorDisabled(location.search);
 
-  const baseExample = playgroundExamples.find((example) => example.id === activeExampleId) ?? defaultExample;
   const { activeVariant, activeRenderIdentity, projectIdSuffix } = resolveActiveVariant(baseExample, activeVariantId);
   const activeExample = useMemo(() => applyVariant(baseExample, activeVariant), [baseExample, activeVariant]);
   const isEditableExample = activeExample.mode !== 'static';
@@ -332,11 +397,8 @@ export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
-    const searchExampleId = readInitialExampleIdFromSearch(params);
-    const searchExample = playgroundExamples.find((example) => example.id === searchExampleId) ?? defaultExample;
-    setActiveExampleId(searchExampleId);
-    setActiveVariantId(readVariantIdFromSearch(params, searchExample));
-  }, [loaderExampleId, location.search]);
+    setActiveVariantId(readVariantIdFromSearch(params, baseExample));
+  }, [baseExample, location.search]);
 
   // Decode any `?p=` token from the URL into the overrides that should be applied to the preview.
   useEffect(() => {
@@ -672,13 +734,13 @@ function useIsCodeEditorDisabled(search: string): boolean {
   return isDisabledByFlag || !isEnabledByParameter;
 }
 
-function readInitialExampleIdFromSearch(params: URLSearchParams): string {
+function readInitialExampleIdFromSearch(params: URLSearchParams, fallbackId = defaultExample.id): string {
   const candidate = params.get('model') ?? params.get('example');
   if (candidate && playgroundExamples.some((example) => example.id === candidate)) {
     return candidate;
   }
 
-  return defaultExample.id;
+  return playgroundExamples.some((example) => example.id === fallbackId) ? fallbackId : defaultExample.id;
 }
 
 /** Resolve `?variant=` to a non-default variant of the example, or undefined for the default. */

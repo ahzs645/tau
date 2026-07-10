@@ -15,6 +15,11 @@
       "import": "./src/kernel-types.ts",
       "default": "./src/kernel-types.ts"
     },
+    "./kernel-type-loaders": {
+      "types": "./src/kernel-type-loaders.ts",
+      "import": "./src/kernel-type-loaders.ts",
+      "default": "./src/kernel-type-loaders.ts"
+    },
     "./kcl-reference": {
       "types": "./src/kcl-reference.ts",
       "import": "./src/kcl-reference.ts",
