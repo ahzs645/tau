@@ -1,10 +1,11 @@
 /**
- * Bounded LRU Map with entry-count-based eviction.
+ * Bounded LRU Map with entry-count and optional weight-based eviction.
  *
  * Uses the native `Map` insertion-order guarantee: on access, entries are
  * deleted and re-inserted to promote them to most-recently-used. When the
  * map exceeds `maxEntries`, the first (oldest) entry is evicted.
  *
+ * @public
  * @example <caption>Content-addressable geometry cache</caption>
  *
  * ```typescript
@@ -16,19 +17,40 @@
  * cache.set(dependencyHash, glbBuffer);
  * const hit = cache.get(dependencyHash); // promotes to MRU
  * ```
- *
- * @public
  */
 export class LruMap<V> {
-  private readonly _map = new Map<string, V>();
+  private readonly _map = new Map<string, { readonly value: V; readonly weight: number }>();
   private readonly _maxEntries: number;
+  private readonly _maxWeight: number | undefined;
+  private readonly _getWeight: ((value: V, key: string) => number) | undefined;
+  private _totalWeight = 0;
 
   /**
+   * Create an LRU cache with entry-count and optional weight limits.
+   *
    * @param options - Cache configuration.
    * @param options.maxEntries - Maximum number of entries before LRU eviction.
+   * @param options.maxWeight - Optional maximum aggregate caller-defined weight.
+   * @param options.getWeight - Returns the caller-defined weight for an entry.
    */
-  public constructor(options: { maxEntries: number }) {
+  public constructor(options: {
+    maxEntries: number;
+    maxWeight?: number;
+    getWeight?: (value: V, key: string) => number;
+  }) {
+    if (!Number.isInteger(options.maxEntries) || options.maxEntries <= 0) {
+      throw new RangeError('maxEntries must be a positive integer');
+    }
+    if (options.maxWeight !== undefined && (!Number.isFinite(options.maxWeight) || options.maxWeight <= 0)) {
+      throw new RangeError('maxWeight must be a positive finite number');
+    }
+    if ((options.maxWeight === undefined) !== (options.getWeight === undefined)) {
+      throw new TypeError('maxWeight and getWeight must be provided together');
+    }
+
     this._maxEntries = options.maxEntries;
+    this._maxWeight = options.maxWeight;
+    this._getWeight = options.getWeight;
   }
 
   /**
@@ -38,13 +60,13 @@ export class LruMap<V> {
    * @returns The cached value, or `undefined` on miss.
    */
   public get(key: string): V | undefined {
-    const value = this._map.get(key);
-    if (value === undefined) {
+    const entry = this._map.get(key);
+    if (entry === undefined) {
       return undefined;
     }
     this._map.delete(key);
-    this._map.set(key, value);
-    return value;
+    this._map.set(key, entry);
+    return entry.value;
   }
 
   /**
@@ -55,30 +77,43 @@ export class LruMap<V> {
    * @returns The cached value, or `undefined` on miss.
    */
   public peek(key: string): V | undefined {
-    return this._map.get(key);
+    return this._map.get(key)?.value;
   }
 
   /**
    * Insert or update a cache entry. If the cache exceeds `maxEntries`,
    * the least-recently-used entry is evicted.
    *
+   * Oversized entries are rejected after removing any previous value stored at
+   * the same key, keeping the configured weight bound invariant intact.
+   *
    * @param key - Cache key.
    * @param value - Value to cache.
+   * @returns `true` when the value was retained, or `false` when it exceeded `maxWeight`.
    */
-  public set(key: string, value: V): void {
-    if (this._map.has(key)) {
-      this._map.delete(key);
+  public set(key: string, value: V): boolean {
+    this.delete(key);
+
+    const weight = this._getWeight?.(value, key) ?? 0;
+    if (!Number.isFinite(weight) || weight < 0) {
+      throw new RangeError('getWeight must return a non-negative finite number');
+    }
+    if (this._maxWeight !== undefined && weight > this._maxWeight) {
+      return false;
     }
 
-    while (this._map.size >= this._maxEntries) {
-      const first = this._map.keys().next();
-      if (first.done) {
-        break;
+    while (
+      this._map.size >= this._maxEntries ||
+      (this._maxWeight !== undefined && this._totalWeight + weight > this._maxWeight)
+    ) {
+      if (!this.deleteLeastRecentlyUsed()) {
+        return false;
       }
-      this._map.delete(first.value);
     }
 
-    this._map.set(key, value);
+    this._map.set(key, { value, weight });
+    this._totalWeight += weight;
+    return true;
   }
 
   /**
@@ -88,6 +123,12 @@ export class LruMap<V> {
    * @returns `true` if the entry existed and was removed.
    */
   public delete(key: string): boolean {
+    const entry = this._map.get(key);
+    if (!entry) {
+      return false;
+    }
+
+    this._totalWeight -= entry.weight;
     return this._map.delete(key);
   }
 
@@ -104,11 +145,35 @@ export class LruMap<V> {
   /** Remove all entries from the cache. */
   public clear(): void {
     this._map.clear();
+    this._totalWeight = 0;
   }
 
-  /** Number of entries currently in the cache. */
+  /**
+   * Number of entries currently in the cache.
+   *
+   * @returns The retained entry count.
+   */
   public get size(): number {
     return this._map.size;
+  }
+
+  /**
+   * Aggregate caller-defined weight of all retained entries.
+   *
+   * @returns The current aggregate weight.
+   */
+  public get totalWeight(): number {
+    return this._totalWeight;
+  }
+
+  /**
+   * Evict the least-recently-used entry.
+   *
+   * @returns `true` when an entry was removed.
+   */
+  private deleteLeastRecentlyUsed(): boolean {
+    const first = this._map.keys().next();
+    return first.done ? false : this.delete(first.value);
   }
 }
 
@@ -124,6 +189,7 @@ export class LruMap<V> {
  * @param factory - Async function that produces the singleton value.
  * @returns A function that returns the cached or in-flight promise.
  *
+ * @public
  * @example <caption>WASM module singleton</caption>
  *
  * ```typescript
@@ -134,8 +200,6 @@ export class LruMap<V> {
  * const io = await getNodeIo(); // first call: inits
  * const io2 = await getNodeIo(); // same instance
  * ```
- *
- * @public
  */
 export const lazyAsync = <T>(factory: () => Promise<T>): (() => Promise<T>) => {
   let cached: Promise<T> | undefined;

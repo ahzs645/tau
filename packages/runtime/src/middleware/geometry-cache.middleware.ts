@@ -26,6 +26,30 @@ import type { KernelFileSystem } from '#types/runtime-kernel.types.js';
 import type { KernelSuccessResult } from '#types/runtime.types.js';
 import { defineMiddleware } from '#middleware/runtime-middleware.js';
 
+const mebibyte = 1024 * 1024;
+const geometryMemoryCacheMaxBytes = 100 * mebibyte;
+const geometryFilesystemCacheMaxBytes = 512 * mebibyte;
+
+function geometryResultByteLength(result: KernelSuccessResult<GeometryResponse[]>): number {
+  let byteLength = 0;
+  for (const geometry of result.data) {
+    switch (geometry.format) {
+      case 'gltf': {
+        byteLength += geometry.content.byteLength;
+        break;
+      }
+      case 'svg': {
+        byteLength += geometry.paths.reduce((total, path) => total + path.length * 2, 0);
+        break;
+      }
+      case 'webrtc': {
+        break;
+      }
+    }
+  }
+  return byteLength;
+}
+
 /**
  * In-memory L1 cache for deserialized geometry results.
  * Module-scoped so each worker gets its own cache.
@@ -33,7 +57,11 @@ import { defineMiddleware } from '#middleware/runtime-middleware.js';
  * Exported for test isolation (`beforeEach` → `.clear()`).
  * @public
  */
-export const geometryMemoryCache = new LruMap<KernelSuccessResult<GeometryResponse[]>>({ maxEntries: 20 });
+export const geometryMemoryCache = new LruMap<KernelSuccessResult<GeometryResponse[]>>({
+  maxEntries: 20,
+  maxWeight: geometryMemoryCacheMaxBytes,
+  getWeight: geometryResultByteLength,
+});
 
 /**
  * Cache entry structure for MessagePack serialization.
@@ -157,12 +185,14 @@ function hasVideoStreamGeometry(geometries: readonly GeometryResponse[]): boolea
 
 /**
  * Clean up old cache entries to prevent unbounded cache growth.
- * Deletes entries older than `maxAge` and keeps only `maxEntries` most recent files.
+ * Deletes entries older than `maxAge`, then evicts the oldest files until both
+ * the entry-count and aggregate-byte limits are satisfied.
  */
 async function cleanupOldCacheEntries({
   filesystem,
   cacheDirectory,
   maxAge,
+  maxBytes,
   maxEntries,
 }: {
   /** The filesystem for file operations */
@@ -171,6 +201,8 @@ async function cleanupOldCacheEntries({
   cacheDirectory: string;
   /** Maximum age for cache entries. Milliseconds. */
   maxAge: number;
+  /** Maximum aggregate size of cache entries. Bytes. */
+  maxBytes: number;
   /** Maximum number of cache entries to keep */
   maxEntries: number;
 }): Promise<void> {
@@ -185,35 +217,33 @@ async function cleanupOldCacheEntries({
     }
 
     const now = Date.now();
-    const filesToDelete: string[] = [];
+    const filesToDelete = new Set<string>();
 
     // First pass: identify files older than maxAge
     for (const file of cacheFiles) {
       const age = now - file.mtimeMs;
       if (age > maxAge) {
-        filesToDelete.push(file.path);
+        filesToDelete.add(file.path);
       }
     }
 
-    // Second pass: if still over maxEntries, delete oldest files
-    const remainingFiles = cacheFiles.filter((file) => !filesToDelete.includes(file.path));
+    // Second pass: if still over either capacity limit, delete oldest files.
+    const remainingFiles = cacheFiles
+      .filter((file) => !filesToDelete.has(file.path))
+      .sort((a, b) => a.mtimeMs - b.mtimeMs);
+    let remainingBytes = remainingFiles.reduce((total, file) => total + file.size, 0);
 
-    if (remainingFiles.length > maxEntries) {
-      // Sort by modification time (oldest first)
-      remainingFiles.sort((a, b) => a.mtimeMs - b.mtimeMs);
-
-      // Delete oldest files to get under maxEntries
-      const excessCount = remainingFiles.length - maxEntries;
-      for (let index = 0; index < excessCount; index++) {
-        const file = remainingFiles[index];
-        if (file) {
-          filesToDelete.push(file.path);
-        }
+    while (remainingFiles.length > maxEntries || remainingBytes > maxBytes) {
+      const file = remainingFiles.shift();
+      if (!file) {
+        break;
       }
+      filesToDelete.add(file.path);
+      remainingBytes -= file.size;
     }
 
     // Delete identified files
-    await Promise.all(filesToDelete.map(async (path) => filesystem.unlink(path)));
+    await Promise.all([...filesToDelete].map(async (path) => filesystem.unlink(path)));
   } catch {
     // Cleanup errors are non-fatal - silently ignore
   }
@@ -234,12 +264,16 @@ async function cleanupOldCacheEntries({
  */
 export const geometryCacheMiddleware = defineMiddleware({
   name: 'GeometryCache',
-  version: '1.0.0',
+  version: '1.1.0',
 
   optionsSchema: z.object({
-    maxEntries: z.number().default(100),
+    maxEntries: z.number().int().positive().default(100),
+    maxBytes: z.number().int().positive().default(geometryFilesystemCacheMaxBytes),
     /** Maximum age for cache entries. Milliseconds. */
-    maxAge: z.number().default(7 * 24 * 60 * 60 * 1000),
+    maxAge: z
+      .number()
+      .nonnegative()
+      .default(7 * 24 * 60 * 60 * 1000),
   }),
 
   async wrapCreateGeometry(input, handler, { logger, filesystem, dependencyHash, options }) {
@@ -260,8 +294,8 @@ export const geometryCacheMiddleware = defineMiddleware({
       logger.debug(`Cache hit for ${cacheKey}`);
 
       const result = deserializeResult(cachedData);
-      geometryMemoryCache.set(cacheKey, result);
-      return cloneResultForDelivery(result);
+      const retainedInMemory = geometryMemoryCache.set(cacheKey, result);
+      return retainedInMemory ? cloneResultForDelivery(result) : result;
     } catch (error) {
       logger.debug(`Cache miss for ${cacheKey}: ${String(error)}`);
     }
@@ -270,28 +304,31 @@ export const geometryCacheMiddleware = defineMiddleware({
     const result = await handler(input);
 
     // Write back to L2 and populate L1 (skip webrtc for both)
-    let cached = false;
+    let retainedInMemory = false;
     if (result.success && result.data.length > 0) {
       if (hasVideoStreamGeometry(result.data)) {
         logger.debug(`Skipping cache for ${cacheKey}: contains webrtc geometry`);
       } else {
-        geometryMemoryCache.set(cacheKey, result);
-        cached = true;
+        retainedInMemory = geometryMemoryCache.set(cacheKey, result);
 
         try {
-          const cacheDirectory = getCacheDirectory(basePath);
-          await filesystem.ensureDir(cacheDirectory);
-
           const serialized = serializeResult(result);
-          await filesystem.writeFile(cachePath, serialized);
-          logger.debug(`Cached ${result.data.length} geometries at ${cacheKey}`);
+          if (serialized.byteLength > options.maxBytes) {
+            logger.debug(`Skipping filesystem cache for ${cacheKey}: entry exceeds maxBytes`);
+          } else {
+            const cacheDirectory = getCacheDirectory(basePath);
+            await filesystem.ensureDir(cacheDirectory);
+            await filesystem.writeFile(cachePath, serialized);
+            logger.debug(`Cached ${result.data.length} geometries at ${cacheKey}`);
 
-          await cleanupOldCacheEntries({
-            filesystem,
-            cacheDirectory,
-            maxAge: options.maxAge,
-            maxEntries: options.maxEntries,
-          });
+            await cleanupOldCacheEntries({
+              filesystem,
+              cacheDirectory,
+              maxAge: options.maxAge,
+              maxBytes: options.maxBytes,
+              maxEntries: options.maxEntries,
+            });
+          }
         } catch (error) {
           logger.warn(`Cache write error for ${cacheKey}: ${String(error)}`);
         }
@@ -300,6 +337,6 @@ export const geometryCacheMiddleware = defineMiddleware({
 
     // When the result is retained by the L1 cache, hand the caller a copy so
     // the downstream transfer tier never detaches the cached buffer.
-    return cached && result.success ? cloneResultForDelivery(result) : result;
+    return retainedInMemory && result.success ? cloneResultForDelivery(result) : result;
   },
 });

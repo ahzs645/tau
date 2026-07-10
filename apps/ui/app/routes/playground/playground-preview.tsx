@@ -1,6 +1,6 @@
 import type { ReactNode, RefCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ChevronDown, Download } from 'lucide-react';
 import type { FileExtension, Geometry } from '@taucad/types';
 import { downloadBlob } from '@taucad/utils/file';
@@ -31,14 +31,15 @@ type PlaygroundPreviewPaneProps = {
   readonly activeExample: PlaygroundExample;
   readonly cachedGeometries: readonly Geometry[] | undefined;
   readonly files: Record<string, { content: Uint8Array<ArrayBuffer> }>;
-  readonly pendingParameters: Record<string, unknown> | undefined;
+  readonly isInteractive: boolean;
+  readonly parameters: Record<string, unknown>;
   readonly previewGeometryCacheKey: string;
   readonly previewProjectId: string;
   readonly previewRenderKey: string;
   readonly staticPreviewUrl: string | undefined;
   readonly mobilePane: PlaygroundMobilePane;
   readonly exportControlsElement: HTMLDivElement | undefined;
-  readonly onGeometriesReady: (geometries: readonly Geometry[]) => void;
+  readonly onGeometriesReady: (geometries: readonly Geometry[], parameters: Record<string, unknown>) => void;
   readonly onParametersChange: (parameters: Record<string, unknown>) => void;
 };
 
@@ -53,7 +54,8 @@ export function PlaygroundPreviewPane({
   activeExample,
   cachedGeometries,
   files,
-  pendingParameters,
+  isInteractive,
+  parameters,
   previewGeometryCacheKey,
   previewProjectId,
   previewRenderKey,
@@ -125,52 +127,60 @@ export function PlaygroundPreviewPane({
     );
   }
 
+  const previewSection = (
+    <section
+      className={cn(
+        'flex min-w-0 flex-col xl:min-h-0 xl:border-r',
+        mobilePane === '3d' ? 'max-xl:flex-1' : 'max-xl:hidden',
+      )}
+    >
+      <div className='relative min-h-0 flex-1 bg-muted/30'>
+        {displayGeometries.length === 0 && !displayError && staticPreviewUrl ? (
+          <StaticPreviewViewer
+            className='size-full'
+            enablePan
+            enableZoom
+            staticPreviewUrl={staticPreviewUrl}
+            stageOptions={{ zoomLevel: 1.25 }}
+            graphicsOptions={{
+              enableLines: activeExample.showPreviewLines ?? true,
+              viewerClassName: 'bg-muted/30',
+            }}
+          />
+        ) : (
+          <ModelViewer
+            geometries={displayGeometries}
+            className='size-full'
+            enablePan
+            enableZoom
+            stageOptions={{ zoomLevel: 1.25 }}
+            graphicsOptions={{
+              enableLines: activeExample.showPreviewLines ?? true,
+              viewerClassName: 'bg-muted/30',
+            }}
+            error={displayError}
+          />
+        )}
+        <RenderStatusOverlay
+          status={displayStatus === 'loading' && displayGeometries.length === 0 ? 'loading' : 'idle'}
+          className='absolute top-3 left-3'
+        />
+
+        {/* Mobile export: lives on the viewer instead of the crowded header. */}
+        {activeExample.exportFormats.length > 0 ? (
+          <div ref={setMobileExportControlsRef} className='absolute right-3 bottom-3 z-10 xl:hidden' />
+        ) : null}
+      </div>
+    </section>
+  );
+
+  if (!isInteractive) {
+    return previewSection;
+  }
+
   return (
     <SharedWorkerGate>
-      <section
-        className={cn(
-          'flex min-w-0 flex-col xl:min-h-0 xl:border-r',
-          mobilePane === '3d' ? 'max-xl:flex-1' : 'max-xl:hidden',
-        )}
-      >
-        <div className='relative min-h-0 flex-1 bg-muted/30'>
-          {displayGeometries.length === 0 && !displayError && staticPreviewUrl ? (
-            <StaticPreviewViewer
-              className='size-full'
-              enablePan
-              enableZoom
-              staticPreviewUrl={staticPreviewUrl}
-              stageOptions={{ zoomLevel: 1.25 }}
-              graphicsOptions={{
-                enableLines: activeExample.showPreviewLines ?? true,
-                viewerClassName: 'bg-muted/30',
-              }}
-            />
-          ) : (
-            <ModelViewer
-              geometries={displayGeometries}
-              className='size-full'
-              enablePan
-              enableZoom
-              stageOptions={{ zoomLevel: 1.25 }}
-              graphicsOptions={{
-                enableLines: activeExample.showPreviewLines ?? true,
-                viewerClassName: 'bg-muted/30',
-              }}
-              error={displayError}
-            />
-          )}
-          <RenderStatusOverlay
-            status={displayStatus === 'loading' && displayGeometries.length === 0 ? 'loading' : 'idle'}
-            className='absolute top-3 left-3'
-          />
-
-          {/* Mobile export: lives on the viewer instead of the crowded header. */}
-          {activeExample.exportFormats.length > 0 ? (
-            <div ref={setMobileExportControlsRef} className='absolute right-3 bottom-3 z-10 xl:hidden' />
-          ) : null}
-        </div>
-      </section>
+      {previewSection}
 
       <FileManagerProvider
         key={previewProjectId}
@@ -183,7 +193,7 @@ export function PlaygroundPreviewPane({
           projectId={previewProjectId}
           mainFile={activeExample.mainFile}
           files={files}
-          parameters={activeExample.initialParameters}
+          parameters={parameters}
           renderTimeout={activeExample.renderTimeout}
           renderOptions={activeExample.renderOptions}
         >
@@ -212,7 +222,7 @@ export function PlaygroundPreviewPane({
             onGeometriesReady={onGeometriesReady}
             onPreviewStateChange={handlePreviewStateChange}
           />
-          <PlaygroundParameterBridge pendingParameters={pendingParameters} onParametersChange={onParametersChange} />
+          <PlaygroundParameterBridge onParametersChange={onParametersChange} />
 
           <section
             className={cn(
@@ -234,60 +244,42 @@ function PlaygroundPreviewStateBridge({
   onGeometriesReady,
   onPreviewStateChange,
 }: {
-  readonly onGeometriesReady: (geometries: readonly Geometry[]) => void;
+  readonly onGeometriesReady: (geometries: readonly Geometry[], parameters: Record<string, unknown>) => void;
   readonly onPreviewStateChange: (snapshot: {
     readonly error: Error | undefined;
     readonly geometries: readonly Geometry[];
     readonly status: CadPreviewStatus;
   }) => void;
 }): ReactNode {
-  const { error, geometries, status } = useCadPreview();
+  const { error, geometries, parameters, status } = useCadPreview();
 
   useEffect(() => {
     onPreviewStateChange({ error, geometries, status });
 
     if (status === 'ready' && geometries.length > 0) {
-      onGeometriesReady(geometries);
+      onGeometriesReady(geometries, parameters);
     }
-  }, [error, geometries, status, onGeometriesReady, onPreviewStateChange]);
+  }, [error, geometries, parameters, status, onGeometriesReady, onPreviewStateChange]);
 
   return undefined;
 }
 
 /**
  * Bridges the preview's live parameter overrides out to the header (where the Share button lives,
- * outside the provider) and applies any overrides decoded from a shared `?p=` token once the kernel
- * is ready. Renders nothing.
+ * outside the provider). Renders nothing.
  */
 function PlaygroundParameterBridge({
-  pendingParameters,
   onParametersChange,
 }: {
-  readonly pendingParameters: Record<string, unknown> | undefined;
   readonly onParametersChange: (parameters: Record<string, unknown>) => void;
 }): ReactNode {
-  const { parameters, setParameters, status } = useCadPreview();
+  const { parameters } = useCadPreview();
   const liveParameters = parameters;
 
   // Surface the live overrides to the header so Share can encode them.
   useEffect(() => {
     onParametersChange(liveParameters);
   }, [liveParameters, onParametersChange]);
-
-  // Apply decoded shared parameters exactly once per distinct token, after the kernel is ready.
-  const appliedRef = useRef<Record<string, unknown> | undefined>(undefined);
-  useEffect(() => {
-    if (status !== 'ready' || !pendingParameters || appliedRef.current === pendingParameters) {
-      return;
-    }
-
-    if (Object.keys(pendingParameters).length === 0) {
-      return;
-    }
-
-    appliedRef.current = pendingParameters;
-    setParameters(pendingParameters);
-  }, [pendingParameters, status, setParameters]);
 
   return undefined;
 }

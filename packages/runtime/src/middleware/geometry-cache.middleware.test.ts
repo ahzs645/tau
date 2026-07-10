@@ -41,7 +41,13 @@ function createSerializedCacheContent(
  * Create input and runtime for cache testing.
  */
 
-type GeometryCacheOptions = { maxEntries: number; maxAge: number };
+type GeometryCacheOptions = { maxBytes: number; maxEntries: number; maxAge: number };
+
+const defaultGeometryCacheOptions: GeometryCacheOptions = {
+  maxBytes: 512 * 1024 * 1024,
+  maxEntries: 100,
+  maxAge: 7 * 24 * 60 * 60 * 1000,
+};
 
 function createCacheTestContext(options?: {
   cacheExists?: boolean;
@@ -68,10 +74,7 @@ function createCacheTestContext(options?: {
     },
     dependencies: options?.dependencies ?? createMockDependencies(),
     dependencyHash: options?.dependencyHash ?? 'a'.repeat(64),
-    options: options?.cacheOptions ?? {
-      maxEntries: 100,
-      maxAge: 7 * 24 * 60 * 60 * 1000,
-    },
+    options: options?.cacheOptions ?? defaultGeometryCacheOptions,
   });
 
   return {
@@ -160,7 +163,7 @@ describe('geometryCacheMiddleware', () => {
           },
           dependencies: createMockDependencies(),
           dependencyHash: 'a'.repeat(64),
-          options: { maxEntries: 100, maxAge: 7 * 24 * 60 * 60 * 1000 },
+          options: defaultGeometryCacheOptions,
         });
 
         const input = createMockInput();
@@ -536,6 +539,50 @@ describe('geometryCacheMiddleware', () => {
         expect(runtime.filesystem.mocks.unlink).toHaveBeenCalledTimes(2);
       });
 
+      it('should delete oldest cache entries when over the aggregate byte limit', async () => {
+        const now = Date.now();
+        const { input, runtime } = createCacheTestContext({
+          cacheExists: false,
+          cacheOptions: { ...defaultGeometryCacheOptions, maxBytes: 250 },
+        });
+        const cacheDirectory = '/projects/test-build/.tau/cache/geometry';
+        runtime.filesystem.mocks.readdirStat.mockResolvedValue([
+          {
+            path: `${cacheDirectory}/oldest.bin`,
+            name: 'oldest.bin',
+            type: 'file',
+            size: 150,
+            mtimeMs: now - 2000,
+          },
+          {
+            path: `${cacheDirectory}/newest.bin`,
+            name: 'newest.bin',
+            type: 'file',
+            size: 150,
+            mtimeMs: now - 1000,
+          },
+        ]);
+        const handler = createMockCreateGeometryHandler(createGltfSuccessResult(new Uint8Array([1, 2, 3])));
+
+        await geometryCacheMiddleware.wrapCreateGeometry!(input, handler, runtime);
+
+        expect(runtime.filesystem.mocks.unlink).toHaveBeenCalledOnce();
+        expect(runtime.filesystem.mocks.unlink).toHaveBeenCalledWith(`${cacheDirectory}/oldest.bin`);
+      });
+
+      it('should not write a single entry larger than the filesystem byte limit', async () => {
+        const { input, runtime } = createCacheTestContext({
+          cacheExists: false,
+          cacheOptions: { ...defaultGeometryCacheOptions, maxBytes: 2 },
+        });
+        const handler = createMockCreateGeometryHandler(createGltfSuccessResult(new Uint8Array([1, 2, 3])));
+
+        await geometryCacheMiddleware.wrapCreateGeometry!(input, handler, runtime);
+
+        expect(runtime.filesystem.mocks.writeFile).not.toHaveBeenCalled();
+        expect(runtime.logger.debug).toHaveBeenCalledWith(expect.stringContaining('entry exceeds maxBytes'));
+      });
+
       it('should handle cleanup errors gracefully', async () => {
         const { input, runtime } = createCacheTestContext({
           cacheExists: false,
@@ -570,7 +617,7 @@ describe('geometryCacheMiddleware', () => {
         },
         dependencies: createMockDependencies(),
         dependencyHash,
-        options: { maxEntries: 100, maxAge: 7 * 24 * 60 * 60 * 1000 },
+        options: defaultGeometryCacheOptions,
       });
 
       const input = createMockInput();
@@ -598,7 +645,7 @@ describe('geometryCacheMiddleware', () => {
         },
         dependencies: createMockDependencies([{ type: 'parameter', parameters: { key: 'newParams123' } }]),
         dependencyHash,
-        options: { maxEntries: 100, maxAge: 7 * 24 * 60 * 60 * 1000 },
+        options: defaultGeometryCacheOptions,
       });
 
       const input = createMockInput();
@@ -626,7 +673,7 @@ describe('geometryCacheMiddleware', () => {
         },
         dependencies: createMockDependencies([{ type: 'parameter', parameters: { key: 'sameParams' } }]),
         dependencyHash,
-        options: { maxEntries: 100, maxAge: 7 * 24 * 60 * 60 * 1000 },
+        options: defaultGeometryCacheOptions,
       });
 
       const input = createMockInput();
@@ -843,7 +890,7 @@ describe('geometryCacheMiddleware', () => {
         },
         dependencies: createMockDependencies(),
         dependencyHash: 'a'.repeat(64),
-        options: { maxEntries: 100, maxAge: 7 * 24 * 60 * 60 * 1000 },
+        options: defaultGeometryCacheOptions,
       });
       const input = createMockInput();
       const handler = createMockCreateGeometryHandler();

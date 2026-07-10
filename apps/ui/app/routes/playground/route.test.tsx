@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
+import { useEffect } from 'react';
 import type { FileExtension, Geometry } from '@taucad/types';
 import PlaygroundRoot, { loader as playgroundRootLoader } from '#routes/playground/route.js';
 import { playgroundShareCodec } from '#routes/playground/share-codec.js';
@@ -27,6 +28,7 @@ const {
   mockToastSuccess,
   mockWriteText,
   fileManagerCalls,
+  providerMountCalls,
   providerCalls,
   viewerCalls,
   resetProviderCalls,
@@ -69,6 +71,12 @@ const {
       mainFile: string;
       files: Record<string, { content: Uint8Array<ArrayBuffer> }>;
     }>,
+    providerMountCalls: [] as Array<{
+      projectId: string;
+      mainFile: string;
+      parameters: Record<string, unknown>;
+      files: Record<string, { content: Uint8Array<ArrayBuffer> }>;
+    }>,
     viewerCalls: [] as Array<{
       graphicsOptions: { readonly enableLines?: boolean } | undefined;
       fallbackGeometries: readonly Geometry[] | undefined;
@@ -84,6 +92,7 @@ const {
       mockWriteText.mockClear();
       fileManagerCalls.length = 0;
       providerCalls.length = 0;
+      providerMountCalls.length = 0;
       viewerCalls.length = 0;
       state.parameters = {};
       state.geometries = [{ format: 'gltf', content: new Uint8Array([1]), hash: 'mock-geometry' }];
@@ -213,14 +222,20 @@ vi.mock('#hooks/use-cad-preview.js', () => ({
     children,
     files,
     mainFile,
+    parameters,
     projectId,
   }: {
     readonly children: React.ReactNode;
     readonly files: Record<string, { content: Uint8Array<ArrayBuffer> }>;
     readonly mainFile: string;
+    readonly parameters: Record<string, unknown>;
     readonly projectId: string;
   }) {
     providerCalls.push({ files, mainFile, projectId });
+    useEffect(() => {
+      providerMountCalls.push({ files, mainFile, parameters, projectId });
+      // oxlint-disable-next-line react-hooks/exhaustive-deps -- Record only the props that started a provider actor.
+    }, []);
     return <div data-testid='cad-preview-provider'>{children}</div>;
   },
   useCadPreview() {
@@ -311,8 +326,8 @@ describe('PlaygroundRoot', () => {
     expect(screen.getAllByRole('button', { name: 'Code' })[0]!.getAttribute('aria-pressed')).toBe('false');
     expect(screen.queryByLabelText('Code editor')).toBeNull();
     expect(screen.getByTestId('cad-preview-viewer')).toBeDefined();
-    expect(screen.getByTestId('preview-parameters')).toBeDefined();
-    expect(screen.getByRole('button', { name: 'Wide' })).toBeDefined();
+    expect(await screen.findByTestId('preview-parameters')).toBeDefined();
+    expect(await screen.findByRole('button', { name: 'Wide' })).toBeDefined();
 
     fireEvent.click(screen.getAllByRole('button', { name: 'Code' })[0]!);
     expect(await screen.findByLabelText('Code editor')).toBeDefined();
@@ -372,9 +387,89 @@ describe('PlaygroundRoot', () => {
       expect(providerCalls.at(-1)?.projectId).toBe('root-playground-pre-chamber-nozzle-insert-opencascade');
     });
     expect(providerCalls.at(-1)?.mainFile).toBe('main.occt.ts');
+    expect(providerMountCalls).toHaveLength(1);
+    expect(providerMountCalls[0]?.projectId).toBe('root-playground-pre-chamber-nozzle-insert-opencascade');
+    expect(providerMountCalls[0]?.mainFile).toBe('main.occt.ts');
+    expect(new TextDecoder().decode(providerMountCalls[0]?.files['main.occt.ts']?.content)).toContain('opencascade.js');
     await waitFor(() => {
       expect(viewerCalls.at(-1)?.graphicsOptions?.enableLines).toBe(true);
     });
+  });
+
+  it('mounts each switched kernel once with that variant source already synchronized', async () => {
+    globalThis.history.replaceState({}, '', '/?model=vane-trap');
+
+    renderPlaygroundRoot();
+
+    await waitFor(() => {
+      expect(providerMountCalls).toHaveLength(1);
+    });
+    expect(providerMountCalls[0]?.projectId).toBe('root-playground-vane-trap');
+    expect(providerMountCalls[0]?.mainFile).toBe('main.scad');
+
+    fireEvent.click(screen.getByRole('button', { name: 'OpenCASCADE' }));
+
+    await waitFor(() => {
+      expect(providerMountCalls).toHaveLength(2);
+    });
+    const openCascadeMount = providerMountCalls[1];
+    expect(openCascadeMount?.projectId).toBe('root-playground-vane-trap-opencascade');
+    expect(openCascadeMount?.mainFile).toBe('main.occt.ts');
+    expect(new TextDecoder().decode(openCascadeMount?.files['main.occt.ts']?.content)).toContain('opencascade.js');
+  });
+
+  it('preserves independently edited source for each kernel variant', async () => {
+    globalThis.history.replaceState({}, '', '/?model=vane-trap&editor=on');
+
+    renderPlaygroundRoot();
+
+    const codeButtons = await screen.findAllByRole('button', { name: 'Code' });
+    fireEvent.click(codeButtons[0]!);
+    const editor = await screen.findByLabelText('Code editor');
+    fireEvent.change(editor, { target: { value: 'cube([11, 12, 13]);' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'OpenCASCADE' }));
+    await waitFor(() => {
+      expect(readCodeEditorValue()).not.toBe('cube([11, 12, 13]);');
+    });
+    fireEvent.change(screen.getByLabelText('Code editor'), {
+      target: { value: "import opencascade from 'opencascade.js';\n// edited OCCT" },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'OpenSCAD' }));
+    await waitFor(() => {
+      expect(readCodeEditorValue()).toBe('cube([11, 12, 13]);');
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'OpenCASCADE' }));
+    await waitFor(() => {
+      expect(readCodeEditorValue()).toBe("import opencascade from 'opencascade.js';\n// edited OCCT");
+    });
+  });
+
+  it('restores each variant parameters before mounting its provider', async () => {
+    globalThis.history.replaceState({}, '', '/?model=vane-trap');
+    mockState.parameters = { slotClearance: 0.3 };
+
+    renderPlaygroundRoot();
+
+    await waitFor(() => {
+      expect(new URL(globalThis.location.href).searchParams.get('p')).toBeTruthy();
+    });
+
+    mockState.parameters = {};
+    fireEvent.click(screen.getByRole('button', { name: 'OpenCASCADE' }));
+    await waitFor(() => {
+      expect(providerMountCalls.at(-1)?.projectId).toBe('root-playground-vane-trap-opencascade');
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'OpenSCAD' }));
+    await waitFor(() => {
+      expect(providerMountCalls.at(-1)?.projectId).toBe('root-playground-vane-trap');
+    });
+    expect(providerMountCalls.at(-1)?.parameters).toEqual({ slotClearance: 0.3 });
   });
 
   it('shows cached variant geometry immediately when switching back', async () => {
@@ -525,6 +620,10 @@ describe('PlaygroundRoot', () => {
 
     renderPlaygroundRoot();
 
+    await waitFor(() => {
+      expect(new URLSearchParams(globalThis.location.search).get('p')).toBeTruthy();
+    });
+
     fireEvent.click(screen.getAllByRole('button', { name: 'Share' })[0]!);
 
     await waitFor(() => {
@@ -572,7 +671,7 @@ describe('PlaygroundRoot', () => {
     globalThis.history.replaceState({}, '', '/?model=replicad-tray');
 
     renderPlaygroundRoot();
-    fireEvent.click(screen.getByRole('button', { name: 'Solid block' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Solid block' }));
 
     expect(mockSetParameters).toHaveBeenCalledWith({
       width: 70,
@@ -589,7 +688,8 @@ describe('PlaygroundRoot', () => {
     renderPlaygroundRoot();
 
     // Export controls render twice (desktop header portal + mobile viewer overlay); either works.
-    fireEvent.click(screen.getAllByRole('button', { name: 'GLB' })[0]!);
+    const glbButtons = await screen.findAllByRole('button', { name: 'GLB' });
+    fireEvent.click(glbButtons[0]!);
 
     await waitFor(() => {
       expect(mockCadSend).toHaveBeenCalledWith({
@@ -605,7 +705,8 @@ describe('PlaygroundRoot', () => {
     globalThis.history.replaceState({}, '', '/?model=opencascade-box');
 
     renderPlaygroundRoot();
-    fireEvent.click(screen.getAllByRole('button', { name: 'STEP' })[0]!);
+    const stepButtons = await screen.findAllByRole('button', { name: 'STEP' });
+    fireEvent.click(stepButtons[0]!);
 
     await waitFor(() => {
       expect(mockCadSend).toHaveBeenCalledWith({
@@ -628,4 +729,12 @@ function renderPlaygroundRoot(): ReturnType<typeof render> {
       <PlaygroundRoot loaderData={loaderData} />
     </MemoryRouter>,
   );
+}
+
+function readCodeEditorValue(): string {
+  const editor = screen.getByLabelText('Code editor');
+  if (!(editor instanceof HTMLTextAreaElement)) {
+    throw new TypeError('Expected the code editor mock to render a textarea');
+  }
+  return editor.value;
 }

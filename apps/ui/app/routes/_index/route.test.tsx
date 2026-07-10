@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import PlaygroundGallery from '#routes/_index/route.js';
 
@@ -23,13 +23,35 @@ describe('PlaygroundGallery', () => {
     );
   });
 
-  it('exposes a per-kernel engine filter including Replicad', () => {
+  it('exposes a per-kernel engine filter including variant-only kernels', () => {
     renderGallery();
 
     // Both kernels present in the gallery get their own filter chip.
     expect(screen.getByRole('button', { name: 'OpenSCAD' })).toBeDefined();
+    expect(screen.getByRole('button', { name: 'OpenCascade' })).toBeDefined();
     expect(screen.getByRole('button', { name: 'Replicad' })).toBeDefined();
     expect(screen.getByRole('button', { name: 'Static' })).toBeDefined();
+  });
+
+  it('shows every supported kernel on dual-kernel cards', () => {
+    renderGallery();
+
+    const rackCard = screen.getByRole('heading', { name: '3D Rack System' }).closest('article');
+    expect(rackCard).not.toBeNull();
+    expect(within(rackCard!).getByLabelText('Engines: OpenSCAD, OpenCascade')).toBeDefined();
+  });
+
+  it('matches and filters against kernels supplied only by variants', () => {
+    renderGallery();
+
+    fireEvent.change(screen.getByLabelText('Search gallery'), { target: { value: 'OpenCascade' } });
+    expect(screen.getByRole('heading', { name: '3D Rack System' })).toBeDefined();
+    expect(screen.queryByRole('heading', { name: 'Network Equipment Rack' })).toBeNull();
+
+    fireEvent.change(screen.getByLabelText('Search gallery'), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'OpenCascade' }));
+    expect(screen.getByRole('heading', { name: '3D Rack System' })).toBeDefined();
+    expect(screen.queryByRole('heading', { name: 'Network Equipment Rack' })).toBeNull();
   });
 
   it('filters gallery models by search and engine', () => {

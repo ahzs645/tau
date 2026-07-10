@@ -127,6 +127,71 @@ describe('LruMap', () => {
     expect(cache.get('b')).toBe('second');
     expect(cache.size).toBe(1);
   });
+
+  it('should evict least-recently-used entries to stay within maxWeight', () => {
+    const cache = new LruMap<string>({
+      maxEntries: 10,
+      maxWeight: 7,
+      getWeight: (value) => value.length,
+    });
+    cache.set('a', 'aaa');
+    cache.set('b', 'bb');
+    cache.set('c', 'cc');
+
+    cache.get('a');
+    cache.set('d', 'ddd');
+
+    expect(cache.get('a')).toBe('aaa');
+    expect(cache.get('b')).toBeUndefined();
+    expect(cache.get('c')).toBeUndefined();
+    expect(cache.get('d')).toBe('ddd');
+    expect(cache.totalWeight).toBe(6);
+  });
+
+  it('should reject entries larger than maxWeight', () => {
+    const cache = new LruMap<string>({
+      maxEntries: 10,
+      maxWeight: 3,
+      getWeight: (value) => value.length,
+    });
+
+    expect(cache.set('oversized', 'four')).toBe(false);
+    expect(cache.get('oversized')).toBeUndefined();
+    expect(cache.size).toBe(0);
+    expect(cache.totalWeight).toBe(0);
+  });
+
+  it('should update totalWeight when overwriting, deleting, and clearing entries', () => {
+    const cache = new LruMap<string>({
+      maxEntries: 10,
+      maxWeight: 20,
+      getWeight: (value) => value.length,
+    });
+    cache.set('a', 'aaa');
+    cache.set('b', 'bb');
+    expect(cache.totalWeight).toBe(5);
+
+    cache.set('a', 'a');
+    expect(cache.totalWeight).toBe(3);
+
+    cache.delete('b');
+    expect(cache.totalWeight).toBe(1);
+
+    cache.clear();
+    expect(cache.totalWeight).toBe(0);
+  });
+
+  it('should reject incomplete or invalid bounds', () => {
+    expect(() => new LruMap<number>({ maxEntries: 0 })).toThrow(RangeError);
+    expect(() => new LruMap<number>({ maxEntries: 1, maxWeight: 10 })).toThrow(TypeError);
+    expect(
+      () =>
+        new LruMap<number>({
+          maxEntries: 1,
+          getWeight: () => 1,
+        }),
+    ).toThrow(TypeError);
+  });
 });
 
 describe('lazyAsync', () => {

@@ -8,9 +8,17 @@ import type { Handle } from '#types/matches.types.js';
 const galleryExamples = projectExamples;
 
 type GalleryExample = (typeof galleryExamples)[number];
+
+function kernelsForExample(example: GalleryExample): readonly string[] {
+  return [...new Set([example.kernel, ...(example.variants?.map((variant) => variant.kernel) ?? [])])];
+}
+
 // Build the engine filter list from the kernels actually present in the gallery
 // so OpenCascade / Replicad projects surface their own filter automatically.
-const engineFilters: readonly string[] = ['All', ...new Set(galleryExamples.map((example) => example.kernel))];
+const engineFilters: readonly string[] = [
+  'All',
+  ...new Set(galleryExamples.flatMap((example) => kernelsForExample(example))),
+];
 // Categories come from each project's `project.json` metadata; projects without one
 // stay reachable through the "All" option.
 const categoryFilters: readonly string[] = [
@@ -53,7 +61,8 @@ export default function PlaygroundGallery(): React.JSX.Element {
   const filteredExamples = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
     return galleryExamples.filter((example) => {
-      if (engineFilter !== 'All' && example.kernel !== engineFilter) {
+      const kernels = kernelsForExample(example);
+      if (engineFilter !== 'All' && !kernels.includes(engineFilter)) {
         return false;
       }
 
@@ -68,8 +77,9 @@ export default function PlaygroundGallery(): React.JSX.Element {
       return [
         example.name,
         example.description,
-        example.kernel,
+        ...kernels,
         example.mainFile,
+        ...(example.variants?.flatMap((variant) => [variant.label, variant.mainFile]) ?? []),
         example.category ?? '',
         ...(example.tags ?? []),
       ]
@@ -193,16 +203,12 @@ export default function PlaygroundGallery(): React.JSX.Element {
                       decoding='async'
                       className='size-full object-cover'
                     />
-                    <span className='absolute top-2 right-2 rounded-sm border bg-background/80 px-1.5 py-0.5 text-[10px] text-muted-foreground backdrop-blur-sm max-sm:hidden'>
-                      {example.kernel}
-                    </span>
+                    <GalleryKernelBadges example={example} />
                   </button>
                 ) : (
                   <div className={cn(mediaClasses, 'flex items-center justify-center')}>
                     <Box className='size-6 text-muted-foreground/40 sm:size-8' strokeWidth={1.25} aria-hidden />
-                    <span className='absolute top-2 right-2 rounded-sm border bg-background/80 px-1.5 py-0.5 text-[10px] text-muted-foreground backdrop-blur-sm max-sm:hidden'>
-                      {example.kernel}
-                    </span>
+                    <GalleryKernelBadges example={example} />
                   </div>
                 )}
 
@@ -262,5 +268,21 @@ export default function PlaygroundGallery(): React.JSX.Element {
         </div>
       ) : null}
     </main>
+  );
+}
+
+function GalleryKernelBadges({ example }: { readonly example: GalleryExample }): React.JSX.Element {
+  const kernels = kernelsForExample(example);
+  return (
+    <span aria-label={`Engines: ${kernels.join(', ')}`} className='absolute top-2 right-2 flex gap-1 max-sm:hidden'>
+      {kernels.map((kernel) => (
+        <span
+          key={kernel}
+          className='rounded-sm border bg-background/80 px-1.5 py-0.5 text-[10px] text-muted-foreground backdrop-blur-sm'
+        >
+          {kernel}
+        </span>
+      ))}
+    </span>
   );
 }
