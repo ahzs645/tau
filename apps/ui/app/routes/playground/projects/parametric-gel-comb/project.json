@@ -9,6 +9,14 @@
   "image": "poster.jpg",
   "variants": [
     { "id": "openscad", "entry": "main.scad" },
-    { "id": "opencascade", "entry": "main.occt.ts" }
+    {
+      "id": "opencascade",
+      "entry": "main.occt.ts",
+      "renderTimeout": 120000,
+      "previewTessellation": {
+        "linearTolerance": 0.02,
+        "angularTolerance": 8
+      }
+    }
   ]
 }
