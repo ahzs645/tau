@@ -267,6 +267,27 @@ export function processOpenScadParameters(exportData: OpenScadParameterExport): 
 }
 
 /**
+ * Undo `json-schema-default`'s JSON-pointer key mangling. That library walks the schema
+ * building RFC 6901 pointer paths (escaping `~` as `~0` and `/` as `~1`) and reuses the
+ * escaped segments as object keys for nested defaults, so a customizer group named
+ * "Tip / chamber" comes back as "Tip ~1 chamber" and never matches the schema's real
+ * property name. OpenSCAD identifiers cannot contain `~` or `/`, so unescaping every
+ * key only rewrites group names that were actually mangled.
+ */
+export function unescapeJsonPointerKeys(value: unknown): unknown {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return value;
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).map(([key, child]) => [
+      key.replaceAll('~1', '/').replaceAll('~0', '~'),
+      unescapeJsonPointerKeys(child),
+    ]),
+  );
+}
+
+/**
  * Create a JSON schema property from an OpenSCAD parameter
  *
  * @param parameter - the parsed OpenSCAD parameter definition
