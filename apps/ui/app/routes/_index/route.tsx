@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { ArrowUpRight, Box, Search, X } from 'lucide-react';
 import { projectExamples } from '#routes/playground/projects.js';
+import { playgroundModelUrl } from '#routes/playground/model-url.js';
 import { cn } from '#utils/ui.utils.js';
 import type { Handle } from '#types/matches.types.js';
 
@@ -180,7 +181,7 @@ export default function PlaygroundGallery(): React.JSX.Element {
                 {/* Stretched link: covers the whole card, so everything that isn't its own
                     control (the mobile zoom button) opens the model. */}
                 <Link
-                  to={`/playground?model=${example.id}`}
+                  to={playgroundModelUrl(example.id)}
                   aria-label={`Open ${example.name}`}
                   className='absolute inset-0 rounded-md focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none'
                 />
