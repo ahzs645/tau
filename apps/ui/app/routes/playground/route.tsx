@@ -765,7 +765,16 @@ function applyVariant(example: PlaygroundExample, variant: PlaygroundVariant | u
     return example;
   }
 
-  const { initialParameters: _initialParameters, presets: _presets, ...rest } = example;
+  // The example's own preview settings (timeout, preview lines, render options)
+  // describe the DEFAULT variant's kernel — never inherit them into another kernel.
+  const {
+    initialParameters: _initialParameters,
+    presets: _presets,
+    renderTimeout: _renderTimeout,
+    showPreviewLines: _showPreviewLines,
+    renderOptions: _renderOptions,
+    ...rest
+  } = example;
   return {
     ...rest,
     kernel: variant.kernel,

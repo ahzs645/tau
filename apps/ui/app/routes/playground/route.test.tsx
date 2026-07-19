@@ -262,6 +262,7 @@ vi.mock('#hooks/use-cad-preview.js', () => ({
       },
       error: undefined,
       geometries: mockState.geometries,
+      jsonSchema: { type: 'object', properties: {} },
       parameters: mockState.parameters,
       setParameters: mockSetParameters,
       status: 'ready',

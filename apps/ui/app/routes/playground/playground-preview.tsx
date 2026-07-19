@@ -274,7 +274,7 @@ function PlaygroundParameterBridge({
 }: {
   readonly onParametersChange: (parameters: Record<string, unknown>) => void;
 }): ReactNode {
-  const { parameters, defaultParameters } = useCadPreview();
+  const { parameters, defaultParameters, jsonSchema } = useCadPreview();
   // The kernel can briefly report schema defaults as if they were overrides while the
   // parameter schema is still being extracted. Strip anything equal to the reported
   // defaults so only genuine user overrides reach the session (and the shared URL).
@@ -283,10 +283,16 @@ function PlaygroundParameterBridge({
     [parameters, defaultParameters],
   );
 
-  // Surface the live overrides to the header so Share can encode them.
+  // Surface the live overrides to the header so Share can encode them. Until the kernel
+  // has produced a parameter schema its parameter context is just the initializing
+  // empty record — forwarding that would wipe the restored variant session (and the
+  // share URL) on every kernel remount after a variant switch.
   useEffect(() => {
+    if (jsonSchema === undefined) {
+      return;
+    }
     onParametersChange(liveParameters);
-  }, [liveParameters, onParametersChange]);
+  }, [jsonSchema, liveParameters, onParametersChange]);
 
   return undefined;
 }
