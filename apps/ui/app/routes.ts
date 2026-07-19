@@ -7,7 +7,6 @@ const isGithubPagesBuild = process.env['GITHUB_PAGES'] === 'true';
 
 const githubPagesRoutes = (): RouteConfigEntry[] => [
   index('routes/_index/route.tsx'),
-  route('playground', 'routes/playground/route.tsx'),
   route('manifest.webmanifest', 'routes/manifest[.webmanifest].ts'),
   route('robots.txt', 'routes/robots[.]txt/route.ts'),
   route('sitemap.xml', 'routes/sitemap[.]xml/route.ts'),
@@ -26,6 +25,10 @@ const githubPagesRoutes = (): RouteConfigEntry[] => [
     route('subprocessors', 'routes/legal.subprocessors/route.tsx'),
     route('acceptable-use', 'routes/legal.acceptable-use/route.tsx'),
   ]),
+  // Models live at root-level `/<model>` paths on the Pages gallery. Static
+  // segments above always outrank the param, and the playground route falls
+  // back to `?model=` (so legacy `/playground?model=<id>` links keep working).
+  route(':model', 'routes/playground/route.tsx'),
 ];
 
 const routes: Promise<RouteConfigEntry[]> = isGithubPagesBuild

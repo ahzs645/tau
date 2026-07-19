@@ -53,6 +53,10 @@ export default defineConfig(({ mode }) => {
               find: '#components/error-page.js',
               replacement: path.resolve(__dirname, './app/components/error-page.static.tsx'),
             },
+            {
+              find: '#lib/deploy-target.js',
+              replacement: path.resolve(__dirname, './app/lib/deploy-target.static.ts'),
+            },
           ]
         : [],
     },

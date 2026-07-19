@@ -14,7 +14,6 @@ import type { Config } from '@react-router/dev/config';
  */
 const prerenderConcurrency = 4;
 const isGithubPagesBuild = process.env['GITHUB_PAGES'] === 'true';
-const githubPagesBasename = isGithubPagesBuild ? '/tau' : undefined;
 
 /**
  * Pre-render docs URLs by walking the Fumadocs MDX content tree directly
@@ -37,7 +36,6 @@ const githubPagesBasename = isGithubPagesBuild ? '/tau' : undefined;
  * extensionless TS specifier as a filesystem path missing the `.ts` suffix.
  */
 export default {
-  ...(githubPagesBasename ? { basename: githubPagesBasename } : {}),
   ...(isGithubPagesBuild ? { routeDiscovery: { mode: 'initial' } as const } : {}),
   ssr: true,
   prerender: {

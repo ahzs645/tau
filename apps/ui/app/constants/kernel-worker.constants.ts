@@ -8,19 +8,11 @@ import { webWorkerTransport } from '@taucad/runtime/transport/web';
 import { observability } from '@taucad/telemetry/middleware';
 import { parameterFileResolver } from '#middleware/parameter-file-resolver.factory.js';
 import { ENV } from '#environment.config.js';
+import { isGithubPagesBuild } from '#lib/deploy-target.js';
 import type { KernelOptionsFactory } from '#types/runtime-client.alias.js';
 
-const shouldReportWorkerTelemetry = (): boolean => {
-  if (typeof ENV.TAU_FRONTEND_URL !== 'string') {
-    return true;
-  }
-
-  try {
-    return new URL(ENV.TAU_FRONTEND_URL).pathname !== '/tau';
-  } catch {
-    return true;
-  }
-};
+// The static Pages gallery has no telemetry backend to report to.
+const shouldReportWorkerTelemetry = (): boolean => !isGithubPagesBuild;
 
 /**
  * Default kernel array for the editor.

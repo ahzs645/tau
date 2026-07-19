@@ -57,7 +57,7 @@ jobs:
         env:
           GITHUB_PAGES: 'true'
           TAU_API_URL: https://api.taucad.dev
-          TAU_FRONTEND_URL: https://3dd.ahmadjalil.com/tau
+          TAU_FRONTEND_URL: https://3dd.ahmadjalil.com
           TAU_WEBSOCKET_URL: wss://api.taucad.dev
           TAU_DISABLE_CODE_EDITOR: 'true'
           # Match the canonical Nx build (apps/ui/project.json): the client bundle
@@ -94,37 +94,49 @@ jobs:
           echo "::error::React Router build failed after 3 attempts."
           exit 1
 
-      - name: Mirror public assets under /tau
+      # The gallery used to live under /tau (basename era). Old links redirect
+      # client-side: /tau/<path> maps to /<path>, and the legacy
+      # /tau/playground?model=<id> form maps to the root-level /<id> model page.
+      # 404.html covers every stale /tau deep link GitHub Pages can't match; the
+      # physical /tau/ and /tau/playground/ pages serve the two shapes that were
+      # actually shared around with a 200 instead of a 404.
+      - name: Add legacy /tau redirects and 404 page
         working-directory: apps/ui
         run: |
-          mkdir -p build/client/tau
-          cp -R build/client/android-chrome-192x192.png build/client/tau/
-          cp -R build/client/android-chrome-512x512.png build/client/tau/
-          cp -R build/client/apple-touch-icon.png build/client/tau/
-          cp -R build/client/favicon.ico build/client/tau/
-          cp -R build/client/favicon.svg build/client/tau/
-          cp -R build/client/favicon-96x96.png build/client/tau/
-          cp -R build/client/version.json build/client/tau/
-          cp -R build/client/version.js build/client/tau/
-
-      - name: Add custom-domain root redirect
-        working-directory: apps/ui
-        run: |
-          cat > build/client/index.html <<'HTML'
+          cat > build/client/404.html <<'HTML'
           <!doctype html>
           <html lang="en">
             <head>
               <meta charset="utf-8">
               <meta name="viewport" content="width=device-width, initial-scale=1">
-              <meta http-equiv="refresh" content="0; url=/tau/">
               <title>Tau CAD Gallery</title>
-              <script>globalThis.location.replace('/tau/' + globalThis.location.search + globalThis.location.hash);</script>
+              <script>
+                (function () {
+                  var url = new URL(globalThis.location.href);
+                  if (!/^\/tau(\/|$)/.test(url.pathname)) {
+                    return;
+                  }
+                  var path = url.pathname.replace(/^\/tau/, '') || '/';
+                  var params = url.searchParams;
+                  var model = params.get('model') || params.get('example');
+                  if (/^\/playground\/?$/.test(path)) {
+                    params.delete('model');
+                    params.delete('example');
+                    path = model ? '/' + model : '/';
+                  }
+                  var query = params.toString();
+                  globalThis.location.replace(path + (query ? '?' + query : '') + url.hash);
+                })();
+              </script>
             </head>
             <body>
-              <a href="/tau/">Open Tau CAD Gallery</a>
+              <p>Page not found. <a href="/">Open Tau CAD Gallery</a></p>
             </body>
           </html>
           HTML
+          mkdir -p build/client/tau/playground
+          cp build/client/404.html build/client/tau/index.html
+          cp build/client/404.html build/client/tau/playground/index.html
 
       - name: Prepare Pages artifact
         run: |

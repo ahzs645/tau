@@ -8,6 +8,7 @@ import { Button, buttonVariants } from '#components/ui/button.js';
 import { ClientOnly } from '#components/ui/utils/client-only.js';
 import { useFeature } from '#flags/use-feature.js';
 import { useTheme } from '#hooks/use-theme.js';
+import { isGithubPagesBuild } from '#lib/deploy-target.js';
 import { FileManagerProvider } from '#hooks/use-file-manager.js';
 import { loadPlaygroundExample, playgroundExamples } from '#routes/playground/playground-examples.js';
 import type { PlaygroundExample, PlaygroundVariant } from '#routes/playground/playground-examples.js';
@@ -86,9 +87,9 @@ export const handle: Handle = {
   enablePageWrapper: false,
 };
 
-export function loader({ request }: Route.LoaderArgs): PlaygroundLoaderData {
+export function loader({ request, params }: Route.LoaderArgs): PlaygroundLoaderData {
   const { searchParams } = new URL(request.url);
-  const activeExampleId = readInitialExampleIdFromSearch(searchParams);
+  const activeExampleId = readPathModelId(params) ?? readInitialExampleIdFromSearch(searchParams);
   const activeExample = playgroundExamples.find((example) => example.id === activeExampleId) ?? defaultExample;
   const activeVariantId = readVariantIdFromSearch(searchParams, activeExample);
   return {
@@ -100,7 +101,9 @@ export function loader({ request }: Route.LoaderArgs): PlaygroundLoaderData {
 export default function PlaygroundRoot(props: Partial<Route.ComponentProps> = {}): React.JSX.Element {
   const location = useLocation();
   const loaderExampleId = props.loaderData?.activeExampleId ?? defaultExample.id;
-  const activeExampleId = readInitialExampleIdFromSearch(new URLSearchParams(location.search), loaderExampleId);
+  const activeExampleId =
+    readPathModelId(props.params) ??
+    readInitialExampleIdFromSearch(new URLSearchParams(location.search), loaderExampleId);
   const catalogExample = playgroundExamples.find((example) => example.id === activeExampleId) ?? defaultExample;
   const [loadedExample, setLoadedExample] = useState<PlaygroundExample | undefined>(() =>
     isProjectExampleId(activeExampleId) && catalogExample.mode !== 'static' ? undefined : catalogExample,
@@ -380,8 +383,7 @@ function PlaygroundLoaded({
     void (async () => {
       try {
         const url = new URL(browserWindow.location.href);
-        url.searchParams.set('model', activeExample.id);
-        url.searchParams.delete('example');
+        writeModelLocation(url, activeExample.id);
         if (activeVariant) {
           url.searchParams.set(variantKey, activeVariant.id);
         } else {
@@ -427,8 +429,7 @@ function PlaygroundLoaded({
         }
 
         const url = new URL(`${location.pathname}${location.search}${location.hash}`, 'https://playground.local');
-        url.searchParams.set('model', baseExample.id);
-        url.searchParams.delete('example');
+        writeModelLocation(url, baseExample.id);
         if (target.isDefault) {
           url.searchParams.delete(variantKey);
         } else {
@@ -469,8 +470,7 @@ function PlaygroundLoaded({
       }
 
       const url = new URL(browserWindow.location.href);
-      url.searchParams.set('model', activeExample.id);
-      url.searchParams.delete('example');
+      writeModelLocation(url, activeExample.id);
       if (activeVariant) {
         url.searchParams.set(variantKey, activeVariant.id);
       } else {
@@ -707,6 +707,38 @@ function useIsCodeEditorDisabled(search: string): boolean {
   const editorParameter = new URLSearchParams(search).get('editor')?.toLowerCase();
   const isEnabledByParameter = editorParameter === 'on' || editorParameter === '1' || editorParameter === 'true';
   return isDisabledByFlag || !isEnabledByParameter;
+}
+
+/**
+ * Resolve the `:model` path segment (Pages gallery routes) to a known example
+ * id. The param only exists on the Pages build's route table, so `params` is
+ * typed loosely; unknown segments fall through to the `?model=` search lookup.
+ */
+function readPathModelId(params: unknown): string | undefined {
+  if (typeof params !== 'object' || params === null) {
+    return undefined;
+  }
+
+  const candidate = (params as Record<string, unknown>)['model'];
+  return typeof candidate === 'string' && playgroundExamples.some((example) => example.id === candidate)
+    ? candidate
+    : undefined;
+}
+
+/**
+ * Write the canonical location for a model onto a URL. The Pages gallery
+ * addresses models by root-level path (`/<model>`); the app build keeps the
+ * `?model=` form on `/playground`. The legacy `example` parameter is dropped
+ * either way.
+ */
+function writeModelLocation(url: URL, exampleId: string): void {
+  if (isGithubPagesBuild) {
+    url.pathname = `/${exampleId}`;
+    url.searchParams.delete('model');
+  } else {
+    url.searchParams.set('model', exampleId);
+  }
+  url.searchParams.delete('example');
 }
 
 function readInitialExampleIdFromSearch(params: URLSearchParams, fallbackId = defaultExample.id): string {
