@@ -1,6 +1,6 @@
 import type { ReactNode, RefCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ChevronDown, Download } from 'lucide-react';
 import type { FileExtension, Geometry } from '@taucad/types';
 import { downloadBlob } from '@taucad/utils/file';
@@ -19,6 +19,7 @@ import { CadPreviewProvider, useCadPreview } from '#hooks/use-cad-preview.js';
 import type { CadPreviewStatus } from '#hooks/use-cad-preview.js';
 import { PreviewParameters } from '#routes/projects_.$id_.preview/preview-parameters.js';
 import type { PlaygroundExample, PlaygroundPreset } from '#routes/playground/playground-examples.js';
+import { extractModifiedProperties } from '#utils/object.utils.js';
 import { cn } from '#utils/ui.utils.js';
 
 export type PlaygroundMobilePane = '3d' | 'params';
@@ -273,13 +274,25 @@ function PlaygroundParameterBridge({
 }: {
   readonly onParametersChange: (parameters: Record<string, unknown>) => void;
 }): ReactNode {
-  const { parameters } = useCadPreview();
-  const liveParameters = parameters;
+  const { parameters, defaultParameters, jsonSchema } = useCadPreview();
+  // The kernel can briefly report schema defaults as if they were overrides while the
+  // parameter schema is still being extracted. Strip anything equal to the reported
+  // defaults so only genuine user overrides reach the session (and the shared URL).
+  const liveParameters = useMemo(
+    () => extractModifiedProperties(parameters, defaultParameters) as Record<string, unknown>,
+    [parameters, defaultParameters],
+  );
 
-  // Surface the live overrides to the header so Share can encode them.
+  // Surface the live overrides to the header so Share can encode them. Until the kernel
+  // has produced a parameter schema its parameter context is just the initializing
+  // empty record — forwarding that would wipe the restored variant session (and the
+  // share URL) on every kernel remount after a variant switch.
   useEffect(() => {
+    if (jsonSchema === undefined) {
+      return;
+    }
     onParametersChange(liveParameters);
-  }, [liveParameters, onParametersChange]);
+  }, [jsonSchema, liveParameters, onParametersChange]);
 
   return undefined;
 }

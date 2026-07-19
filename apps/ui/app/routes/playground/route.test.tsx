@@ -262,6 +262,7 @@ vi.mock('#hooks/use-cad-preview.js', () => ({
       },
       error: undefined,
       geometries: mockState.geometries,
+      jsonSchema: { type: 'object', properties: {} },
       parameters: mockState.parameters,
       setParameters: mockSetParameters,
       status: 'ready',
@@ -377,18 +378,18 @@ describe('PlaygroundRoot', () => {
     expect(providerCalls.at(-1)?.files['main.ts']).toBeDefined();
   });
 
-  it('shows preview edge lines for the OpenCascade pre-chamber variant', async () => {
-    globalThis.history.replaceState({}, '', '/?model=pre-chamber-nozzle-insert&variant=opencascade');
+  it('loads the pre-chamber project with the OpenCascade variant as the default', async () => {
+    globalThis.history.replaceState({}, '', '/?model=pre-chamber-nozzle-insert');
 
     renderPlaygroundRoot();
 
     expect(await screen.findByRole('heading', { name: 'Pre-Chamber Nozzle Insert' })).toBeDefined();
     await waitFor(() => {
-      expect(providerCalls.at(-1)?.projectId).toBe('root-playground-pre-chamber-nozzle-insert-opencascade');
+      expect(providerCalls.at(-1)?.projectId).toBe('root-playground-pre-chamber-nozzle-insert');
     });
     expect(providerCalls.at(-1)?.mainFile).toBe('main.occt.ts');
     expect(providerMountCalls).toHaveLength(1);
-    expect(providerMountCalls[0]?.projectId).toBe('root-playground-pre-chamber-nozzle-insert-opencascade');
+    expect(providerMountCalls[0]?.projectId).toBe('root-playground-pre-chamber-nozzle-insert');
     expect(providerMountCalls[0]?.mainFile).toBe('main.occt.ts');
     expect(new TextDecoder().decode(providerMountCalls[0]?.files['main.occt.ts']?.content)).toContain('opencascade.js');
     await waitFor(() => {

@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { parseOpenScadCustomizerParameters, processOpenScadParameters } from '#parse-parameters.js';
+import {
+  parseOpenScadCustomizerParameters,
+  processOpenScadParameters,
+  unescapeJsonPointerKeys,
+} from '#parse-parameters.js';
 
 /* eslint-disable @typescript-eslint/naming-convention -- OpenSCAD parameters conventionally use snake_case */
 
@@ -182,6 +186,27 @@ derived = unknown_function();
 `);
 
     expect(parsed?.parameters.map((parameter) => parameter.name)).toEqual(['width']);
+  });
+});
+
+describe('unescapeJsonPointerKeys', () => {
+  it('restores slashes and tildes that json-schema-default mangled in group keys', () => {
+    expect(
+      unescapeJsonPointerKeys({
+        'Tip ~1 chamber - estimated unless measured': { nose_tip_flat_d: 5.8 },
+        'Approx ~0 exact': { nested: { 'a~1b': 1 } },
+        Holes: { axial_hole_d: 2.5 },
+      }),
+    ).toEqual({
+      'Tip / chamber - estimated unless measured': { nose_tip_flat_d: 5.8 },
+      'Approx ~ exact': { nested: { 'a/b': 1 } },
+      Holes: { axial_hole_d: 2.5 },
+    });
+  });
+
+  it('leaves primitives and arrays untouched', () => {
+    expect(unescapeJsonPointerKeys(5.8)).toBe(5.8);
+    expect(unescapeJsonPointerKeys([{ '~1': 1 }])).toEqual([{ '~1': 1 }]);
   });
 });
 

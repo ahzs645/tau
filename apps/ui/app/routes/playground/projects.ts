@@ -18,6 +18,12 @@ const variantLabels = {
   opencascade: 'OpenCASCADE',
 } as const;
 
+const variantShortLabels = {
+  openscad: 'SCAD',
+  replicad: 'Replicad',
+  opencascade: 'OCCT',
+} as const;
+
 /**
  * Per-preview OCCT mesh deflection override. Applied only to the live preview
  * (never to exports or BRep topology), so a threaded model can render smoother
@@ -53,6 +59,7 @@ function buildPreviewRenderOptions(source: {
 const projectVariantSchema = z.object({
   id: z.enum(['openscad', 'replicad', 'opencascade']),
   label: z.string().min(1).optional(),
+  shortLabel: z.string().min(1).optional(),
   entry: z.string().min(1),
   language: z.string().min(1).optional(),
   exportFormats: z.array(z.enum(exportFormats)).optional(),
@@ -382,6 +389,7 @@ function variantsForProject(projectId: string, metadata: ProjectMetadata): reado
     return {
       id: variant.id,
       label: variant.label ?? variantLabels[variant.id],
+      shortLabel: variant.shortLabel ?? variantShortLabels[variant.id],
       kernel,
       mainFile: variant.entry,
       language: variant.language ?? languageForEntry(variant.entry),

@@ -32,6 +32,7 @@ import {
   processOpenScadParameters,
   flattenParametersForInjection,
   parseOpenScadCustomizerParameters,
+  unescapeJsonPointerKeys,
 } from '#parse-parameters.js';
 import { openscadRenderSchema, openscadExportSchemas } from '#openscad.schemas.js';
 import type { AddErrorFunction, GetFileContentsFunction } from '#parse-output.js';
@@ -714,7 +715,7 @@ export default defineKernel({
         };
         // Schema excludes $-prefixed params via processOpenScadParameters
         jsonSchema = processOpenScadParameters(mergedExport);
-        defaultParameters = jsonDefault(jsonSchema) as Record<string, unknown>;
+        defaultParameters = unescapeJsonPointerKeys(jsonDefault(jsonSchema)) as Record<string, unknown>;
 
         // Include $fn/$fa/$fs in defaultParameters so they flow through
         // the parameter merge pipeline and are available in createGeometry

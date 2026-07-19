@@ -765,7 +765,16 @@ function applyVariant(example: PlaygroundExample, variant: PlaygroundVariant | u
     return example;
   }
 
-  const { initialParameters: _initialParameters, presets: _presets, ...rest } = example;
+  // The example's own preview settings (timeout, preview lines, render options)
+  // describe the DEFAULT variant's kernel — never inherit them into another kernel.
+  const {
+    initialParameters: _initialParameters,
+    presets: _presets,
+    renderTimeout: _renderTimeout,
+    showPreviewLines: _showPreviewLines,
+    renderOptions: _renderOptions,
+    ...rest
+  } = example;
   return {
     ...rest,
     kernel: variant.kernel,
@@ -804,14 +813,15 @@ function VariantToggle({ example, activeVariant, onSwitch }: VariantToggleProps)
 
   const selectedVariantId = activeVariant?.id ?? defaultVariantIdFor(example);
   return (
-    <div role='group' aria-label='Kernel variant' className='flex items-center overflow-hidden rounded-md border'>
+    <div role='group' aria-label='Kernel variant' className='flex h-8 items-center overflow-hidden rounded-md border'>
       {example.variants.map((variant) => (
         <button
           key={variant.id}
           type='button'
           aria-pressed={variant.id === selectedVariantId}
+          aria-label={variant.label}
           className={cn(
-            'px-2.5 py-1.5 text-xs font-medium transition-colors',
+            'h-full px-2.5 text-xs font-medium transition-colors',
             variant.id === selectedVariantId
               ? 'bg-primary text-primary-foreground'
               : 'text-muted-foreground hover:text-foreground',
@@ -820,7 +830,9 @@ function VariantToggle({ example, activeVariant, onSwitch }: VariantToggleProps)
             onSwitch(variant.id);
           }}
         >
-          {variant.label}
+          {/* Abbreviated on phones (e.g. "SCAD"/"OCCT") so the header stays within a thumb-width. */}
+          <span className='md:hidden'>{variant.shortLabel}</span>
+          <span className='max-md:hidden'>{variant.label}</span>
         </button>
       ))}
     </div>

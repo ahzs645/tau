@@ -21,6 +21,8 @@ export type PlaygroundStaticPreview = {
 export type PlaygroundVariant = {
   readonly id: 'openscad' | 'replicad' | 'opencascade';
   readonly label: string;
+  /** Compact label shown on narrow viewports (e.g. "SCAD" for "OpenSCAD"). */
+  readonly shortLabel: string;
   readonly kernel: PlaygroundExample['kernel'];
   readonly mainFile: string;
   readonly language: string;
