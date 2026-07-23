@@ -11,6 +11,7 @@ import { useGraphics, useGraphicsSelector } from '#hooks/use-graphics.js';
 const _box3 = new THREE.Box3();
 const _centerPoint = new THREE.Vector3();
 const _sphere = new THREE.Sphere();
+const _boxSize = new THREE.Vector3();
 
 type GeometryBoundsOptions = {
   /** When true, the outer group is translated to center geometry at the origin. */
@@ -48,12 +49,14 @@ export function useGeometryBounds(
 
   const geometryKey = useGraphicsSelector((state) => state.context.geometryKey);
 
-  const [{ geometryRadius, geometryCenter }, set] = useState<{
+  const [{ geometryRadius, geometryCenter, geometrySize }, set] = useState<{
     geometryRadius: number;
     geometryCenter: THREE.Vector3;
+    geometrySize: THREE.Vector3;
   }>({
     geometryRadius: 0,
     geometryCenter: new THREE.Vector3(),
+    geometrySize: new THREE.Vector3(),
   });
 
   // Track geometry key changes to avoid expensive per-frame scene traversal.
@@ -108,14 +111,17 @@ export function useGeometryBounds(
     // Snapshot values from shared temporaries BEFORE the state updater runs,
     // to guard against cross-contamination if React batches updates across
     // multiple Canvas instances sharing the same module-level _sphere / _centerPoint.
+    _box3.getSize(_boxSize);
     const snapshotRadius = _sphere.radius;
     const snapshotCenter = _centerPoint.clone();
+    const snapshotSize = _boxSize.clone();
 
     // Only update state when the radius or center has actually changed to avoid unnecessary re-renders
     set((previous) => {
       const centerChanged = !previous.geometryCenter.equals(snapshotCenter);
+      const sizeChanged = !previous.geometrySize.equals(snapshotSize);
 
-      if (previous.geometryRadius === snapshotRadius && !centerChanged) {
+      if (previous.geometryRadius === snapshotRadius && !centerChanged && !sizeChanged) {
         // Radius and center converged -- bounds are stable, stop polling
         boundsStableRef.current = true;
         return previous;
@@ -124,6 +130,7 @@ export function useGeometryBounds(
       return {
         geometryRadius: snapshotRadius,
         geometryCenter: centerChanged ? snapshotCenter : previous.geometryCenter,
+        geometrySize: sizeChanged ? snapshotSize : previous.geometrySize,
       };
     });
   });
@@ -134,9 +141,13 @@ export function useGeometryBounds(
   const graphicsActor = useGraphics();
   useEffect(() => {
     if (geometryRadius > 0) {
-      graphicsActor.send({ type: 'sceneRadiusUpdated', radius: geometryRadius });
+      graphicsActor.send({
+        type: 'sceneRadiusUpdated',
+        radius: geometryRadius,
+        size: [geometrySize.x, geometrySize.y, geometrySize.z],
+      });
     }
-  }, [graphicsActor, geometryRadius]);
+  }, [graphicsActor, geometryRadius, geometrySize]);
 
   return { geometryRadius, geometryCenter };
 }

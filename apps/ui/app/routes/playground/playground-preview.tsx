@@ -23,6 +23,7 @@ import { graphicsMachine } from '#machines/graphics.machine.js';
 import { defaultGraphicsSettings } from '#constants/editor.constants.js';
 import { TooltipProvider } from '#components/ui/tooltip.js';
 import { MeasureControl } from '#components/geometry/cad/measure-control.js';
+import { MeasureReadout, ModelSizeIndicator } from '#components/geometry/cad/measure-readout.js';
 import { MeasureSnapModeControl } from '#components/geometry/cad/measure-snap-mode-control.js';
 import { SectionViewControl } from '#components/geometry/cad/section-view-control.js';
 import { ResetCameraControl } from '#components/geometry/cad/reset-camera-control.js';
@@ -75,6 +76,11 @@ function PlaygroundViewerToolbar(): React.JSX.Element {
         <MeasureSnapModeControl />
         <SectionViewControl />
         <ResetCameraControl />
+      </div>
+      {/* Bottom-16 below xl keeps the stack clear of the mobile export button. */}
+      <div className='absolute bottom-16 left-3 z-10 flex flex-col items-start gap-2 xl:bottom-4 xl:left-4'>
+        <MeasureReadout />
+        <ModelSizeIndicator />
       </div>
     </TooltipProvider>
   );
@@ -198,6 +204,9 @@ export function PlaygroundPreviewPane({
                   enableGizmo: true,
                   gizmoVariant: 'axes',
                   gizmoContainer: `#${orientationGizmoContainerId}`,
+                  // Pre-rendered static GLBs are exported in glTF meters; the
+                  // viewer (and its measure/size readouts) works in millimeters.
+                  modelUnitScale: 1000,
                   viewerClassName: 'bg-muted/30',
                 }}
               />
@@ -233,6 +242,9 @@ export function PlaygroundPreviewPane({
               enableGizmo: true,
               gizmoVariant: 'axes',
               gizmoContainer: `#${orientationGizmoContainerId}`,
+              // Pre-rendered static GLBs are exported in glTF meters; the
+              // viewer (and its measure/size readouts) works in millimeters.
+              modelUnitScale: 1000,
               viewerClassName: 'bg-muted/30',
             }}
           />

@@ -5,6 +5,22 @@ export type SnapPoint = {
   type: 'vertex' | 'edge-midpoint' | 'face-center';
 };
 
+/** The contiguous coplanar face region under the cursor, for face-pick highlighting. */
+export type SnapFace = {
+  /** World-space triangle soup of the region (9 floats per triangle). */
+  positions: Float32Array;
+  /** Unit normal of the face plane. */
+  normal: THREE.Vector3;
+  /** Area centroid of the region (matches the `face-center` snap point). */
+  center: THREE.Vector3;
+};
+
+export type SnapDetection = {
+  snapPoints: SnapPoint[];
+  /** Present when the pick landed on a coplanar region large enough to act as a face. */
+  face?: SnapFace;
+};
+
 // Epsilon constants for coplanar face detection
 const normalEpsilonCos = 0.9995; // Cos(theta) where theta ~ 1.8°
 const planeDistanceEpsilon = 1e-4; // World units
@@ -424,10 +440,31 @@ function computeFaceCenter(parameters: FaceCenterParameters): THREE.Vector3 {
 }
 
 export function detectSnapPoints(mesh: THREE.Mesh, raycaster: THREE.Raycaster): SnapPoint[] {
+  return detectSnapGeometry(mesh, raycaster).snapPoints;
+}
+
+function buildFaceSoup(faceTriangleIndices: number[], triangles: Triangle[], worldPositions: THREE.Vector3[]): Float32Array {
+  const positions = new Float32Array(faceTriangleIndices.length * 9);
+  let offset = 0;
+  for (const triIndex of faceTriangleIndices) {
+    const { a, b, c } = triangles[triIndex]!;
+    for (const vertexIndex of [a, b, c]) {
+      const p = worldPositions[vertexIndex]!;
+      positions[offset] = p.x;
+      positions[offset + 1] = p.y;
+      positions[offset + 2] = p.z;
+      offset += 3;
+    }
+  }
+
+  return positions;
+}
+
+export function detectSnapGeometry(mesh: THREE.Mesh, raycaster: THREE.Raycaster): SnapDetection {
   // 1. Get raycast intersection
   const intersection = getRaycastIntersection(mesh, raycaster);
   if (!intersection) {
-    return [];
+    return { snapPoints: [] };
   }
 
   // 2. Extract geometry data
@@ -462,6 +499,12 @@ export function detectSnapPoints(mesh: THREE.Mesh, raycaster: THREE.Raycaster): 
   // 7. Gather boundary edges
   const { boundaryEdges } = gatherBoundaryEdges(faceTriangleIndices, triangles, canonicalIndex);
 
+  const faceOf = (center: THREE.Vector3): SnapFace => ({
+    positions: buildFaceSoup(faceTriangleIndices, triangles, worldPositions),
+    normal: referenceNormal.clone(),
+    center,
+  });
+
   // 8. Try circular face detection first
   const maybeCircle = tryDetectCircularFace({
     boundaryEdges,
@@ -470,7 +513,11 @@ export function detectSnapPoints(mesh: THREE.Mesh, raycaster: THREE.Raycaster): 
     planePoint: referencePoint,
   });
   if (maybeCircle) {
-    return maybeCircle;
+    const circleCenter = maybeCircle.find((snapPoint) => snapPoint.type === 'face-center');
+    return {
+      snapPoints: maybeCircle,
+      face: circleCenter ? faceOf(circleCenter.position.clone()) : undefined,
+    };
   }
 
   // 9. Collect boundary snap points
@@ -487,7 +534,7 @@ export function detectSnapPoints(mesh: THREE.Mesh, raycaster: THREE.Raycaster): 
   });
   addPoint(center, 'face-center');
 
-  return snapPoints;
+  return { snapPoints, face: faceOf(center.clone()) };
 }
 
 // ---------------------- Circle detection helpers ----------------------

@@ -28,6 +28,13 @@ export type ModelViewerGraphicsOptions = {
   readonly enableGrid?: boolean;
   readonly enableAxes?: boolean;
   readonly enablePostProcessing?: boolean;
+  /**
+   * Uniform scale applied to loaded glTF scenes. The viewer convention is
+   * millimeters; pass `1000` for spec-compliant meter-based GLB sources
+   * (e.g. pre-rendered static preview files) so measurements and size
+   * readouts stay in real model units.
+   */
+  readonly modelUnitScale?: number;
   readonly viewerClassName?: string;
 };
 
@@ -119,6 +126,7 @@ const ModelViewerCore = memo(function ModelViewerCore({
           enableGizmo={graphicsOptions?.enableGizmo}
           gizmoVariant={graphicsOptions?.gizmoVariant}
           gizmoContainer={graphicsOptions?.gizmoContainer}
+          modelUnitScale={graphicsOptions?.modelUnitScale}
           className={graphicsOptions?.viewerClassName}
           stageOptions={stageOptions}
         />

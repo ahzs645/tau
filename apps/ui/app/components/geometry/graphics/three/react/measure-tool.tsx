@@ -7,10 +7,14 @@ import {
   LabelBackgroundGeometry,
 } from '#components/geometry/graphics/three/geometries/label-geometry.js';
 import {
-  detectSnapPoints,
+  detectSnapGeometry,
   findClosestSnapPoint,
 } from '#components/geometry/graphics/three/utils/snap-detection.utils.js';
-import type { SnapPoint } from '#components/geometry/graphics/three/utils/snap-detection.utils.js';
+import type {
+  SnapDetection,
+  SnapFace,
+  SnapPoint,
+} from '#components/geometry/graphics/three/utils/snap-detection.utils.js';
 import { computeAxisRotationForCamera } from '#components/geometry/graphics/three/utils/rotation.utils.js';
 import { matcapMaterial } from '#components/geometry/graphics/three/materials/matcap-material.js';
 import { sceneTag, sceneTagData, hasSceneTag } from '#components/geometry/graphics/three/utils/scene-tags.js';
@@ -87,7 +91,9 @@ export function MeasureTool(): React.JSX.Element {
   const [hoveredSnapPoints, setHoveredSnapPoints] = useState<SnapPoint[]>([]);
   const [activeSnapPoint, setActiveSnapPoint] = useState<SnapPoint | undefined>();
   const [mousePosition, setMousePosition] = useState<THREE.Vector3 | undefined>();
-  const lastSnapPointsRef = useRef<SnapPoint[] | undefined>(undefined);
+  const [hoveredFace, setHoveredFace] = useState<SnapFace | undefined>();
+  const [startFace, setStartFace] = useState<SnapFace | undefined>();
+  const lastDetectionRef = useRef<SnapDetection | undefined>(undefined);
 
   // Refs for values that change rapidly (every mouse move) so the event-listener
   // effect doesn't tear down and re-add 4 DOM listeners per mouse event.
@@ -99,6 +105,10 @@ export function MeasureTool(): React.JSX.Element {
   currentStartRef.current = currentStart;
   const measureSnapModeRef = useRef(measureSnapMode);
   measureSnapModeRef.current = measureSnapMode;
+  const hoveredFaceRef = useRef(hoveredFace);
+  hoveredFaceRef.current = hoveredFace;
+  const startFaceRef = useRef(startFace);
+  startFaceRef.current = startFace;
 
   const raycasterRef = useRef(new THREE.Raycaster());
   const mouseRef = useRef(new THREE.Vector2());
@@ -117,9 +127,9 @@ export function MeasureTool(): React.JSX.Element {
   const geometryKeyRef = useRef(geometryKey);
   geometryKeyRef.current = geometryKey;
 
-  // Cache detectSnapPoints results keyed by (mesh.id, faceIndex) to avoid
+  // Cache detectSnapGeometry results keyed by (mesh.id, faceIndex) to avoid
   // running the expensive geometry pipeline on every mouse move over the same face.
-  const snapCacheRef = useRef(new Map<string, SnapPoint[]>());
+  const snapCacheRef = useRef(new Map<string, SnapDetection>());
 
   const getCachedMeshes = useRef((): THREE.Mesh[] => {
     const currentKey = geometryKeyRef.current;
@@ -147,7 +157,9 @@ export function MeasureTool(): React.JSX.Element {
       return undefined;
     }
 
-    const handleMouseMove = (event: MouseEvent): void => {
+    // Shared by mousemove (hover) and pointerdown (so taps without a preceding
+    // hover — the mobile case — still resolve a snap target before the click).
+    const updateSnapFromPointer = (event: MouseEvent): void => {
       const rect = gl.domElement.getBoundingClientRect();
       mouseRef.current.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
       mouseRef.current.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
@@ -163,7 +175,7 @@ export function MeasureTool(): React.JSX.Element {
 
       // Only show snap points for the closest/top-most intersected object.
       // If there is no intersection, fall back to the last detected face's snap points.
-      let allSnapPoints: SnapPoint[] = [];
+      let detection: SnapDetection | undefined;
       if (firstIntersection?.object) {
         const topMesh = firstIntersection.object as THREE.Mesh;
         // Cache by mesh ID + face index to avoid re-running the expensive geometry
@@ -171,40 +183,58 @@ export function MeasureTool(): React.JSX.Element {
         const cacheKey = `${topMesh.id}:${firstIntersection.faceIndex ?? -1}`;
         const cached = snapCacheRef.current.get(cacheKey);
         if (cached) {
-          allSnapPoints = cached;
+          detection = cached;
         } else {
-          allSnapPoints = detectSnapPoints(topMesh, raycasterRef.current);
-          snapCacheRef.current.set(cacheKey, allSnapPoints);
+          detection = detectSnapGeometry(topMesh, raycasterRef.current);
+          snapCacheRef.current.set(cacheKey, detection);
         }
 
-        lastSnapPointsRef.current = allSnapPoints;
-      } else if (lastSnapPointsRef.current?.length) {
-        allSnapPoints = lastSnapPointsRef.current;
+        lastDetectionRef.current = detection;
+      } else if (lastDetectionRef.current?.snapPoints.length) {
+        detection = lastDetectionRef.current;
       }
 
+      const isFaceMode = measureSnapModeRef.current === 'face';
+      // Only surface the whole-face highlight while actually over the model:
+      // the off-model fallback keeps snap points sticky but a lingering face
+      // highlight would read as a selection.
+      const faceUnderPointer = firstIntersection && isFaceMode ? detection?.face : undefined;
+      setHoveredFace(faceUnderPointer);
+      hoveredFaceRef.current = faceUnderPointer;
+
       // Restrict picks to the active snap mode (vertex / edge / face / all)
-      allSnapPoints = filterSnapPointsByMode(allSnapPoints, measureSnapModeRef.current);
+      const allSnapPoints = filterSnapPointsByMode(detection?.snapPoints ?? [], measureSnapModeRef.current);
       setHoveredSnapPoints(allSnapPoints);
 
-      const closest = findClosestSnapPoint(allSnapPoints, {
+      let closest = findClosestSnapPoint(allSnapPoints, {
         mousePos: mouseRef.current,
         camera,
         canvas: gl.domElement,
         snapDistancePx: snapDistance,
         snapPointBufferPx: 15, // Add buffer for hover persistence
       });
+      // Face mode selects the whole face: anywhere on the highlighted region
+      // picks its center, not just the small center indicator.
+      if (!closest && faceUnderPointer) {
+        closest = allSnapPoints.find((snapPoint) => snapPoint.type === 'face-center');
+      }
       setActiveSnapPoint(closest);
+      // Sync the ref immediately: pointerdown calls this routine right before the
+      // click handlers read it, and the state->ref sync only runs on re-render.
+      activeSnapPointRef.current = closest;
 
       // Update mouse position for preview line
       if (closest) {
         setMousePosition(closest.position);
       } else if (firstIntersection) {
         setMousePosition(firstIntersection.point);
-      } else if (lastSnapPointsRef.current?.[0]) {
+      } else if (lastDetectionRef.current?.snapPoints[0]) {
         // Use the first snap point as a stable mouse position proxy when off-face
-        setMousePosition(lastSnapPointsRef.current[0].position);
+        setMousePosition(lastDetectionRef.current.snapPoints[0].position);
       }
     };
+
+    const handleMouseMove = updateSnapFromPointer;
 
     const handlePointerDown = (event: MouseEvent): void => {
       // Track camera state at mouse down to detect rotations/translations during drag
@@ -218,6 +248,10 @@ export function MeasureTool(): React.JSX.Element {
       if (event.button !== 0) {
         return;
       }
+
+      // Resolve the snap target at the pressed position. On touch there is no
+      // hover phase, so without this a tap would read a stale (or empty) target.
+      updateSnapFromPointer(event);
 
       // Track if pointerdown happens on a mesh
       raycasterRef.current.setFromCamera(mouseRef.current, camera);
@@ -298,9 +332,25 @@ export function MeasureTool(): React.JSX.Element {
         return;
       }
 
-      const pointArray: [number, number, number] = [point.x, point.y, point.z];
+      let pointArray: [number, number, number] = [point.x, point.y, point.z];
 
       if (currentStartRef.current) {
+        // Face-to-face pick with parallel planes: project the start face's
+        // center onto the end face's plane so the measurement reads the
+        // perpendicular distance between the faces, not center-to-center.
+        const measureStartFace = startFaceRef.current;
+        const measureEndFace = measureSnapModeRef.current === 'face' ? hoveredFaceRef.current : undefined;
+        if (measureStartFace && measureEndFace) {
+          const normalAlignment = Math.abs(measureStartFace.normal.dot(measureEndFace.normal));
+          if (normalAlignment > 0.999) {
+            const planeOffset = new THREE.Vector3()
+              .subVectors(measureStartFace.center, measureEndFace.center)
+              .dot(measureEndFace.normal);
+            const projected = measureStartFace.center.clone().addScaledVector(measureEndFace.normal, -planeOffset);
+            pointArray = [projected.x, projected.y, projected.z];
+          }
+        }
+
         // Disallow 0-length measurements by ignoring a completion click
         // that lands effectively on the start point (within a small epsilon)
         const startVec = new THREE.Vector3(...currentStartRef.current);
@@ -318,6 +368,9 @@ export function MeasureTool(): React.JSX.Element {
         });
       } else {
         graphicsActor.send({ type: 'startMeasurement', payload: pointArray });
+        const pickedFace = measureSnapModeRef.current === 'face' ? hoveredFaceRef.current : undefined;
+        setStartFace(pickedFace);
+        startFaceRef.current = pickedFace;
       }
 
       // Reset the pointerdown flag
@@ -343,6 +396,14 @@ export function MeasureTool(): React.JSX.Element {
     };
   }, [camera, gl, scene, snapDistance, isMeasureActive, graphicsActor, getCachedMeshes]);
 
+  // The start-face highlight lives only as long as the in-progress measurement:
+  // the machine clears currentMeasurementStart on completion and cancellation.
+  useEffect(() => {
+    if (!currentStart) {
+      setStartFace(undefined);
+    }
+  }, [currentStart]);
+
   // Choose which measurements to display: all during measure mode, otherwise only pinned
   const visibleMeasurements = isMeasureActive ? measurements : measurements.filter((m) => m.isPinned);
 
@@ -354,6 +415,10 @@ export function MeasureTool(): React.JSX.Element {
 
   return (
     <group>
+      {/* Whole-face highlights for face pick mode: hovered face + selected start face */}
+      {isMeasureActive && hoveredFace ? <FaceHighlight face={hoveredFace} /> : null}
+      {isMeasureActive && startFace && startFace !== hoveredFace ? <FaceHighlight isSelected face={startFace} /> : null}
+
       {/* Render snap point indicators */}
       {isMeasureActive
         ? hoveredSnapPoints.map((snapPoint) => {
@@ -395,6 +460,44 @@ export function MeasureTool(): React.JSX.Element {
         />
       ))}
     </group>
+  );
+}
+
+/**
+ * Translucent overlay over the whole picked coplanar face region, in the
+ * spirit of slicer measure tools that highlight the surface under the cursor.
+ * Slight polygon offset keeps it from z-fighting the surface it covers.
+ */
+function FaceHighlight({ face, isSelected = false }: { readonly face: SnapFace; readonly isSelected?: boolean }): React.JSX.Element {
+  const geometry = useMemo(() => {
+    const bufferGeometry = new THREE.BufferGeometry();
+    bufferGeometry.setAttribute('position', new THREE.BufferAttribute(face.positions, 3));
+    return bufferGeometry;
+  }, [face]);
+
+  useEffect(
+    () => () => {
+      geometry.dispose();
+    },
+    [geometry],
+  );
+
+  return (
+    <mesh geometry={geometry} userData={sceneTagData(sceneTag.measurementUi)} renderOrder={1}>
+      <meshBasicMaterial
+        transparent
+        toneMapped={false}
+        fog={false}
+        // oxlint-disable-next-line tau-lint/no-hardcoded-color -- Three.js material color
+        color={isSelected ? '#16a34a' : '#3b82f6'}
+        opacity={isSelected ? 0.45 : 0.35}
+        depthWrite={false}
+        polygonOffset
+        polygonOffsetFactor={-2}
+        polygonOffsetUnits={-2}
+        side={THREE.DoubleSide}
+      />
+    </mesh>
   );
 }
 

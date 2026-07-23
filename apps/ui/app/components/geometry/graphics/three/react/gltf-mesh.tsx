@@ -318,6 +318,12 @@ type GltfMeshDisplayProperties = {
    */
   readonly gltfFile: Uint8Array<ArrayBuffer>;
   /**
+   * Uniform scale applied to the parsed scene, for sources whose length unit
+   * differs from the viewer's millimeter convention (e.g. spec-compliant
+   * meter-based GLB exports need `1000`).
+   */
+  readonly unitScale?: number;
+  /**
    * Whether to enable matcap material.
    */
   readonly enableMatcap: boolean;
@@ -382,6 +388,7 @@ export function GltfMesh({
   enableMatcap = false,
   enableSurfaces = true,
   enableLines = true,
+  unitScale = 1,
 }: GltfMeshDisplayProperties): React.JSX.Element | undefined {
   const graphicsBackendThree = useThreeGraphicsBackend();
   const parsedSceneCacheKey = buildParsedGltfSceneCacheKey({
@@ -602,6 +609,14 @@ export function GltfMesh({
 
   if (!scene) {
     return undefined;
+  }
+
+  if (unitScale !== 1) {
+    return (
+      <group scale={unitScale}>
+        <primitive object={scene} />
+      </group>
+    );
   }
 
   return <primitive object={scene} />;

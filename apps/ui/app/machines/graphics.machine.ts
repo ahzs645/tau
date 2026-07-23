@@ -71,6 +71,8 @@ export type GraphicsContext = {
   currentZoom: number;
   geometryRadius: number;
   sceneRadius: number | undefined;
+  /** Axis-aligned bounding-box size of the loaded geometry in scene units. */
+  sceneSize: [number, number, number] | undefined;
 
   // Visibility state
   enableSurfaces: boolean;
@@ -235,7 +237,7 @@ export type GraphicsEvent =
       units: { length: LengthSymbol };
     }
   // Scene radius update from Three.js bounding sphere (sent by Stage)
-  | { type: 'sceneRadiusUpdated'; radius: number };
+  | { type: 'sceneRadiusUpdated'; radius: number; size?: [number, number, number] };
 
 // Emitted events
 export type GraphicsEmitted =
@@ -645,9 +647,9 @@ export const graphicsMachine = setup({
       });
     }),
 
-    updateSceneRadius: enqueueActions(({ enqueue, event }) => {
+    updateSceneRadius: enqueueActions(({ enqueue, event, context }) => {
       assertEvent(event, 'sceneRadiusUpdated');
-      enqueue.assign({ geometryRadius: event.radius });
+      enqueue.assign({ geometryRadius: event.radius, sceneSize: event.size ?? context.sceneSize });
       enqueue.emit({
         type: 'geometryRadiusCalculated',
         radius: event.radius,
@@ -1199,6 +1201,7 @@ export const graphicsMachine = setup({
       currentZoom: 1,
       geometryRadius: 0,
       sceneRadius: undefined,
+      sceneSize: undefined,
 
       // Visibility state (from per-view settings or defaults)
       enableSurfaces: input.enableSurfaces ?? true,
