@@ -21,6 +21,10 @@ export type ModelViewerGraphicsOptions = {
   readonly enableSurfaces?: boolean;
   readonly enableMatcap?: boolean;
   readonly enableGizmo?: boolean;
+  /** Which gizmo style `enableGizmo` renders: orientation cube (default) or XYZ axes ball. */
+  readonly gizmoVariant?: 'cube' | 'axes';
+  /** A container element or selector the gizmo canvas is appended to. */
+  readonly gizmoContainer?: HTMLElement | string;
   readonly enableGrid?: boolean;
   readonly enableAxes?: boolean;
   readonly enablePostProcessing?: boolean;
@@ -113,6 +117,8 @@ const ModelViewerCore = memo(function ModelViewerCore({
           enableSurfaces={graphicsOptions?.enableSurfaces}
           enableMatcap={graphicsOptions?.enableMatcap}
           enableGizmo={graphicsOptions?.enableGizmo}
+          gizmoVariant={graphicsOptions?.gizmoVariant}
+          gizmoContainer={graphicsOptions?.gizmoContainer}
           className={graphicsOptions?.viewerClassName}
           stageOptions={stageOptions}
         />

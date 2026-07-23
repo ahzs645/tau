@@ -9,6 +9,11 @@ export type ThreeViewerProperties = {
    */
   readonly graphicsBackend: ResolvedGraphicsBackend;
   readonly enableGizmo?: boolean;
+  /**
+   * Which gizmo style to render when `enableGizmo` is set: the orientation cube
+   * (default) or the compact XYZ axes ball used by compact previews.
+   */
+  readonly gizmoVariant?: 'cube' | 'axes';
   readonly enableGrid?: boolean;
   readonly enableAxes?: boolean;
   readonly enableZoom?: boolean;

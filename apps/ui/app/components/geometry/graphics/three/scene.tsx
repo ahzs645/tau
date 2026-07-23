@@ -7,6 +7,7 @@ import { UpDirectionHandler } from '#components/geometry/graphics/three/up-direc
 type SceneProperties = {
   readonly children: ReactNode;
   readonly enableGizmo?: boolean;
+  readonly gizmoVariant?: 'cube' | 'axes';
   readonly enableDamping?: boolean;
   readonly enableZoom?: boolean;
   readonly enablePan?: boolean;
@@ -20,6 +21,7 @@ type SceneProperties = {
 export function Scene({
   children,
   enableGizmo = false,
+  gizmoVariant = 'cube',
   enableDamping = false,
   enableZoom = false,
   enablePan = false,
@@ -34,6 +36,7 @@ export function Scene({
       <UpDirectionHandler upDirection={upDirection} />
       <Controls
         enableGizmo={enableGizmo}
+        gizmoVariant={gizmoVariant}
         enableDamping={enableDamping}
         enableZoom={enableZoom}
         enablePan={enablePan}

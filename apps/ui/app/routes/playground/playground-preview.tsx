@@ -24,6 +24,25 @@ import { cn } from '#utils/ui.utils.js';
 
 export type PlaygroundMobilePane = '3d' | 'params';
 
+const orientationGizmoContainerId = 'playground-orientation-gizmo';
+
+/**
+ * Circular bottom-right host for the XYZ orientation gizmo, targeted by the
+ * viewer via `graphicsOptions.gizmoContainer`. The gizmo draws into a
+ * sub-viewport of the shared viewer canvas underneath this element, so the
+ * element itself stays transparent and only contributes the ring chrome.
+ */
+function OrientationGizmoContainer(): React.JSX.Element {
+  return (
+    <div className='pointer-events-none absolute right-4 bottom-4 z-10'>
+      <div
+        id={orientationGizmoContainerId}
+        className='pointer-events-auto relative size-20 shrink-0 rounded-full border shadow-sm'
+      />
+    </div>
+  );
+}
+
 export const playgroundPreviewCapabilities = {
   parameters: true,
 } as const;
@@ -111,17 +130,23 @@ export function PlaygroundPreviewPane({
       <section className='flex min-h-0 min-w-0 flex-1 flex-col'>
         <div className='relative min-h-0 flex-1 bg-muted/30'>
           {staticPreviewUrl ? (
-            <StaticPreviewViewer
-              className='size-full'
-              enablePan
-              enableZoom
-              staticPreviewUrl={staticPreviewUrl}
-              stageOptions={{ zoomLevel: 1.25 }}
-              graphicsOptions={{
-                enableLines: true,
-                viewerClassName: 'bg-muted/30',
-              }}
-            />
+            <>
+              <StaticPreviewViewer
+                className='size-full'
+                enablePan
+                enableZoom
+                staticPreviewUrl={staticPreviewUrl}
+                stageOptions={{ zoomLevel: 1.25 }}
+                graphicsOptions={{
+                  enableLines: true,
+                  enableGizmo: true,
+                  gizmoVariant: 'axes',
+                  gizmoContainer: `#${orientationGizmoContainerId}`,
+                  viewerClassName: 'bg-muted/30',
+                }}
+              />
+              <OrientationGizmoContainer />
+            </>
           ) : null}
         </div>
       </section>
@@ -145,6 +170,9 @@ export function PlaygroundPreviewPane({
             stageOptions={{ zoomLevel: 1.25 }}
             graphicsOptions={{
               enableLines: activeExample.showPreviewLines ?? true,
+              enableGizmo: true,
+              gizmoVariant: 'axes',
+              gizmoContainer: `#${orientationGizmoContainerId}`,
               viewerClassName: 'bg-muted/30',
             }}
           />
@@ -157,19 +185,24 @@ export function PlaygroundPreviewPane({
             stageOptions={{ zoomLevel: 1.25 }}
             graphicsOptions={{
               enableLines: activeExample.showPreviewLines ?? true,
+              enableGizmo: true,
+              gizmoVariant: 'axes',
+              gizmoContainer: `#${orientationGizmoContainerId}`,
               viewerClassName: 'bg-muted/30',
             }}
             error={displayError}
           />
         )}
+        <OrientationGizmoContainer />
         <RenderStatusOverlay
           status={displayStatus === 'loading' && displayGeometries.length === 0 ? 'loading' : 'idle'}
           className='absolute top-3 left-3'
         />
 
-        {/* Mobile export: lives on the viewer instead of the crowded header. */}
+        {/* Mobile export: lives on the viewer instead of the crowded header,
+            offset left of the orientation gizmo circle. */}
         {activeExample.exportFormats.length > 0 ? (
-          <div ref={setMobileExportControlsRef} className='absolute right-3 bottom-3 z-10 xl:hidden' />
+          <div ref={setMobileExportControlsRef} className='absolute right-28 bottom-3 z-10 xl:hidden' />
         ) : null}
       </div>
     </section>

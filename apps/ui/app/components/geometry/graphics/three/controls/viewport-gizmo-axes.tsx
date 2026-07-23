@@ -7,11 +7,16 @@ import * as THREE from 'three';
 import type { OrbitControls } from 'three/addons';
 import type { ReactNode } from 'react';
 import { useColor } from '#hooks/use-color.js';
-import { useTheme } from '#hooks/use-theme.js';
+import { Theme, useTheme } from '#hooks/use-theme.js';
 import { resolveGizmoContainer, useGizmoResizeSync } from '#components/geometry/graphics/three/utils/gizmo.utils.js';
 
 type ViewportGizmoAxesProps = {
   readonly size?: number;
+  /**
+   * Scale applied to the gizmo content inside its canvas. `1` fills the canvas;
+   * smaller values add breathing room around the axes ball.
+   */
+  readonly contentScale?: number;
   /**
    * A container element or selector to append the gizmo to.
    *
@@ -29,7 +34,8 @@ const className = 'viewport-gizmo-axes';
 const emptyDependencies: readonly unknown[] = [];
 
 export function ViewportGizmoAxes({
-  size = 96,
+  size = 80,
+  contentScale = 0.95,
   container,
   dependencies = emptyDependencies,
 }: ViewportGizmoAxesProps): ReactNode {
@@ -95,6 +101,18 @@ export function ViewportGizmoAxes({
         bottom: 0,
         right: 0,
       },
+      // The gizmo renders into a sub-viewport of the shared canvas, underneath
+      // any host container chrome, so the circular backdrop must come from the
+      // library's background sphere rather than a container background.
+      background: {
+        enabled: true,
+        color: theme === Theme.DARK ? 0x29_25_24 : 0xf5_f5_f4,
+        opacity: 1,
+        hover: {
+          color: theme === Theme.DARK ? 0x3b_36_33 : 0xe7_e5_e4,
+          opacity: 1,
+        },
+      },
     };
 
     const gizmo = new ViewportGizmo(camera, gl, gizmoConfig);
@@ -103,7 +121,7 @@ export function ViewportGizmoAxes({
     gizmo.addEventListener('change', handleChange);
     gizmo.addEventListener('hoverchange', handleChange);
 
-    gizmo.scale.multiplyScalar(0.7);
+    gizmo.scale.multiplyScalar(contentScale);
 
     gizmo.attachControls(controls);
 
@@ -120,7 +138,7 @@ export function ViewportGizmoAxes({
       }
     };
     // oxlint-disable-next-line react-hooks/exhaustive-deps -- dependencies array is user-provided for custom recreation triggers
-  }, [camera, gl, controls, scene, serialized.hex, theme, size, handleChange, container, invalidate, ...dependencies]);
+  }, [camera, gl, controls, scene, serialized.hex, theme, size, contentScale, handleChange, container, invalidate, ...dependencies]);
 
   return null;
 }
