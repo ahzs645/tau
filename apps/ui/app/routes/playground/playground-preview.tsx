@@ -40,6 +40,7 @@ import {
 import { useToolbarOverflow } from '#hooks/use-toolbar-overflow.js';
 import type { ToolbarItemConfig } from '#hooks/use-toolbar-overflow.js';
 import { useResizeObserver } from '#hooks/use-resize-observer.js';
+import { ArButton } from '#components/cad/ar-button.js';
 import type { CadPreviewStatus } from '#hooks/use-cad-preview.js';
 import { PreviewParameters } from '#routes/projects_.$id_.preview/preview-parameters.js';
 import type { PlaygroundExample, PlaygroundPreset } from '#routes/playground/playground-examples.js';
@@ -167,6 +168,15 @@ export const playgroundPreviewCapabilities = {
   parameters: true,
 } as const;
 
+async function fetchGlbBytes(url: string): Promise<Uint8Array<ArrayBuffer> | undefined> {
+  const response = await fetch(url);
+  if (!response.ok) {
+    return undefined;
+  }
+
+  return new Uint8Array(await response.arrayBuffer());
+}
+
 type PlaygroundPreviewPaneProps = {
   readonly activeExample: PlaygroundExample;
   readonly cachedGeometries: readonly Geometry[] | undefined;
@@ -246,6 +256,28 @@ export function PlaygroundPreviewPane({
     [previewGeometryCacheKey],
   );
 
+  // AR Quick Look source: the live kernel render when available, otherwise the
+  // pre-rendered static GLB. Works for every example mode — no kernel needed.
+  const hasArSource = displayGeometries.some((g) => g.format === 'gltf') || staticPreviewUrl !== undefined;
+  const getArGlbData = useCallback(async (): Promise<Uint8Array<ArrayBuffer> | undefined> => {
+    const gltfGeometry = displayGeometries.find((g) => g.format === 'gltf');
+    if (gltfGeometry?.format === 'gltf') {
+      return gltfGeometry.content;
+    }
+
+    return staticPreviewUrl === undefined ? undefined : fetchGlbBytes(staticPreviewUrl);
+  }, [displayGeometries, staticPreviewUrl]);
+
+  // Mobile-only iOS Quick Look launcher; renders nothing elsewhere. Sits above
+  // the orientation gizmo disc in the bottom-right corner.
+  const arButton = (
+    <ArButton
+      geometries={displayGeometries}
+      getGlbData={hasArSource ? getArGlbData : undefined}
+      className='absolute right-4 bottom-28 z-10'
+    />
+  );
+
   if (!isEditableExample) {
     return (
       <section className='flex min-h-0 min-w-0 flex-1 flex-col'>
@@ -274,6 +306,7 @@ export function PlaygroundPreviewPane({
                 <PlaygroundViewerToolbar />
               </GraphicsProvider>
               <OrientationGizmoContainer />
+              {arButton}
             </>
           ) : null}
         </div>
@@ -338,6 +371,7 @@ export function PlaygroundPreviewPane({
           />
         </GraphicsProvider>
         <OrientationGizmoContainer />
+        {arButton}
         <RenderStatusOverlay
           status={displayStatus === 'loading' && displayGeometries.length === 0 ? 'loading' : 'idle'}
           className='absolute top-3 left-3'
