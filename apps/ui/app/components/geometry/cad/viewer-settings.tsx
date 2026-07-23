@@ -32,6 +32,7 @@ import { axesColors } from '#constants/color.constants.js';
 import type { EnvironmentPreset, GraphicsBackendPreference } from '#constants/editor.constants.js';
 import { useGraphics, useGraphicsSelector } from '#hooks/use-graphics.js';
 import { useCad, useCadSelector } from '#hooks/use-cad.js';
+import { useIsMobile } from '#hooks/use-mobile.js';
 import { BetaBadge } from '#components/release-badge.js';
 
 // Up direction options
@@ -121,6 +122,8 @@ export function ViewerSettings({ className, overflowControls }: ViewerSettingsPr
   const graphicsRef = useGraphics();
 
   const [isOpen, setIsOpen] = useState(false);
+  // Side-right hangs a 288px menu off-screen on phones; open upward there instead.
+  const isMobile = useIsMobile();
 
   // Read all settings from per-view graphicsMachine state via context
   const enableSurfaces = useGraphicsSelector((state) => state.context.enableSurfaces);
@@ -272,9 +275,10 @@ export function ViewerSettings({ className, overflowControls }: ViewerSettingsPr
         <TooltipContent side='top'>Viewer settings</TooltipContent>
       </Tooltip>
       <DropdownMenuContent
-        align='end'
-        side='right'
-        className='w-72'
+        align={isMobile ? 'start' : 'end'}
+        side={isMobile ? 'top' : 'right'}
+        collisionPadding={8}
+        className='w-72 max-md:max-h-[60vh] max-md:overflow-y-auto'
         onCloseAutoFocus={(event) => {
           event.preventDefault();
         }}
