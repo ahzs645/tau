@@ -6,6 +6,7 @@ import { useEffect } from 'react';
 import type { FileExtension, Geometry } from '@taucad/types';
 import PlaygroundRoot, { loader as playgroundRootLoader } from '#routes/playground/route.js';
 import { playgroundShareCodec } from '#routes/playground/share-codec.js';
+import { KeyboardProvider } from '#hooks/use-keyboard.js';
 
 type CadEventMap = {
   geometryExported: { blob: Blob; format: FileExtension };
@@ -287,6 +288,56 @@ vi.mock('#components/ui/dropdown-menu.js', () => ({
       </button>
     );
   },
+  DropdownMenuLabel({ children }: { readonly children: React.ReactNode }) {
+    return <div>{children}</div>;
+  },
+  DropdownMenuSeparator() {
+    return <hr />;
+  },
+  DropdownMenuRadioGroup({ children }: { readonly children: React.ReactNode }) {
+    return <div>{children}</div>;
+  },
+  DropdownMenuRadioItem({ children }: { readonly children: React.ReactNode }) {
+    return <div>{children}</div>;
+  },
+  DropdownMenuSwitchItem({
+    children,
+    isChecked,
+    onIsCheckedChange,
+  }: {
+    readonly children: React.ReactNode;
+    readonly isChecked?: boolean;
+    readonly onIsCheckedChange?: (checked: boolean) => void;
+  }) {
+    return (
+      <button
+        type='button'
+        onClick={() => {
+          onIsCheckedChange?.(!isChecked);
+        }}
+      >
+        {children}
+      </button>
+    );
+  },
+  DropdownMenuSelectItem({ children }: { readonly children: React.ReactNode }) {
+    return <div>{children}</div>;
+  },
+  DropdownMenuToggleGroupItem({ children }: { readonly children: React.ReactNode }) {
+    return <div>{children}</div>;
+  },
+  DropdownMenuSliderItem({ children }: { readonly children: React.ReactNode }) {
+    return <div>{children}</div>;
+  },
+  DropdownMenuSub({ children }: { readonly children: React.ReactNode }) {
+    return <div>{children}</div>;
+  },
+  DropdownMenuSubTrigger({ children }: { readonly children: React.ReactNode }) {
+    return <div>{children}</div>;
+  },
+  DropdownMenuSubContent({ children }: { readonly children: React.ReactNode }) {
+    return <div>{children}</div>;
+  },
 }));
 
 vi.mock('#routes/projects_.$id_.preview/preview-parameters.js', () => ({
@@ -502,7 +553,9 @@ describe('PlaygroundRoot', () => {
   it('updates the active model when route loader data changes on client navigation', async () => {
     const { rerender } = render(
       <MemoryRouter key='3d-rack-scad' initialEntries={['/?model=3d-rack-scad']}>
-        <PlaygroundRoot loaderData={{ activeExampleId: '3d-rack-scad' }} />
+        <KeyboardProvider>
+          <PlaygroundRoot loaderData={{ activeExampleId: '3d-rack-scad' }} />
+        </KeyboardProvider>
       </MemoryRouter>,
     );
 
@@ -513,7 +566,9 @@ describe('PlaygroundRoot', () => {
 
     rerender(
       <MemoryRouter key='networking' initialEntries={['/?model=networking']}>
-        <PlaygroundRoot loaderData={{ activeExampleId: 'networking' }} />
+        <KeyboardProvider>
+          <PlaygroundRoot loaderData={{ activeExampleId: 'networking' }} />
+        </KeyboardProvider>
       </MemoryRouter>,
     );
 
@@ -526,7 +581,9 @@ describe('PlaygroundRoot', () => {
   it('uses the browser location search when static prerender loader data is the default model', async () => {
     render(
       <MemoryRouter initialEntries={['/?model=networking']}>
-        <PlaygroundRoot loaderData={{ activeExampleId: 'openscad-bracket' }} />
+        <KeyboardProvider>
+          <PlaygroundRoot loaderData={{ activeExampleId: 'openscad-bracket' }} />
+        </KeyboardProvider>
       </MemoryRouter>,
     );
 
@@ -727,7 +784,9 @@ function renderPlaygroundRoot(): ReturnType<typeof render> {
 
   return render(
     <MemoryRouter initialEntries={[`${globalThis.location.pathname}${globalThis.location.search}`]}>
-      <PlaygroundRoot loaderData={loaderData} />
+      <KeyboardProvider>
+        <PlaygroundRoot loaderData={loaderData} />
+      </KeyboardProvider>
     </MemoryRouter>,
   );
 }

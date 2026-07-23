@@ -18,7 +18,13 @@ const snapModes: ReadonlyArray<{ mode: MeasureSnapMode; label: string; icon: Luc
  * feature-select modes of desktop CAD measure tools. Renders nothing while the
  * measure tool is inactive.
  */
-export function MeasureSnapModeControl({ className }: { readonly className?: string }): React.ReactNode {
+export function MeasureSnapModeControl({
+  className,
+  tooltipSide = 'right',
+}: {
+  readonly className?: string;
+  readonly tooltipSide?: 'top' | 'right' | 'bottom' | 'left';
+}): React.ReactNode {
   const graphicsRef = useGraphics();
   const isMeasureActive = useGraphicsSelector((state) => state.context.isMeasureActive);
   const measureSnapMode = useGraphicsSelector((state) => state.context.measureSnapMode);
@@ -44,7 +50,7 @@ export function MeasureSnapModeControl({ className }: { readonly className?: str
               <Icon className='size-3.5' />
             </Button>
           </TooltipTrigger>
-          <TooltipContent side='right'>{label}</TooltipContent>
+          <TooltipContent side={tooltipSide}>{label}</TooltipContent>
         </Tooltip>
       ))}
     </div>

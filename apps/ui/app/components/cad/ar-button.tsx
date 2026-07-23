@@ -4,6 +4,7 @@ import type { Geometry } from '@taucad/types';
 import { Button } from '#components/ui/button.js';
 import { useIsMobile } from '#hooks/use-mobile.js';
 import { useAr } from '#components/cad/use-ar.js';
+import type { GetGlbData } from '#components/cad/use-ar.js';
 import type { AppRuntimeClient } from '#types/runtime-client.alias.js';
 import { cn } from '#utils/ui.utils.js';
 
@@ -36,14 +37,17 @@ function ArIcon({ className }: { readonly className?: string }): React.JSX.Eleme
 export const ArButton = memo(function ({
   geometries,
   kernelClient,
+  getGlbData,
   className,
 }: {
   readonly geometries: readonly Geometry[];
   readonly kernelClient?: AppRuntimeClient;
+  /** Kernel-free USDZ source: current model's GLB bytes, converted in the browser. */
+  readonly getGlbData?: GetGlbData;
   readonly className?: string;
 }): React.ReactNode {
   const isMobile = useIsMobile();
-  const { canActivateAr, isConverting, activateAr } = useAr(geometries, kernelClient);
+  const { canActivateAr, isConverting, activateAr } = useAr(geometries, kernelClient, getGlbData);
 
   if (!isMobile || !canActivateAr) {
     return undefined;

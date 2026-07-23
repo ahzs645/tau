@@ -11,6 +11,13 @@ type ArCapability = {
 };
 
 /**
+ * Fallback GLB source for viewers without a runtime kernel client (e.g. the
+ * playground). Resolves the current model's GLB bytes, or `undefined` when no
+ * model is available yet.
+ */
+export type GetGlbData = () => Promise<Uint8Array<ArrayBuffer> | undefined>;
+
+/**
  * Detect iOS via user agent (iPhone/iPad/iPod) and iPad masquerading as Mac.
  * Mirrors model-viewer's detection logic from constants.ts.
  */
@@ -60,18 +67,30 @@ function launchQuickLook(usdzBlobUrl: string): void {
 /**
  * Hook providing iOS Quick Look AR capability detection and launch.
  *
- * Returns `canActivateAr: true` only when the device supports Quick Look
- * and geometry is available. Call `activateAr()` from a user click handler
- * to export the model to USDZ via the runtime client and open AR Quick Look.
+ * Returns `canActivateAr: true` only when the device supports Quick Look and a
+ * USDZ source is available. Call `activateAr()` from a user click handler to
+ * export the model to USDZ and open AR Quick Look.
+ *
+ * Two export paths, matching whichever the surrounding view provides:
+ * - `kernelClient`: the runtime client's worker-side `export('usdz')`
+ *   (project views with a live kernel).
+ * - `getGlbData`: browser-side GLB → USDZ conversion via `@taucad/converter`
+ *   — the same `exportFromGlb` the runtime path wraps — for viewers without a
+ *   kernel (playground examples, pre-rendered static models).
  */
-export function useAr(geometries: readonly Geometry[], kernelClient?: AppRuntimeClient): ArCapability {
+export function useAr(
+  geometries: readonly Geometry[],
+  kernelClient?: AppRuntimeClient,
+  getGlbData?: GetGlbData,
+): ArCapability {
   const [isConverting, setIsConverting] = useState(false);
 
   const hasGltfGeometry = geometries.some((g) => g.format === 'gltf');
-  const canActivateAr = isQuickLookSupported && hasGltfGeometry && Boolean(kernelClient);
+  const canActivateAr =
+    isQuickLookSupported && ((hasGltfGeometry && Boolean(kernelClient)) || getGlbData !== undefined);
 
   const activateAr = useCallback(async () => {
-    if (!canActivateAr || !kernelClient) {
+    if (!canActivateAr) {
       return;
     }
 
@@ -79,13 +98,33 @@ export function useAr(geometries: readonly Geometry[], kernelClient?: AppRuntime
     let blobUrl: string | undefined;
 
     try {
-      const result = await kernelClient.export('usdz');
-      if (!result.success) {
-        throw new Error(result.issues[0]?.message ?? 'USDZ export failed');
+      let usdz: { bytes: Uint8Array<ArrayBuffer>; mimeType: string };
+
+      if (kernelClient) {
+        const result = await kernelClient.export('usdz');
+        if (!result.success) {
+          throw new Error(result.issues[0]?.message ?? 'USDZ export failed');
+        }
+
+        usdz = result.data;
+      } else {
+        const glbData = await getGlbData?.();
+        if (!glbData) {
+          throw new Error('No model available for AR');
+        }
+
+        // Deferred so the Assimp-backed converter only loads on first AR use.
+        const { exportFromGlb } = await import('@taucad/converter');
+        const files = await exportFromGlb(glbData, 'usdz');
+        const file = files[0];
+        if (!file) {
+          throw new Error('USDZ export produced no output');
+        }
+
+        usdz = { bytes: file.bytes, mimeType: file.mimeType };
       }
 
-      const { data } = result;
-      blobUrl = URL.createObjectURL(new Blob([data.bytes], { type: data.mimeType }));
+      blobUrl = URL.createObjectURL(new Blob([usdz.bytes], { type: usdz.mimeType }));
 
       launchQuickLook(blobUrl);
     } catch (error) {
@@ -98,7 +137,7 @@ export function useAr(geometries: readonly Geometry[], kernelClient?: AppRuntime
 
       setIsConverting(false);
     }
-  }, [canActivateAr, kernelClient]);
+  }, [canActivateAr, kernelClient, getGlbData]);
 
   return {
     isQuickLookSupported,
