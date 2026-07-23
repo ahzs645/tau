@@ -276,9 +276,9 @@ export function PlaygroundPreviewPane({
         />
 
         {/* Mobile export: lives on the viewer instead of the crowded header,
-            offset left of the orientation gizmo circle. */}
+            left-aligned under the measurement/size stack. */}
         {activeExample.exportFormats.length > 0 ? (
-          <div ref={setMobileExportControlsRef} className='absolute right-28 bottom-3 z-10 xl:hidden' />
+          <div ref={setMobileExportControlsRef} className='absolute bottom-3 left-3 z-10 xl:hidden' />
         ) : null}
       </div>
     </section>
