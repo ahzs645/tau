@@ -83,9 +83,26 @@ export function helicalRidge(options: HelicalRidgeOptions): TopoDS_Shape {
   // gp_Dir2d normalises its direction, so the edge parameter runs in (u, v) arc
   // length: one unit of v costs `pcurveMagnitude` of parameter.
   const pcurveMagnitude = Math.hypot((2 * Math.PI) / pitch, 1);
-  const spineEdge = new BRepBuilderAPI_MakeEdge(pcurve, cylinderSurface, 0, spineLength * pcurveMagnitude);
-  BRepLib.BuildCurve3d(spineEdge.Edge());
-  const spineWire = new BRepBuilderAPI_MakeWire(spineEdge.Edge());
+  // Split the spine into one edge per helix turn. The pipe shell approximates
+  // one B-spline surface per spine edge; a single edge spanning ~20 turns
+  // exhausts the approximation budget and leaves localized folds in the thread
+  // flanks that render as cracks in the surface.
+  const turnCount = Math.max(1, Math.ceil(spineLength / pitch));
+  const spineWire = new BRepBuilderAPI_MakeWire();
+  const spineEdges: BRepBuilderAPI_MakeEdge[] = [];
+  for (let turn = 0; turn < turnCount; turn += 1) {
+    const segmentStart = (spineLength * turn) / turnCount;
+    const segmentEnd = (spineLength * (turn + 1)) / turnCount;
+    const spineEdge = new BRepBuilderAPI_MakeEdge(
+      pcurve,
+      cylinderSurface,
+      segmentStart * pcurveMagnitude,
+      segmentEnd * pcurveMagnitude,
+    );
+    BRepLib.BuildCurve3d(spineEdge.Edge());
+    spineWire.Add(spineEdge.Edge());
+    spineEdges.push(spineEdge);
+  }
   helixOrigin.delete();
   helixAxisDir.delete();
   helixRefDir.delete();
@@ -124,7 +141,9 @@ export function helicalRidge(options: HelicalRidgeOptions): TopoDS_Shape {
   pipe.delete();
   profile.delete();
   spineWire.delete();
-  spineEdge.delete();
+  for (const spineEdge of spineEdges) {
+    spineEdge.delete();
+  }
   pcurve.delete();
   cylinderSurface.delete();
 
