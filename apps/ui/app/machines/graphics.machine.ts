@@ -16,6 +16,13 @@ import {
   resolveGraphicsBackendPreference,
 } from '#components/geometry/graphics/graphics-backend.js';
 
+/**
+ * Which feature type measurement snapping targets.
+ * `all` offers every snap point; the others filter to one feature kind,
+ * mirroring the vertex/edge/face pick modes of desktop CAD measure tools.
+ */
+export type MeasureSnapMode = 'all' | 'vertex' | 'edge' | 'face';
+
 // Context type definition
 export type GraphicsContext = {
   /**
@@ -64,6 +71,8 @@ export type GraphicsContext = {
   currentZoom: number;
   geometryRadius: number;
   sceneRadius: number | undefined;
+  /** Axis-aligned bounding-box size of the loaded geometry in scene units. */
+  sceneSize: [number, number, number] | undefined;
 
   // Visibility state
   enableSurfaces: boolean;
@@ -120,6 +129,7 @@ export type GraphicsContext = {
   }>;
   currentMeasurementStart: [number, number, number] | undefined;
   measureSnapDistance: number; // Pixels
+  measureSnapMode: MeasureSnapMode;
   hoveredMeasurementId?: string;
 
   // Capability registrations
@@ -184,6 +194,7 @@ export type GraphicsEvent =
   | { type: 'setClippingMeshEnabled'; payload: boolean }
   // Measure events
   | { type: 'setMeasureActive'; payload: boolean }
+  | { type: 'setMeasureSnapMode'; payload: MeasureSnapMode }
   | { type: 'startMeasurement'; payload: [number, number, number] }
   | { type: 'completeMeasurement'; payload: [number, number, number] }
   | { type: 'cancelCurrentMeasurement' }
@@ -226,7 +237,7 @@ export type GraphicsEvent =
       units: { length: LengthSymbol };
     }
   // Scene radius update from Three.js bounding sphere (sent by Stage)
-  | { type: 'sceneRadiusUpdated'; radius: number };
+  | { type: 'sceneRadiusUpdated'; radius: number; size?: [number, number, number] };
 
 // Emitted events
 export type GraphicsEmitted =
@@ -636,9 +647,9 @@ export const graphicsMachine = setup({
       });
     }),
 
-    updateSceneRadius: enqueueActions(({ enqueue, event }) => {
+    updateSceneRadius: enqueueActions(({ enqueue, event, context }) => {
       assertEvent(event, 'sceneRadiusUpdated');
-      enqueue.assign({ geometryRadius: event.radius });
+      enqueue.assign({ geometryRadius: event.radius, sceneSize: event.size ?? context.sceneSize });
       enqueue.emit({
         type: 'geometryRadiusCalculated',
         radius: event.radius,
@@ -1008,6 +1019,13 @@ export const graphicsMachine = setup({
       },
     }),
 
+    setMeasureSnapMode: assign({
+      measureSnapMode({ event }) {
+        assertEvent(event, 'setMeasureSnapMode');
+        return event.payload;
+      },
+    }),
+
     deactivateMeasure: assign({
       isMeasureActive: false,
       measurements: [],
@@ -1183,6 +1201,7 @@ export const graphicsMachine = setup({
       currentZoom: 1,
       geometryRadius: 0,
       sceneRadius: undefined,
+      sceneSize: undefined,
 
       // Visibility state (from per-view settings or defaults)
       enableSurfaces: input.enableSurfaces ?? true,
@@ -1229,6 +1248,7 @@ export const graphicsMachine = setup({
       })),
       currentMeasurementStart: undefined,
       measureSnapDistance: input.measureSnapDistance ?? 40,
+      measureSnapMode: 'all',
       hoveredMeasurementId: undefined,
 
       // Capabilities
@@ -1369,6 +1389,9 @@ export const graphicsMachine = setup({
         // Measurement events (available in all operational states)
         clearMeasurement: {
           actions: 'clearMeasurement',
+        },
+        setMeasureSnapMode: {
+          actions: 'setMeasureSnapMode',
         },
         setHoveredMeasurement: {
           actions: 'setHoveredMeasurement',

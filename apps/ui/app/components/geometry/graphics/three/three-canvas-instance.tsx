@@ -30,6 +30,7 @@ export function ThreeCanvasInstance({
   graphicsBackend,
   onRetry,
   enableGizmo = false,
+  gizmoVariant = 'cube',
   enableGrid = false,
   enableAxes = false,
   enableZoom = false,
@@ -90,6 +91,7 @@ export function ThreeCanvasInstance({
       <ThreeGraphicsBackendProvider value={graphicsBackend}>
         <Scene
           enableGizmo={enableGizmo}
+          gizmoVariant={gizmoVariant}
           enableCentering={enableCentering}
           enableDamping={enableDamping}
           enableZoom={enableZoom}

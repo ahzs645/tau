@@ -1,6 +1,7 @@
 import { OrbitControls } from '@react-three/drei';
 import React from 'react';
 import type * as THREE from 'three';
+import { ViewportGizmoAxes } from '#components/geometry/graphics/three/controls/viewport-gizmo-axes.js';
 import { ViewportGizmoCube } from '#components/geometry/graphics/three/controls/viewport-gizmo-cube.js';
 import { SectionViewControls } from '#components/geometry/graphics/three/react/section-view-controls.js';
 import { MeasureTool } from '#components/geometry/graphics/three/react/measure-tool.js';
@@ -11,6 +12,10 @@ type ControlsProperties = {
    * @description Whether to enable the gizmo for the viewport.
    */
   readonly enableGizmo: boolean;
+  /**
+   * @description Which gizmo style to render: the orientation cube (default) or the XYZ axes ball.
+   */
+  readonly gizmoVariant?: 'cube' | 'axes';
   /**
    * @description Whether to enable damping for the camera.
    */
@@ -35,6 +40,7 @@ type ControlsProperties = {
 
 export const Controls = React.memo(function ({
   enableGizmo,
+  gizmoVariant = 'cube',
   enableDamping,
   enableZoom,
   enablePan,
@@ -111,7 +117,12 @@ export const Controls = React.memo(function ({
         onSetRotation={handleSetRotation}
         onSetPivot={handleSetPivot}
       />
-      {enableGizmo ? <ViewportGizmoCube container={gizmoContainer} dependencies={[upDirection]} /> : null}
+      {enableGizmo && gizmoVariant === 'cube' ? (
+        <ViewportGizmoCube container={gizmoContainer} dependencies={[upDirection]} />
+      ) : null}
+      {enableGizmo && gizmoVariant === 'axes' ? (
+        <ViewportGizmoAxes container={gizmoContainer} dependencies={[upDirection]} />
+      ) : null}
     </>
   );
 });

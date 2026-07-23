@@ -14,6 +14,8 @@ type CadViewerProperties = Omit<ThreeViewerProperties, 'graphicsBackend'> & {
   readonly enableSurfaces?: boolean;
   readonly enableLines?: boolean;
   readonly enableMatcap?: boolean;
+  /** Uniform scale applied to loaded glTF scenes whose unit differs from the viewer's mm convention. */
+  readonly modelUnitScale?: number;
 };
 
 export const CadViewer = memo(
@@ -22,6 +24,7 @@ export const CadViewer = memo(
     enableSurfaces = true,
     enableLines = true,
     enableMatcap = false,
+    modelUnitScale = 1,
     ...properties
   }: CadViewerProperties): React.JSX.Element => {
     const machineResolvedBackend = useGraphicsSelector((state) => state.context.resolvedGraphicsBackend);
@@ -56,6 +59,7 @@ export const CadViewer = memo(
                     enableMatcap={enableMatcap}
                     enableSurfaces={enableSurfaces}
                     enableLines={enableLines}
+                    unitScale={modelUnitScale}
                   />
                 );
               }

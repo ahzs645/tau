@@ -10,6 +10,7 @@ export function ThreeProvider({
   children,
   graphicsBackend,
   enableGizmo = false,
+  gizmoVariant = 'cube',
   enableGrid = false,
   enableAxes = false,
   enableZoom = false,
@@ -76,6 +77,7 @@ export function ThreeProvider({
       key={canvasMountKey}
       {...properties}
       enableGizmo={enableGizmo}
+      gizmoVariant={gizmoVariant}
       enableGrid={enableGrid}
       enableAxes={enableAxes}
       enableZoom={enableZoom}

@@ -21,9 +21,20 @@ export type ModelViewerGraphicsOptions = {
   readonly enableSurfaces?: boolean;
   readonly enableMatcap?: boolean;
   readonly enableGizmo?: boolean;
+  /** Which gizmo style `enableGizmo` renders: orientation cube (default) or XYZ axes ball. */
+  readonly gizmoVariant?: 'cube' | 'axes';
+  /** A container element or selector the gizmo canvas is appended to. */
+  readonly gizmoContainer?: HTMLElement | string;
   readonly enableGrid?: boolean;
   readonly enableAxes?: boolean;
   readonly enablePostProcessing?: boolean;
+  /**
+   * Uniform scale applied to loaded glTF scenes. The viewer convention is
+   * millimeters; pass `1000` for spec-compliant meter-based GLB sources
+   * (e.g. pre-rendered static preview files) so measurements and size
+   * readouts stay in real model units.
+   */
+  readonly modelUnitScale?: number;
   readonly viewerClassName?: string;
 };
 
@@ -113,6 +124,9 @@ const ModelViewerCore = memo(function ModelViewerCore({
           enableSurfaces={graphicsOptions?.enableSurfaces}
           enableMatcap={graphicsOptions?.enableMatcap}
           enableGizmo={graphicsOptions?.enableGizmo}
+          gizmoVariant={graphicsOptions?.gizmoVariant}
+          gizmoContainer={graphicsOptions?.gizmoContainer}
+          modelUnitScale={graphicsOptions?.modelUnitScale}
           className={graphicsOptions?.viewerClassName}
           stageOptions={stageOptions}
         />

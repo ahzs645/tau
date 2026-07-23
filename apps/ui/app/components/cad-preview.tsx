@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useState } from 'react';
 import type { Geometry } from '@taucad/types';
 import { ModelViewer, RenderStatusOverlay } from '#components/model-viewer.js';
-import type { ModelViewerGraphicsOptions } from '#components/model-viewer.js';
+import type { ModelViewerGraphicsOptions, ModelViewerProps } from '#components/model-viewer.js';
 import { useCadPreview } from '#hooks/use-cad-preview.js';
 import type { StageOptions } from '#components/geometry/graphics/three/stage.js';
 
@@ -127,7 +127,12 @@ export const StaticPreviewViewer = memo(function StaticPreviewViewer({
   stageOptions,
   graphicsOptions,
   staticPreviewUrl,
-}: CadPreviewViewerProps & { readonly staticPreviewUrl: string }): React.JSX.Element {
+  graphicsRef,
+}: CadPreviewViewerProps & {
+  readonly staticPreviewUrl: string;
+  /** Optional external graphics actor so parents can drive viewer tools (measure, section view). */
+  readonly graphicsRef?: ModelViewerProps['graphicsRef'];
+}): React.JSX.Element {
   const [geometry, setGeometry] = useState<Geometry | undefined>(undefined);
   const [error, setError] = useState<Error | undefined>(undefined);
 
@@ -157,6 +162,7 @@ export const StaticPreviewViewer = memo(function StaticPreviewViewer({
   return (
     <ModelViewer
       geometries={geometry ? [geometry] : []}
+      graphicsRef={graphicsRef}
       className={className}
       enablePan={enablePan}
       enableZoom={enableZoom}
