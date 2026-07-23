@@ -95,9 +95,11 @@ function PlaygroundViewerToolbar(): React.JSX.Element {
 function OrientationGizmoContainer(): React.JSX.Element {
   return (
     <div className='pointer-events-none absolute right-4 bottom-4 z-10'>
+      {/* Fixed pixel size: the gizmo canvas is exactly 80px, so the host must be
+          82px (1px border each side) and must not scale with root font-size. */}
       <div
         id={orientationGizmoContainerId}
-        className='pointer-events-auto relative size-20 shrink-0 rounded-full border shadow-sm'
+        className='pointer-events-auto relative size-[82px] shrink-0 rounded-full border shadow-sm'
       />
     </div>
   );
