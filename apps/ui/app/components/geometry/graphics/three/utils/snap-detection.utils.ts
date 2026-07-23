@@ -2,7 +2,7 @@ import * as THREE from 'three';
 
 export type SnapPoint = {
   position: THREE.Vector3;
-  type: 'vertex' | 'edge-midpoint';
+  type: 'vertex' | 'edge-midpoint' | 'face-center';
 };
 
 // Epsilon constants for coplanar face detection
@@ -485,7 +485,7 @@ export function detectSnapPoints(mesh: THREE.Mesh, raycaster: THREE.Raycaster): 
     refNormal: referenceNormal,
     refPoint: referencePoint,
   });
-  addPoint(center, 'vertex');
+  addPoint(center, 'face-center');
 
   return snapPoints;
 }
@@ -679,7 +679,7 @@ function detectCircleOnFace(
       position: centerWorld.clone().addScaledVector(v, -r),
       type: 'edge-midpoint',
     },
-    { position: centerWorld, type: 'vertex' },
+    { position: centerWorld, type: 'face-center' },
   ];
   return result;
 }

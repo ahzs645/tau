@@ -1,6 +1,8 @@
 import type { ReactNode, RefCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useActorRef } from '@xstate/react';
+import type { ActorRefFrom } from 'xstate';
 import { ChevronDown, Download } from 'lucide-react';
 import type { FileExtension, Geometry } from '@taucad/types';
 import { downloadBlob } from '@taucad/utils/file';
@@ -16,6 +18,14 @@ import {
 } from '#components/ui/dropdown-menu.js';
 import { FileManagerProvider, SharedWorkerGate } from '#hooks/use-file-manager.js';
 import { CadPreviewProvider, useCadPreview } from '#hooks/use-cad-preview.js';
+import { GraphicsProvider } from '#hooks/use-graphics.js';
+import { graphicsMachine } from '#machines/graphics.machine.js';
+import { defaultGraphicsSettings } from '#constants/editor.constants.js';
+import { TooltipProvider } from '#components/ui/tooltip.js';
+import { MeasureControl } from '#components/geometry/cad/measure-control.js';
+import { MeasureSnapModeControl } from '#components/geometry/cad/measure-snap-mode-control.js';
+import { SectionViewControl } from '#components/geometry/cad/section-view-control.js';
+import { ResetCameraControl } from '#components/geometry/cad/reset-camera-control.js';
 import type { CadPreviewStatus } from '#hooks/use-cad-preview.js';
 import { PreviewParameters } from '#routes/projects_.$id_.preview/preview-parameters.js';
 import type { PlaygroundExample, PlaygroundPreset } from '#routes/playground/playground-examples.js';
@@ -25,6 +35,50 @@ import { cn } from '#utils/ui.utils.js';
 export type PlaygroundMobilePane = '3d' | 'params';
 
 const orientationGizmoContainerId = 'playground-orientation-gizmo';
+
+type PlaygroundGraphicsRef = ActorRefFrom<typeof graphicsMachine>;
+
+/**
+ * One graphics actor shared between the preview viewer and the utilities
+ * toolbar, so toolbar buttons (measure, section view, reset camera) drive the
+ * same viewer the geometries render in.
+ */
+function usePlaygroundGraphicsRef(): PlaygroundGraphicsRef {
+  return useActorRef(graphicsMachine, {
+    input: {
+      defaultCameraFovAngle: defaultGraphicsSettings.cameraFovAngle,
+      measureSnapDistance: 40,
+      enableSurfaces: defaultGraphicsSettings.enableSurfaces,
+      enableLines: defaultGraphicsSettings.enableLines,
+      enableGizmo: defaultGraphicsSettings.enableGizmo,
+      enableGrid: defaultGraphicsSettings.enableGrid,
+      enableAxes: defaultGraphicsSettings.enableAxes,
+      enableMatcap: defaultGraphicsSettings.enableMatcap,
+      enablePostProcessing: defaultGraphicsSettings.enablePostProcessing,
+      upDirection: defaultGraphicsSettings.upDirection,
+      environmentPreset: defaultGraphicsSettings.environmentPreset,
+      graphicsBackendPreference: defaultGraphicsSettings.graphicsBackend ?? 'webgl',
+    },
+  });
+}
+
+/**
+ * Floating viewer utilities: measure (with vertex/edge/face snap modes),
+ * section view, and camera reset. Must render inside a `GraphicsProvider`
+ * bound to the same actor as the viewer.
+ */
+function PlaygroundViewerToolbar(): React.JSX.Element {
+  return (
+    <TooltipProvider>
+      <div className='absolute top-3 left-3 z-10 flex flex-col items-start gap-2'>
+        <MeasureControl />
+        <MeasureSnapModeControl />
+        <SectionViewControl />
+        <ResetCameraControl />
+      </div>
+    </TooltipProvider>
+  );
+}
 
 /**
  * Circular bottom-right host for the XYZ orientation gizmo, targeted by the
@@ -92,6 +146,7 @@ export function PlaygroundPreviewPane({
     setMobileExportControlsElement(node ?? undefined);
   }, []);
 
+  const graphicsRef = usePlaygroundGraphicsRef();
   const isCurrentPreviewSnapshot =
     previewSnapshot !== undefined && previewSnapshot.cacheKey === previewGeometryCacheKey;
   const displayGeometries =
@@ -136,6 +191,7 @@ export function PlaygroundPreviewPane({
                 enablePan
                 enableZoom
                 staticPreviewUrl={staticPreviewUrl}
+                graphicsRef={graphicsRef}
                 stageOptions={{ zoomLevel: 1.25 }}
                 graphicsOptions={{
                   enableLines: true,
@@ -145,6 +201,9 @@ export function PlaygroundPreviewPane({
                   viewerClassName: 'bg-muted/30',
                 }}
               />
+              <GraphicsProvider graphicsRef={graphicsRef}>
+                <PlaygroundViewerToolbar />
+              </GraphicsProvider>
               <OrientationGizmoContainer />
             </>
           ) : null}
@@ -167,6 +226,7 @@ export function PlaygroundPreviewPane({
             enablePan
             enableZoom
             staticPreviewUrl={staticPreviewUrl}
+            graphicsRef={graphicsRef}
             stageOptions={{ zoomLevel: 1.25 }}
             graphicsOptions={{
               enableLines: activeExample.showPreviewLines ?? true,
@@ -179,6 +239,7 @@ export function PlaygroundPreviewPane({
         ) : (
           <ModelViewer
             geometries={displayGeometries}
+            graphicsRef={graphicsRef}
             className='size-full'
             enablePan
             enableZoom
@@ -193,10 +254,13 @@ export function PlaygroundPreviewPane({
             error={displayError}
           />
         )}
+        <GraphicsProvider graphicsRef={graphicsRef}>
+          <PlaygroundViewerToolbar />
+        </GraphicsProvider>
         <OrientationGizmoContainer />
         <RenderStatusOverlay
           status={displayStatus === 'loading' && displayGeometries.length === 0 ? 'loading' : 'idle'}
-          className='absolute top-3 left-3'
+          className='absolute top-3 left-14'
         />
 
         {/* Mobile export: lives on the viewer instead of the crowded header,

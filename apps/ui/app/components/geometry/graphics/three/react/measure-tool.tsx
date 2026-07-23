@@ -15,6 +15,21 @@ import { computeAxisRotationForCamera } from '#components/geometry/graphics/thre
 import { matcapMaterial } from '#components/geometry/graphics/three/materials/matcap-material.js';
 import { sceneTag, sceneTagData, hasSceneTag } from '#components/geometry/graphics/three/utils/scene-tags.js';
 import { useGraphics, useGraphicsSelector } from '#hooks/use-graphics.js';
+import type { MeasureSnapMode } from '#machines/graphics.machine.js';
+
+const snapTypeForMode: Record<Exclude<MeasureSnapMode, 'all'>, SnapPoint['type']> = {
+  vertex: 'vertex',
+  edge: 'edge-midpoint',
+  face: 'face-center',
+};
+
+function filterSnapPointsByMode(snapPoints: SnapPoint[], mode: MeasureSnapMode): SnapPoint[] {
+  if (mode === 'all') {
+    return snapPoints;
+  }
+
+  return snapPoints.filter((snapPoint) => snapPoint.type === snapTypeForMode[mode]);
+}
 
 function calculateScaleFromCamera(position: THREE.Vector3, camera: THREE.Camera): number {
   const distanceToCamera = camera.position.distanceTo(position);
@@ -63,6 +78,7 @@ export function MeasureTool(): React.JSX.Element {
   const measurements = useGraphicsSelector((state) => state.context.measurements);
   const currentStart = useGraphicsSelector((state) => state.context.currentMeasurementStart);
   const snapDistance = useGraphicsSelector((state) => state.context.measureSnapDistance);
+  const measureSnapMode = useGraphicsSelector((state) => state.context.measureSnapMode);
   const lengthFactor = useGraphicsSelector((state) => state.context.units.length.factor);
   const lengthSymbol = useGraphicsSelector((state) => state.context.units.length.symbol);
   const hoveredMeasurementId = useGraphicsSelector((state) => state.context.hoveredMeasurementId);
@@ -81,6 +97,8 @@ export function MeasureTool(): React.JSX.Element {
   mousePositionRef.current = mousePosition;
   const currentStartRef = useRef(currentStart);
   currentStartRef.current = currentStart;
+  const measureSnapModeRef = useRef(measureSnapMode);
+  measureSnapModeRef.current = measureSnapMode;
 
   const raycasterRef = useRef(new THREE.Raycaster());
   const mouseRef = useRef(new THREE.Vector2());
@@ -164,6 +182,8 @@ export function MeasureTool(): React.JSX.Element {
         allSnapPoints = lastSnapPointsRef.current;
       }
 
+      // Restrict picks to the active snap mode (vertex / edge / face / all)
+      allSnapPoints = filterSnapPointsByMode(allSnapPoints, measureSnapModeRef.current);
       setHoveredSnapPoints(allSnapPoints);
 
       const closest = findClosestSnapPoint(allSnapPoints, {
@@ -343,6 +363,7 @@ export function MeasureTool(): React.JSX.Element {
                 key={key}
                 position={snapPoint.position}
                 isActive={snapPoint === activeSnapPoint}
+                snapType={snapPoint.type}
                 camera={camera}
               />
             );
@@ -381,10 +402,19 @@ type SnapPointIndicatorProps = {
   readonly position: THREE.Vector3;
   // Indicates hovered/selected state for color
   readonly isActive: boolean;
+  /** Feature type of the snap point; tints the idle fill so picks are distinguishable. */
+  readonly snapType?: SnapPoint['type'];
   readonly camera: THREE.Camera;
 };
 
-function SnapPointIndicator({ position, isActive, camera }: SnapPointIndicatorProps): React.JSX.Element {
+/** Idle fill color per snap feature type (active picks always turn green). */
+const snapTypeFillColor: Record<SnapPoint['type'], string> = {
+  vertex: '#ffffff',
+  'edge-midpoint': '#7dd3fc',
+  'face-center': '#fbbf24',
+};
+
+function SnapPointIndicator({ position, isActive, snapType, camera }: SnapPointIndicatorProps): React.JSX.Element {
   const outerRef = useRef<THREE.Mesh>(null);
   const innerRef = useRef<THREE.Mesh>(null);
 
@@ -445,7 +475,7 @@ function SnapPointIndicator({ position, isActive, camera }: SnapPointIndicatorPr
           toneMapped={false}
           fog={false}
           // oxlint-disable-next-line tau-lint/no-hardcoded-color -- Three.js material color
-          color={isActive ? '#00ff00' : '#ffffff'}
+          color={isActive ? '#00ff00' : snapTypeFillColor[snapType ?? 'vertex']}
           opacity={1}
           depthTest={false}
           depthWrite={false}
