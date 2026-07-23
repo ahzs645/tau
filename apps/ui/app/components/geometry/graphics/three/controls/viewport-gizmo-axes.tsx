@@ -13,8 +13,10 @@ import { resolveGizmoContainer, useGizmoResizeSync } from '#components/geometry/
 type ViewportGizmoAxesProps = {
   readonly size?: number;
   /**
-   * Scale applied to the gizmo content inside its canvas. `1` fills the canvas;
-   * smaller values add breathing room around the axes ball.
+   * Scale applied to the gizmo content inside its viewport. The sphere gizmo's
+   * backdrop disc exactly fills the viewport at `1` (the library's ±1.8 ortho
+   * frustum matches its 1.8 disc radius), so the host ring hugs the disc edge;
+   * smaller values shrink the disc and leave a visible gap inside the ring.
    */
   readonly contentScale?: number;
   /**
@@ -35,7 +37,7 @@ const emptyDependencies: readonly unknown[] = [];
 
 export function ViewportGizmoAxes({
   size = 80,
-  contentScale = 0.95,
+  contentScale = 1,
   container,
   dependencies = emptyDependencies,
 }: ViewportGizmoAxesProps): ReactNode {
