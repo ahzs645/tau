@@ -1,6 +1,6 @@
 import type { ReactNode, RefCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useActorRef } from '@xstate/react';
 import type { ActorRefFrom } from 'xstate';
 import { ChevronDown, Download } from 'lucide-react';
@@ -22,11 +22,24 @@ import { GraphicsProvider } from '#hooks/use-graphics.js';
 import { graphicsMachine } from '#machines/graphics.machine.js';
 import { defaultGraphicsSettings } from '#constants/editor.constants.js';
 import { TooltipProvider } from '#components/ui/tooltip.js';
+import { FovControl } from '#components/geometry/cad/fov-control.js';
+import { GridSizeIndicator } from '#components/geometry/cad/grid-control.js';
 import { MeasureControl } from '#components/geometry/cad/measure-control.js';
 import { MeasureReadout, ModelSizeIndicator } from '#components/geometry/cad/measure-readout.js';
 import { MeasureSnapModeControl } from '#components/geometry/cad/measure-snap-mode-control.js';
 import { SectionViewControl } from '#components/geometry/cad/section-view-control.js';
 import { ResetCameraControl } from '#components/geometry/cad/reset-camera-control.js';
+import { ViewerSettings } from '#components/geometry/cad/viewer-settings.js';
+import {
+  FovOverflowControl,
+  GridOverflowControl,
+  SectionViewOverflowControl,
+  MeasureOverflowControl,
+  ResetCameraOverflowControl,
+} from '#components/geometry/cad/viewer-overflow-controls.js';
+import { useToolbarOverflow } from '#hooks/use-toolbar-overflow.js';
+import type { ToolbarItemConfig } from '#hooks/use-toolbar-overflow.js';
+import { useResizeObserver } from '#hooks/use-resize-observer.js';
 import type { CadPreviewStatus } from '#hooks/use-cad-preview.js';
 import { PreviewParameters } from '#routes/projects_.$id_.preview/preview-parameters.js';
 import type { PlaygroundExample, PlaygroundPreset } from '#routes/playground/playground-examples.js';
@@ -64,23 +77,68 @@ function usePlaygroundGraphicsRef(): PlaygroundGraphicsRef {
 }
 
 /**
- * Floating viewer utilities: measure (with vertex/edge/face snap modes),
- * section view, and camera reset. Must render inside a `GraphicsProvider`
- * bound to the same actor as the viewer.
+ * Control items ordered by "stickiness" (first = last to overflow), matching
+ * the main app's viewer toolbar: FOV stays visible the longest, reset camera
+ * overflows into the settings dropdown first.
  */
-function PlaygroundViewerToolbar(): React.JSX.Element {
+const toolbarItems: ToolbarItemConfig[] = [
+  { id: 'fov', width: 200, compactWidth: 120 },
+  { id: 'grid', width: 32 },
+  { id: 'section', width: 32 },
+  { id: 'measure', width: 32 },
+  { id: 'reset', width: 32 },
+];
+
+/** Gap-2 = 8px, settings button (32px) + one gap (8px) = 40px reserved */
+const toolbarOverflowOptions = { gap: 8, reservedWidth: 40 } as const;
+
+/**
+ * Bottom-left viewer control bar mirroring the main app's toolbar: FOV slider,
+ * grid units, section view, measure, camera reset, and viewer settings.
+ * Controls that don't fit the measured width collapse into the settings
+ * dropdown (compact FOV labels first, then right-to-left overflow), so the
+ * full toolbar stays usable on phone-width viewports. Must render inside a
+ * `GraphicsProvider` bound to the same actor as the viewer.
+ */
+function PlaygroundViewerToolbar({ mobileExportSlot }: { readonly mobileExportSlot?: ReactNode }): React.JSX.Element {
+  const measureRef = useRef<HTMLDivElement>(null);
+  const { width: toolbarAvailableWidth } = useResizeObserver({ ref: measureRef });
+  const { visibleIds, overflowIds, isCompact } = useToolbarOverflow(
+    toolbarItems,
+    toolbarAvailableWidth,
+    toolbarOverflowOptions,
+  );
+
+  const overflowControls =
+    overflowIds.size === 0 ? undefined : (
+      <>
+        {overflowIds.has('reset') && <ResetCameraOverflowControl />}
+        {overflowIds.has('measure') && <MeasureOverflowControl />}
+        {overflowIds.has('section') && <SectionViewOverflowControl />}
+        {overflowIds.has('grid') && <GridOverflowControl />}
+        {overflowIds.has('fov') && <FovOverflowControl />}
+      </>
+    );
+
   return (
     <TooltipProvider>
-      <div className='absolute top-3 left-3 z-10 flex flex-col items-start gap-2'>
-        <MeasureControl />
-        <MeasureSnapModeControl />
-        <SectionViewControl />
-        <ResetCameraControl />
-      </div>
-      {/* Bottom-16 below xl keeps the stack clear of the mobile export button. */}
-      <div className='absolute bottom-16 left-3 z-10 flex flex-col items-start gap-2 xl:bottom-4 xl:left-4'>
+      {/* Content-independent width probe (left gutter to just left of the 82px
+          orientation gizmo disc), so toolbar overflow can't feed back into the
+          measurement and can restore when the pane widens again. */}
+      <div ref={measureRef} aria-hidden className='pointer-events-none absolute right-28 bottom-0 left-3' />
+      <div className='absolute bottom-3 left-3 z-10 flex flex-col items-start gap-2'>
+        {mobileExportSlot}
         <MeasureReadout />
         <ModelSizeIndicator />
+        <MeasureSnapModeControl className='flex-row' tooltipSide='top' />
+        <div className='flex items-center gap-2'>
+          {visibleIds.has('fov') && <FovControl className={isCompact ? 'w-30' : 'w-50'} isCompact={isCompact} />}
+          {visibleIds.has('grid') && <GridSizeIndicator />}
+          {visibleIds.has('section') && <SectionViewControl />}
+          {visibleIds.has('measure') && <MeasureControl />}
+          {visibleIds.has('reset') && <ResetCameraControl />}
+          <ViewerSettings overflowControls={overflowControls} />
+        </div>
       </div>
     </TooltipProvider>
   );
@@ -269,19 +327,21 @@ export function PlaygroundPreviewPane({
           />
         )}
         <GraphicsProvider graphicsRef={graphicsRef}>
-          <PlaygroundViewerToolbar />
+          <PlaygroundViewerToolbar
+            // Mobile export: lives on the viewer instead of the crowded header,
+            // stacked above the control bar.
+            mobileExportSlot={
+              activeExample.exportFormats.length > 0 ? (
+                <div ref={setMobileExportControlsRef} className='xl:hidden' />
+              ) : undefined
+            }
+          />
         </GraphicsProvider>
         <OrientationGizmoContainer />
         <RenderStatusOverlay
           status={displayStatus === 'loading' && displayGeometries.length === 0 ? 'loading' : 'idle'}
-          className='absolute top-3 left-14'
+          className='absolute top-3 left-3'
         />
-
-        {/* Mobile export: lives on the viewer instead of the crowded header,
-            left-aligned under the measurement/size stack. */}
-        {activeExample.exportFormats.length > 0 ? (
-          <div ref={setMobileExportControlsRef} className='absolute bottom-3 left-3 z-10 xl:hidden' />
-        ) : null}
       </div>
     </section>
   );
