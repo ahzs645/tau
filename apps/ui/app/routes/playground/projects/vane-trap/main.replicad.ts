@@ -14,8 +14,9 @@
  * the OpenSCAD render — they have no visible effect. They are reproduced anyway
  * to keep the variants structurally identical.
  */
-import { draw, makeBaseBox, makeCylinder, sketchHelix } from 'replicad';
+import { draw, makeBaseBox, makeCylinder } from 'replicad';
 import type { Shape3D } from 'replicad';
+import { helicalRidge } from './lib/threads.replicad.js';
 
 export const defaultParams = {
   jarThreadOuterDiameter: 86.6,
@@ -105,52 +106,6 @@ function jarThreadMask(p: Params): Shape3D {
     flankAngleDeg: 15,
     apexWidth: p.jarThreadPitch * 0.25,
   }).translate([0, 0, -0.1]);
-}
-
-type HelicalRidgeOptions = {
-  /** Radius of the cylindrical surface the ridge sits on (thread root radius). */
-  baseRadius: number;
-  pitch: number;
-  /** Axial length of the threaded band; the ridge is trimmed flush to [0, length]. */
-  length: number;
-  /** Radial height of the ridge above `baseRadius`. */
-  depth: number;
-  /** Angle of each thread flank from the plane perpendicular to the axis. ISO metric = 30. */
-  flankAngleDeg?: number;
-  /** Axial width of the flat at the thread crest. ISO metric = pitch / 8. */
-  apexWidth?: number;
-};
-
-/**
- * The helical thread ridge alone — BOSL2's `thread_helix()`. Fuse it onto a rod
- * for external threads, or subtract it from a bore wall for internal ones.
- *
- * `sketchHelix` gives an exact analytic helix and `sweepSketch` places the
- * profile on the plane normal to the spine start, so the whole helper is the
- * trapezoid profile plus one sweep — no spine sampling, no manual Frenet
- * bookkeeping, and no shape lifetimes to manage.
- */
-function helicalRidge(options: HelicalRidgeOptions): Shape3D {
-  const { baseRadius, pitch, length, depth } = options;
-  const flankAngleDeg = options.flankAngleDeg ?? 30;
-  const apexWidth = options.apexWidth ?? pitch / 8;
-  const rootWidth = apexWidth + 2 * depth * Math.tan((flankAngleDeg * Math.PI) / 180);
-  // Sink the root slightly under the surface so booleans against the core are watertight.
-  const rootInset = Math.min(0.2, depth * 0.25);
-
-  const ridge = sketchHelix(pitch, length, baseRadius).sweepSketch(
-    (plane, origin) =>
-      draw([-rootInset, -rootWidth / 2])
-        .lineTo([depth, -apexWidth / 2])
-        .lineTo([depth, apexWidth / 2])
-        .lineTo([-rootInset, rootWidth / 2])
-        .close()
-        .sketchOnPlane(plane, origin),
-    { frenet: true },
-  );
-
-  // Trim the ridge run-out flush with the z = [0, length] band.
-  return ridge.intersect(makeCylinder(baseRadius + depth + 1, length));
 }
 
 /** `single_vane()` — flat plate with the interlock slot cut from the bottom. */
