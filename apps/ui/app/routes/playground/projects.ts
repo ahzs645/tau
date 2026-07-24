@@ -79,10 +79,6 @@ export const projectMetadataSchema = z.looseObject({
   description: z.string(),
   type: z.enum(['scad', 'static']).optional(),
   mainFile: z.string().min(1).optional(),
-  // Pulls the project's code from @taucad/tau-examples (the canonical source)
-  // instead of a local file, keyed by the example folder name. Avoids keeping a
-  // duplicate copy of the source in this app.
-  libSource: z.string().min(1).optional(),
   name: z.string().min(1).optional(),
   language: z.string().min(1).optional(),
   kernel: z.enum(['OpenSCAD', 'Replicad', 'OpenCascade', 'Static']).optional(),
@@ -184,7 +180,7 @@ export const projectExamples: readonly PlaygroundExample[] = Object.entries(proj
       ];
     }
 
-    if (!metadata.libSource && !hasProjectSource(projectId, entryFile)) {
+    if (!hasProjectSource(projectId, entryFile)) {
       throw new Error(`Project "${projectId}" is missing source for entry "${entryFile}"`);
     }
 
@@ -438,16 +434,6 @@ export async function loadProjectExample(projectId: string): Promise<PlaygroundE
   const sourceFiles = await sourceFilesForProject(projectId, metadata);
   const mainFile = metadata.mainFile ?? metadata.entry;
   const entryFile = metadata.entry;
-
-  if (metadata.libSource) {
-    const { replicadExampleCode } = await import('@taucad/tau-examples');
-    const libCode = replicadExampleCode[metadata.libSource];
-    if (!libCode) {
-      throw new Error(`Project "${projectId}" references unknown libSource "${metadata.libSource}"`);
-    }
-    sourceFiles[mainFile] = libCode;
-    sourceFiles[entryFile] = libCode;
-  }
 
   const code = sourceFiles[mainFile] ?? sourceFiles[entryFile];
   if (!code) {

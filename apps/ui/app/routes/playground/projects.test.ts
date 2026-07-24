@@ -89,8 +89,8 @@ describe('project examples discovery', () => {
     expect(example?.sourceFiles).toHaveProperty('main.ts', example?.code);
     expect(example?.sourceFiles).toHaveProperty('lib/melded-neck.ts');
     expect(example?.sourceFiles).not.toHaveProperty('presets.json');
-    // The project owns its source locally (no libSource indirection): the
-    // loader reads main.ts straight from this project folder.
+    // Projects own their source locally: the loader reads main.ts straight
+    // from this project folder.
     expect(example?.code).toContain('Modular PET Bottle Opener');
   });
 
