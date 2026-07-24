@@ -20,6 +20,10 @@
         "linearTolerance": 0.02,
         "angularTolerance": 8
       }
+    },
+    {
+      "id": "replicad",
+      "entry": "main.replicad.ts"
     }
   ]
 }

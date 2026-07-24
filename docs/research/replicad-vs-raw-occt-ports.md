@@ -82,7 +82,7 @@ copied and re-learns the same failures.
 | `vane-trap/replicad`    | 1445 ms | 9104      | `[-65, -8, -65] → [65, 176, 65]` |
 
 The Replicad bounds are the OCCT bounds with Y and Z swapped — an export axis convention
-difference (finding 4), not a modelling difference. Render time is within 7% of the raw port.
+difference (finding 5), not a modelling difference. Render time is within 7% of the raw port.
 
 Across the whole gallery, every OCCT port matches its OpenSCAD original to ≤ 0.061 mm.
 
@@ -141,7 +141,53 @@ against `BRepOffsetAPI_MakePipeShell` setup, spine construction, profile polygon
 `.delete()` calls in the raw ports. The rest of `occt-utils.ts` — frusta, centred boxes, transforms,
 boolean wrappers — disappears entirely, because those are library primitives in Replicad.
 
-### 4. The kernels disagree on the glTF axis convention
+### 4. Three of the four attempted ports match across a parameter sweep; one does not
+
+Agreement on default parameters proves little — a port can be right at one point
+in parameter space and wrong everywhere else. `packages/testing/scripts/compare-ports.ts`
+asks the kernel for a model's resolved defaults, sweeps one parameter at a time
+around them, and renders both ports for every set.
+
+| Project                     | Ports agree | Notes                                              |
+| --------------------------- | ----------- | -------------------------------------------------- |
+| `vane-trap`                 | yes         | 0.00% volume, 0.000 mm bounds across the sweep     |
+| `pendant-lamp`              | yes         | includes the `pleatsInside` / brim branches        |
+| `catan-insert`              | yes         | 17 parameters, hex prisms, capsules, stadium walls |
+| `pre-chamber-nozzle-insert` | **no**      | not shipped; see below                             |
+
+**Why the pre-chamber insert did not port.** It is the model that leans hardest on
+OCCT-specific boolean control, and each mitigation the raw port uses has no
+Replicad equivalent:
+
+| Raw port                                                            | Purpose                                                                                                                              | Replicad                                                                                                                     |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
+| `healedFuse` (fuzzy value + `BOPAlgo_GlueShift` + `simplifyResult`) | Heal the coincident nose-cone/thread-core seam                                                                                       | `fuse()` exposes only `optimisation: 'none' \| 'commonFace' \| 'sameFace'` — no fuzzy value, no glue                         |
+| `BRepFeat_MakeCylindricalHole.PerformUntilEnd`                      | Drill the oblique ports as a _local feature_, because "a generic cut with an analytic cylinder leaves retained cutter/chamber faces" | No feature-drilling wrapper — and replicad's bundled OCCT build does not bind the class, so `getOC()` cannot reach it either |
+| `segmentedCone`                                                     | Split the conical surface into face domains so the ports cut cleanly                                                                 | No equivalent; a plain revolve is all that is available                                                                      |
+
+Measured, by construction stage (volume, mm³):
+
+| Stage         | OCCT   | Replicad | Δ                              |
+| ------------- | ------ | -------- | ------------------------------ |
+| positive body | 5057.2 | 5061.6   | +4.3 (the seam overlap itself) |
+| + centre bore | 4705.0 | 4709.5   | +4.5                           |
+| + side holes  | 4694.0 | 4180.8   | **−513.2**                     |
+
+Replacing the coincident-face fuse with a hair of overlap fixed the first two
+stages (Δ went from −57.8 mm³ to the +4.3 mm³ the overlap adds). The third did
+not recover: cutting the three ports from the threaded solid leaks along the
+thread flanks and removes the entire ridge, even with the tool diameters set to
+0.01 mm. Reordering to drill before fusing the ridge — geometrically identical,
+since the ports sit in the nose well below the thread band — made it worse: the
+fuse then returns the ridge alone (320.9 mm³ against 3376.4).
+
+The conclusion is not "Replicad cannot do this model". It is that this model's
+correctness currently rests on kernel controls that only the raw API exposes,
+so porting it means either reproducing those controls in Replicad (they are not
+bound) or reworking the construction until no boolean needs healing. Neither is
+worth doing to a model that already works.
+
+### 5. The kernels disagree on the glTF axis convention
 
 Reproduced with a 10 × 20 × 40 box authored Z-up in each kernel and exported to GLB:
 
@@ -158,7 +204,7 @@ unconditionally on the replicad and jscad paths, while the OpenCascade path hono
 Replicad, and `'y-up'` double-rotates. This matters for anything consuming exported files — slicers,
 AR Quick Look, glTF viewers — more than for the in-app preview.
 
-### 5. Two runtime constraints on headless rendering
+### 6. Two runtime constraints on headless rendering
 
 Both were found while building the comparison harness, both reproduce in a few lines:
 
@@ -171,7 +217,7 @@ TopoDS_Shape, got an instance of TopoDS_Shape`. The first client works; every la
 Together they mean a parity test suite must use one client per kernel, which is what the harness
 now does.
 
-### 6. Two gallery models do not render at all
+### 7. Two gallery models do not render at all
 
 `projects/periodic-table` and `projects/keyguard-with-raised-tabs` fail with `syntax error` before
 any port work. Minimal repro — two customizer parameters carrying option specs, separated by a
@@ -189,9 +235,11 @@ Replicad question but was surfaced by rendering the whole gallery headlessly for
 
 ## Recommendation
 
-1. **Author new ports in Replicad.** Reserve raw `opencascade.js` for what Replicad cannot express,
-   and drop to `getOC()` inside an otherwise-Replicad model when that happens, rather than porting
-   the whole model to the raw API.
+1. **Author new ports in Replicad by default**, and check the result against a sweep rather than a
+   render. Three of four attempted ports matched exactly; the fourth (finding 4) needs boolean
+   healing and feature drilling that Replicad does not expose, so a model that fights its booleans
+   still belongs on the raw API. Note that `getOC()` is only a partial escape hatch: it reaches
+   replicad's own OCCT build, which binds a narrower API than the OpenCascade kernel's.
 2. **Sweep threads with an axial-plane profile**, not with `sweepSketch`'s normal plane (finding 2),
    and check a new fitted feature with a mating boolean rather than by looking at it. A rendered,
    watertight, plausible-looking thread was off by a quarter of its ridge volume.

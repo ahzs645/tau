@@ -21,7 +21,12 @@
  *
  * Run from packages/testing:
  *
- *   npx tsx scripts/compare-threads.ts
+ *   npx tsx scripts/compare-threads.ts [--repeat 3]
+ *
+ * With `--repeat`, each case is timed once cold (the first export in a fresh
+ * client, which carries kernel init and bundling) and then N more times warm,
+ * reported as a median — the two numbers a playground kernel switch and a
+ * parameter tweak actually experience.
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -260,7 +265,23 @@ function boundsOf({ positions }: Mesh): { min: number[]; max: number[] } {
   return { min, max };
 }
 
-type CaseResult = { volume: number; watertight: boolean; triangles: number; span: number; milliseconds: number };
+type CaseResult = {
+  volume: number;
+  watertight: boolean;
+  triangles: number;
+  span: number;
+  coldMilliseconds: number;
+  warmMilliseconds: number | undefined;
+};
+
+const repeatIndex = process.argv.indexOf('--repeat');
+const repeats = repeatIndex === -1 ? 0 : Number(process.argv[repeatIndex + 1] ?? 3);
+
+const median = (values: number[]): number => {
+  const sorted = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[middle - 1]! + sorted[middle]!) / 2 : sorted[middle]!;
+};
 
 const results: Record<string, Record<string, CaseResult | string>> = {};
 
@@ -284,6 +305,14 @@ for (const [implementation, files] of Object.entries(models)) {
         continue;
       }
 
+      const coldMilliseconds = Date.now() - started;
+      const warmRuns: number[] = [];
+      for (let repeat = 0; repeat < repeats; repeat += 1) {
+        const warmStarted = Date.now();
+        await client.export('glb', { file: `/${testCase}.ts`, coordinateSystem: 'z-up' } as never);
+        warmRuns.push(Date.now() - warmStarted);
+      }
+
       const mesh = readMesh(result.data.bytes);
       const bounds = boundsOf(mesh);
       results[implementation]![testCase] = {
@@ -291,7 +320,8 @@ for (const [implementation, files] of Object.entries(models)) {
         watertight: isWatertight(mesh),
         triangles: mesh.indices.length / 3,
         span: Math.max(...bounds.max.map((value, axis) => value - bounds.min[axis]!)),
-        milliseconds: Date.now() - started,
+        coldMilliseconds,
+        warmMilliseconds: warmRuns.length > 0 ? median(warmRuns) : undefined,
       };
     } catch (error) {
       results[implementation]![testCase] = `THREW: ${String(error).split('\n')[0]}`;
@@ -313,7 +343,7 @@ console.log(`block volume (nut stock):       ${blockVolume.toFixed(1)} mm³\n`);
 
 const pad = (value: string, width: number): string => value.padEnd(width);
 console.log(
-  `${pad('implementation', 16)}${pad('case', 7)}${pad('volume mm³', 13)}${pad('vs analytic', 13)}${pad('watertight', 12)}${pad('tris', 8)}time`,
+  `${pad('implementation', 16)}${pad('case', 7)}${pad('volume mm³', 13)}${pad('vs analytic', 13)}${pad('watertight', 12)}${pad('tris', 8)}${pad('cold', 9)}warm (median of ${repeats})`,
 );
 for (const [implementation, cases] of Object.entries(results)) {
   for (const [testCase, result] of Object.entries(cases)) {
@@ -333,7 +363,8 @@ for (const [implementation, cases] of Object.entries(results)) {
     const deviation = expected === undefined ? '—' : `${(((result.volume - expected) / expected) * 100).toFixed(1)}%`;
     console.log(
       `${pad(implementation, 16)}${pad(testCase, 7)}${pad(result.volume.toFixed(1), 13)}${pad(deviation, 13)}` +
-        `${pad(result.watertight ? 'yes' : 'NO', 12)}${pad(String(result.triangles), 8)}${result.milliseconds}ms`,
+        `${pad(result.watertight ? 'yes' : 'NO', 12)}${pad(String(result.triangles), 8)}` +
+        `${pad(`${result.coldMilliseconds}ms`, 9)}${result.warmMilliseconds === undefined ? '—' : `${result.warmMilliseconds}ms`}`,
     );
   }
 }
