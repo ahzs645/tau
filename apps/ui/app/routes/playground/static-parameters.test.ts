@@ -43,10 +43,11 @@ describe('static parameter derivation', () => {
   });
 
   it('falls back to source inference when the kernel parser declines', async () => {
-    // The interlocking-boxes model has computed globals (`BoxWidth = (BoxWidthUnits>0) ? …`),
-    // which the kernel's cheap parser refuses; the static build has no wasm to
-    // fall back to, so local inference still has to produce a usable form.
-    const example = await loadProjectExample('interlocking-boxes');
+    // The periodic-table model (an interlocking-box system) has computed globals
+    // (`BoxWidth = (BoxWidthUnits>0) ? …`), which the kernel's cheap parser
+    // refuses; the static build has no wasm to fall back to, so local inference
+    // still has to produce a usable form.
+    const example = await loadProjectExample('periodic-table');
     expect(example).toBeDefined();
 
     const view = deriveStaticParameterView(example!);
