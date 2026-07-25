@@ -56,6 +56,19 @@ function buildPreviewRenderOptions(source: {
   return Object.keys(renderOptions).length > 0 ? renderOptions : undefined;
 }
 
+/**
+ * A file the viewer may supply at render time (artwork, a template, a font).
+ * The uploaded file is written into the project's preview filesystem under
+ * `fileName`, and `parameter` is set to that name so the model picks it up —
+ * so a project opts in with metadata rather than the UI knowing about it.
+ */
+const projectUploadSchema = z.object({
+  parameter: z.string().min(1),
+  fileName: z.string().min(1),
+  accept: z.string().min(1),
+  label: z.string().min(1),
+});
+
 const projectVariantSchema = z.object({
   id: z.enum(['openscad', 'replicad', 'opencascade']),
   label: z.string().min(1).optional(),
@@ -95,6 +108,7 @@ export const projectMetadataSchema = z.looseObject({
   previewTessellation: previewTessellationSchema,
   previewNativeEdges: z.boolean().optional(),
   initialParameters: z.record(z.string(), z.unknown()).optional(),
+  uploads: z.array(projectUploadSchema).min(1).optional(),
   previewGlb: z.string().min(1).optional(),
   staticPreview: z
     .object({
@@ -319,12 +333,13 @@ function modeFromMetadata(metadata: ProjectMetadata): NonNullable<PlaygroundExam
 function galleryMetadataFor(
   metadata: ProjectMetadata,
   image: string | undefined,
-): Partial<Pick<PlaygroundExample, 'category' | 'tags' | 'author' | 'image'>> {
+): Partial<Pick<PlaygroundExample, 'category' | 'tags' | 'author' | 'image' | 'uploads'>> {
   return {
     ...(metadata.category ? { category: metadata.category } : {}),
     ...(metadata.tags && metadata.tags.length > 0 ? { tags: metadata.tags } : {}),
     ...(metadata.author ? { author: metadata.author } : {}),
     ...(image ? { image } : {}),
+    ...(metadata.uploads ? { uploads: metadata.uploads } : {}),
   };
 }
 

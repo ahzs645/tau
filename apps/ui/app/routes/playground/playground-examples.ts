@@ -12,6 +12,20 @@ export type PlaygroundStaticPreview = {
 };
 
 /**
+ * A file the viewer may supply for this model (artwork, a template, a font).
+ * The upload is written into the preview filesystem as `fileName` and
+ * `parameter` is pointed at it, so the model reads it the same way it reads a
+ * file that shipped with the project.
+ */
+export type PlaygroundUpload = {
+  readonly parameter: string;
+  readonly fileName: string;
+  /** `accept` attribute for the file input, e.g. `.svg`. */
+  readonly accept: string;
+  readonly label: string;
+};
+
+/**
  * Alternate implementation of the same model in a different kernel
  * (e.g. an OpenSCAD original alongside a hand-ported OpenCASCADE
  * version). Switching variants swaps the active entry file; kernel
@@ -54,6 +68,8 @@ export type PlaygroundExample = {
   /** Kernel render-option overrides for the live preview (e.g. finer OCCT tessellation). */
   readonly renderOptions?: Record<string, unknown>;
   readonly initialParameters?: Record<string, unknown>;
+  /** Files the viewer can supply at render time; empty for most projects. */
+  readonly uploads?: readonly PlaygroundUpload[];
   readonly presets?: readonly PlaygroundPreset[];
   readonly staticPreview?: PlaygroundStaticPreview;
   /** Alternate kernel implementations; when present, includes the default variant. */

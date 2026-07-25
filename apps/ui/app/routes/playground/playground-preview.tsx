@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useActorRef } from '@xstate/react';
 import type { ActorRefFrom } from 'xstate';
-import { ChevronDown, Download } from 'lucide-react';
+import { ChevronDown, Download, Upload } from 'lucide-react';
 import type { FileExtension, Geometry } from '@taucad/types';
 import { downloadBlob } from '@taucad/utils/file';
 import { toast } from '#components/ui/sonner.js';
@@ -43,7 +43,7 @@ import { useResizeObserver } from '#hooks/use-resize-observer.js';
 import { ArButton } from '#components/cad/ar-button.js';
 import type { CadPreviewStatus } from '#hooks/use-cad-preview.js';
 import { PreviewParameters } from '#routes/projects_.$id_.preview/preview-parameters.js';
-import type { PlaygroundExample, PlaygroundPreset } from '#routes/playground/playground-examples.js';
+import type { PlaygroundExample, PlaygroundPreset, PlaygroundUpload } from '#routes/playground/playground-examples.js';
 import { extractModifiedProperties } from '#utils/object.utils.js';
 import { cn } from '#utils/ui.utils.js';
 
@@ -190,6 +190,8 @@ type PlaygroundPreviewPaneProps = {
   readonly mobilePane: PlaygroundMobilePane;
   readonly exportControlsElement: HTMLDivElement | undefined;
   readonly onGeometriesReady: (geometries: readonly Geometry[], parameters: Record<string, unknown>) => void;
+  readonly uploads?: readonly PlaygroundUpload[];
+  readonly onUpload?: (upload: PlaygroundUpload, content: string) => void;
   readonly onParametersChange: (parameters: Record<string, unknown>) => void;
 };
 
@@ -202,6 +204,8 @@ type PlaygroundPreviewSnapshot = {
 
 export function PlaygroundPreviewPane({
   activeExample,
+  uploads,
+  onUpload,
   cachedGeometries,
   files,
   isInteractive,
@@ -438,7 +442,7 @@ export function PlaygroundPreviewPane({
               mobilePane === 'params' ? 'max-xl:min-h-0 max-xl:flex-1 max-xl:overflow-y-auto' : 'max-xl:hidden',
             )}
           >
-            <PlaygroundParameters presets={activeExample.presets ?? []} />
+            <PlaygroundParameters presets={activeExample.presets ?? []} uploads={uploads} onUpload={onUpload} />
           </section>
         </CadPreviewProvider>
       </FileManagerProvider>
@@ -502,11 +506,93 @@ function PlaygroundParameterBridge({
   return undefined;
 }
 
-function PlaygroundParameters({ presets }: { readonly presets: readonly PlaygroundPreset[] }): React.JSX.Element {
+function PlaygroundParameters({
+  presets,
+  uploads,
+  onUpload,
+}: {
+  readonly presets: readonly PlaygroundPreset[];
+  readonly uploads?: readonly PlaygroundUpload[];
+  readonly onUpload?: (upload: PlaygroundUpload, content: string) => void;
+}): React.JSX.Element {
+  // The parameters pane is the one surface present at every breakpoint — beside
+  // the viewer on desktop, behind the Params tab on mobile — so an upload
+  // control here needs no separate mobile treatment.
+  const hasUploads = Boolean(uploads && uploads.length > 0 && onUpload);
+  const headerActions =
+    hasUploads || presets.length > 0 ? (
+      <div className='flex items-center gap-1'>
+        {uploads?.map((upload) => (
+          <PlaygroundUploadButton key={upload.parameter} upload={upload} onUpload={onUpload} />
+        ))}
+        {presets.length > 0 ? <PlaygroundPresetMenu presets={presets} /> : null}
+      </div>
+    ) : undefined;
+
   return (
     <div className='flex h-full min-h-0 flex-col'>
-      <PreviewParameters headerActions={presets.length > 0 ? <PlaygroundPresetMenu presets={presets} /> : undefined} />
+      <PreviewParameters headerActions={headerActions} />
     </div>
+  );
+}
+
+/**
+ * Reads the picked file as text and hands it to the route, which writes it into
+ * the preview filesystem and points the model's parameter at it.
+ */
+function PlaygroundUploadButton({
+  upload,
+  onUpload,
+}: {
+  readonly upload: PlaygroundUpload;
+  readonly onUpload?: (upload: PlaygroundUpload, content: string) => void;
+}): React.JSX.Element {
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const handleChange = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      // Clear immediately so picking the same file twice fires another change.
+      event.target.value = '';
+      if (!file || !onUpload) {
+        return;
+      }
+
+      // oxlint-disable-next-line tau-lint/no-async-iife -- file read is the event's whole purpose
+      void (async () => {
+        try {
+          onUpload(upload, await file.text());
+          toast.success(`Loaded ${file.name}`);
+        } catch {
+          toast.error(`Could not read ${file.name}`);
+        }
+      })();
+    },
+    [onUpload, upload],
+  );
+
+  return (
+    <>
+      <input
+        ref={inputRef}
+        type='file'
+        accept={upload.accept}
+        className='hidden'
+        aria-label={upload.label}
+        onChange={handleChange}
+      />
+      <Button
+        variant='ghost'
+        size='xs'
+        className='gap-1'
+        onClick={() => {
+          inputRef.current?.click();
+        }}
+      >
+        <Upload className='size-3.5' />
+        {upload.label}
+      </Button>
+    </>
   );
 }
 
