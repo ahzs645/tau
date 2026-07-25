@@ -50,9 +50,8 @@ export const defaultParams = {
   /**
    * Direction change tolerated when merging the artwork's consecutive line
    * segments. Every segment costs a boolean, so this is the knob between a
-   * render and an exhausted wasm heap; 0 keeps every segment. 30° collapses
-   * yaa.svg's 1624 plotter segments to ~400 and renders in about six minutes;
-   * finer tolerances have not been shown to finish.
+   * render and its cost. 30° collapses yaa.svg's 1624 plotter segments to ~400
+   * and renders in ~24 s; 6° keeps 1035 segments and renders in ~61 s.
    */
   simplifyAngleDeg: 30,
 };
@@ -221,7 +220,12 @@ function applyArtwork(
   segments: readonly StrokeSegment[],
   build: (segment: StrokeSegment) => TopoDS_Shape | undefined,
   raised: boolean,
-  batchSize = 100,
+  // Fifteen, not a hundred: BOPAlgo's cost is superlinear in how many tools in
+  // one operation intersect *each other*, and chained strokes all touch their
+  // neighbours. Profiling batches of 100 gave 4.6 s, 185 s, 239 s, 58 s — the
+  // spikes are the dense passages of the drawing, not a growing base. Fifteen
+  // makes every batch 0.2–1.4 s and the whole render 20x faster.
+  batchSize = 15,
 ): TopoDS_Shape {
   let result = plate;
   for (let index = 0; index < segments.length; index += batchSize) {

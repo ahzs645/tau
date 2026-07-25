@@ -153,6 +153,34 @@ engine, which is exactly the work that makes it slow. Doing this properly needs 
 (Clipper, paper.js, or Inkscape's own) before writing the file. The generated artwork was reverted;
 the original stroke drawing is unchanged in the repository.
 
+## Profiling found it: batch size, not construction
+
+Timing each batch of the artwork cut (batches of 100) settles it, and refutes the accumulating-base
+hypothesis:
+
+| Batch | Tools | Time        |
+| ----- | ----- | ----------- |
+| 0     | 100   | 4.6 s       |
+| 1     | 100   | **185.1 s** |
+| 2     | 100   | **238.6 s** |
+| 3     | 100   | 57.6 s      |
+| 4     | 7     | 0.2 s       |
+
+Not monotonic — batch 3 is four times faster than batch 2 against a _larger_ base. The cost tracks
+how many tools within one operation intersect **each other**: BOPAlgo builds an intersection graph
+across all tools, chained strokes all touch their neighbours, and the spikes are the dense passages
+of the drawing. Batching by document order groups exactly those together.
+
+Dropping the batch size from 100 to 15 turns every batch into 0.2–1.4 s:
+
+| Simplification | Segments | Before         | After      |
+| -------------- | -------- | -------------- | ---------- |
+| 30°            | ~400     | 356 s          | **24.4 s** |
+| 6°             | 1035     | never finished | **60.9 s** |
+
+A 20x speedup from one constant, and the full-fidelity artwork now renders too. Every earlier
+attempt — simplification, chaining, lazy building — was tuning the wrong dimension.
+
 ## Ranked options, with what is known about each
 
 1. **Profile the 356 s OCCT render** (`ocTracing: 'per-call'`, which the kernel already supports).
