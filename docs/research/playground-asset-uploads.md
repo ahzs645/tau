@@ -120,7 +120,14 @@ all: the thumbnail generator waits 15 minutes and no canvas ever appears. So the
 is declared with a 900 s render timeout but is _not_ the project's default entry, and the artwork
 still needs the construction below before it is practical.
 
-What would make it fast: stop making one solid per stroke. Build the artwork as a **2D** problem — union the
+**One solid per polyline chain is slower, not faster.** The obvious next step — chain the segments
+(1624 segments become 236 chains at a 50° split tolerance) and extrude each chain's offset outline as
+a single prism — was implemented and abandoned: the render had not finished after 35 minutes, against
+356 s for the per-segment version. Fewer tools is not the objective function. A chain of 50 segments
+becomes a 100-vertex outline, and OCCT's booleans cost far more on a handful of complex profiles than
+on many quads. Anyone reaching for this optimisation should know it has been measured.
+
+What might still make it fast: stop making one solid per stroke. Build the artwork as a **2D** problem — union the
 stroke outlines into a single face (or a face per connected polyline), extrude once, and cut once.
 That turns ~1000 solids and ~5 batched 3D booleans into a handful of operations. It is a bigger
 rewrite of `main.occt.ts` than the current construction, which is why it is written down rather than
