@@ -301,6 +301,47 @@ function ensureDirectoryForFile(instance: OpenSCAD, filePath: string): void {
   }
 }
 
+/**
+ * Non-`.scad` files sitting beside the model — SVG artwork, STL templates, DXF
+ * profiles, images for `surface()`.
+ *
+ * The include graph cannot find these: `import("artwork.svg")` is not an
+ * include, and a model may name the file through a variable
+ * (`import(svg_file)`), which no static scan can resolve. Mounting the
+ * project's own assets unconditionally makes both work, and is bounded — these
+ * are the files the project already carries.
+ */
+const openScadAssetExtensions = new Set(['svg', 'stl', 'off', 'dxf', 'amf', '3mf', 'obj', 'png', 'json']);
+
+async function mountProjectAssets(
+  instance: OpenSCAD,
+  options: { basePath: string; filesystem: KernelFileSystem; logger: RuntimeLogger },
+): Promise<void> {
+  const { basePath, filesystem, logger } = options;
+  let entries: Record<string, Uint8Array<ArrayBuffer>>;
+  try {
+    entries = await filesystem.readdirContents(basePath);
+  } catch (error) {
+    logger.debug(`No project assets mounted from ${basePath}: ${String(error)}`);
+    return;
+  }
+
+  for (const [name, content] of Object.entries(entries)) {
+    const extension = name.slice(name.lastIndexOf('.') + 1).toLowerCase();
+    if (!openScadAssetExtensions.has(extension)) {
+      continue;
+    }
+
+    const relativePath = name.startsWith('/') ? name.slice(1) : name;
+    try {
+      ensureDirectoryForFile(instance, relativePath);
+      instance.FS.writeFile(relativePath, content);
+    } catch (error) {
+      logger.warn(`Failed to mount project asset ${relativePath}`, { data: { error: String(error) } });
+    }
+  }
+}
+
 function ensureDirectory(instance: OpenSCAD, directoryPath: string): void {
   try {
     instance.FS.mkdir(directoryPath);
@@ -342,6 +383,8 @@ async function mountFileSystem(
     logger.debug(`Batch-reading ${uncachedAbsolutePaths.length} uncached files`);
     await filesystem.readFiles(uncachedAbsolutePaths);
   }
+
+  await mountProjectAssets(instance, { basePath, filesystem, logger });
 
   for (const relativePath of projectFiles) {
     const absolutePath = resolveFromRoot(relativePath, basePath);
