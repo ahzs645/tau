@@ -181,16 +181,49 @@ Dropping the batch size from 100 to 15 turns every batch into 0.2–1.4 s:
 A 20x speedup from one constant, and the full-fidelity artwork now renders too. Every earlier
 attempt — simplification, chaining, lazy building — was tuning the wrong dimension.
 
+## Looking at the render found three more faults
+
+The speedup made the model cheap enough to actually look at, and the first picture of it exposed
+three faults the port had carried unseen. All three are the same kind of bug: a detail that only
+becomes checkable once geometry exists.
+
+- **No round joins.** `yaa.svg` declares `stroke-linejoin: round` and `stroke-linecap: round`; the
+  port extruded bare quads per segment. Every turn left an uncovered wedge on the outer side of the
+  corner, which survived the cut as a hair of material running the length of the drawing. A disc of
+  the stroke's radius at each distinct stroke end — deduplicated, so a shared joint costs one — is
+  precisely what the document asks for, and it removes the hairs entirely.
+- **No mirror.** The original sets `reverse_svg = true`, whose `rotate(180)` over `mirror([0,1,0])`
+  composes to a negated x. The port never applied it, so it laid the artwork the way a stamp would
+  not print it.
+- **A scale that does not fit.** `svg_scale = 0.16` puts the drawing at 33.1 x 20.2 mm on a 30 x
+  40 mm plate: three millimetres hang off each side. It is not a value anyone could have caught,
+  because the artwork imported as nothing. 0.125 gives 25.8 x 15.8 mm and a 2 mm margin.
+
+With joins added, the simplification tolerance also had to come down — at 30° the speech bubble's
+lettering melts into the bubble outline:
+
+| Simplification | Render | Reads correctly          |
+| -------------- | ------ | ------------------------ |
+| 30°            | 45 s   | no — lettering is a blob |
+| 14°            | 81 s   | yes                      |
+| 8°             | 124 s  | yes, no better than 14°  |
+
+14° is the shipped default. The rendered plate is 30.0 x 40.0 x 2.5 mm and matches the source
+drawing — a wolf's head with an `!AAAAAY` speech bubble — checked against a rasterisation of
+`yaa.svg` itself.
+
 ## Ranked options, with what is known about each
 
-1. **Profile the 356 s OCCT render** (`ocTracing: 'per-call'`, which the kernel already supports).
-   Every optimisation so far targeted an assumed cost and three of four were wrong. The specific
-   hypothesis to test: the cost is the _accumulating base_, not the tools — each batch cuts against
-   the result of the previous one, so the plate carries every stroke already engraved and each
-   successive cut re-processes all of it.
-2. **One multi-cut against a pristine plate.** Direct test of that hypothesis: build all ~400 stroke
-   solids lazily, then cut once with all of them as tools so the base is processed a single time.
-   This failed at 1600 tools before the live-shape-count fix; it has not been retried at 400.
+Option 1 was taken and is what found the batch-size cost; the section above records it. The rest
+remain open.
+
+1. ~~**Profile the 356 s OCCT render**~~ — done. The cost was mutually intersecting tools per
+   boolean call, not the accumulating base, and three of the four earlier optimisations had targeted
+   an assumed cost.
+2. **One multi-cut against a pristine plate.** Direct test of the accumulating-base hypothesis:
+   build all stroke solids lazily, then cut once with all of them as tools so the base is processed
+   a single time. Now expected to be _worse_, not better, since it maximises the tool count in one
+   call — but it has not been retried at 400.
 3. **Union the artwork in 2D.** Replicad has `fuse2D` / `fuseBlueprints` / `cutBlueprints`, so the
    union happens on blueprints and only one 3D boolean remains: sketch once, extrude once, cut once.
    This is the construction most likely to make the model interactive, and it belongs in a Replicad
