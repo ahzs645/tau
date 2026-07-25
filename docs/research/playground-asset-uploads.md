@@ -52,6 +52,42 @@ stroke width in the model), not a kernel one.
 Because of that, `uploads` is still not declared on the stamp: the upload path works end to end, but
 what it produces is not yet a good stamp.
 
+## The OpenCascade route: verified unlock, unfinished model
+
+**A TypeScript model can read project assets.** Probed through the runtime's esbuild bundler:
+
+| Import form                       | Result                              |
+| --------------------------------- | ----------------------------------- |
+| `import art from './art.svg'`     | fails — esbuild reads `.svg` as JSX |
+| `import art from './art.svg?raw'` | **works**, arrives as a string      |
+| artwork inlined in a `.ts` module | works (but breaks the upload story) |
+
+`?raw` is the answer, and it matters beyond this project: an uploaded file lands in the same
+filesystem under the same name, so a TS model reads viewer-supplied assets by the same import.
+
+`projects/stamp/lib/svg-strokes.ts` parses the `<line>` elements and the declared stroke width, then
+centres and scales them to millimetres. `projects/stamp/main.occt.ts` builds the plate and gives each
+stroke width as a solid — which is the _right_ construction for this artwork, since there is no fill
+to import.
+
+It does not render yet, and the obstacle is scale rather than API. 1624 segments is a large boolean
+budget:
+
+1. A rod at each segment end plus a body per segment is ~4900 solids — the wasm heap dies with
+   `memory access out of bounds` before any boolean runs. Fixed by deduplicating rods per distinct
+   vertex (the artwork is a chain, so ends coincide) and then dropping them entirely.
+2. One multi-cut with ~1600 tools dies the same way. Fixed by cutting in batches of 200.
+3. What remains: the export then fails with `Cannot read properties of undefined (reading
+'RWMesh_CoordinateSystem_Zup')` — an OC module-state error after a very long boolean run, whose
+   leading hypothesis is a render timeout tearing the module down before export.
+
+Next steps, cheapest first: simplify the polyline (consecutive plotter segments are near-collinear,
+so a 0.05 mm tolerance should cut the segment count several-fold at this scale); raise the render
+timeout to confirm or rule out the teardown; chain segments into polylines and build one swept solid
+per polyline rather than one per segment.
+
+The variant is not registered in `project.json` while it does not render.
+
 ## What blocked it (before the fix)
 
 **The OpenSCAD kernel never mounts the uploaded file.** `getReferencedScadFiles` walks the source
