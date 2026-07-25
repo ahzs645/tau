@@ -34,7 +34,25 @@ A project declares what it accepts in `project.json`, so the UI stays generic:
   the one surface present at every breakpoint (beside the viewer on desktop, behind the Params tab
   on mobile), so it needs no separate mobile treatment.
 
-## What blocks it
+## Update: the kernel gap is fixed
+
+`mountProjectAssets` in `kernels/openscad/src/openscad.kernel.ts` now mounts the project's own
+non-`.scad` files (svg, stl, off, dxf, amf, 3mf, obj, png, json) alongside the sources, so
+`import(svg_file)` resolves. Measured on the stamp: the shipped `yaa.svg` went from 412 triangles
+(no artwork at all) to 3596, and substituting a different SVG changes the geometry — 560 triangles
+for a square-ring test artwork. Viewer-supplied artwork is now possible.
+
+**But the stamp still does not render correctly**, for a reason one layer up: `yaa.svg` is a
+stroke-only drawing (`fill: none; stroke: #000`), and OpenSCAD's `import()` builds geometry from
+_fill_, not stroke. The model compensates with `offset(r = svg_stroke_width/2)`, which on a
+zero-area path produces long radial slivers rather than a logo — visible as spikes across the stamp
+face. Fixing that is an artwork/model question (convert the strokes to filled outlines, or handle
+stroke width in the model), not a kernel one.
+
+Because of that, `uploads` is still not declared on the stamp: the upload path works end to end, but
+what it produces is not yet a good stamp.
+
+## What blocked it (before the fix)
 
 **The OpenSCAD kernel never mounts the uploaded file.** `getReferencedScadFiles` walks the source
 for `include <…>` / `use <…>` and mounts what it finds; assets pulled in by `import("artwork.svg")`
