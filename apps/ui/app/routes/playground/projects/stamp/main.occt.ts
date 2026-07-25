@@ -24,17 +24,15 @@ import {
   BRepAlgoAPI_Fuse,
   BRepBuilderAPI_MakeFace,
   BRepBuilderAPI_MakePolygon,
-  BRepBuilderAPI_Transform,
   BRepPrimAPI_MakeCylinder,
   BRepPrimAPI_MakePrism,
   gp_Ax2,
   gp_Dir,
   gp_Pnt,
-  gp_Trsf,
   gp_Vec,
   NCollection_List_TopoDS_Shape,
 } from 'opencascade.js';
-import { parseSvgStrokes, placeStrokes } from './lib/svg-strokes.js';
+import { parseSvgStrokes, placeStrokes, simplifyStrokes } from './lib/svg-strokes.js';
 import type { StrokeSegment } from './lib/svg-strokes.js';
 
 export const defaultParams = {
@@ -49,6 +47,12 @@ export const defaultParams = {
   plateThickness: 2.5,
   roundedRadius: 5,
   stampRidgeHeight: 2.5,
+  /**
+   * Direction change tolerated when merging the artwork's consecutive line
+   * segments. Every segment costs a boolean, so this is the knob between a
+   * render and an exhausted wasm heap; 0 keeps every segment.
+   */
+  simplifyAngleDeg: 6,
 };
 
 type Params = typeof defaultParams;
@@ -107,21 +111,11 @@ const fuse = (...shapes: TopoDS_Shape[]): TopoDS_Shape =>
 const cut = (base: TopoDS_Shape, ...tools: TopoDS_Shape[]): TopoDS_Shape =>
   tools.length === 0 ? base : booleanOf(BRepAlgoAPI_Cut, [base], tools);
 
-function translate(shape: TopoDS_Shape, [x, y, z]: readonly [number, number, number]): TopoDS_Shape {
-  const transform = new gp_Trsf();
-  const vector = new gp_Vec(x, y, z);
-  transform.SetTranslation(vector);
-  const moved = shapeOf(new BRepBuilderAPI_Transform(shape, transform, true, false));
-  vector.delete();
-  transform.delete();
-  return moved;
-}
-
 /** A polygon in the XY plane extruded along +Z. */
-function polygonPrism(points: ReadonlyArray<readonly [number, number]>, height: number): TopoDS_Shape {
+function polygonPrism(points: ReadonlyArray<readonly [number, number]>, height: number, baseZ = 0): TopoDS_Shape {
   const polygon = new BRepBuilderAPI_MakePolygon();
   for (const [x, y] of points) {
-    const point = new gp_Pnt(x, y, 0);
+    const point = new gp_Pnt(x, y, baseZ);
     polygon.Add(point);
     point.delete();
   }
@@ -141,8 +135,8 @@ function polygonPrism(points: ReadonlyArray<readonly [number, number]>, height: 
 }
 
 /** Cylinder along +Z with its base at `[x, y, 0]`. */
-function cylinderAt([x, y]: readonly [number, number], radius: number, height: number): TopoDS_Shape {
-  const origin = new gp_Pnt(x, y, 0);
+function cylinderAt([x, y]: readonly [number, number], radius: number, height: number, baseZ = 0): TopoDS_Shape {
+  const origin = new gp_Pnt(x, y, baseZ);
   const direction = new gp_Dir(0, 0, 1);
   const axes = new gp_Ax2(origin, direction);
   const solid = shapeOf(new BRepPrimAPI_MakeCylinder(axes, radius, height));
@@ -188,7 +182,7 @@ function roundedPlate(p: Params, height: number): TopoDS_Shape {
 }
 
 /** One stroke body: a rectangle the length of the segment, extruded. */
-function strokeBody(segment: StrokeSegment, width: number, height: number): TopoDS_Shape | undefined {
+function strokeBody(segment: StrokeSegment, width: number, height: number, baseZ: number): TopoDS_Shape | undefined {
   const [x1, y1] = segment.from;
   const [x2, y2] = segment.to;
   const [dx, dy] = [x2 - x1, y2 - y1];
@@ -208,34 +202,8 @@ function strokeBody(segment: StrokeSegment, width: number, height: number): Topo
       [x1 - nx, y1 - ny],
     ],
     height,
+    baseZ,
   );
-}
-
-/**
- * Round caps and joins, one rod per *distinct* vertex.
- *
- * The artwork is a chain — each line ends where the next begins — so a rod per
- * segment end would build the same rod twice and triple the solid count. This
- * file has 1624 segments; naively that is ~4900 solids, which exhausts the wasm
- * heap ("memory access out of bounds") before any boolean runs.
- */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars -- kept for the raised style, which has budget for round joins
-function capSolids(segments: readonly StrokeSegment[], width: number, height: number): TopoDS_Shape[] {
-  const seen = new Set<string>();
-  const caps: TopoDS_Shape[] = [];
-  for (const segment of segments) {
-    for (const point of [segment.from, segment.to]) {
-      const key = `${point[0].toFixed(4)},${point[1].toFixed(4)}`;
-      if (seen.has(key)) {
-        continue;
-      }
-
-      seen.add(key);
-      caps.push(cylinderAt(point, width / 2, height));
-    }
-  }
-
-  return caps;
 }
 
 /**
@@ -262,7 +230,7 @@ function fuseInBatches(base: TopoDS_Shape, tools: readonly TopoDS_Shape[], batch
 
 export default function main(params: Params = defaultParams): TopoDS_Shape {
   const p = { ...defaultParams, ...params };
-  const strokes = placeStrokes(parseSvgStrokes(artworkSource, p.svgStrokeWidth), {
+  const strokes = placeStrokes(simplifyStrokes(parseSvgStrokes(artworkSource, p.svgStrokeWidth), p.simplifyAngleDeg), {
     scale: p.svgScale,
     offset: [p.svgAdjustX, p.svgAdjustY],
   });
@@ -278,11 +246,11 @@ export default function main(params: Params = defaultParams): TopoDS_Shape {
   // Caps are omitted: the artwork is a chain, so consecutive quads already meet
   // at their shared vertex, and each rod is another solid on a boolean budget
   // that is already the binding constraint at 1624 segments.
-  const artwork = [
-    ...strokes.segments
-      .map((segment) => strokeBody(segment, strokeWidth, raised ? p.stampRidgeHeight + seamOverlap : toolHeight))
-      .filter((solid): solid is TopoDS_Shape => solid !== undefined),
-  ].map((solid) => translate(solid, [0, 0, artworkZ]));
+  const artwork = strokes.segments
+    .map((segment) =>
+      strokeBody(segment, strokeWidth, raised ? p.stampRidgeHeight + seamOverlap : toolHeight, artworkZ),
+    )
+    .filter((solid): solid is TopoDS_Shape => solid !== undefined);
 
   const plate = roundedPlate(p, p.plateThickness);
   return raised ? fuseInBatches(plate, artwork) : cutInBatches(plate, artwork);

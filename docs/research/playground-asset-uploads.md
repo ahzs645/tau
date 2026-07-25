@@ -81,10 +81,35 @@ budget:
 'RWMesh_CoordinateSystem_Zup')` — an OC module-state error after a very long boolean run, whose
    leading hypothesis is a render timeout tearing the module down before export.
 
-Next steps, cheapest first: simplify the polyline (consecutive plotter segments are near-collinear,
-so a 0.05 mm tolerance should cut the segment count several-fold at this scale); raise the render
-timeout to confirm or rule out the teardown; chain segments into polylines and build one swept solid
-per polyline rather than one per segment.
+Both of those were then tried, and neither is the answer:
+
+- **Polyline simplification helps less than expected.** `simplifyStrokes` merges consecutive
+  segments whose direction changes by less than a tolerance: 1624 → 1550 at 2°, 1035 at 6°, 700 at
+  12°. The artwork is script lettering, so it is genuinely curvy; there is no run of collinear
+  segments to collapse.
+- **The leaked transform was not the cause.** Each stroke was built at the origin and then
+  translated, and `translate` did not delete its input — a leaked OCCT object per stroke. Building
+  each prism at its final height instead removes both the leak and ~1000 transforms. No change.
+
+Measured against the boolean count directly, by rendering at successively finer simplification (each
+later row runs against an already-dead module, so only the first row is an independent signal):
+
+| Tolerance | Segments | Result                                   |
+| --------- | -------- | ---------------------------------------- |
+| 60°       | ~400     | `memory access out of bounds` after 32 s |
+| 30°       | ~500     | module already dead                      |
+| 15°       | ~640     | module already dead                      |
+| 6°        | 1035     | module already dead                      |
+
+So ~400 extruded prisms plus batched cuts already exhausts this wasm build's heap. The per-stroke
+construction does not scale to this artwork at any useful fidelity, and tuning the knob does not
+change that.
+
+What would: stop making one solid per stroke. Build the artwork as a **2D** problem — union the
+stroke outlines into a single face (or a face per connected polyline), extrude once, and cut once.
+That turns ~1000 solids and ~5 batched 3D booleans into a handful of operations. It is a bigger
+rewrite of `main.occt.ts` than the current construction, which is why it is written down rather than
+attempted at the end of a long session.
 
 The variant is not registered in `project.json` while it does not render.
 

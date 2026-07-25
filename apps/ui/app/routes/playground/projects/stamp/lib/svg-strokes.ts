@@ -78,6 +78,63 @@ export function parseSvgStrokes(source: string, fallbackStrokeWidth = 1): SvgStr
   };
 }
 
+/**
+ * Merges consecutive segments that continue in nearly the same direction.
+ *
+ * A plotter emits its path as many short `<line>` elements in draw order, each
+ * starting where the previous ended — `yaa.svg` is 1624 of them for a drawing
+ * that reads as a few dozen strokes. Every segment becomes a solid and every
+ * solid costs a boolean, so this is the difference between a render and an
+ * exhausted wasm heap. Collapsing a run into one segment is invisible below a
+ * fraction of the stroke width.
+ *
+ * @param angleToleranceDeg - direction change tolerated within a run.
+ * @param gapTolerance - how close two segments must be, in SVG user units, to
+ *   count as continuing the same run.
+ */
+export function simplifyStrokes(strokes: SvgStrokes, angleToleranceDeg = 6, gapTolerance = 1e-6): SvgStrokes {
+  const cosLimit = Math.cos((angleToleranceDeg * Math.PI) / 180);
+  const merged: StrokeSegment[] = [];
+  let run: { from: Vec2; to: Vec2 } | undefined;
+
+  const direction = (from: Vec2, to: Vec2): Vec2 | undefined => {
+    const [dx, dy] = [to[0] - from[0], to[1] - from[1]];
+    const length = Math.hypot(dx, dy);
+    return length < 1e-12 ? undefined : [dx / length, dy / length];
+  };
+
+  for (const segment of strokes.segments) {
+    const next = direction(segment.from, segment.to);
+    if (!next) {
+      continue;
+    }
+
+    const current = run && direction(run.from, run.to);
+    const continues =
+      run !== undefined &&
+      current !== undefined &&
+      Math.hypot(run.to[0] - segment.from[0], run.to[1] - segment.from[1]) <= gapTolerance &&
+      current[0] * next[0] + current[1] * next[1] >= cosLimit;
+
+    if (continues && run) {
+      run.to = segment.to;
+      continue;
+    }
+
+    if (run) {
+      merged.push({ from: run.from, to: run.to });
+    }
+
+    run = { from: segment.from, to: segment.to };
+  }
+
+  if (run) {
+    merged.push({ from: run.from, to: run.to });
+  }
+
+  return { ...strokes, segments: merged };
+}
+
 export type PlacementOptions = {
   /** Multiplies SVG user units to reach millimetres. */
   scale: number;
