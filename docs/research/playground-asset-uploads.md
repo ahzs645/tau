@@ -105,7 +105,22 @@ So ~400 extruded prisms plus batched cuts already exhausts this wasm build's hea
 construction does not scale to this artwork at any useful fidelity, and tuning the knob does not
 change that.
 
-What would: stop making one solid per stroke. Build the artwork as a **2D** problem — union the
+**It renders once the solids are built lazily.** The remaining cause was not the boolean count but
+the _live_ shape count: every stroke solid was built up front, so ~1000 OCCT solids existed
+simultaneously before the first boolean ran. Building each batch's solids immediately before
+consuming them holds the live count at the batch size, and the model completes:
+
+| Tolerance | Segments | Result                                                       |
+| --------- | -------- | ------------------------------------------------------------ |
+| 30°       | ~400     | **OK, 356 s** — 2553.9 mm³, 2200 triangles, 30 × 40 × 2.5 mm |
+| 6°        | 1035     | not shown to finish                                          |
+
+356 seconds is far too slow to be a default in the gallery, and the browser run does not complete at
+all: the thumbnail generator waits 15 minutes and no canvas ever appears. So the OpenCASCADE variant
+is declared with a 900 s render timeout but is _not_ the project's default entry, and the artwork
+still needs the construction below before it is practical.
+
+What would make it fast: stop making one solid per stroke. Build the artwork as a **2D** problem — union the
 stroke outlines into a single face (or a face per connected polyline), extrude once, and cut once.
 That turns ~1000 solids and ~5 batched 3D booleans into a handful of operations. It is a bigger
 rewrite of `main.occt.ts` than the current construction, which is why it is written down rather than

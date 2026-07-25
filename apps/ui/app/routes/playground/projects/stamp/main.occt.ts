@@ -50,9 +50,11 @@ export const defaultParams = {
   /**
    * Direction change tolerated when merging the artwork's consecutive line
    * segments. Every segment costs a boolean, so this is the knob between a
-   * render and an exhausted wasm heap; 0 keeps every segment.
+   * render and an exhausted wasm heap; 0 keeps every segment. 30° collapses
+   * yaa.svg's 1624 plotter segments to ~400 and renders in about six minutes;
+   * finer tolerances have not been shown to finish.
    */
-  simplifyAngleDeg: 6,
+  simplifyAngleDeg: 30,
 };
 
 type Params = typeof defaultParams;
@@ -207,22 +209,31 @@ function strokeBody(segment: StrokeSegment, width: number, height: number, baseZ
 }
 
 /**
- * Booleans in batches. One multi-cut with a few thousand tools also exhausts the
- * heap; a few hundred at a time keeps each operation small enough to finish.
+ * Applies the artwork in batches, building each batch's solids only when it is
+ * about to be consumed.
+ *
+ * Building every stroke first and then booleaning holds ~1000 solids live at
+ * once, which exhausts the wasm heap before the booleans even start. Generating
+ * a batch, consuming it, and moving on keeps the live count at `batchSize`.
  */
-function cutInBatches(base: TopoDS_Shape, tools: readonly TopoDS_Shape[], batchSize = 200): TopoDS_Shape {
-  let result = base;
-  for (let index = 0; index < tools.length; index += batchSize) {
-    result = cut(result, ...tools.slice(index, index + batchSize));
-  }
+function applyArtwork(
+  plate: TopoDS_Shape,
+  segments: readonly StrokeSegment[],
+  build: (segment: StrokeSegment) => TopoDS_Shape | undefined,
+  raised: boolean,
+  batchSize = 100,
+): TopoDS_Shape {
+  let result = plate;
+  for (let index = 0; index < segments.length; index += batchSize) {
+    const tools = segments
+      .slice(index, index + batchSize)
+      .map((segment) => build(segment))
+      .filter((solid): solid is TopoDS_Shape => solid !== undefined);
+    if (tools.length === 0) {
+      continue;
+    }
 
-  return result;
-}
-
-function fuseInBatches(base: TopoDS_Shape, tools: readonly TopoDS_Shape[], batchSize = 200): TopoDS_Shape {
-  let result = base;
-  for (let index = 0; index < tools.length; index += batchSize) {
-    result = fuse(result, ...tools.slice(index, index + batchSize));
+    result = raised ? fuse(result, ...tools) : cut(result, ...tools);
   }
 
   return result;
@@ -246,12 +257,11 @@ export default function main(params: Params = defaultParams): TopoDS_Shape {
   // Caps are omitted: the artwork is a chain, so consecutive quads already meet
   // at their shared vertex, and each rod is another solid on a boolean budget
   // that is already the binding constraint at 1624 segments.
-  const artwork = strokes.segments
-    .map((segment) =>
-      strokeBody(segment, strokeWidth, raised ? p.stampRidgeHeight + seamOverlap : toolHeight, artworkZ),
-    )
-    .filter((solid): solid is TopoDS_Shape => solid !== undefined);
-
-  const plate = roundedPlate(p, p.plateThickness);
-  return raised ? fuseInBatches(plate, artwork) : cutInBatches(plate, artwork);
+  const toolHeightForStyle = raised ? p.stampRidgeHeight + seamOverlap : toolHeight;
+  return applyArtwork(
+    roundedPlate(p, p.plateThickness),
+    strokes.segments,
+    (segment) => strokeBody(segment, strokeWidth, toolHeightForStyle, artworkZ),
+    raised,
+  );
 }

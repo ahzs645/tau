@@ -5,5 +5,16 @@
   "category": "Personalization",
   "tags": ["stamp", "svg", "text"],
   "hidden": false,
-  "image": "poster.jpg"
+  "image": "poster.jpg",
+  "variants": [
+    {
+      "id": "openscad",
+      "entry": "Main.scad"
+    },
+    {
+      "id": "opencascade",
+      "entry": "main.occt.ts",
+      "renderTimeout": 900000
+    }
+  ]
 }
