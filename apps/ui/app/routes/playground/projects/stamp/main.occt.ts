@@ -33,15 +33,23 @@ import {
   NCollection_List_TopoDS_Shape,
 } from 'opencascade.js';
 import { parseSvgStrokes, placeStrokes, simplifyStrokes } from './lib/svg-strokes.js';
-import type { StrokeSegment } from './lib/svg-strokes.js';
+import type { StrokeSegment, Vec2 } from './lib/svg-strokes.js';
 
 export const defaultParams = {
   /** 'negative' engraves the artwork into the face; 'positive' raises it. */
   svgStyle: 'negative',
   svgStrokeWidth: 0.7,
-  svgScale: 0.16,
+  /**
+   * The original's `svg_scale = 0.16` puts `yaa.svg` at 33.1 x 20.2 mm on a
+   * 30 x 40 mm plate — three millimetres of the drawing hang off each side. It
+   * is not a value anyone could have checked, because the artwork imported as
+   * nothing; 0.125 gives 25.8 x 15.8 mm and a two-millimetre margin.
+   */
+  svgScale: 0.125,
   svgAdjustX: -0.7,
   svgAdjustY: 0,
+  /** `reverse_svg` — a stamp prints mirrored, so the artwork is laid mirrored. */
+  svgMirror: true,
   plateWidth: 30,
   plateLength: 40,
   plateThickness: 2.5,
@@ -49,11 +57,13 @@ export const defaultParams = {
   stampRidgeHeight: 2.5,
   /**
    * Direction change tolerated when merging the artwork's consecutive line
-   * segments. Every segment costs a boolean, so this is the knob between a
-   * render and its cost. 30° collapses yaa.svg's 1624 plotter segments to ~400
-   * and renders in ~24 s; 6° keeps 1035 segments and renders in ~61 s.
+   * segments. Every segment costs a boolean, so this is the knob between the
+   * drawing's fidelity and its cost. Measured on `yaa.svg`'s 1624 plotter
+   * segments: 30° renders in 45 s but melts the speech bubble's lettering into
+   * the bubble; 14° takes 81 s and reads correctly; 8° costs 124 s and is not
+   * visibly better than 14°.
    */
-  simplifyAngleDeg: 30,
+  simplifyAngleDeg: 14,
 };
 
 type Params = typeof defaultParams;
@@ -208,6 +218,28 @@ function strokeBody(segment: StrokeSegment, width: number, height: number, baseZ
 }
 
 /**
+ * Every distinct stroke end, once.
+ *
+ * `yaa.svg` declares `stroke-linecap: round` and `stroke-linejoin: round`, and
+ * both are the same thing here: a disc of the stroke's radius centred on the
+ * point. Without them a turn leaves an uncovered wedge on its outer side, which
+ * survives the cut as a hair of material along the artwork.
+ */
+function strokeJoints(segments: readonly StrokeSegment[], tolerance = 1e-6): Vec2[] {
+  const seen = new Map<string, Vec2>();
+  for (const segment of segments) {
+    for (const point of [segment.from, segment.to]) {
+      const key = `${Math.round(point[0] / tolerance)},${Math.round(point[1] / tolerance)}`;
+      if (!seen.has(key)) {
+        seen.set(key, point);
+      }
+    }
+  }
+
+  return [...seen.values()];
+}
+
+/**
  * Applies the artwork in batches, building each batch's solids only when it is
  * about to be consumed.
  *
@@ -217,8 +249,7 @@ function strokeBody(segment: StrokeSegment, width: number, height: number, baseZ
  */
 function applyArtwork(
   plate: TopoDS_Shape,
-  segments: readonly StrokeSegment[],
-  build: (segment: StrokeSegment) => TopoDS_Shape | undefined,
+  tools: ReadonlyArray<() => TopoDS_Shape | undefined>,
   raised: boolean,
   // Fifteen, not a hundred: BOPAlgo's cost is superlinear in how many tools in
   // one operation intersect *each other*, and chained strokes all touch their
@@ -228,16 +259,16 @@ function applyArtwork(
   batchSize = 15,
 ): TopoDS_Shape {
   let result = plate;
-  for (let index = 0; index < segments.length; index += batchSize) {
-    const tools = segments
+  for (let index = 0; index < tools.length; index += batchSize) {
+    const batch = tools
       .slice(index, index + batchSize)
-      .map((segment) => build(segment))
+      .map((build) => build())
       .filter((solid): solid is TopoDS_Shape => solid !== undefined);
-    if (tools.length === 0) {
+    if (batch.length === 0) {
       continue;
     }
 
-    result = raised ? fuse(result, ...tools) : cut(result, ...tools);
+    result = raised ? fuse(result, ...batch) : cut(result, ...batch);
   }
 
   return result;
@@ -248,6 +279,7 @@ export default function main(params: Params = defaultParams): TopoDS_Shape {
   const strokes = placeStrokes(simplifyStrokes(parseSvgStrokes(artworkSource, p.svgStrokeWidth), p.simplifyAngleDeg), {
     scale: p.svgScale,
     offset: [p.svgAdjustX, p.svgAdjustY],
+    mirrorX: p.svgMirror,
   });
   // The document's own stroke width, scaled, plus the model's thickening —
   // the role `offset(r = svg_stroke_width / 2)` plays in the original.
@@ -258,14 +290,13 @@ export default function main(params: Params = defaultParams): TopoDS_Shape {
   const raised = p.svgStyle === 'positive';
   const artworkZ = raised ? p.plateThickness - seamOverlap : -seamOverlap;
 
-  // Caps are omitted: the artwork is a chain, so consecutive quads already meet
-  // at their shared vertex, and each rod is another solid on a boolean budget
-  // that is already the binding constraint at 1624 segments.
   const toolHeightForStyle = raised ? p.stampRidgeHeight + seamOverlap : toolHeight;
-  return applyArtwork(
-    roundedPlate(p, p.plateThickness),
-    strokes.segments,
-    (segment) => strokeBody(segment, strokeWidth, toolHeightForStyle, artworkZ),
-    raised,
-  );
+  const tools = [
+    ...strokes.segments.map((segment) => () => strokeBody(segment, strokeWidth, toolHeightForStyle, artworkZ)),
+    ...strokeJoints(strokes.segments).map(
+      (point) => () => cylinderAt(point, strokeWidth / 2, toolHeightForStyle, artworkZ),
+    ),
+  ];
+
+  return applyArtwork(roundedPlate(p, p.plateThickness), tools, raised);
 }

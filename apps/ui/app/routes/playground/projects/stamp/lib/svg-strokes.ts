@@ -142,6 +142,12 @@ export type PlacementOptions = {
   offset?: Vec2;
   /** SVG's y axis points down; flip it so the artwork reads the right way up. */
   flipY?: boolean;
+  /**
+   * Mirror across the y axis — what a stamp needs, since it prints reversed.
+   * The OpenSCAD original spells this `reverse_svg`, as `rotate(180)` over
+   * `mirror([0, 1, 0])`, which composes to exactly a negated x.
+   */
+  mirrorX?: boolean;
 };
 
 /**
@@ -152,11 +158,12 @@ export function placeStrokes(strokes: SvgStrokes, options: PlacementOptions): Sv
   const { scale } = options;
   const [offsetX, offsetY] = options.offset ?? [0, 0];
   const flipY = options.flipY ?? true;
+  const mirrorX = options.mirrorX ?? false;
   const centreX = (strokes.bounds.min[0] + strokes.bounds.max[0]) / 2;
   const centreY = (strokes.bounds.min[1] + strokes.bounds.max[1]) / 2;
 
   const place = ([x, y]: Vec2): Vec2 => [
-    (x - centreX) * scale + offsetX,
+    (mirrorX ? centreX - x : x - centreX) * scale + offsetX,
     (flipY ? centreY - y : y - centreY) * scale + offsetY,
   ];
 
