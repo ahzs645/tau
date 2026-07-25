@@ -32,6 +32,7 @@
   "license": "GPL-2.0-or-later",
   "exports": {
     ".": "./src/index.ts",
+    "./parameters": "./src/parse-parameters.ts",
     "./kernel": "./src/openscad.kernel.ts"
   },
   "publishConfig": {
@@ -45,6 +46,16 @@
         "import": {
           "types": "./dist/esm/index.d.ts",
           "default": "./dist/esm/index.js"
+        }
+      },
+      "./parameters": {
+        "require": {
+          "types": "./dist/cjs/parse-parameters.d.cts",
+          "default": "./dist/cjs/parse-parameters.cjs"
+        },
+        "import": {
+          "types": "./dist/esm/parse-parameters.d.ts",
+          "default": "./dist/esm/parse-parameters.js"
         }
       },
       "./kernel": {

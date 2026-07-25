@@ -2,7 +2,7 @@ import { defineConfig } from 'tsdown';
 import type { Options } from 'tsdown';
 
 const baseConfig: Options = {
-  entry: ['src/index.ts', 'src/openscad.kernel.ts'],
+  entry: ['src/index.ts', 'src/openscad.kernel.ts', 'src/parse-parameters.ts'],
   sourcemap: false,
   clean: true,
   dts: true,

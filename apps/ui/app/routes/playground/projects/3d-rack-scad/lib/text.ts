@@ -11,88 +11,8 @@
 import type { TopoDS_Shape } from 'opencascade.js';
 import { boxAt, rotateZ, translate } from './occt-utils.js';
 import type { Vec2 } from './occt-utils.js';
+import { advanceEm, capHeightPerSize, digitStrokes, glyphWidthEm, strokeWidthEm } from './stroke-font.js';
 
-type Stroke = readonly [Vec2, Vec2];
-
-/**
- * Digit polylines on a unit glyph box: x in [0, 0.6], y in [0, 1] cap-height
- * units, y up. Joints overlap thanks to the square stroke caps.
- */
-const digitStrokes: Readonly<Record<string, readonly Stroke[]>> = {
-  '0': [
-    [[0, 0], [0.6, 0]],
-    [[0.6, 0], [0.6, 1]],
-    [[0.6, 1], [0, 1]],
-    [[0, 1], [0, 0]],
-  ],
-  '1': [
-    [[0.1, 0.75], [0.3, 1]],
-    [[0.3, 1], [0.3, 0]],
-    [[0.1, 0], [0.5, 0]],
-  ],
-  '2': [
-    [[0, 1], [0.6, 1]],
-    [[0.6, 1], [0.6, 0.5]],
-    [[0.6, 0.5], [0, 0.5]],
-    [[0, 0.5], [0, 0]],
-    [[0, 0], [0.6, 0]],
-  ],
-  '3': [
-    [[0, 1], [0.6, 1]],
-    [[0.6, 1], [0.6, 0]],
-    [[0.6, 0], [0, 0]],
-    [[0.2, 0.5], [0.6, 0.5]],
-  ],
-  '4': [
-    [[0, 1], [0, 0.5]],
-    [[0, 0.5], [0.6, 0.5]],
-    [[0.6, 1], [0.6, 0]],
-  ],
-  '5': [
-    [[0.6, 1], [0, 1]],
-    [[0, 1], [0, 0.5]],
-    [[0, 0.5], [0.6, 0.5]],
-    [[0.6, 0.5], [0.6, 0]],
-    [[0.6, 0], [0, 0]],
-  ],
-  '6': [
-    [[0.6, 1], [0, 1]],
-    [[0, 1], [0, 0]],
-    [[0, 0], [0.6, 0]],
-    [[0.6, 0], [0.6, 0.5]],
-    [[0.6, 0.5], [0, 0.5]],
-  ],
-  '7': [
-    [[0, 1], [0.6, 1]],
-    [[0.6, 1], [0.25, 0]],
-  ],
-  '8': [
-    [[0, 0], [0.6, 0]],
-    [[0.6, 0], [0.6, 1]],
-    [[0.6, 1], [0, 1]],
-    [[0, 1], [0, 0]],
-    [[0, 0.5], [0.6, 0.5]],
-  ],
-  '9': [
-    [[0.6, 0.5], [0, 0.5]],
-    [[0, 0.5], [0, 1]],
-    [[0, 1], [0.6, 1]],
-    [[0.6, 1], [0.6, 0]],
-    [[0.6, 0], [0, 0]],
-  ],
-};
-
-const glyphWidthEm = 0.6;
-const advanceEm = 0.85;
-const strokeWidthEm = 0.17;
-// OpenSCAD's `text(size = s)` produces digits of roughly 0.7·s cap height.
-const capHeightPerSize = 0.7;
-
-/**
- * Solids for `text(str, size, halign = "center", valign = "center")` extruded
- * `depth` along +Z from z = 0. Returned unfused so a caller batching many
- * labels can hand every box to a single multi-tool cut.
- */
 export function engravedText(text: string, options: { size: number; depth: number }): TopoDS_Shape[] {
   const capHeight = options.size * capHeightPerSize;
   const strokeWidth = strokeWidthEm * capHeight;

@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+# The fork does not use the upstream Nx Cloud workspace (nxCloudId in nx.json),
+# and unauthenticated access to it is rejected, which aborts every nx command.
+env:
+  NX_NO_CLOUD: 'true'
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Test, lint, typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          # nx-set-shas needs history to work out the affected base.
+          fetch-depth: 0
+
+      - name: Setup Nx environment
+        uses: ./.github/actions/setup-nx
+
+      - name: Provision kernel assets
+        # Kernel wasm and OpenSCAD fonts are copied, not committed; without this
+        # both the OCCT and OpenSCAD suites fail silently.
+        run: pnpm nx run-many -t copy-assets
+
+      - name: Verify affected projects
+        run: pnpm nx affected --targets=test,build,lint,typecheck
+
+  overlay-boundary:
+    name: Fork overlay boundary
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Advisory: reports core-package edits so they get an upstream follow-up.
+    # See docs/policy/fork-overlay-policy.md.
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup Nx environment
+        uses: ./.github/actions/setup-nx
+
+      - name: Report core-package edits
+        run: node --import tsx scripts/src/check-overlay-boundary.mts origin/${{ github.base_ref }}

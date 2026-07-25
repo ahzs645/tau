@@ -6,6 +6,39 @@ import {
   projectPresetsSchema,
 } from '#routes/playground/projects.js';
 
+describe('project uploads', () => {
+  it('accepts a complete upload declaration', () => {
+    expect(
+      projectMetadataSchema.safeParse({
+        title: 'Uploadable project',
+        entry: 'main.scad',
+        description: 'Takes viewer-supplied artwork.',
+        uploads: [{ parameter: 'svg_file', fileName: 'artwork.svg', accept: '.svg', label: 'Artwork (SVG)' }],
+      }).success,
+    ).toBe(true);
+  });
+
+  it('leaves uploads undefined for projects that do not declare one', () => {
+    // No project declares an upload yet: the OpenSCAD kernel mounts only the
+    // .scad files it discovers through include/use, so an uploaded asset never
+    // reaches the render. See docs/research/playground-asset-uploads.md.
+    const vaneTrap = projectExamples.find((example) => example.id === 'vane-trap');
+    expect(vaneTrap?.uploads).toBeUndefined();
+    expect(projectExamples.every((example) => example.uploads === undefined)).toBe(true);
+  });
+
+  it('rejects an upload declaration missing its parameter binding', () => {
+    expect(
+      projectMetadataSchema.safeParse({
+        title: 'Bad upload',
+        entry: 'main.scad',
+        description: 'Upload without a parameter to point at.',
+        uploads: [{ fileName: 'artwork.svg', accept: '.svg', label: 'Artwork' }],
+      }).success,
+    ).toBe(false);
+  });
+});
+
 describe('project examples discovery', () => {
   it('validates project metadata before building examples', () => {
     expect(
@@ -89,8 +122,8 @@ describe('project examples discovery', () => {
     expect(example?.sourceFiles).toHaveProperty('main.ts', example?.code);
     expect(example?.sourceFiles).toHaveProperty('lib/melded-neck.ts');
     expect(example?.sourceFiles).not.toHaveProperty('presets.json');
-    // The project owns its source locally (no libSource indirection): the
-    // loader reads main.ts straight from this project folder.
+    // Projects own their source locally: the loader reads main.ts straight
+    // from this project folder.
     expect(example?.code).toContain('Modular PET Bottle Opener');
   });
 

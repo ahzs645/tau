@@ -7,7 +7,17 @@
   "created": "2026-07-04",
   "author": "OpenSCAD Playground",
   "variants": [
-    { "id": "openscad", "entry": "main.scad" },
-    { "id": "opencascade", "entry": "main.occt.ts" }
+    {
+      "id": "openscad",
+      "entry": "main.scad"
+    },
+    {
+      "id": "opencascade",
+      "entry": "main.occt.ts"
+    },
+    {
+      "id": "replicad",
+      "entry": "main.replicad.ts"
+    }
   ]
 }

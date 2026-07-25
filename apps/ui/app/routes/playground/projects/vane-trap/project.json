@@ -15,6 +15,10 @@
     {
       "id": "opencascade",
       "entry": "main.occt.ts"
+    },
+    {
+      "id": "replicad",
+      "entry": "main.replicad.ts"
     }
   ]
 }

@@ -39,7 +39,6 @@ Optional fields include:
 ```json
 {
   "mainFile": "main.ts",
-  "libSource": "pet-bottle-opener",
   "kernel": "OpenSCAD",
   "engine": "openscad",
   "language": "scad",
@@ -102,17 +101,12 @@ they are illustrative kernel example assets, not app code; they are still type-c
 `tsconfig`. Use `mainFile` only for compatibility aliases (e.g. exposing a differently-named entry to
 the runtime).
 
-### Pulling code from `@taucad/tau-examples`
+### This folder is the only home for project code
 
-A project may optionally pull its code from the shared `@taucad/tau-examples` library by setting
-`"libSource": "<example-folder-name>"` in `project.json` (keeping only `project.json` + optional
-`presets.json` here); the loader then resolves the code from `replicadExampleCode` in the library.
-The dependency only points one way — apps import the library, never the reverse.
-
-As of now **no project uses `libSource`** and `replicadExampleCode` is empty: every project owns its
-own source under `projects/<id>/` (this folder is the single home for project code). `pet-bottle-opener`
-was migrated here as a local `main.ts`. The `libSource` mechanism remains available should a future
-project want to reuse a library-owned example verbatim.
+Every project owns its source under `projects/<id>/`. There is no indirection to a shared example
+library: a `libSource` field that resolved code from `@taucad/tau-examples` existed, was never used
+by any project, and was removed. If a future project wants to reuse a library-owned example
+verbatim, add the mechanism back with its first real consumer rather than ahead of one.
 
 Binary files (`.stl`, `.glb`, `.usdz`, etc.) are not loaded into the editor by this path. If a
 project needs binary runtime assets, design that asset path explicitly before adding the project.

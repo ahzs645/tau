@@ -1,6 +1,5 @@
 /* eslint-disable @typescript-eslint/naming-convention -- parameter keys mirror the source model APIs, including OpenSCAD snake_case names */
 import type { FileExtension } from '@taucad/types';
-import { legacyPlaygroundExamples } from '#routes/playground/legacy-playground-examples.js';
 import { isProjectExampleId, loadProjectExample, projectExamples } from '#routes/playground/projects.js';
 
 export type PlaygroundPreset = {
@@ -10,6 +9,20 @@ export type PlaygroundPreset = {
 
 export type PlaygroundStaticPreview = {
   readonly glb: string;
+};
+
+/**
+ * A file the viewer may supply for this model (artwork, a template, a font).
+ * The upload is written into the preview filesystem as `fileName` and
+ * `parameter` is pointed at it, so the model reads it the same way it reads a
+ * file that shipped with the project.
+ */
+export type PlaygroundUpload = {
+  readonly parameter: string;
+  readonly fileName: string;
+  /** `accept` attribute for the file input, e.g. `.svg`. */
+  readonly accept: string;
+  readonly label: string;
 };
 
 /**
@@ -55,6 +68,8 @@ export type PlaygroundExample = {
   /** Kernel render-option overrides for the live preview (e.g. finer OCCT tessellation). */
   readonly renderOptions?: Record<string, unknown>;
   readonly initialParameters?: Record<string, unknown>;
+  /** Files the viewer can supply at render time; empty for most projects. */
+  readonly uploads?: readonly PlaygroundUpload[];
   readonly presets?: readonly PlaygroundPreset[];
   readonly staticPreview?: PlaygroundStaticPreview;
   /** Alternate kernel implementations; when present, includes the default variant. */
@@ -511,7 +526,6 @@ export default function main(params = {}) {
 export const playgroundExamples: readonly PlaygroundExample[] = [
   ...curatedPlaygroundExamples,
   ...projectExamples,
-  ...legacyPlaygroundExamples,
 ] as const;
 
 /** Resolve a catalog entry, loading project-owned source files only when selected. */
