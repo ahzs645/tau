@@ -155,9 +155,11 @@ around them, and renders both ports for every set.
 | `catan-insert`              | yes         | 17 parameters, hex prisms, capsules, stadium walls |
 | `pre-chamber-nozzle-insert` | **no**      | not shipped; see below                             |
 
-**Why the pre-chamber insert did not port.** It is the model that leans hardest on
-OCCT-specific boolean control, and each mitigation the raw port uses has no
-Replicad equivalent:
+**Why the pre-chamber insert did not port.** It is the model that leans hardest on OCCT-specific
+boolean control, and a second attempt narrowed the cause to two independent Replicad boolean
+failures rather than to missing API surface.
+
+The missing API is real enough:
 
 | Raw port                                                            | Purpose                                                                                                                              | Replicad                                                                                                                     |
 | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------- |
@@ -165,27 +167,36 @@ Replicad equivalent:
 | `BRepFeat_MakeCylindricalHole.PerformUntilEnd`                      | Drill the oblique ports as a _local feature_, because "a generic cut with an analytic cylinder leaves retained cutter/chamber faces" | No feature-drilling wrapper — and replicad's bundled OCCT build does not bind the class, so `getOC()` cannot reach it either |
 | `segmentedCone`                                                     | Split the conical surface into face domains so the ports cut cleanly                                                                 | No equivalent; a plain revolve is all that is available                                                                      |
 
-Measured, by construction stage (volume, mm³):
+But the two failures underneath are sharper than "no fuzzy fuse":
 
-| Stage         | OCCT   | Replicad | Δ                              |
-| ------------- | ------ | -------- | ------------------------------ |
-| positive body | 5057.2 | 5061.6   | +4.3 (the seam overlap itself) |
-| + centre bore | 4705.0 | 4709.5   | +4.5                           |
-| + side holes  | 4694.0 | 4180.8   | **−513.2**                     |
+**`fuse` silently returns one operand.** Measured on the second attempt, where the nose is drilled
+and bored on its own (a plain cone while every fragile boolean runs) and fused to the threaded stack
+afterwards:
 
-Replacing the coincident-face fuse with a hair of overlap fixed the first two
-stages (Δ went from −57.8 mm³ to the +4.3 mm³ the overlap adds). The third did
-not recover: cutting the three ports from the threaded solid leaks along the
-thread flanks and removes the entire ridge, even with the tool diameters set to
-0.01 mm. Reordering to drill before fusing the ridge — geometrically identical,
-since the ports sit in the nose well below the thread band — made it worse: the
-fuse then returns the ridge alone (320.9 mm³ against 3376.4).
+| Piece                                     | Volume     | z range          |
+| ----------------------------------------- | ---------- | ---------------- |
+| nose (drilled, bored)                     | 283.3 mm³  | 0.00 – 7.00      |
+| rear (core + ridge + collar + hex, bored) | 4311.9 mm³ | 6.50 – 35.00     |
+| `fuse(nose, rear)`                        | 4308.7 mm³ | **6.50** – 35.00 |
+| `fuse(rear, nose)`                        | 4308.7 mm³ | **6.50** – 35.00 |
 
-The conclusion is not "Replicad cannot do this model". It is that this model's
-correctness currently rests on kernel controls that only the raw API exposes,
-so porting it means either reproducing those controls in Replicad (they are not
-bound) or reworking the construction until no boolean needs healing. Neither is
-worth doing to a model that already works.
+Both operands are valid solids that genuinely overlap (the core radius 6.32 mm sits inside the
+cone's 6.71 mm radius at z = 6.5), and the result is the rear alone — the nose is gone, in either
+operand order, at a hairline overlap and at 0.5 mm.
+
+**Cuts against a threaded solid remove far more than the tool.** Drilling the three ports after the
+ridge exists takes the whole ridge with it (−513 mm³ at 0.4 mm tools, and −335 mm³ even with the
+tools shrunk to 0.01 mm, where they should remove nothing).
+
+Those two constraints are mutually exclusive as the model is written: the ports must be cut before
+the ridge exists, which forces a later fuse across the nose seam, which is the fuse that drops an
+operand. Rebuilding the nose, core and collar as a single revolved profile removes the seam — and
+then the port cuts, now running against a threaded body again, destroy the nose instead (−75%).
+
+Worth trying next, in rough order of promise: return the nose and rear as two touching solids rather
+than fusing them (correct for rendering, printing and STEP assemblies, though not one watertight
+solid); `fuse(..., { optimisation: 'sameFace' })` at the seam; or sweeping the thread profile as part
+of the revolved body so no ridge fuse is needed at all.
 
 ### 5. The kernels disagree on the glTF axis convention
 
