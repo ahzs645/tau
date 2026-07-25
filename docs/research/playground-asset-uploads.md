@@ -135,6 +135,41 @@ attempted at the end of a long session.
 
 The variant is not registered in `project.json` while it does not render.
 
+## Converting the artwork to fills: attempted, also slow
+
+The cheapest-looking fix is to stop working around the artwork and fix it: give `yaa.svg` fill area
+so OpenSCAD's `import()` has something to extrude, and the existing variant renders with no kernel or
+model work at all.
+
+Attempted by generating a filled version — each `<line>` became a filled quad and each vertex an
+octagon for the round join/cap, 3277 subpaths under a single `fill-rule: nonzero` path, which unions
+correctly. The render then did not finish in 10 minutes, with or without the model's
+`offset(r = svg_stroke_width/2)` (zeroing it is correct once the width is baked into the fill, and
+made no difference).
+
+The flaw is in the conversion, not the idea. A real _Stroke to Path_ unions the outlines into a few
+dozen closed paths; mine emits 3277 overlapping subpaths and leaves the union to OpenSCAD's 2D
+engine, which is exactly the work that makes it slow. Doing this properly needs a polygon-union pass
+(Clipper, paper.js, or Inkscape's own) before writing the file. The generated artwork was reverted;
+the original stroke drawing is unchanged in the repository.
+
+## Ranked options, with what is known about each
+
+1. **Profile the 356 s OCCT render** (`ocTracing: 'per-call'`, which the kernel already supports).
+   Every optimisation so far targeted an assumed cost and three of four were wrong. The specific
+   hypothesis to test: the cost is the _accumulating base_, not the tools — each batch cuts against
+   the result of the previous one, so the plate carries every stroke already engraved and each
+   successive cut re-processes all of it.
+2. **One multi-cut against a pristine plate.** Direct test of that hypothesis: build all ~400 stroke
+   solids lazily, then cut once with all of them as tools so the base is processed a single time.
+   This failed at 1600 tools before the live-shape-count fix; it has not been retried at 400.
+3. **Union the artwork in 2D.** Replicad has `fuse2D` / `fuseBlueprints` / `cutBlueprints`, so the
+   union happens on blueprints and only one 3D boolean remains: sketch once, extrude once, cut once.
+   This is the construction most likely to make the model interactive, and it belongs in a Replicad
+   variant rather than a raw OCCT one.
+4. **Convert the artwork to filled outlines with a real union pass** — the section above. Still the
+   cheapest fix if the union is done properly, because it needs no kernel or model changes at all.
+
 ## What blocked it (before the fix)
 
 **The OpenSCAD kernel never mounts the uploaded file.** `getReferencedScadFiles` walks the source
