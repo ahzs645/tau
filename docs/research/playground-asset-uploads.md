@@ -1,9 +1,9 @@
 ---
 title: 'Viewer-supplied asset uploads in the playground'
-description: 'The upload mechanism the gallery now carries, and the kernel gap that stops an uploaded SVG from reaching a render.'
+description: 'The upload mechanism the gallery carries, the kernel gap that once stopped an uploaded SVG from reaching a render, and how the stamp was switched on.'
 status: draft
 created: '2026-07-25'
-updated: '2026-07-25'
+updated: '2026-08-10'
 category: investigation
 related:
   - docs/research/cad-text-and-custom-fonts.md
@@ -13,8 +13,9 @@ related:
 # Viewer-supplied asset uploads in the playground
 
 The stamp project is built around artwork the viewer brings — its description literally says
-"SVG-driven stamp generator using uploaded artwork" — but there is no way to supply that artwork.
-This records the mechanism now in place, the blocker that keeps it switched off, and what unblocks it.
+"SVG-driven stamp generator using uploaded artwork" — but for a long time there was no way to supply
+that artwork. This records the mechanism, the blocker that kept it switched off, and the shape it
+took once it was switched on.
 
 ## What is implemented
 
@@ -22,17 +23,34 @@ A project declares what it accepts in `project.json`, so the UI stays generic:
 
 ```json
 "uploads": [
-  { "parameter": "svg_file", "fileName": "artwork.svg", "accept": ".svg,image/svg+xml", "label": "Artwork (SVG)" }
+  { "fileName": "yaa.svg", "accept": ".svg,image/svg+xml", "label": "Artwork (SVG)" }
 ]
 ```
 
 - `projects.ts` validates the declaration and surfaces it on `PlaygroundExample.uploads`.
-- The playground session keeps `uploadedFiles`, merged into the preview filesystem alongside the
-  project's own sources.
-- Picking a file writes it in as `fileName`, sets `parameter` to that name, and bumps the preview
-  version so the render re-runs. The control sits in the parameters pane header next to Presets —
-  the one surface present at every breakpoint (beside the viewer on desktop, behind the Params tab
-  on mobile), so it needs no separate mobile treatment.
+- The playground session keeps `uploadedFiles` — the picked name and its text — merged into the
+  preview filesystem alongside the project's own sources.
+- Picking a file writes it into the live preview filesystem as `fileName`; the kernel sees a file
+  change and re-renders off it (see "the third blocker" below for why the write has to happen that
+  way rather than through a remount).
+- `parameter` is optional. A model that _selects_ its asset by name (an OpenSCAD customizer field)
+  gets that parameter set to `fileName`; a model that reads a fixed name needs nothing pointed at
+  it, because the file it reads is the one just replaced. The stamp is the second kind twice over:
+  its OpenSCAD `svg_file` already defaults to `yaa.svg`, and its OpenCASCADE variant imports
+  `./yaa.svg?raw`.
+
+The control is a drop zone in the parameters pane, built from the app's own `Dropzone` — the same
+component the converter's "drop new file here" area uses, so a file can be dragged in or clicked
+for. It sits above the parameter list rather than in the header: the parameters pane is the one
+surface present at every breakpoint (beside the viewer on desktop, behind the Params tab on mobile),
+so it needs no separate mobile treatment.
+
+The picked file's name is held in the session rather than in the drop zone, so it survives any
+remount of the preview provider — a variant switch, a re-run of the code — and so the session can
+seed the file again when one happens.
+
+Uploads are read as text (`file.text()`), so the mechanism covers textual assets — SVG, DXF, JSON, a
+kernel source — and not binary meshes.
 
 ## Update: the kernel gap is fixed
 
@@ -49,8 +67,9 @@ zero-area path produces long radial slivers rather than a logo — visible as sp
 face. Fixing that is an artwork/model question (convert the strokes to filled outlines, or handle
 stroke width in the model), not a kernel one.
 
-Because of that, `uploads` is still not declared on the stamp: the upload path works end to end, but
-what it produces is not yet a good stamp.
+That is still true of the OpenSCAD variant today, and it is why the upload is worth having on the
+OpenCASCADE one: `uploads` is declared on the project, and the variant that reads strokes directly
+is where uploaded stroke artwork renders as artwork. (Filled SVGs work in both.)
 
 ## The OpenCascade route: verified unlock, unfinished model
 
@@ -263,9 +282,95 @@ The same change fixes `surface(file = …)` and STL imports, which have the iden
 That is a change in `kernels/openscad`, so per the fork policy it wants an upstream PR rather than a
 local patch — it is generic, and any Tau consumer with an asset-driven model hits it.
 
-Until then the mechanism stays in the code with **no project declaring `uploads`**, so no upload
-control renders. Switching the stamp on is a four-line `project.json` edit once the kernel mounts
-assets.
+## Switching the stamp on
+
+With the kernel mounting assets and the OpenCASCADE variant rendering the artwork correctly, the
+stamp declares `uploads` and the drop zone appears. What the declaration binds to is the point worth
+recording: **both variants read the artwork as `yaa.svg`**, so replacing that file _is_ the binding,
+and the earlier design's `parameter` — which pointed an OpenSCAD customizer field at a new name —
+had nothing to do. Worse, it would have been actively wrong for the OpenCASCADE variant: a TS model
+resolves `./yaa.svg?raw` at bundle time, so an upload written as `artwork.svg` would have reached
+OpenSCAD and silently missed OCCT. `parameter` is therefore optional, and the stamp declares none.
+
+Verified headlessly, rendering each variant against its own artwork and against a substituted one
+(four `<line>` elements forming a square outline) written to the same name:
+
+| Variant     | Shipped `yaa.svg` | Substituted artwork | Reads the replacement |
+| ----------- | ----------------- | ------------------- | --------------------- |
+| OpenSCAD    | 3596 triangles    | 604 triangles       | yes                   |
+| OpenCASCADE | 4064 tri, 44.7 s  | 1268 tri, 2.6 s     | yes                   |
+
+Plate dimensions are unchanged at 30.0 x 40.0 mm in every case; only the artwork cut into the face
+moves, which is exactly the expected signature.
+
+The OpenSCAD variant's numbers still describe the wrong picture — it is cutting slivers, not a logo,
+for the stroke-versus-fill reason above, and an uploaded stroke drawing gets the same treatment. So
+the upload is honest about what it feeds: the OpenCASCADE variant is where uploaded stroke artwork
+renders as artwork. Filled SVGs work in both.
+
+## The second blocker: mounted is not the same as tracked
+
+The headless numbers above are real, and the browser still showed nothing. Uploading a completely
+different SVG in the running playground produced a pixel-identical render — the drop zone reported
+the new file, the preview re-ran, and the plate came back unchanged.
+
+The cause is the first blocker's twin, one layer up. `KernelWorker.computeBaseDependencies` builds
+the dependency hash from what the kernel's `getDependencies` reports, and the OpenSCAD kernel
+reported only the `include`/`use` graph — the same graph that could never see `import("artwork.svg")`.
+Mounting the assets fixed what a _fresh_ render reads; it did not make an asset change produce a
+fresh render. With the artwork outside the hash, the geometry cache answered every upload with the
+render it already had. A headless probe never sees this, because each process starts with an empty
+cache — which is exactly why the earlier measurements looked conclusive.
+
+The fix is symmetry: `getDependencies` now appends the same project asset listing that
+`mountProjectAssets` writes, so the files the kernel mounts are the files the render is keyed and
+watched on. It is the same argument as the mount, and the same upstream PR: any Tau consumer who
+edits an `import()`ed SVG and sees no re-render has this bug, upload or no upload.
+
+The lesson generalises past this kernel: a kernel that reads a file the runtime does not know about
+has _two_ obligations, and satisfying only the first fails silently rather than loudly.
+
+## The third blocker: a file replaced between mounts never "changed"
+
+Tracking the asset was necessary and still not sufficient. Instrumenting the kernel's asset listing
+in the running app showed the write landing exactly as intended — `yaa.svg` reported at 448 bytes
+after uploading the test square and 106,929 bytes after uploading the original back — while every
+render after the first answered `Cache hit` on the _same_ dependency hash.
+
+The kernel had the right file list and the wrong file hashes. `computeBaseDependencies` only reads
+paths missing from `fileHashCache`, and that cache is invalidated by filesystem _change_ events. The
+upload originally worked by bumping a preview version, which remounts the preview provider, which
+writes the whole file snapshot on the way up. But the kernel worker outlives that remount: the file
+was replaced while nothing was watching, so from the worker's side it never changed, and it kept
+hashing the artwork it had read minutes earlier.
+
+So the drop zone writes into the _mounted_ filesystem instead, through the same
+`FileContentService` an editor save goes through, and no longer forces a remount. The write is a
+change, the change invalidates, and the render that follows reads the artwork the viewer brought.
+Measured in the running app (OpenSCAD variant, facet counts from the kernel's own render log):
+
+| Step                    | Kernel sees        | Result                                        |
+| ----------------------- | ------------------ | --------------------------------------------- |
+| Shipped `yaa.svg`       | `yaa.svg` 106929 B | 4496 facets                                   |
+| Uploaded square outline | `yaa.svg` 448 B    | re-renders, 908 facets — a square in the face |
+| Uploaded `yaa.svg` back | `yaa.svg` 106929 B | cache hit on the first render, face restored  |
+
+The third row is the one that shows the caching working _for_ us rather than against us: putting the
+original artwork back is a dependency hash the kernel has already rendered, so it answers instantly
+from cache — correctly, because the inputs really are identical.
+
+The OpenCASCADE variant takes the same round trip and is the one worth looking at, since it renders
+stroke artwork as artwork: the square uploads as a clean square ring cut into the plate, and
+uploading `yaa.svg` back brings the wolf's head and speech bubble with it. Its artwork arrives
+through the bundler rather than the kernel filesystem (`./yaa.svg?raw`), and `bundleResultCache` is
+invalidated by the same change event, so nothing extra was needed for it.
+
+The general shape is worth keeping: **staging files through a remount is not a substitute for
+telling the runtime they changed.** `KernelWorker.handleStageAndOpenFile` makes exactly this point
+in a comment — it invalidates the paths it stages "so the cache contract is identical regardless of
+who wrote the bytes" — and a consumer that writes bytes by another route has to honour the same
+contract. The public `RuntimeClient` has no `notifyFileChanged`, so the only way to honour it from
+the app is to write where the watcher is looking.
 
 ## Related: the Replicad stamp
 

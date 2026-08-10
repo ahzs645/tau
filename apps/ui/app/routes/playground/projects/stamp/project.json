@@ -6,6 +6,13 @@
   "tags": ["stamp", "svg", "text"],
   "hidden": false,
   "image": "poster.jpg",
+  "uploads": [
+    {
+      "fileName": "yaa.svg",
+      "accept": ".svg,image/svg+xml",
+      "label": "Artwork (SVG)"
+    }
+  ],
   "variants": [
     {
       "id": "openscad",

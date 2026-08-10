@@ -59,15 +59,45 @@ function buildPreviewRenderOptions(source: {
 /**
  * A file the viewer may supply at render time (artwork, a template, a font).
  * The uploaded file is written into the project's preview filesystem under
- * `fileName`, and `parameter` is set to that name so the model picks it up —
- * so a project opts in with metadata rather than the UI knowing about it.
+ * `fileName`, so a project opts in with metadata rather than the UI knowing
+ * about it. `parameter` is optional: a model that selects its asset by name
+ * gets that parameter set to `fileName`, and a model that reads a fixed name
+ * (an OpenSCAD default, a TypeScript `?raw` import) needs nothing pointed at
+ * it, because the file it reads is the one that was just replaced.
  */
 const projectUploadSchema = z.object({
-  parameter: z.string().min(1),
+  parameter: z.string().min(1).optional(),
   fileName: z.string().min(1),
-  accept: z.string().min(1),
+  // The drop zone matches uploads on MIME type as well as extension, so a
+  // declaration listing only extensions would accept nothing.
+  accept: z
+    .string()
+    .min(1)
+    .refine((accept) => parseUploadAccept(accept) !== undefined, {
+      message: 'accept must list at least one MIME type, e.g. ".svg,image/svg+xml"',
+    }),
   label: z.string().min(1),
 });
+
+/**
+ * An HTML `accept` string as the drop zone wants it: every declared MIME type
+ * mapped to every declared extension, which is how `react-dropzone` matches a
+ * file by either. Undefined when no MIME type is declared, which is a broken
+ * declaration rather than "accept anything".
+ */
+export function parseUploadAccept(accept: string): Record<string, string[]> | undefined {
+  const entries = accept
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const extensions = entries.filter((entry) => entry.startsWith('.'));
+  const mimeTypes = entries.filter((entry) => entry.includes('/'));
+  if (mimeTypes.length === 0) {
+    return undefined;
+  }
+
+  return Object.fromEntries(mimeTypes.map((mimeType) => [mimeType, extensions]));
+}
 
 const projectVariantSchema = z.object({
   id: z.enum(['openscad', 'replicad', 'opencascade']),

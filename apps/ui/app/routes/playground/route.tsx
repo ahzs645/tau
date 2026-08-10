@@ -11,7 +11,12 @@ import { useTheme } from '#hooks/use-theme.js';
 import { isGithubPagesBuild } from '#lib/deploy-target.js';
 import { FileManagerProvider } from '#hooks/use-file-manager.js';
 import { loadPlaygroundExample, playgroundExamples } from '#routes/playground/playground-examples.js';
-import type { PlaygroundExample, PlaygroundVariant, PlaygroundUpload } from '#routes/playground/playground-examples.js';
+import type {
+  PlaygroundExample,
+  PlaygroundVariant,
+  PlaygroundUpload,
+  PlaygroundUploadedFile,
+} from '#routes/playground/playground-examples.js';
 import { isProjectExampleId } from '#routes/playground/projects.js';
 import { PlaygroundPreviewPane, playgroundPreviewCapabilities } from '#routes/playground/playground-preview.js';
 import type { PlaygroundMobilePane } from '#routes/playground/playground-preview.js';
@@ -65,8 +70,8 @@ function hasParameterOverrides(parameters: Record<string, unknown>, baseline: Re
 type PlaygroundVariantSession = {
   readonly editorValue: string;
   readonly parameters: Record<string, unknown>;
-  /** Files the viewer supplied, by file name, merged into the preview filesystem. */
-  readonly uploadedFiles: Record<string, string>;
+  /** Files the viewer supplied, by the name they are written under in the preview filesystem. */
+  readonly uploadedFiles: Record<string, PlaygroundUploadedFile>;
   readonly previewValue: string;
   readonly previewVersion: number;
 };
@@ -268,7 +273,9 @@ function PlaygroundLoaded({
   const previewSourceFiles = useMemo(
     () => ({
       ...activeExample.sourceFiles,
-      ...activeSession.uploadedFiles,
+      ...Object.fromEntries(
+        Object.entries(activeSession.uploadedFiles).map(([fileName, file]) => [fileName, file.content]),
+      ),
       [activeExample.mainFile]: activeSession.previewValue,
     }),
     [activeExample.mainFile, activeExample.sourceFiles, activeSession.previewValue, activeSession.uploadedFiles],
@@ -369,15 +376,18 @@ function PlaygroundLoaded({
   );
 
   const handleUpload = useCallback(
-    (upload: PlaygroundUpload, content: string): void => {
+    (upload: PlaygroundUpload, file: PlaygroundUploadedFile): void => {
       updateActiveSession((session) => ({
         ...session,
-        uploadedFiles: { ...session.uploadedFiles, [upload.fileName]: content },
-        parameters: { ...session.parameters, [upload.parameter]: upload.fileName },
-        // The kernel keys its cache on the source files, but the parameter value
-        // is what the model reads, so bump the version to force a fresh render
-        // when the same file name is replaced by different content.
-        previewVersion: session.previewVersion + 1,
+        uploadedFiles: { ...session.uploadedFiles, [upload.fileName]: file },
+        // Only a model that selects its asset by name needs pointing at it; one
+        // that reads a fixed name is already reading the file just replaced.
+        ...(upload.parameter === undefined
+          ? {}
+          : { parameters: { ...session.parameters, [upload.parameter]: upload.fileName } }),
+        // No preview-version bump: the drop zone has already written the file
+        // into the mounted preview filesystem, and the kernel re-renders off
+        // that change. Remounting here would race it — see the drop zone.
       }));
     },
     [updateActiveSession],
@@ -654,6 +664,7 @@ function PlaygroundLoaded({
           exportControlsElement={exportControlsElement}
           onGeometriesReady={handlePreviewGeometriesReady}
           uploads={activeExample.uploads}
+          uploadedFiles={activeSession.uploadedFiles}
           onUpload={handleUpload}
           onParametersChange={handleParametersChange}
         />

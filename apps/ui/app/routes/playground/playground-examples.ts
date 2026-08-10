@@ -13,16 +13,37 @@ export type PlaygroundStaticPreview = {
 
 /**
  * A file the viewer may supply for this model (artwork, a template, a font).
- * The upload is written into the preview filesystem as `fileName` and
- * `parameter` is pointed at it, so the model reads it the same way it reads a
- * file that shipped with the project.
+ * The upload is written into the preview filesystem as `fileName`, so the model
+ * reads it the same way it reads a file that shipped with the project — an
+ * OpenSCAD `import()` finds it in the kernel filesystem, and a TypeScript
+ * model's `import art from './art.svg?raw'` resolves through the same
+ * filesystem at bundle time.
+ *
+ * Uploads are read as text, so the accepted formats are the textual ones (SVG,
+ * DXF, JSON, a kernel source file) rather than binary meshes.
  */
 export type PlaygroundUpload = {
-  readonly parameter: string;
+  /**
+   * Model parameter to point at `fileName`, for models that select their asset
+   * by name (an OpenSCAD customizer field). Omitted when the model already
+   * names the file it reads, which is the case for every model that reads a
+   * fixed import — replacing the file is then the whole mechanism.
+   */
+  readonly parameter?: string;
   readonly fileName: string;
-  /** `accept` attribute for the file input, e.g. `.svg`. */
+  /**
+   * Accepted types, in HTML `accept` form. At least one MIME type is required,
+   * because the drop zone matches on type as well as extension —
+   * `.svg,image/svg+xml`.
+   */
   readonly accept: string;
   readonly label: string;
+};
+
+/** A file the viewer supplied, kept with the name they picked it under. */
+export type PlaygroundUploadedFile = {
+  readonly name: string;
+  readonly content: string;
 };
 
 /**

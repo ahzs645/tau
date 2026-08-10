@@ -1,42 +1,74 @@
 import { describe, expect, it } from 'vitest';
 import {
   loadProjectExample,
+  parseUploadAccept,
   projectExamples,
   projectMetadataSchema,
   projectPresetsSchema,
 } from '#routes/playground/projects.js';
 
 describe('project uploads', () => {
-  it('accepts a complete upload declaration', () => {
+  it('accepts a declaration that points a parameter at the uploaded file', () => {
     expect(
       projectMetadataSchema.safeParse({
         title: 'Uploadable project',
         entry: 'main.scad',
         description: 'Takes viewer-supplied artwork.',
-        uploads: [{ parameter: 'svg_file', fileName: 'artwork.svg', accept: '.svg', label: 'Artwork (SVG)' }],
+        uploads: [
+          { parameter: 'svg_file', fileName: 'artwork.svg', accept: '.svg,image/svg+xml', label: 'Artwork (SVG)' },
+        ],
       }).success,
     ).toBe(true);
   });
 
-  it('leaves uploads undefined for projects that do not declare one', () => {
-    // No project declares an upload yet: the OpenSCAD kernel mounts only the
-    // .scad files it discovers through include/use, so an uploaded asset never
-    // reaches the render. See docs/research/playground-asset-uploads.md.
-    const vaneTrap = projectExamples.find((example) => example.id === 'vane-trap');
-    expect(vaneTrap?.uploads).toBeUndefined();
-    expect(projectExamples.every((example) => example.uploads === undefined)).toBe(true);
+  it('accepts a declaration without a parameter, for a model that reads a fixed name', () => {
+    expect(
+      projectMetadataSchema.safeParse({
+        title: 'Uploadable project',
+        entry: 'main.occt.ts',
+        description: 'Reads its artwork through a fixed `?raw` import.',
+        uploads: [{ fileName: 'artwork.svg', accept: '.svg,image/svg+xml', label: 'Artwork (SVG)' }],
+      }).success,
+    ).toBe(true);
   });
 
-  it('rejects an upload declaration missing its parameter binding', () => {
+  it('rejects an accept string with no MIME type to match on', () => {
     expect(
       projectMetadataSchema.safeParse({
         title: 'Bad upload',
         entry: 'main.scad',
-        description: 'Upload without a parameter to point at.',
+        description: 'Extension-only accept matches nothing in the drop zone.',
         uploads: [{ fileName: 'artwork.svg', accept: '.svg', label: 'Artwork' }],
       }).success,
     ).toBe(false);
   });
+
+  it('surfaces the stamp declaration the artwork drop zone renders from', () => {
+    // The stamp's artwork is the one asset a viewer is expected to bring, and
+    // both its variants read it as `yaa.svg` — the OpenSCAD `svg_file` default
+    // and the OpenCASCADE `./yaa.svg?raw` import — so replacing that file is
+    // the whole binding and no parameter needs pointing at it.
+    const stamp = projectExamples.find((example) => example.id === 'stamp');
+    expect(stamp?.uploads).toStrictEqual([
+      { fileName: 'yaa.svg', accept: '.svg,image/svg+xml', label: 'Artwork (SVG)' },
+    ]);
+  });
+
+  it('leaves uploads undefined for projects that do not declare one', () => {
+    const vaneTrap = projectExamples.find((example) => example.id === 'vane-trap');
+    expect(vaneTrap?.uploads).toBeUndefined();
+  });
+
+  /* eslint-disable @typescript-eslint/naming-convention -- keys are MIME types, not identifiers */
+  it('maps an accept string onto every declared MIME type', () => {
+    expect(parseUploadAccept('.svg,image/svg+xml')).toStrictEqual({ 'image/svg+xml': ['.svg'] });
+    expect(parseUploadAccept('.dxf,.svg,image/svg+xml,image/vnd.dxf')).toStrictEqual({
+      'image/svg+xml': ['.dxf', '.svg'],
+      'image/vnd.dxf': ['.dxf', '.svg'],
+    });
+    expect(parseUploadAccept('.svg')).toBeUndefined();
+  });
+  /* eslint-enable @typescript-eslint/naming-convention */
 });
 
 describe('project examples discovery', () => {

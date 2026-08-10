@@ -16,7 +16,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '#components/ui/dropdown-menu.js';
-import { FileManagerProvider, SharedWorkerGate } from '#hooks/use-file-manager.js';
+import { FileManagerProvider, SharedWorkerGate, useFileManager } from '#hooks/use-file-manager.js';
 import { CadPreviewProvider, useCadPreview } from '#hooks/use-cad-preview.js';
 import { GraphicsProvider } from '#hooks/use-graphics.js';
 import { graphicsMachine } from '#machines/graphics.machine.js';
@@ -42,8 +42,15 @@ import type { ToolbarItemConfig } from '#hooks/use-toolbar-overflow.js';
 import { useResizeObserver } from '#hooks/use-resize-observer.js';
 import { ArButton } from '#components/cad/ar-button.js';
 import type { CadPreviewStatus } from '#hooks/use-cad-preview.js';
+import { Dropzone, DropzoneContent, DropzoneEmptyState } from '#components/ui/dropzone.js';
 import { PreviewParameters } from '#routes/projects_.$id_.preview/preview-parameters.js';
-import type { PlaygroundExample, PlaygroundPreset, PlaygroundUpload } from '#routes/playground/playground-examples.js';
+import type {
+  PlaygroundExample,
+  PlaygroundPreset,
+  PlaygroundUpload,
+  PlaygroundUploadedFile,
+} from '#routes/playground/playground-examples.js';
+import { parseUploadAccept } from '#routes/playground/projects.js';
 import { extractModifiedProperties } from '#utils/object.utils.js';
 import { cn } from '#utils/ui.utils.js';
 
@@ -191,7 +198,9 @@ type PlaygroundPreviewPaneProps = {
   readonly exportControlsElement: HTMLDivElement | undefined;
   readonly onGeometriesReady: (geometries: readonly Geometry[], parameters: Record<string, unknown>) => void;
   readonly uploads?: readonly PlaygroundUpload[];
-  readonly onUpload?: (upload: PlaygroundUpload, content: string) => void;
+  /** Files already supplied for this variant, by the name they were written under. */
+  readonly uploadedFiles?: Record<string, PlaygroundUploadedFile>;
+  readonly onUpload?: (upload: PlaygroundUpload, file: PlaygroundUploadedFile) => void;
   readonly onParametersChange: (parameters: Record<string, unknown>) => void;
 };
 
@@ -205,6 +214,7 @@ type PlaygroundPreviewSnapshot = {
 export function PlaygroundPreviewPane({
   activeExample,
   uploads,
+  uploadedFiles,
   onUpload,
   cachedGeometries,
   files,
@@ -442,7 +452,12 @@ export function PlaygroundPreviewPane({
               mobilePane === 'params' ? 'max-xl:min-h-0 max-xl:flex-1 max-xl:overflow-y-auto' : 'max-xl:hidden',
             )}
           >
-            <PlaygroundParameters presets={activeExample.presets ?? []} uploads={uploads} onUpload={onUpload} />
+            <PlaygroundParameters
+              presets={activeExample.presets ?? []}
+              uploads={uploads}
+              uploadedFiles={uploadedFiles}
+              onUpload={onUpload}
+            />
           </section>
         </CadPreviewProvider>
       </FileManagerProvider>
@@ -509,90 +524,120 @@ function PlaygroundParameterBridge({
 function PlaygroundParameters({
   presets,
   uploads,
+  uploadedFiles,
   onUpload,
 }: {
   readonly presets: readonly PlaygroundPreset[];
   readonly uploads?: readonly PlaygroundUpload[];
-  readonly onUpload?: (upload: PlaygroundUpload, content: string) => void;
+  readonly uploadedFiles?: Record<string, PlaygroundUploadedFile>;
+  readonly onUpload?: (upload: PlaygroundUpload, file: PlaygroundUploadedFile) => void;
 }): React.JSX.Element {
   // The parameters pane is the one surface present at every breakpoint — beside
   // the viewer on desktop, behind the Params tab on mobile — so an upload
   // control here needs no separate mobile treatment.
-  const hasUploads = Boolean(uploads && uploads.length > 0 && onUpload);
-  const headerActions =
-    hasUploads || presets.length > 0 ? (
-      <div className='flex items-center gap-1'>
-        {uploads?.map((upload) => (
-          <PlaygroundUploadButton key={upload.parameter} upload={upload} onUpload={onUpload} />
-        ))}
-        {presets.length > 0 ? <PlaygroundPresetMenu presets={presets} /> : null}
-      </div>
-    ) : undefined;
+  const uploadControls = onUpload && uploads && uploads.length > 0 ? { uploads, onUpload } : undefined;
+  const headerActions = presets.length > 0 ? <PlaygroundPresetMenu presets={presets} /> : undefined;
 
   return (
     <div className='flex h-full min-h-0 flex-col'>
-      <PreviewParameters headerActions={headerActions} />
+      {uploadControls ? (
+        <div className='flex shrink-0 flex-col gap-2 border-b p-2'>
+          {uploadControls.uploads.map((upload) => (
+            <PlaygroundUploadDropzone
+              key={upload.fileName}
+              upload={upload}
+              uploaded={uploadedFiles?.[upload.fileName]}
+              onUpload={uploadControls.onUpload}
+            />
+          ))}
+        </div>
+      ) : null}
+      <div className='min-h-0 flex-1'>
+        <PreviewParameters headerActions={headerActions} />
+      </div>
     </div>
   );
 }
 
 /**
- * Reads the picked file as text and hands it to the route, which writes it into
- * the preview filesystem and points the model's parameter at it.
+ * Drop target for a file the model reads, in the same shape the converter's
+ * drop area uses.
+ *
+ * The picked file is written into the live preview filesystem here rather than
+ * being handed to the route to seed a remount. That is deliberate: the kernel
+ * worker outlives a preview remount, and it invalidates its file hashes from
+ * filesystem *change* events. A file replaced between two mounts is therefore
+ * a file it never saw change — it re-reads its own cached hash, the dependency
+ * hash comes out identical, and the geometry cache answers the upload with the
+ * render it already had. Writing into the mounted filesystem is the same path
+ * an editor save takes, and it invalidates and re-renders the same way.
+ *
+ * The route still records the upload (so a variant switch or a later remount
+ * carries it), and the picked name comes back in through `uploaded`.
  */
-function PlaygroundUploadButton({
+function PlaygroundUploadDropzone({
   upload,
+  uploaded,
   onUpload,
 }: {
   readonly upload: PlaygroundUpload;
-  readonly onUpload?: (upload: PlaygroundUpload, content: string) => void;
+  readonly uploaded?: PlaygroundUploadedFile;
+  readonly onUpload: (upload: PlaygroundUpload, file: PlaygroundUploadedFile) => void;
 }): React.JSX.Element {
-  const inputRef = useRef<HTMLInputElement>(null);
+  const { writeFile } = useFileManager();
+  const source = useMemo(() => (uploaded ? [new File([uploaded.content], uploaded.name)] : undefined), [uploaded]);
 
-  const handleChange = useCallback(
-    (event: React.ChangeEvent<HTMLInputElement>) => {
-      const file = event.target.files?.[0];
-      // Clear immediately so picking the same file twice fires another change.
-      event.target.value = '';
-      if (!file || !onUpload) {
+  const handleDrop = useCallback(
+    (files: File[]) => {
+      const file = files[0];
+      if (!file) {
         return;
       }
 
-      // oxlint-disable-next-line tau-lint/no-async-iife -- file read is the event's whole purpose
+      // oxlint-disable-next-line tau-lint/no-async-iife -- file read is the drop's whole purpose
       void (async () => {
         try {
-          onUpload(upload, await file.text());
+          const content = await file.text();
+          await writeFile(upload.fileName, new TextEncoder().encode(content), { source: 'user' });
+          onUpload(upload, { name: file.name, content });
           toast.success(`Loaded ${file.name}`);
         } catch {
           toast.error(`Could not read ${file.name}`);
         }
       })();
     },
-    [onUpload, upload],
+    [onUpload, upload, writeFile],
   );
 
+  const handleError = useCallback((error: Error) => {
+    toast.error(error.message);
+  }, []);
+
   return (
-    <>
-      <input
-        ref={inputRef}
-        type='file'
-        accept={upload.accept}
-        className='hidden'
-        aria-label={upload.label}
-        onChange={handleChange}
-      />
-      <Button
-        variant='ghost'
-        size='xs'
-        className='gap-1'
-        onClick={() => {
-          inputRef.current?.click();
-        }}
-      >
-        <Upload className='size-3.5' />
-        {upload.label}
-      </Button>
-    </>
+    <Dropzone
+      accept={parseUploadAccept(upload.accept)}
+      maxFiles={1}
+      src={source}
+      className='p-4'
+      aria-label={upload.label}
+      onDrop={handleDrop}
+      onError={handleError}
+    >
+      <DropzoneEmptyState>
+        <div className='flex flex-col items-center gap-1'>
+          <Upload className='size-5 text-muted-foreground' />
+          <p className='text-sm font-medium'>{upload.label}</p>
+          <p className='text-xs text-muted-foreground'>Drag and drop or click to upload</p>
+        </div>
+      </DropzoneEmptyState>
+      <DropzoneContent>
+        <div className='flex w-full flex-col items-center gap-1'>
+          <Upload className='size-5 text-muted-foreground' />
+          <p className='w-full truncate text-sm font-medium'>{uploaded?.name}</p>
+          <p className='text-xs text-muted-foreground'>{upload.label} — click to replace</p>
+        </div>
+      </DropzoneContent>
+    </Dropzone>
   );
 }
 

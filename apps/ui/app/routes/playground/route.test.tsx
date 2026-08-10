@@ -27,6 +27,7 @@ const {
   mockState,
   mockToastError,
   mockToastSuccess,
+  mockWriteProjectFile,
   mockWriteText,
   fileManagerCalls,
   providerMountCalls,
@@ -62,6 +63,7 @@ const {
     mockSetParameters: vi.fn(),
     mockToastError: vi.fn(),
     mockToastSuccess: vi.fn(),
+    mockWriteProjectFile: vi.fn(async (_path: string, _data: Uint8Array, _options: { source: string }) => undefined),
     mockWriteText: vi.fn(async (_text: string) => 'copied'),
     fileManagerCalls: [] as Array<{
       projectId: string;
@@ -90,6 +92,7 @@ const {
       mockSetParameters.mockClear();
       mockToastError.mockClear();
       mockToastSuccess.mockClear();
+      mockWriteProjectFile.mockClear();
       mockWriteText.mockClear();
       fileManagerCalls.length = 0;
       providerCalls.length = 0;
@@ -215,6 +218,9 @@ vi.mock('#hooks/use-file-manager.js', () => ({
   },
   SharedWorkerGate({ children }: { readonly children: React.ReactNode }) {
     return <div data-testid='shared-worker-gate'>{children}</div>;
+  },
+  useFileManager() {
+    return { writeFile: mockWriteProjectFile };
   },
 }));
 
@@ -757,6 +763,49 @@ describe('PlaygroundRoot', () => {
       expect(mockDownloadBlob).toHaveBeenCalledWith(expect.any(Blob), 'openscad-bracket.glb');
     });
     expect(mockToastSuccess).toHaveBeenCalledWith('Downloaded openscad-bracket.glb');
+  });
+
+  it('renders an artwork drop zone for a project that declares an upload, and feeds the file to the render', async () => {
+    globalThis.history.replaceState({}, '', '/?model=stamp');
+
+    const { container } = renderPlaygroundRoot();
+    expect(await screen.findByText('Artwork (SVG)')).toBeDefined();
+
+    const fileInput = container.querySelector('input[type="file"]');
+    if (!(fileInput instanceof HTMLInputElement)) {
+      throw new TypeError('Expected the artwork drop zone to render a file input');
+    }
+
+    const artwork = '<svg xmlns="http://www.w3.org/2000/svg"><line x1="0" y1="0" x2="10" y2="10"/></svg>';
+    const artworkFile = new File([artwork], 'my-logo.svg', { type: 'image/svg+xml' });
+    // Jsdom's Blob implements neither `text()` nor `arrayBuffer()`, so the
+    // picked file carries the reader every browser provides.
+    Object.defineProperty(artworkFile, 'text', { value: async () => artwork });
+    fireEvent.change(fileInput, { target: { files: [artworkFile] } });
+
+    // Both stamp variants read the artwork as `yaa.svg` — the OpenSCAD
+    // `svg_file` default and the OpenCASCADE `?raw` import — so the upload
+    // reaches the render by replacing that file in the live preview
+    // filesystem, which is what makes the kernel treat it as a change.
+    await waitFor(() => {
+      expect(mockWriteProjectFile).toHaveBeenCalled();
+    });
+    const [writtenPath, writtenBytes, writeOptions] = mockWriteProjectFile.mock.calls.at(-1)!;
+    expect(writtenPath).toBe('yaa.svg');
+    expect(new TextDecoder().decode(writtenBytes)).toBe(artwork);
+    expect(writeOptions).toStrictEqual({ source: 'user' });
+
+    // …and it is recorded on the session too, so a remount (a variant switch,
+    // a reload of the same session) still carries the viewer's artwork.
+    await waitFor(() => {
+      const { files } = providerCalls.at(-1)!;
+      expect(new TextDecoder().decode(files['yaa.svg']?.content)).toBe(artwork);
+    });
+
+    // The drop zone reports what is loaded, and the name survives the remount
+    // the new render forces.
+    expect(await screen.findByText('my-logo.svg')).toBeDefined();
+    expect(mockToastSuccess).toHaveBeenCalledWith('Loaded my-logo.svg');
   });
 
   it('dispatches direct OpenCascade exports through the same preview actor', async () => {

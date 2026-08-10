@@ -2274,6 +2274,49 @@ describe('OpenSCAD Kernel – unresolved dependency tracking', () => {
   });
 });
 
+describe('OpenSCAD Kernel – project asset dependencies', () => {
+  const squareSvg = (size: number): string =>
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">` +
+    `<rect x="0" y="0" width="${size}" height="${size}" fill="#000000"/></svg>`;
+
+  const renderBounds = async (
+    worker: Awaited<ReturnType<typeof createWorker>>,
+    file: ReturnType<typeof createGeometryFile>,
+  ): Promise<ReturnType<typeof getOffBounds>> => {
+    const result = await worker.createGeometry({ file, parameters: {} });
+    expect(result.success).toBe(true);
+    const offData = (worker as unknown as { nativeHandle: string | undefined }).nativeHandle;
+    if (!offData) {
+      throw new Error('Expected OFF data from the render');
+    }
+    return getOffBounds(offData);
+  };
+
+  it('re-renders when an imported asset changes, though no include references it', async () => {
+    const worker = await createWorker({
+      'main.scad': 'svg_file = "artwork.svg";\nlinear_extrude(2) import(svg_file, center = true);',
+      'artwork.svg': squareSvg(10),
+    });
+    const geometryFile = createGeometryFile('main.scad');
+
+    await worker.render({ file: geometryFile, parameters: {} });
+    const before = await renderBounds(worker, geometryFile);
+
+    // The asset reaches the model through `import()`, and by a variable at
+    // that — no include graph can find it, so it has to be a dependency by
+    // virtue of sitting in the project. Otherwise the render is cached against
+    // a hash that cannot see the artwork.
+    expect(worker.getWatchedPaths()).toContain('/projects/test/artwork.svg');
+
+    const fs = getTestFileSystem();
+    await fs.writeFile('/projects/test/artwork.svg', squareSvg(40));
+    await worker.notifyFileChanged(['/projects/test/artwork.svg']);
+
+    const after = await renderBounds(worker, geometryFile);
+    expect(after.max[0] - after.min[0]).toBeGreaterThan(before.max[0] - before.min[0]);
+  });
+});
+
 // =============================================================================
 // Tessellation
 // =============================================================================
