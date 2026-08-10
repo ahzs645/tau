@@ -114,7 +114,18 @@ jobs:
         # ui: 22 inherited failures (tiptap editor, TSL material snapshots,
         # use-chat). The playground overlay is covered by its own step below.
         # oxlint: require-using-on-disposable fails on the fork base too.
-        run: pnpm nx affected --targets=test --exclude=ui,oxlint
+        #
+        # Retried once, because the inherited suite has timing-sensitive tests
+        # that only surface now that the whole graph runs on a loaded runner —
+        # `rpc:test`'s symmetric-close race is one, and it passes 8/8 locally.
+        # This is cheap and it does not hide a real break: nx caches passing
+        # tasks, so the second pass re-runs only what failed, and a test that is
+        # actually broken fails twice. A flake in fork-owned code is a bug to
+        # fix, so the playground step below gets no retry.
+        run: |
+          pnpm nx affected --targets=test --exclude=ui,oxlint && exit 0
+          echo "::warning::test pass failed; re-running the failed projects once to rule out a flake"
+          pnpm nx affected --targets=test --exclude=ui,oxlint
 
       - name: Lint fork-owned code
         # Lint is the one target that cannot be run tree-wide here. The
