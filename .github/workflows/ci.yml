@@ -48,9 +48,6 @@ jobs:
       TAU_FRONTEND_URL: https://3dd.ahmadjalil.com
       TAU_WEBSOCKET_URL: wss://api.taucad.dev
       TAU_DISABLE_CODE_EDITOR: 'true'
-      # Match the canonical Nx build (apps/ui/project.json): the client bundle
-      # needs more than the default heap.
-      NODE_OPTIONS: '--max-old-space-size=8192'
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -69,7 +66,38 @@ jobs:
       - name: Build affected projects
         # example-electron: the OCCT wasm modules use top-level await and vite
         # bundles the kernel worker as `iife`, which cannot represent it.
-        run: pnpm nx affected --targets=build --exclude=example-electron
+        # ui is built on its own below — see that step for why.
+        run: pnpm nx affected --targets=build --exclude=example-electron,ui
+
+      - name: Build the gallery
+        env:
+          # Match the canonical Nx build (apps/ui/project.json): the client
+          # bundle needs more than the default heap. Scoped to this step, as in
+          # the Pages deploy — at job level it also raises the ceiling for every
+          # parallel nx task and vitest worker on a 16GB runner.
+          NODE_OPTIONS: '--max-old-space-size=8192'
+        # Alone and bounded, both deliberately. The react-router client bundle
+        # can wedge in rolldown rather than fail — it did here for 43 minutes,
+        # silent, until the job timeout killed it, and the Pages deploy carries
+        # its own retry guard for the same reason (github-pages.yml). Running it
+        # outside the parallel fan-out keeps it off the other builds' cores, and
+        # a bounded retry turns a wedge into a fast, legible failure instead of
+        # eating the job's whole budget.
+        run: |
+          set -euo pipefail
+
+          for attempt in 1 2 3; do
+            echo "::group::ui build attempt ${attempt}/3"
+            if timeout 300 pnpm nx build ui; then
+              echo "::endgroup::"
+              exit 0
+            fi
+            echo "::endgroup::"
+            echo "ui build attempt ${attempt} did not complete within 5 minutes"
+          done
+
+          echo "::error::ui build did not complete in three bounded attempts"
+          exit 1
 
       - name: Typecheck affected projects
         # api: `@morphllm/morphsdk` renamed `instructions` to `instruction` and
@@ -105,14 +133,19 @@ jobs:
         working-directory: apps/ui
         run: pnpm exec vitest run app/routes/playground
 
-  # Advisory: the targets `verify` excludes, run in full so inherited breakage
-  # stays visible (and so it is obvious when an upstream sync fixes one and the
-  # exclusion above can go). Never blocks a merge.
+  # Advisory: the targets `verify` holds back, run in full so inherited breakage
+  # stays visible — and so it is obvious when an upstream sync fixes one and the
+  # matching exclusion can go.
+  #
+  # Reports, never gates, in the same sense as the overlay-boundary job below:
+  # the step records each result and always exits 0. `continue-on-error` would
+  # keep the run green but still paint this job red in the PR's checks, which is
+  # the permanently-failing check this whole split exists to get rid of. A ✅ in
+  # its summary table is the thing to act on.
   upstream-drift:
     name: Upstream drift (advisory)
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -127,10 +160,34 @@ jobs:
 
       - name: Report inherited failures
         run: |
-          pnpm nx affected --targets=lint
-          pnpm nx affected --targets=typecheck --projects=api
-          pnpm nx affected --targets=test --projects=ui,oxlint
-          pnpm nx affected --targets=build --projects=example-electron
+          set -uo pipefail
+
+          {
+            echo "### Upstream drift"
+            echo
+            echo "What \`verify\` holds back. A ✅ is an exclusion to delete."
+            echo
+            echo "| Held back | Result |"
+            echo "| --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          report() {
+            label="$1"
+            shift
+            echo "::group::${label}"
+            if "$@"; then
+              result='✅ passes now'
+            else
+              result='❌ still failing'
+            fi
+            echo "::endgroup::"
+            echo "| \`${label}\` | ${result} |" >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          report 'lint (whole workspace)' pnpm nx affected --targets=lint
+          report 'api:typecheck' pnpm nx affected --targets=typecheck --projects=api
+          report 'ui:test, oxlint:test' pnpm nx affected --targets=test --projects=ui,oxlint
+          report 'example-electron:build' pnpm nx affected --targets=build --projects=example-electron
 
   overlay-boundary:
     name: Fork overlay boundary
