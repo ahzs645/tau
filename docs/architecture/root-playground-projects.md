@@ -114,16 +114,34 @@ bevels.
 
 Binary assets such as `.stl` and `.glb` are not loaded into the code editor by this path. Static
 (`"type": "static"`) projects reference a pre-rendered `.glb` via `previewGlb` / `staticPreview`
-and render viewer-only. If a project needs other binary runtime assets, add an explicit runtime
-asset plan before adding the project.
+and render viewer-only.
 
-They do not reach the _render_ either, and that failure is quiet. The loader reads every matched
-file as `?raw` text, so a binary `.stl` cannot be carried even by widening the glob, and it never
-lands in the preview filesystem the kernel mounts. A model that imports one gets an OpenSCAD warning
-(`Can't open import file '/…stl'`) and geometry with that part silently missing — the stamp's knub
-and its whole `component_selection = "handle"` branch render as nothing for exactly this reason. Do
-not carry an asset a model imports at render time until that plan exists; a customizer parameter
-naming such a file is worse than nothing, because it offers to change a file that is not there.
+### Binary runtime assets
+
+A model that `import()`s a mesh gets it through a second loader:
+
+```text
+.stl, .3mf
+```
+
+These cannot ride the `?raw` text glob — decoding an STL as UTF-8 corrupts it — so they are emitted
+as URLs and fetched when the project opens, then merged into the same `sourceFiles` record as bytes.
+`PlaygroundSourceFile` is therefore `string | Uint8Array`: text for anything a viewer reads or
+edits, bytes for anything a model only imports. The preview filesystem takes bytes either way, and
+the OpenSCAD kernel mounts every project asset beside the sources, so `import("part.stl")` resolves.
+
+Three things follow, and they are easy to get wrong:
+
+- **A fetch that fails is skipped, not fatal.** Losing a mesh is a model rendering without that
+  part; throwing would be a project that does not open at all.
+- **Binary assets enter the preview cache key by byte length, not by content.** Nothing in the
+  playground can edit them, and hashing a 340 KB mesh on every parameter change is not free.
+- **The code editor never shows them,** so `example.code` and the variant sources are always text —
+  read them through a helper that returns `undefined` for bytes rather than casting.
+
+Before this existed, an imported mesh failed quietly: OpenSCAD warned `Can't open import file
+'/…stl'` and rendered that part as nothing. The stamp's knub was invisible for that reason, and its
+`component_selection = "handle"` branch produced no geometry at all.
 
 ## Hidden Projects
 

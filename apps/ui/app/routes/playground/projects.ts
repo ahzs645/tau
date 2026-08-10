@@ -1,6 +1,10 @@
 import type { FileExtension } from '@taucad/types';
 import { z } from 'zod';
-import type { PlaygroundExample, PlaygroundVariant } from '#routes/playground/playground-examples.js';
+import type {
+  PlaygroundExample,
+  PlaygroundSourceFile,
+  PlaygroundVariant,
+} from '#routes/playground/playground-examples.js';
 
 const meshExportFormats = ['glb', 'stl', '3mf', 'obj'] as const;
 const solidExportFormats = ['glb', 'stl', '3mf', 'step'] as const;
@@ -172,6 +176,19 @@ const projectSourceLoadersByPath = import.meta.glob<string>('./projects/**/*.{js
   query: '?raw',
 });
 
+/**
+ * Assets a model imports at render time but no one edits: meshes and images.
+ * They cannot come through the `?raw` text loader above — an STL is bytes, and
+ * decoding it as UTF-8 corrupts it — so they are emitted as separate URLs and
+ * fetched when the project opens. That keeps them out of the gallery payload
+ * (nothing is fetched until a project is selected) and out of the code editor,
+ * which only ever shows the text sources.
+ */
+const projectBinaryAssetUrlsByPath = import.meta.glob<string>('./projects/**/*.{stl,3mf}', {
+  import: 'default',
+  query: '?url',
+});
+
 const projectStaticPreviewGlbByPath = import.meta.glob<string>('./projects/**/*.glb', {
   eager: true,
   import: 'default',
@@ -284,9 +301,40 @@ function presetsForProject(projectId: string): ProjectPresets | undefined {
   throw new Error(`Invalid root playground project presets at "${presetsPath}": ${z.prettifyError(result.error)}`);
 }
 
-async function sourceFilesForProject(projectId: string, metadata: ProjectMetadata): Promise<Record<string, string>> {
+/**
+ * The project's binary assets, by path relative to the project folder. A fetch
+ * that fails is reported and skipped rather than failing the project: the model
+ * then renders without that asset, which is exactly what it did before these
+ * were carried at all.
+ */
+async function binaryAssetsForProject(projectId: string): Promise<Record<string, Uint8Array<ArrayBuffer>>> {
   const prefix = `./projects/${projectId}/`;
-  const sourceFiles: Record<string, string> = {};
+  const matching = Object.entries(projectBinaryAssetUrlsByPath).filter(([assetPath]) => assetPath.startsWith(prefix));
+  const loaded = await Promise.all(
+    matching.map(async ([assetPath, loadUrl]) => {
+      try {
+        const response = await fetch(await loadUrl());
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        return [assetPath.slice(prefix.length), new Uint8Array(await response.arrayBuffer())] as const;
+      } catch (error) {
+        console.warn(`Playground project "${projectId}" could not load asset "${assetPath}"`, error);
+        return undefined;
+      }
+    }),
+  );
+
+  return Object.fromEntries(loaded.filter((entry) => entry !== undefined));
+}
+
+async function sourceFilesForProject(
+  projectId: string,
+  metadata: ProjectMetadata,
+): Promise<Record<string, PlaygroundSourceFile>> {
+  const prefix = `./projects/${projectId}/`;
+  const sourceFiles: Record<string, PlaygroundSourceFile> = {};
 
   const matchingLoaders = Object.entries(projectSourceLoadersByPath).filter(
     ([sourcePath]) =>
@@ -316,7 +364,7 @@ async function sourceFilesForProject(projectId: string, metadata: ProjectMetadat
     }
   }
 
-  return sourceFiles;
+  return { ...sourceFiles, ...(await binaryAssetsForProject(projectId)) };
 }
 
 function hasProjectSource(projectId: string, relativePath: string): boolean {
@@ -481,7 +529,7 @@ export async function loadProjectExample(projectId: string): Promise<PlaygroundE
   const entryFile = metadata.entry;
 
   const code = sourceFiles[mainFile] ?? sourceFiles[entryFile];
-  if (!code) {
+  if (typeof code !== 'string') {
     throw new Error(`Project "${projectId}" is missing source for entry "${entryFile}"`);
   }
 

@@ -40,6 +40,13 @@ export type PlaygroundUpload = {
   readonly label: string;
 };
 
+/**
+ * A project file as the preview filesystem receives it: text for everything a
+ * viewer can read or edit, bytes for the assets a model only imports (meshes,
+ * images), which cannot survive being decoded as UTF-8.
+ */
+export type PlaygroundSourceFile = string | Uint8Array<ArrayBuffer>;
+
 /** A file the viewer supplied, kept with the name they picked it under. */
 export type PlaygroundUploadedFile = {
   readonly name: string;
@@ -96,7 +103,7 @@ export type PlaygroundExample = {
   /** Alternate kernel implementations; when present, includes the default variant. */
   readonly variants?: readonly PlaygroundVariant[];
   readonly code: string;
-  readonly sourceFiles?: Record<string, string>;
+  readonly sourceFiles?: Record<string, PlaygroundSourceFile>;
 };
 
 const curatedPlaygroundExamples: readonly PlaygroundExample[] = [

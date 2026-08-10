@@ -13,6 +13,7 @@ import { FileManagerProvider } from '#hooks/use-file-manager.js';
 import { loadPlaygroundExample, playgroundExamples } from '#routes/playground/playground-examples.js';
 import type {
   PlaygroundExample,
+  PlaygroundSourceFile,
   PlaygroundVariant,
   PlaygroundUpload,
   PlaygroundUploadedFile,
@@ -65,6 +66,11 @@ const shareCodec = playgroundShareCodec;
 /** The parameter pane emits override deltas; an empty record means "use defaults." */
 function hasParameterOverrides(parameters: Record<string, unknown>, baseline: Record<string, unknown>): boolean {
   return Object.keys(parameters).length > 0 && !haveSamePlaygroundParameters(parameters, baseline);
+}
+
+/** A project file's text, or undefined when it is one of the binary assets. */
+function sourceText(file: PlaygroundSourceFile | undefined): string | undefined {
+  return typeof file === 'string' ? file : undefined;
 }
 
 type PlaygroundVariantSession = {
@@ -286,7 +292,9 @@ function PlaygroundLoaded({
   const shippedUploadFiles = useMemo(() => {
     const files: Record<string, PlaygroundUploadedFile> = {};
     for (const upload of activeExample.uploads ?? []) {
-      const content = activeExample.sourceFiles?.[upload.fileName];
+      // Uploads are text, so a binary asset cannot seed a slot — nor does one
+      // need to, since nothing declares an upload for a mesh.
+      const content = sourceText(activeExample.sourceFiles?.[upload.fileName]);
       if (content !== undefined) {
         files[upload.fileName] = { name: upload.fileName, content };
       }
@@ -345,7 +353,10 @@ function PlaygroundLoaded({
   const files = useMemo(
     () =>
       Object.fromEntries(
-        Object.entries(previewSourceFiles).map(([path, content]) => [path, { content: encodeTextFile(content) }]),
+        Object.entries(previewSourceFiles).map(([path, content]) => [
+          path,
+          { content: typeof content === 'string' ? encodeTextFile(content) : content },
+        ]),
       ),
     [previewSourceFiles],
   );
@@ -885,7 +896,7 @@ function applyVariant(example: PlaygroundExample, variant: PlaygroundVariant | u
     ...(variant.renderTimeout ? { renderTimeout: variant.renderTimeout } : {}),
     ...(typeof variant.showPreviewLines === 'boolean' ? { showPreviewLines: variant.showPreviewLines } : {}),
     ...(variant.renderOptions ? { renderOptions: variant.renderOptions } : {}),
-    code: example.sourceFiles?.[variant.mainFile] ?? example.code,
+    code: sourceText(example.sourceFiles?.[variant.mainFile]) ?? example.code,
   };
 }
 

@@ -1,4 +1,5 @@
 import type { Geometry } from '@taucad/types';
+import type { PlaygroundSourceFile } from '#routes/playground/playground-examples.js';
 import { LruMap } from '@taucad/utils/cache';
 
 const mebibyte = 1024 * 1024;
@@ -13,7 +14,7 @@ export type PlaygroundPreviewCacheRequest = {
   readonly mainFile: string;
   readonly parameters: Record<string, unknown>;
   readonly renderOptions: Record<string, unknown> | undefined;
-  readonly sourceFiles: Readonly<Record<string, string>>;
+  readonly sourceFiles: Readonly<Record<string, PlaygroundSourceFile>>;
 };
 
 /** Stable tagged serialization for render-request cache keys and parameter comparisons. */
@@ -87,7 +88,20 @@ export function serializePlaygroundCacheValue(value: unknown, seen = new Set<unk
 
 /** Build a dependency-complete key for one playground preview request. */
 export function buildPlaygroundPreviewCacheKey(request: PlaygroundPreviewCacheRequest): string {
-  return serializePlaygroundCacheValue(request);
+  // Binary assets enter the key by size rather than by content. They ship with
+  // the project and nothing in the playground can edit them — the code editor
+  // holds text and uploads are read as text — so their length identifies them
+  // for as long as a session lasts, and the alternative is stringifying a
+  // 340 KB mesh byte by byte on every parameter change.
+  return serializePlaygroundCacheValue({
+    ...request,
+    sourceFiles: Object.fromEntries(
+      Object.entries(request.sourceFiles).map(([path, file]) => [
+        path,
+        typeof file === 'string' ? file : `bytes:${file.byteLength}`,
+      ]),
+    ),
+  });
 }
 
 /** Compare parameter records without depending on object key order. */

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   loadProjectExample,
   parseUploadAccept,
@@ -69,6 +69,44 @@ describe('project uploads', () => {
     expect(parseUploadAccept('.svg')).toBeUndefined();
   });
   /* eslint-enable @typescript-eslint/naming-convention */
+});
+
+describe('project binary assets', () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    vi.restoreAllMocks();
+  });
+
+  it('carries a mesh as bytes while its sources stay text', async () => {
+    // A binary STL cannot come through the `?raw` text loader — decoding it as
+    // UTF-8 corrupts it — so it is fetched from its emitted URL instead. Both
+    // shapes end up in the same `sourceFiles` record, because the preview
+    // filesystem takes bytes either way.
+    globalThis.fetch = vi.fn(async () => new Response(new Uint8Array([0x53, 0x54, 0x4c, 0x42])));
+
+    const stamp = await loadProjectExample('stamp');
+    const handle = stamp?.sourceFiles?.['stamp_template_handle.stl'];
+
+    expect(ArrayBuffer.isView(handle)).toBe(true);
+    expect((handle as Uint8Array).byteLength).toBe(4);
+    expect(typeof stamp?.sourceFiles?.['Main.scad']).toBe('string');
+    expect(typeof stamp?.sourceFiles?.['yaa.svg']).toBe('string');
+  });
+
+  it('drops an asset it cannot fetch instead of failing the whole project', async () => {
+    // Losing the knub is a model that renders without it; throwing here would
+    // be a project that does not open at all.
+    globalThis.fetch = vi.fn(async () => new Response(undefined, { status: 404 }));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const stamp = await loadProjectExample('stamp');
+
+    expect(stamp?.sourceFiles?.['stamp_template_handle.stl']).toBeUndefined();
+    expect(typeof stamp?.code).toBe('string');
+    expect(warn).toHaveBeenCalled();
+  });
 });
 
 describe('project examples discovery', () => {
