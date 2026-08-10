@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/naming-convention -- test data uses filenames as object keys */
 // @vitest-environment node
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createRuntimeClient } from '@taucad/runtime';
@@ -34,7 +35,7 @@ afterAll(() => {
   client.terminate();
 });
 
-async function exportFormat(format: string): Promise<Uint8Array> {
+async function exportFormat(format: string): Promise<Uint8Array<ArrayBuffer>> {
   const result = await client.export(format as 'glb', { file: '/box.ts' });
   if (!result.success) {
     throw new Error(`${format} export failed: ${result.issues.map((issue) => issue.message).join('; ')}`);
@@ -43,7 +44,7 @@ async function exportFormat(format: string): Promise<Uint8Array> {
   return result.data.bytes;
 }
 
-const latin1Head = (bytes: Uint8Array, length: number): string =>
+const latin1Head = (bytes: Uint8Array<ArrayBuffer>, length: number): string =>
   Buffer.from(bytes.slice(0, length)).toString('latin1');
 
 describe('opencascade kernel export formats', () => {

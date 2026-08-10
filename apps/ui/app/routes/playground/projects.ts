@@ -552,7 +552,7 @@ export async function loadProjectExample(projectId: string): Promise<PlaygroundE
 
   const code = sourceFiles[mainFile] ?? sourceFiles[entryFile];
   if (typeof code !== 'string') {
-    throw new Error(`Project "${projectId}" is missing source for entry "${entryFile}"`);
+    throw new TypeError(`Project "${projectId}" is missing source for entry "${entryFile}"`);
   }
 
   return { ...catalogExample, code, sourceFiles };

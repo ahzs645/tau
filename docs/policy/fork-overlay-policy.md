@@ -135,3 +135,33 @@ locally forever:
 `scripts/src/check-overlay-boundary.mts` reports which files in a diff touch core paths. It is
 advisory by design — it prints the list and the three headings above, and does not fail the build.
 The point is that core edits are _noticed_ at review time, not that they are forbidden.
+
+## What CI can and cannot ask of this fork
+
+The same split decides what CI is allowed to block on. The inherited tree does not pass its own
+lint, typecheck, or test suites: upstream runs `nx affected` behind an Nx Cloud remote cache, so
+projects a change does not touch are never re-run there and the rot in them stays invisible. On the
+fork it is all visible at once — lint fails in `apps/ui`, `apps/api`, `packages/runtime`,
+`packages/types`, `packages/memory`, `packages/filesystem` and `libs/oxlint` on files this fork has
+never opened, `apps/api` fails typecheck on a pinned SDK that renamed a field, `apps/ui` and
+`libs/oxlint` fail tests, and `examples/electron-tau` cannot bundle a top-level await into an `iife`
+worker. Every one of them reproduces on the upstream commit this fork started from.
+
+Blocking on those would mean either fixing core (a rebase conflict plus an upstream PR, per rule 2)
+or ignoring a permanently red check. So `.github/workflows/ci.yml` splits the difference:
+
+- **`verify` blocks.** Build, typecheck and test run across the affected graph with the inherited
+  failures excluded by name and by reason — a short, stable list. Lint gets a different treatment:
+  its rot spans seven projects today and the next sync can add more, so an exclusion list would go
+  stale into a red check the fork cannot fix. Lint therefore blocks on fork-owned paths only, and
+  the playground overlay gets its own lint and test steps so the `ui` exclusions do not take it with
+  them. Fork-owned code has no exemptions — only a narrower scope.
+- **`upstream-drift` never blocks.** It lints the whole workspace and runs everything `verify` holds
+  back, so the inherited failures stay on the record — and so it is visible when a sync fixes one
+  and the matching exclusion can be deleted.
+
+Two things follow from this. When an upstream sync lands, re-run the held-back targets: one that now
+passes is an exclusion to delete in the same commit. And when `verify` does go red, it is the fork's
+own doing — treat it that way. It has already earned its keep once: the cross-kernel mesh parity
+suite caught this fork's raised OCCT tessellation default silently changing meshes that upstream
+asserts on.

@@ -133,9 +133,17 @@ export default function main() {
   return new BRepPrimAPI_MakeCylinder(5, 20).Shape();
 }`,
     });
+    // FORK: pinned rather than left to the schema default. This fork raised the
+    // OCCT preview default to 0.05mm/15° (opencascade.schemas.ts), and the
+    // comparison below only holds when both kernels facet the cylinder the same
+    // way: it averages normals per shared position, so a finer OCCT mesh
+    // averages a different set of adjacent facets and 16/48 normals diverge.
+    // Pinning the values this test was written against keeps the assertion at a
+    // full match and makes it immune to either side moving its default again.
     const occtResult = (await occtWorker.createGeometry({
       file: geometryFile,
       parameters: {},
+      options: { tessellation: { linearTolerance: 0.1, angularTolerance: 30 } },
     })) as CreateGeometryResult;
     assertSuccess(occtResult, 'occt createGeometry');
     const occtGlb = extractGltfFromResult(occtResult);

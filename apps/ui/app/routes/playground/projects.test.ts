@@ -68,7 +68,7 @@ describe('project uploads', () => {
     });
     expect(parseUploadAccept('.svg')).toBeUndefined();
   });
-  /* eslint-enable @typescript-eslint/naming-convention */
+  /* eslint-enable @typescript-eslint/naming-convention -- MIME-type keys are back out of scope */
 });
 
 describe('project binary assets', () => {
@@ -90,7 +90,7 @@ describe('project binary assets', () => {
     const handle = stamp?.sourceFiles?.['stamp_template_handle.stl'];
 
     expect(ArrayBuffer.isView(handle)).toBe(true);
-    expect((handle as Uint8Array).byteLength).toBe(4);
+    expect((handle as Uint8Array<ArrayBuffer>).byteLength).toBe(4);
     expect(typeof stamp?.sourceFiles?.['Main.scad']).toBe('string');
     expect(typeof stamp?.sourceFiles?.['yaa.svg']).toBe('string');
   });

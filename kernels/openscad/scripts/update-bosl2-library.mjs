@@ -14,20 +14,16 @@ const packageDirectory = dirname(scriptDirectory);
 const outputPath = join(packageDirectory, 'src/bosl2-library.generated.ts');
 const assetPath = join(packageDirectory, 'src/bosl2-library.generated.json.gz');
 
-async function download(url, destination) {
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Failed to download ${url}: ${response.status} ${response.statusText}`);
-  }
-
-  await writeFile(destination, Buffer.from(await response.arrayBuffer()));
-}
-
 const temporaryDirectory = await mkdtemp(join(tmpdir(), 'tau-bosl2-'));
 const archivePath = join(temporaryDirectory, `BOSL2-${bosl2Version}.tar.gz`);
 
 try {
-  await download(bosl2ArchiveUrl, archivePath);
+  const response = await fetch(bosl2ArchiveUrl);
+  if (!response.ok) {
+    throw new Error(`Failed to download ${bosl2ArchiveUrl}: ${response.status} ${response.statusText}`);
+  }
+
+  await writeFile(archivePath, Buffer.from(await response.arrayBuffer()));
   await execFile('tar', ['-xzf', archivePath, '-C', temporaryDirectory]);
 
   const { stdout: rootStdout } = await execFile('find', [
@@ -46,13 +42,13 @@ try {
 
   const { stdout } = await execFile('find', [rootDirectory, '-type', 'f', '-name', '*.scad']);
   const files = stdout.trim().split('\n').filter(Boolean).sort();
-  const entries = [];
 
-  for (const file of files) {
-    const libraryPath = `BOSL2/${relative(rootDirectory, file).replaceAll('\\', '/')}`;
-    const content = await readFile(file, 'utf8');
-    entries.push([libraryPath, content]);
-  }
+  const entries = await Promise.all(
+    files.map(async (file) => {
+      const libraryPath = `BOSL2/${relative(rootDirectory, file).replaceAll('\\', '/')}`;
+      return [libraryPath, await readFile(file, 'utf8')];
+    }),
+  );
 
   const jsonPayload = JSON.stringify(Object.fromEntries(entries));
   const compressedPayload = gzipSync(jsonPayload, { level: 9 });

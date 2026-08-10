@@ -13,6 +13,7 @@
  *
  *   npx tsx scripts/render-variants.ts [outDir] [--project <id>]
  */
+/* oxlint-disable no-await-in-loop -- variants render one at a time on purpose: two OCCT WASM instances at once double peak memory */
 import { mkdirSync, readFileSync, readdirSync, existsSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import process from 'node:process';
@@ -26,10 +27,10 @@ import { openscad } from '@taucad/openscad';
 type RuntimeClientInstance = ReturnType<typeof createRuntimeClient>;
 
 const projectsDirectory = resolve(import.meta.dirname, '../../../apps/ui/app/routes/playground/projects');
-const positional = process.argv.slice(2).filter((argument) => !argument.startsWith('--'));
+const firstPositional = process.argv.slice(2).find((argument) => !argument.startsWith('--'));
 const projectFilterIndex = process.argv.indexOf('--project');
 const projectFilter = projectFilterIndex === -1 ? undefined : process.argv[projectFilterIndex + 1];
-const outDirectory = positional[0] ?? resolve(import.meta.dirname, '../renders');
+const outDirectory = firstPositional ?? resolve(import.meta.dirname, '../renders');
 
 type VariantSpec = { project: string; variant: string; entry: string };
 type Bounds = { min: [number, number, number]; max: [number, number, number] };
@@ -54,7 +55,7 @@ function discoverSpecs(): VariantSpec[] {
       hidden?: boolean;
       variants?: Array<{ id: string; entry: string }>;
     };
-    if (metadata.hidden || !metadata.entry.match(/\.(scad|ts|js)$/u)) {
+    if (metadata.hidden === true || !/\.(scad|ts|js)$/u.test(metadata.entry)) {
       continue;
     }
 
@@ -96,9 +97,9 @@ function allProjectFiles(specs: readonly VariantSpec[]): Record<string, string> 
 function projectFiles(project: string): Record<string, string> {
   const root = join(projectsDirectory, project);
   const files: Record<string, string> = {};
-  const walk = (dir: string, prefix: string): void => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const path = join(dir, entry.name);
+  const walk = (directory: string, prefix: string): void => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
       if (entry.isDirectory()) {
         walk(path, `${prefix}${entry.name}/`);
       } else if (/\.(ts|js|scad|json|txt|svg)$/u.test(entry.name)) {
@@ -114,7 +115,7 @@ function projectFiles(project: string): Record<string, string> {
  * Positions and index count straight out of the GLB, so the comparison is on
  * the geometry that ships rather than on the kernel's internal shape.
  */
-function measureGlb(bytes: Uint8Array): { bounds: Bounds; triangles: number } {
+function measureGlb(bytes: Uint8Array<ArrayBuffer>): { bounds: Bounds; triangles: number } {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const jsonLength = view.getUint32(12, true);
   const json = JSON.parse(new TextDecoder().decode(bytes.subarray(20, 20 + jsonLength))) as {
@@ -154,18 +155,24 @@ function kernelForSpec(spec: VariantSpec, files: Record<string, string>): Kernel
   return /from\s+['"]opencascade\.js['"]/u.test(source) ? 'opencascade' : 'replicad';
 }
 
+/*
+ * One array literal per kernel rather than a lookup map: `@taucad/openscad`
+ * carries its own copy of the runtime's `KernelPlugin` type, so a map's union
+ * value type makes the two nominally unrelated. Inlined per branch, each call
+ * infers on its own.
+ */
 function createClient(kernel: KernelName, files: Record<string, string>): RuntimeClientInstance {
-  const kernels = {
-    openscad: [openscad()],
-    opencascade: [opencascade()],
-    replicad: [replicad()],
-  }[kernel];
+  const transport = inProcessTransport({ fileSystem: fromMemoryFs(files) });
+  const bundlers = [esbuild()];
+  if (kernel === 'openscad') {
+    return createRuntimeClient({ transport, kernels: [openscad()], bundlers });
+  }
 
-  return createRuntimeClient({
-    transport: inProcessTransport({ fileSystem: fromMemoryFs(files) }),
-    kernels,
-    bundlers: [esbuild()],
-  });
+  if (kernel === 'opencascade') {
+    return createRuntimeClient({ transport, kernels: [opencascade()], bundlers });
+  }
+
+  return createRuntimeClient({ transport, kernels: [replicad()], bundlers });
 }
 
 async function renderVariant(client: RuntimeClientInstance, spec: VariantSpec): Promise<VariantReport> {
@@ -193,7 +200,7 @@ async function renderVariant(client: RuntimeClientInstance, spec: VariantSpec): 
   }
 }
 
-// glTF positions are metres; models are authored in millimetres.
+// GlTF positions are metres; models are authored in millimetres.
 const toMillimetres = (value: number): number => value * 1000;
 const format = (value: number): string => toMillimetres(value).toFixed(1).padStart(8);
 const formatBounds = (bounds: Bounds): string =>
@@ -235,7 +242,8 @@ for (const [kernel, kernelSpecs] of byKernel) {
 // Per-project parity: every variant of a project should agree on the model's
 // extents, whatever kernel produced it.
 console.log('\nVariant parity (max bounding-box delta against the default variant):');
-for (const project of [...new Set(reports.map((report) => report.project))]) {
+for (const project of new Set(reports.map((report) => report.project))) {
+  // oxlint-disable-next-line unicorn/prefer-array-find -- the rest of the matches is the comparison set, not just the first
   const projectReports = reports.filter((report) => report.project === project);
   const [reference, ...others] = projectReports;
   if (!reference || others.length === 0) {

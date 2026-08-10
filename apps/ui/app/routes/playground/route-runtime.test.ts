@@ -1,4 +1,12 @@
-/* eslint-disable no-await-in-loop -- runtime smoke uses sequential WASM clients to avoid cross-kernel state bleed */
+/**
+ * @vitest-environment node
+ *
+ * This suite drives the real Node runtime client (WASM kernels, the esbuild
+ * bundler). The app's default jsdom environment replaces `TextEncoder` with
+ * one whose output fails `instanceof Uint8Array`, which esbuild-wasm asserts
+ * on at import time — so this file has to opt back out to `node`.
+ */
+/* oxlint-disable no-await-in-loop -- runtime smoke uses sequential WASM clients to avoid cross-kernel state bleed */
 import { describe, expect, it } from 'vitest';
 import type { FileExtension } from '@taucad/types';
 import { createNodeClient } from '@taucad/runtime/node';

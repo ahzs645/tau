@@ -5,6 +5,8 @@ on:
   push:
     branches:
       - main
+  # Run against any branch on demand, without opening a pull request first.
+  workflow_dispatch:
 
 # The fork does not use the upstream Nx Cloud workspace (nxCloudId in nx.json),
 # and unauthenticated access to it is rejected, which aborts every nx command.
@@ -19,10 +21,33 @@ permissions:
   contents: read
 
 jobs:
+  # What this job asks: did the fork's own work break anything?
+  #
+  # The tree this fork forked from does not pass its own lint, typecheck, or
+  # test suites — upstream runs `nx affected` behind an Nx Cloud remote cache,
+  # so the rot in projects a change does not touch never gets re-run there. On
+  # the fork it does, and the result was a check that had never once been green.
+  # The fork also cannot fix most of it: `packages/`, `kernels/`, `libs/` and
+  # the shared `apps/ui` surface are upstream's, and editing them costs a rebase
+  # conflict plus an upstream PR (docs/policy/fork-overlay-policy.md).
+  #
+  # So the targets carrying inherited breakage are held back here — by name
+  # where the set is small and stable (build, typecheck, test), by scoping to
+  # fork-owned paths where it is neither (lint) — and all of it runs unblocking
+  # in `upstream-drift` below. Everything else, including the gallery build and
+  # the playground overlay the fork exists for, is required to pass.
   verify:
     name: Test, lint, typecheck
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      # The `ui:build` prerender boots the SSR loaders, which validate this
+      # schema (apps/ui/app/environment.config.ts) and hard-fail when it is
+      # unset. Same values the Pages deploy builds with (github-pages.yml).
+      TAU_API_URL: https://api.taucad.dev
+      TAU_FRONTEND_URL: https://3dd.ahmadjalil.com
+      TAU_WEBSOCKET_URL: wss://api.taucad.dev
+      TAU_DISABLE_CODE_EDITOR: 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -38,8 +63,163 @@ jobs:
         # both the OCCT and OpenSCAD suites fail silently.
         run: pnpm nx run-many -t copy-assets
 
-      - name: Verify affected projects
-        run: pnpm nx affected --targets=test,build,lint,typecheck
+      - name: Build affected projects
+        # example-electron: the OCCT wasm modules use top-level await and vite
+        # bundles the kernel worker as `iife`, which cannot represent it.
+        # ui is built on its own below — see that step for why.
+        run: pnpm nx affected --targets=build --exclude=example-electron,ui
+
+      - name: Build the gallery
+        env:
+          # Deliberately the same environment the Pages deploy builds in
+          # (github-pages.yml), because that is the artifact this fork actually
+          # ships — a green build here should mean a green deploy. GITHUB_PAGES
+          # is not cosmetic: it switches react-router.config.ts to
+          # `routeDiscovery: 'initial'`, and it is a declared cache input on the
+          # bundle target. Left unset, the client transform wedged in rolldown
+          # for the full timeout on every attempt.
+          GITHUB_PAGES: 'true'
+          # Redundant with apps/ui/project.json, which already scopes this to
+          # the bundle command — kept for parity with the Pages deploy.
+          NODE_OPTIONS: '--max-old-space-size=8192'
+        # Alone and bounded, both deliberately. The react-router client bundle
+        # can wedge in rolldown rather than fail — it did here for 43 minutes,
+        # silent, until the job timeout killed it, and the Pages deploy carries
+        # its own retry guard for the same reason. Running it outside the
+        # parallel fan-out keeps it off the other builds' cores, and a bounded
+        # retry turns a wedge into a fast, legible failure instead of eating the
+        # job's whole budget.
+        run: |
+          set -euo pipefail
+
+          for attempt in 1 2 3; do
+            echo "::group::ui build attempt ${attempt}/3"
+            if timeout 300 pnpm nx build ui; then
+              echo "::endgroup::"
+              exit 0
+            fi
+            echo "::endgroup::"
+            echo "ui build attempt ${attempt} did not complete within 5 minutes"
+          done
+
+          echo "::error::ui build did not complete in three bounded attempts"
+          exit 1
+
+      - name: Typecheck affected projects
+        # api: `@morphllm/morphsdk` renamed `instructions` to `instruction` and
+        # the pinned version no longer matches its call site in file-edit.service.ts.
+        run: pnpm nx affected --targets=typecheck --exclude=api
+
+      - name: Test affected projects
+        # ui: 22 inherited failures (tiptap editor, TSL material snapshots,
+        # use-chat). The playground overlay is covered by its own step below.
+        # oxlint: require-using-on-disposable fails on the fork base too.
+        #
+        # Retried once, because the inherited suite has timing-sensitive tests
+        # that only surface now that the whole graph runs on a loaded runner —
+        # `rpc:test`'s symmetric-close race is one, and it passes 8/8 locally.
+        # This is cheap and it does not hide a real break: nx caches passing
+        # tasks, so the second pass re-runs only what failed, and a test that is
+        # actually broken fails twice. A flake in fork-owned code is a bug to
+        # fix, so the playground step below gets no retry.
+        run: |
+          pnpm nx affected --targets=test --exclude=ui,oxlint && exit 0
+          echo "::warning::test pass failed; re-running the failed projects once to rule out a flake"
+          pnpm nx affected --targets=test --exclude=ui,oxlint
+
+      - name: Lint fork-owned code
+        # Lint is the one target that cannot be run tree-wide here. The
+        # inherited rot is not confined to a listable set of projects — ui, api,
+        # runtime, types, memory, filesystem and oxlint all fail on upstream
+        # files today, and the next sync can add more — so an exclusion list
+        # would go stale into a red check the fork cannot fix. Lint therefore
+        # blocks on the paths the fork actually owns, and the whole workspace is
+        # linted unblocking in `upstream-drift`.
+        #
+        # Overlay paths per docs/policy/fork-overlay-policy.md, plus the
+        # fork-added tooling that lives inside otherwise-core packages. Keep in
+        # step with `overlayPrefixes` in scripts/src/check-overlay-boundary.mts.
+        run: |
+          FORK_PATHS="apps/ui/app/routes/playground apps/ui-e2e/thumbnails packages/testing/scripts kernels/openscad/scripts"
+          pnpm exec oxlint -c .oxlintrc.json ${FORK_PATHS}
+          pnpm exec eslint ${FORK_PATHS}
+
+      - name: Test the playground overlay
+        # The fork's own slice of apps/ui, which the `ui` test exclusion above
+        # would otherwise take with it.
+        working-directory: apps/ui
+        run: pnpm exec vitest run app/routes/playground
+
+  # Advisory: the targets `verify` holds back, run in full so inherited breakage
+  # stays visible — and so it is obvious when an upstream sync fixes one and the
+  # matching exclusion can go.
+  #
+  # Reports, never gates, in the same sense as the overlay-boundary job below:
+  # the step records each result and always exits 0. `continue-on-error` would
+  # keep the run green but still paint this job red in the PR's checks, which is
+  # the permanently-failing check this whole split exists to get rid of. A ✅ in
+  # its summary table is the thing to act on.
+  upstream-drift:
+    name: Upstream drift (advisory)
+    runs-on: ubuntu-latest
+    # Headroom over the four bounded commands below (10 minutes each), so the
+    # job's own timeout is never what stops it — a timeout here is a cancelled
+    # job, which is the red check this design exists to avoid, and it loses the
+    # summary table with it.
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup Nx environment
+        uses: ./.github/actions/setup-nx
+
+      - name: Provision kernel assets
+        run: pnpm nx run-many -t copy-assets
+
+      - name: Report inherited failures
+        run: |
+          set -uo pipefail
+
+          {
+            echo "### Upstream drift"
+            echo
+            echo "What \`verify\` holds back. A ✅ is an exclusion to delete."
+            echo
+            echo "| Held back | Result |"
+            echo "| --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Bounded at 10 minutes each. These commands are the known-broken
+          # ones, so "hangs instead of failing" is a live possibility — the
+          # first run of this job spent 44 minutes in here and was killed by the
+          # job timeout, taking the summary with it. A wedge is now just another
+          # row in the table.
+          report() {
+            label="$1"
+            shift
+            echo "::group::${label}"
+            # `|| status=$?` rather than a bare call: GitHub runs `run:` blocks
+            # under `bash -e`, so a bare failing command aborts the step before
+            # it can be classified — which is how a job that always exits 0
+            # managed to fail.
+            status=0
+            timeout 600 "$@" || status=$?
+            case $status in
+              0)   result='✅ passes now' ;;
+              124) result='⏱ hit the 10m bound (neither passing nor failing)' ;;
+              *)   result='❌ still failing' ;;
+            esac
+            echo "::endgroup::"
+            echo "| \`${label}\` | ${result} |" >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          report 'lint (whole workspace)' pnpm nx affected --targets=lint
+          report 'api:typecheck' pnpm nx affected --targets=typecheck --projects=api
+          report 'ui:test, oxlint:test' pnpm nx affected --targets=test --projects=ui,oxlint
+          report 'example-electron:build' pnpm nx affected --targets=build --projects=example-electron
 
   overlay-boundary:
     name: Fork overlay boundary

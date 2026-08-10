@@ -1083,7 +1083,12 @@ export class WorkspaceFileService {
     for (const mount of childMounts) {
       const mountName = mount.prefix.split('/').pop();
       if (mountName && !entryMap.has(mountName)) {
-        entryMap.set(mountName, { name: mountName, type: 'dir', size: 0, mtimeMs: Date.now() });
+        // A mount point the parent provider cannot see, so there is no stat to
+        // report: 0 for "unknown", as InMemoryFileTree already does for the
+        // directory nodes it synthesises. `Date.now()` here made the listing
+        // differ on every call, so two reads a millisecond apart disagreed and
+        // any consumer diffing listings saw the mount change constantly.
+        entryMap.set(mountName, { name: mountName, type: 'dir', size: 0, mtimeMs: 0 });
       }
     }
 

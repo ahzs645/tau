@@ -16,6 +16,7 @@
  *
  *   npx tsx scripts/compare-ports.ts [--project <id>] [--sets 12]
  */
+/* oxlint-disable no-await-in-loop -- parameter sets render one at a time on purpose: concurrent OCCT WASM instances multiply peak memory, and the table has to stay in sweep order */
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import process from 'node:process';
@@ -24,8 +25,8 @@ import { inProcessTransport } from '@taucad/runtime/transport/in-process';
 import { fromMemoryFs } from '@taucad/runtime/filesystem';
 import { esbuild } from '@taucad/runtime/bundler';
 import { opencascade, replicad } from '@taucad/runtime/kernels';
-import { boundsOf, meshVolume, readMesh, toZUp } from './lib/glb-measure.js';
-import type { Bounds } from './lib/glb-measure.js';
+import { boundsOf, meshVolume, readMesh, toZup } from '#scripts/lib/glb-measure.js';
+import type { Bounds } from '#scripts/lib/glb-measure.js';
 
 const projectsDirectory = resolve(import.meta.dirname, '../../../apps/ui/app/routes/playground/projects');
 const argumentValue = (name: string): string | undefined => {
@@ -88,7 +89,7 @@ function projectFiles(project: string): Record<string, string> {
 function parameterSets(
   defaults: Record<string, unknown>,
 ): Array<{ label: string; parameters: Record<string, unknown> }> {
-  const sets = [{ label: 'defaults', parameters: {} }];
+  const sets: Array<{ label: string; parameters: Record<string, unknown> }> = [{ label: 'defaults', parameters: {} }];
   for (const [key, value] of Object.entries(defaults)) {
     if (typeof value === 'boolean') {
       sets.push({ label: `${key}=${!value}`, parameters: { [key]: !value } });
@@ -99,10 +100,13 @@ function parameterSets(
       continue;
     }
 
+    const current: number = value;
     for (const factor of [0.75, 1.25]) {
-      const isSmallInteger = Number.isInteger(value) && Math.abs(value) <= 8;
-      const next = isSmallInteger ? Math.max(1, value + (factor < 1 ? -1 : 1)) : Number((value * factor).toFixed(4));
-      if (next !== value) {
+      const isSmallInteger = Number.isInteger(current) && Math.abs(current) <= 8;
+      const next: number = isSmallInteger
+        ? Math.max(1, current + (factor < 1 ? -1 : 1))
+        : Number((current * factor).toFixed(4));
+      if (next !== current) {
         sets.push({ label: `${key}=${next}`, parameters: { [key]: next } });
       }
     }
@@ -116,11 +120,10 @@ type Measurement = { bounds: Bounds; volume: number; triangles: number; millisec
 async function measure(
   client: ReturnType<typeof createRuntimeClient>,
   file: string,
-  parameters: Record<string, unknown>,
-  zUpCorrection: boolean,
+  { parameters, zUpCorrection }: { parameters: Record<string, unknown>; zUpCorrection: boolean },
 ): Promise<Measurement | string> {
   const started = Date.now();
-  const result = await client.export('glb', { file, parameters, coordinateSystem: 'z-up' } as never);
+  const result = await client.export('glb', { file, parameters, coordinateSystem: 'z-up' });
   if (!result.success) {
     return `FAILED: ${result.issues.map((issue) => issue.message).join('; ')}`;
   }
@@ -132,7 +135,7 @@ async function measure(
 
   const bounds = boundsOf(mesh);
   return {
-    bounds: zUpCorrection ? toZUp(bounds) : bounds,
+    bounds: zUpCorrection ? toZup(bounds) : bounds,
     volume: meshVolume(mesh),
     triangles: mesh.indices.length / 3,
     milliseconds: Date.now() - started,
@@ -150,7 +153,7 @@ async function resolveDefaults(
       defaults = result.data.defaultParameters;
     }
   });
-  await client.openFile({ file } as never);
+  await client.openFile({ file });
   unsubscribe();
   return defaults;
 }
@@ -186,8 +189,8 @@ for (const pair of pairs) {
 
     for (const set of sets) {
       const [occtResult, replicadResult] = [
-        await measure(occtClient, `/${pair.occtEntry}`, set.parameters, false),
-        await measure(replicadClient, `/${pair.replicadEntry}`, set.parameters, true),
+        await measure(occtClient, `/${pair.occtEntry}`, { parameters: set.parameters, zUpCorrection: false }),
+        await measure(replicadClient, `/${pair.replicadEntry}`, { parameters: set.parameters, zUpCorrection: true }),
       ];
 
       if (typeof occtResult === 'string' || typeof replicadResult === 'string') {
