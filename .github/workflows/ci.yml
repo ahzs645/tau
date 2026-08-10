@@ -5,6 +5,8 @@ on:
   push:
     branches:
       - main
+  # Run against any branch on demand, without opening a pull request first.
+  workflow_dispatch:
 
 # The fork does not use the upstream Nx Cloud workspace (nxCloudId in nx.json),
 # and unauthenticated access to it is rejected, which aborts every nx command.
