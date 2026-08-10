@@ -1,6 +1,5 @@
 // Configuration
 $fn = 50;
-stamp_knub = "stamp_template_knub.stl";
 
 /*[Component Selection]*/
 // Combo box to select which component to render
@@ -52,7 +51,7 @@ if (component_selection == "stamp") {
         // Add the knub
         rotate(30) {
             color("red", 0.5) {
-                import(stamp_knub, center=true);
+                import("stamp_template_knub.stl", center=true);
             }
         }
         

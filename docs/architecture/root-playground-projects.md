@@ -117,6 +117,14 @@ Binary assets such as `.stl` and `.glb` are not loaded into the code editor by t
 and render viewer-only. If a project needs other binary runtime assets, add an explicit runtime
 asset plan before adding the project.
 
+They do not reach the _render_ either, and that failure is quiet. The loader reads every matched
+file as `?raw` text, so a binary `.stl` cannot be carried even by widening the glob, and it never
+lands in the preview filesystem the kernel mounts. A model that imports one gets an OpenSCAD warning
+(`Can't open import file '/…stl'`) and geometry with that part silently missing — the stamp's knub
+and its whole `component_selection = "handle"` branch render as nothing for exactly this reason. Do
+not carry an asset a model imports at render time until that plan exists; a customizer parameter
+naming such a file is worse than nothing, because it offers to change a file that is not there.
+
 ## Hidden Projects
 
 `"hidden": true` means the project is not exported from the root playground project list. It will not
