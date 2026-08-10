@@ -198,8 +198,11 @@ type PlaygroundPreviewPaneProps = {
   readonly exportControlsElement: HTMLDivElement | undefined;
   readonly onGeometriesReady: (geometries: readonly Geometry[], parameters: Record<string, unknown>) => void;
   readonly uploads?: readonly PlaygroundUpload[];
-  /** Files already supplied for this variant, by the name they were written under. */
-  readonly uploadedFiles?: Record<string, PlaygroundUploadedFile>;
+  /**
+   * What each upload slot currently holds, by the name it is written under —
+   * the file the project ships until the viewer replaces it.
+   */
+  readonly uploadFiles?: Record<string, PlaygroundUploadedFile>;
   readonly onUpload?: (upload: PlaygroundUpload, file: PlaygroundUploadedFile) => void;
   readonly onParametersChange: (parameters: Record<string, unknown>) => void;
 };
@@ -214,7 +217,7 @@ type PlaygroundPreviewSnapshot = {
 export function PlaygroundPreviewPane({
   activeExample,
   uploads,
-  uploadedFiles,
+  uploadFiles,
   onUpload,
   cachedGeometries,
   files,
@@ -455,7 +458,7 @@ export function PlaygroundPreviewPane({
             <PlaygroundParameters
               presets={activeExample.presets ?? []}
               uploads={uploads}
-              uploadedFiles={uploadedFiles}
+              uploadFiles={uploadFiles}
               onUpload={onUpload}
             />
           </section>
@@ -524,12 +527,12 @@ function PlaygroundParameterBridge({
 function PlaygroundParameters({
   presets,
   uploads,
-  uploadedFiles,
+  uploadFiles,
   onUpload,
 }: {
   readonly presets: readonly PlaygroundPreset[];
   readonly uploads?: readonly PlaygroundUpload[];
-  readonly uploadedFiles?: Record<string, PlaygroundUploadedFile>;
+  readonly uploadFiles?: Record<string, PlaygroundUploadedFile>;
   readonly onUpload?: (upload: PlaygroundUpload, file: PlaygroundUploadedFile) => void;
 }): React.JSX.Element {
   // The parameters pane is the one surface present at every breakpoint — beside
@@ -546,7 +549,7 @@ function PlaygroundParameters({
             <PlaygroundUploadDropzone
               key={upload.fileName}
               upload={upload}
-              uploaded={uploadedFiles?.[upload.fileName]}
+              current={uploadFiles?.[upload.fileName]}
               onUpload={uploadControls.onUpload}
             />
           ))}
@@ -573,19 +576,26 @@ function PlaygroundParameters({
  * an editor save takes, and it invalidates and re-renders the same way.
  *
  * The route still records the upload (so a variant switch or a later remount
- * carries it), and the picked name comes back in through `uploaded`.
+ * carries it), and what the slot currently holds comes back in through
+ * `current` — the project's own file until the viewer replaces it, so the slot
+ * shows the artwork being rendered rather than an empty state that implies
+ * there is none.
  */
 function PlaygroundUploadDropzone({
   upload,
-  uploaded,
+  current,
   onUpload,
 }: {
   readonly upload: PlaygroundUpload;
-  readonly uploaded?: PlaygroundUploadedFile;
+  readonly current?: PlaygroundUploadedFile;
   readonly onUpload: (upload: PlaygroundUpload, file: PlaygroundUploadedFile) => void;
 }): React.JSX.Element {
   const { writeFile } = useFileManager();
-  const source = useMemo(() => (uploaded ? [new File([uploaded.content], uploaded.name)] : undefined), [uploaded]);
+  const source = useMemo(() => (current ? [new File([current.content], current.name)] : undefined), [current]);
+  const preview = useMemo(
+    () => (current ? imagePreviewSource(upload.accept, current.content) : undefined),
+    [current, upload.accept],
+  );
 
   const handleDrop = useCallback(
     (files: File[]) => {
@@ -631,14 +641,42 @@ function PlaygroundUploadDropzone({
         </div>
       </DropzoneEmptyState>
       <DropzoneContent>
-        <div className='flex w-full flex-col items-center gap-1'>
-          <Upload className='size-5 text-muted-foreground' />
-          <p className='w-full truncate text-sm font-medium'>{uploaded?.name}</p>
+        <div className='flex w-full flex-col items-center gap-1.5'>
+          {preview ? (
+            // The artwork itself, not a file icon: an SVG is a picture, and
+            // seeing it is the quickest way to know the right file went in —
+            // especially here, where the OpenSCAD variant's render of a stroke
+            // drawing looks nothing like the drawing. White tile because the
+            // artwork carries no background and is usually drawn in black.
+            <img
+              src={preview}
+              alt={`${upload.label} preview`}
+              className='h-16 rounded-sm bg-white object-contain p-1'
+            />
+          ) : (
+            <Upload className='size-5 text-muted-foreground' />
+          )}
+          <p className='w-full truncate text-sm font-medium'>{current?.name}</p>
           <p className='text-xs text-muted-foreground'>{upload.label} — click to replace</p>
         </div>
       </DropzoneContent>
     </Dropzone>
   );
+}
+
+/**
+ * A `data:` source for previewing an upload, when the declaration accepts an
+ * image type and the content is textual (SVG). Data rather than a blob URL so
+ * there is no object-URL lifetime to manage against a component that remounts
+ * whenever the preview does.
+ */
+function imagePreviewSource(accept: string, content: string): string | undefined {
+  const imageType = Object.keys(parseUploadAccept(accept) ?? {}).find((type) => type.startsWith('image/'));
+  if (!imageType?.includes('svg')) {
+    return undefined;
+  }
+
+  return `data:${imageType};charset=utf-8,${encodeURIComponent(content)}`;
 }
 
 function PlaygroundPresetMenu({ presets }: { readonly presets: readonly PlaygroundPreset[] }): React.JSX.Element {

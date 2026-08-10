@@ -45,6 +45,14 @@ for. It sits above the parameter list rather than in the header: the parameters 
 surface present at every breakpoint (beside the viewer on desktop, behind the Params tab on mobile),
 so it needs no separate mobile treatment.
 
+The slot is not empty on arrival. A project that declares an upload usually _ships_ the file — the
+stamp renders `yaa.svg` from the moment it loads — so the drop zone resolves to the project's own
+file until the viewer replaces it, and shows it: name, and for an image type, the artwork itself as
+a thumbnail (a `data:` URL off the file's text, so there is no object-URL lifetime to manage). An
+empty state would claim there is no artwork, and the preview earns its place here more than in most
+upload controls, because the OpenSCAD variant's render of a stroke drawing looks nothing like the
+drawing — the thumbnail is the only place the viewer sees what they actually supplied.
+
 The picked file's name is held in the session rather than in the drop zone, so it survives any
 remount of the preview provider — a variant switch, a re-run of the code — and so the session can
 seed the file again when one happens.

@@ -280,6 +280,24 @@ function PlaygroundLoaded({
     }),
     [activeExample.mainFile, activeExample.sourceFiles, activeSession.previewValue, activeSession.uploadedFiles],
   );
+  // What each upload slot is showing right now: the viewer's file once they
+  // bring one, and until then the file the project ships — the stamp renders
+  // `yaa.svg` from the moment it loads, so an empty drop zone would claim
+  // there is no artwork.
+  const uploadFiles = useMemo(() => {
+    const files: Record<string, PlaygroundUploadedFile> = {};
+    for (const upload of activeExample.uploads ?? []) {
+      const shipped = activeExample.sourceFiles?.[upload.fileName];
+      const current =
+        activeSession.uploadedFiles[upload.fileName] ??
+        (shipped === undefined ? undefined : { name: upload.fileName, content: shipped });
+      if (current) {
+        files[upload.fileName] = current;
+      }
+    }
+
+    return files;
+  }, [activeExample.uploads, activeExample.sourceFiles, activeSession.uploadedFiles]);
   const previewGeometryCacheKey = useMemo(
     () =>
       buildPlaygroundPreviewCacheKey({
@@ -664,7 +682,7 @@ function PlaygroundLoaded({
           exportControlsElement={exportControlsElement}
           onGeometriesReady={handlePreviewGeometriesReady}
           uploads={activeExample.uploads}
-          uploadedFiles={activeSession.uploadedFiles}
+          uploadFiles={uploadFiles}
           onUpload={handleUpload}
           onParametersChange={handleParametersChange}
         />

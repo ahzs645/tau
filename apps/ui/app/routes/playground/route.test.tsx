@@ -769,7 +769,13 @@ describe('PlaygroundRoot', () => {
     globalThis.history.replaceState({}, '', '/?model=stamp');
 
     const { container } = renderPlaygroundRoot();
-    expect(await screen.findByText('Artwork (SVG)')).toBeDefined();
+
+    // The slot opens on the artwork the project ships, previewed as the image
+    // it is, rather than on an empty state that implies there is none.
+    expect(await screen.findByText('yaa.svg')).toBeDefined();
+    expect(screen.getByRole('img', { name: 'Artwork (SVG) preview' }).getAttribute('src')).toMatch(
+      /^data:image\/svg\+xml;charset=utf-8,/u,
+    );
 
     const fileInput = container.querySelector('input[type="file"]');
     if (!(fileInput instanceof HTMLInputElement)) {
