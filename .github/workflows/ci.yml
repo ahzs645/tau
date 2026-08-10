@@ -201,8 +201,13 @@ jobs:
             label="$1"
             shift
             echo "::group::${label}"
-            timeout 600 "$@"
-            case $? in
+            # `|| status=$?` rather than a bare call: GitHub runs `run:` blocks
+            # under `bash -e`, so a bare failing command aborts the step before
+            # it can be classified — which is how a job that always exits 0
+            # managed to fail.
+            status=0
+            timeout 600 "$@" || status=$?
+            case $status in
               0)   result='✅ passes now' ;;
               124) result='⏱ hit the 10m bound (neither passing nor failing)' ;;
               *)   result='❌ still failing' ;;
