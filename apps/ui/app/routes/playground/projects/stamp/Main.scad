@@ -1,16 +1,20 @@
 // Configuration
 $fn = 50;
-stamp_knub = "stamp_template_knub.stl";
 
-/*[Component Selection]*/
-// Combo box to select which component to render
-component_selection = "stamp"; // [stamp:Stamp, handle:Handle]
+/* [Hidden] */
+// Which model to render: "stamp" or "handle". Kept out of the customizer
+// because the gallery pins it above the parameters as its own control.
+component_selection = "stamp";
+// The artwork this model imports. Kept out of the customizer because it names a
+// file rather than a value: the gallery replaces the file itself, and there is
+// no other name that would render.
+svg_file = "yaa.svg";
 
+/*[Stamp]*/
 // Stamp style selection
 svg_style = "negative"; // [positive, negative]
 
 // Parameters
-svg_file = "yaa.svg";
 svg_stroke_width = 0.7;
 knub_height = 10;
 knub_radius = 10;
@@ -52,7 +56,7 @@ if (component_selection == "stamp") {
         // Add the knub
         rotate(30) {
             color("red", 0.5) {
-                import(stamp_knub, center=true);
+                import("stamp_template_knub.stl", center=true);
             }
         }
         

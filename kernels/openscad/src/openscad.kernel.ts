@@ -313,6 +313,27 @@ function ensureDirectoryForFile(instance: OpenSCAD, filePath: string): void {
  */
 const openScadAssetExtensions = new Set(['svg', 'stl', 'off', 'dxf', 'amf', '3mf', 'obj', 'png', 'json']);
 
+const isProjectAsset = (name: string): boolean =>
+  openScadAssetExtensions.has(name.slice(name.lastIndexOf('.') + 1).toLowerCase());
+
+/**
+ * The project's asset files, relative to `basePath`. Names only, so a caller
+ * that just needs to hash or watch them does not read every byte.
+ */
+async function listProjectAssets(
+  basePath: string,
+  filesystem: KernelFileSystem,
+  logger: RuntimeLogger,
+): Promise<string[]> {
+  try {
+    const entries = await filesystem.readdirStat(basePath);
+    return entries.filter((entry) => entry.type === 'file' && isProjectAsset(entry.name)).map((entry) => entry.name);
+  } catch (error) {
+    logger.debug(`No project assets found in ${basePath}: ${String(error)}`);
+    return [];
+  }
+}
+
 async function mountProjectAssets(
   instance: OpenSCAD,
   options: { basePath: string; filesystem: KernelFileSystem; logger: RuntimeLogger },
@@ -327,8 +348,7 @@ async function mountProjectAssets(
   }
 
   for (const [name, content] of Object.entries(entries)) {
-    const extension = name.slice(name.lastIndexOf('.') + 1).toLowerCase();
-    if (!openScadAssetExtensions.has(extension)) {
+    if (!isProjectAsset(name)) {
       continue;
     }
 
@@ -691,8 +711,16 @@ export default defineKernel({
       filesystem,
       logger,
     });
+    // The assets `mountProjectAssets` writes are inputs to the render like any
+    // included `.scad`, so they belong in the dependency set: they are what the
+    // geometry cache keys on and what the watcher reloads. Without them,
+    // editing (or uploading) the SVG an `import()` reads leaves the model
+    // hashing identically and the cached geometry standing.
+    const assets = await listProjectAssets(basePath, filesystem, logger);
     return {
-      resolved: projectFiles.map((relativePath) => resolveFromRoot(relativePath, basePath)),
+      resolved: [...new Set([...projectFiles, ...assets])].map((relativePath) =>
+        resolveFromRoot(relativePath, basePath),
+      ),
       unresolved: unresolved.map((relativePath) => resolveFromRoot(relativePath, basePath)),
     };
   },

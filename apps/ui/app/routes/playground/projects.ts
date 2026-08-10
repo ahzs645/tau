@@ -1,6 +1,10 @@
 import type { FileExtension } from '@taucad/types';
 import { z } from 'zod';
-import type { PlaygroundExample, PlaygroundVariant } from '#routes/playground/playground-examples.js';
+import type {
+  PlaygroundExample,
+  PlaygroundSourceFile,
+  PlaygroundVariant,
+} from '#routes/playground/playground-examples.js';
 
 const meshExportFormats = ['glb', 'stl', '3mf', 'obj'] as const;
 const solidExportFormats = ['glb', 'stl', '3mf', 'step'] as const;
@@ -59,14 +63,64 @@ function buildPreviewRenderOptions(source: {
 /**
  * A file the viewer may supply at render time (artwork, a template, a font).
  * The uploaded file is written into the project's preview filesystem under
- * `fileName`, and `parameter` is set to that name so the model picks it up —
- * so a project opts in with metadata rather than the UI knowing about it.
+ * `fileName`, so a project opts in with metadata rather than the UI knowing
+ * about it. `parameter` is optional: a model that selects its asset by name
+ * gets that parameter set to `fileName`, and a model that reads a fixed name
+ * (an OpenSCAD default, a TypeScript `?raw` import) needs nothing pointed at
+ * it, because the file it reads is the one that was just replaced.
  */
 const projectUploadSchema = z.object({
-  parameter: z.string().min(1),
+  parameter: z.string().min(1).optional(),
   fileName: z.string().min(1),
-  accept: z.string().min(1),
+  // The drop zone matches uploads on MIME type as well as extension, so a
+  // declaration listing only extensions would accept nothing.
+  accept: z
+    .string()
+    .min(1)
+    .refine((accept) => parseUploadAccept(accept) !== undefined, {
+      message: 'accept must list at least one MIME type, e.g. ".svg,image/svg+xml"',
+    }),
   label: z.string().min(1),
+});
+
+/**
+ * An HTML `accept` string as the drop zone wants it: every declared MIME type
+ * mapped to every declared extension, which is how `react-dropzone` matches a
+ * file by either. Undefined when no MIME type is declared, which is a broken
+ * declaration rather than "accept anything".
+ */
+export function parseUploadAccept(accept: string): Record<string, string[]> | undefined {
+  const entries = accept
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const extensions = entries.filter((entry) => entry.startsWith('.'));
+  const mimeTypes = entries.filter((entry) => entry.includes('/'));
+  if (mimeTypes.length === 0) {
+    return undefined;
+  }
+
+  return Object.fromEntries(mimeTypes.map((mimeType) => [mimeType, extensions]));
+}
+
+/**
+ * Related models one project renders — the stamp and the handle it screws into.
+ * The choice is a model parameter like any other, but it is the first decision a
+ * viewer makes rather than a detail of the current one, so the gallery pins it
+ * above the parameter list. The model keeps the parameter in its `[Hidden]`
+ * group, since showing it twice would be worse than showing it once.
+ */
+const projectComponentsSchema = z.object({
+  parameter: z.string().min(1),
+  label: z.string().min(1),
+  options: z
+    .array(
+      z.object({
+        value: z.string().min(1),
+        label: z.string().min(1),
+      }),
+    )
+    .min(2),
 });
 
 const projectVariantSchema = z.object({
@@ -109,6 +163,7 @@ export const projectMetadataSchema = z.looseObject({
   previewNativeEdges: z.boolean().optional(),
   initialParameters: z.record(z.string(), z.unknown()).optional(),
   uploads: z.array(projectUploadSchema).min(1).optional(),
+  components: projectComponentsSchema.optional(),
   previewGlb: z.string().min(1).optional(),
   staticPreview: z
     .object({
@@ -140,6 +195,19 @@ const projectPresetsByPath = import.meta.glob<unknown>('./projects/*/presets.jso
 const projectSourceLoadersByPath = import.meta.glob<string>('./projects/**/*.{js,ts,json,scad,svg,txt}', {
   import: 'default',
   query: '?raw',
+});
+
+/**
+ * Assets a model imports at render time but no one edits: meshes and images.
+ * They cannot come through the `?raw` text loader above — an STL is bytes, and
+ * decoding it as UTF-8 corrupts it — so they are emitted as separate URLs and
+ * fetched when the project opens. That keeps them out of the gallery payload
+ * (nothing is fetched until a project is selected) and out of the code editor,
+ * which only ever shows the text sources.
+ */
+const projectBinaryAssetUrlsByPath = import.meta.glob<string>('./projects/**/*.{stl,3mf}', {
+  import: 'default',
+  query: '?url',
 });
 
 const projectStaticPreviewGlbByPath = import.meta.glob<string>('./projects/**/*.glb', {
@@ -254,9 +322,40 @@ function presetsForProject(projectId: string): ProjectPresets | undefined {
   throw new Error(`Invalid root playground project presets at "${presetsPath}": ${z.prettifyError(result.error)}`);
 }
 
-async function sourceFilesForProject(projectId: string, metadata: ProjectMetadata): Promise<Record<string, string>> {
+/**
+ * The project's binary assets, by path relative to the project folder. A fetch
+ * that fails is reported and skipped rather than failing the project: the model
+ * then renders without that asset, which is exactly what it did before these
+ * were carried at all.
+ */
+async function binaryAssetsForProject(projectId: string): Promise<Record<string, Uint8Array<ArrayBuffer>>> {
   const prefix = `./projects/${projectId}/`;
-  const sourceFiles: Record<string, string> = {};
+  const matching = Object.entries(projectBinaryAssetUrlsByPath).filter(([assetPath]) => assetPath.startsWith(prefix));
+  const loaded = await Promise.all(
+    matching.map(async ([assetPath, loadUrl]) => {
+      try {
+        const response = await fetch(await loadUrl());
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        return [assetPath.slice(prefix.length), new Uint8Array(await response.arrayBuffer())] as const;
+      } catch (error) {
+        console.warn(`Playground project "${projectId}" could not load asset "${assetPath}"`, error);
+        return undefined;
+      }
+    }),
+  );
+
+  return Object.fromEntries(loaded.filter((entry) => entry !== undefined));
+}
+
+async function sourceFilesForProject(
+  projectId: string,
+  metadata: ProjectMetadata,
+): Promise<Record<string, PlaygroundSourceFile>> {
+  const prefix = `./projects/${projectId}/`;
+  const sourceFiles: Record<string, PlaygroundSourceFile> = {};
 
   const matchingLoaders = Object.entries(projectSourceLoadersByPath).filter(
     ([sourcePath]) =>
@@ -286,7 +385,7 @@ async function sourceFilesForProject(projectId: string, metadata: ProjectMetadat
     }
   }
 
-  return sourceFiles;
+  return { ...sourceFiles, ...(await binaryAssetsForProject(projectId)) };
 }
 
 function hasProjectSource(projectId: string, relativePath: string): boolean {
@@ -333,13 +432,14 @@ function modeFromMetadata(metadata: ProjectMetadata): NonNullable<PlaygroundExam
 function galleryMetadataFor(
   metadata: ProjectMetadata,
   image: string | undefined,
-): Partial<Pick<PlaygroundExample, 'category' | 'tags' | 'author' | 'image' | 'uploads'>> {
+): Partial<Pick<PlaygroundExample, 'category' | 'tags' | 'author' | 'image' | 'uploads' | 'components'>> {
   return {
     ...(metadata.category ? { category: metadata.category } : {}),
     ...(metadata.tags && metadata.tags.length > 0 ? { tags: metadata.tags } : {}),
     ...(metadata.author ? { author: metadata.author } : {}),
     ...(image ? { image } : {}),
     ...(metadata.uploads ? { uploads: metadata.uploads } : {}),
+    ...(metadata.components ? { components: metadata.components } : {}),
   };
 }
 
@@ -451,7 +551,7 @@ export async function loadProjectExample(projectId: string): Promise<PlaygroundE
   const entryFile = metadata.entry;
 
   const code = sourceFiles[mainFile] ?? sourceFiles[entryFile];
-  if (!code) {
+  if (typeof code !== 'string') {
     throw new Error(`Project "${projectId}" is missing source for entry "${entryFile}"`);
   }
 

@@ -13,16 +13,55 @@ export type PlaygroundStaticPreview = {
 
 /**
  * A file the viewer may supply for this model (artwork, a template, a font).
- * The upload is written into the preview filesystem as `fileName` and
- * `parameter` is pointed at it, so the model reads it the same way it reads a
- * file that shipped with the project.
+ * The upload is written into the preview filesystem as `fileName`, so the model
+ * reads it the same way it reads a file that shipped with the project — an
+ * OpenSCAD `import()` finds it in the kernel filesystem, and a TypeScript
+ * model's `import art from './art.svg?raw'` resolves through the same
+ * filesystem at bundle time.
+ *
+ * Uploads are read as text, so the accepted formats are the textual ones (SVG,
+ * DXF, JSON, a kernel source file) rather than binary meshes.
  */
 export type PlaygroundUpload = {
-  readonly parameter: string;
+  /**
+   * Model parameter to point at `fileName`, for models that select their asset
+   * by name (an OpenSCAD customizer field). Omitted when the model already
+   * names the file it reads, which is the case for every model that reads a
+   * fixed import — replacing the file is then the whole mechanism.
+   */
+  readonly parameter?: string;
   readonly fileName: string;
-  /** `accept` attribute for the file input, e.g. `.svg`. */
+  /**
+   * Accepted types, in HTML `accept` form. At least one MIME type is required,
+   * because the drop zone matches on type as well as extension —
+   * `.svg,image/svg+xml`.
+   */
   readonly accept: string;
   readonly label: string;
+};
+
+/**
+ * Related models one project can render, switched by a model parameter. The
+ * gallery pins this above the parameter list: which model you are looking at is
+ * a different kind of question from how that model is shaped.
+ */
+export type PlaygroundComponents = {
+  readonly parameter: string;
+  readonly label: string;
+  readonly options: ReadonlyArray<{ readonly value: string; readonly label: string }>;
+};
+
+/**
+ * A project file as the preview filesystem receives it: text for everything a
+ * viewer can read or edit, bytes for the assets a model only imports (meshes,
+ * images), which cannot survive being decoded as UTF-8.
+ */
+export type PlaygroundSourceFile = string | Uint8Array<ArrayBuffer>;
+
+/** A file the viewer supplied, kept with the name they picked it under. */
+export type PlaygroundUploadedFile = {
+  readonly name: string;
+  readonly content: string;
 };
 
 /**
@@ -70,12 +109,14 @@ export type PlaygroundExample = {
   readonly initialParameters?: Record<string, unknown>;
   /** Files the viewer can supply at render time; empty for most projects. */
   readonly uploads?: readonly PlaygroundUpload[];
+  /** Related models this project renders, if it renders more than one. */
+  readonly components?: PlaygroundComponents;
   readonly presets?: readonly PlaygroundPreset[];
   readonly staticPreview?: PlaygroundStaticPreview;
   /** Alternate kernel implementations; when present, includes the default variant. */
   readonly variants?: readonly PlaygroundVariant[];
   readonly code: string;
-  readonly sourceFiles?: Record<string, string>;
+  readonly sourceFiles?: Record<string, PlaygroundSourceFile>;
 };
 
 const curatedPlaygroundExamples: readonly PlaygroundExample[] = [

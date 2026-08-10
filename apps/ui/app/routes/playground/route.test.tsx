@@ -27,6 +27,7 @@ const {
   mockState,
   mockToastError,
   mockToastSuccess,
+  mockWriteProjectFile,
   mockWriteText,
   fileManagerCalls,
   providerMountCalls,
@@ -62,6 +63,7 @@ const {
     mockSetParameters: vi.fn(),
     mockToastError: vi.fn(),
     mockToastSuccess: vi.fn(),
+    mockWriteProjectFile: vi.fn(async (_path: string, _data: Uint8Array, _options: { source: string }) => undefined),
     mockWriteText: vi.fn(async (_text: string) => 'copied'),
     fileManagerCalls: [] as Array<{
       projectId: string;
@@ -90,6 +92,7 @@ const {
       mockSetParameters.mockClear();
       mockToastError.mockClear();
       mockToastSuccess.mockClear();
+      mockWriteProjectFile.mockClear();
       mockWriteText.mockClear();
       fileManagerCalls.length = 0;
       providerCalls.length = 0;
@@ -216,6 +219,9 @@ vi.mock('#hooks/use-file-manager.js', () => ({
   SharedWorkerGate({ children }: { readonly children: React.ReactNode }) {
     return <div data-testid='shared-worker-gate'>{children}</div>;
   },
+  useFileManager() {
+    return { writeFile: mockWriteProjectFile };
+  },
 }));
 
 vi.mock('#hooks/use-cad-preview.js', () => ({
@@ -341,11 +347,18 @@ vi.mock('#components/ui/dropdown-menu.js', () => ({
 }));
 
 vi.mock('#routes/projects_.$id_.preview/preview-parameters.js', () => ({
-  PreviewParameters({ headerActions }: { readonly headerActions?: React.ReactNode }) {
+  PreviewParameters({
+    headerActions,
+    beforeParameters,
+  }: {
+    readonly headerActions?: React.ReactNode;
+    readonly beforeParameters?: React.ReactNode;
+  }) {
     return (
       <div data-testid='preview-parameters'>
         parameters
         {headerActions}
+        {beforeParameters}
       </div>
     );
   },
@@ -757,6 +770,95 @@ describe('PlaygroundRoot', () => {
       expect(mockDownloadBlob).toHaveBeenCalledWith(expect.any(Blob), 'openscad-bracket.glb');
     });
     expect(mockToastSuccess).toHaveBeenCalledWith('Downloaded openscad-bracket.glb');
+  });
+
+  it('renders an artwork drop zone for a project that declares an upload, and feeds the file to the render', async () => {
+    globalThis.history.replaceState({}, '', '/?model=stamp');
+
+    const { container } = renderPlaygroundRoot();
+
+    // The slot opens on the artwork the project ships, previewable as the image
+    // it is, rather than on an empty state that implies there is none. The
+    // preview opens on click rather than hover, because this pane is a phone
+    // surface too.
+    expect(await screen.findByText('yaa.svg')).toBeDefined();
+    const previewButton = screen.getByRole('button', { name: 'Preview yaa.svg' });
+    expect(previewButton.querySelector('img')?.getAttribute('src')).toMatch(/^data:image\/svg\+xml;charset=utf-8,/u);
+
+    const fileInput = container.querySelector('input[type="file"]');
+    if (!(fileInput instanceof HTMLInputElement)) {
+      throw new TypeError('Expected the artwork drop zone to render a file input');
+    }
+
+    const artwork = '<svg xmlns="http://www.w3.org/2000/svg"><line x1="0" y1="0" x2="10" y2="10"/></svg>';
+    const artworkFile = new File([artwork], 'my-logo.svg', { type: 'image/svg+xml' });
+    // Jsdom's Blob implements neither `text()` nor `arrayBuffer()`, so the
+    // picked file carries the reader every browser provides.
+    Object.defineProperty(artworkFile, 'text', { value: async () => artwork });
+    fireEvent.change(fileInput, { target: { files: [artworkFile] } });
+
+    // Both stamp variants read the artwork as `yaa.svg` — the OpenSCAD
+    // `svg_file` default and the OpenCASCADE `?raw` import — so the upload
+    // reaches the render by replacing that file in the live preview
+    // filesystem, which is what makes the kernel treat it as a change.
+    await waitFor(() => {
+      expect(mockWriteProjectFile).toHaveBeenCalled();
+    });
+    const [writtenPath, writtenBytes, writeOptions] = mockWriteProjectFile.mock.calls.at(-1)!;
+    expect(writtenPath).toBe('yaa.svg');
+    expect(new TextDecoder().decode(writtenBytes)).toBe(artwork);
+    expect(writeOptions).toStrictEqual({ source: 'user' });
+
+    // …and it is recorded on the session too, so a remount (a variant switch,
+    // a reload of the same session) still carries the viewer's artwork.
+    await waitFor(() => {
+      const { files } = providerCalls.at(-1)!;
+      expect(new TextDecoder().decode(files['yaa.svg']?.content)).toBe(artwork);
+    });
+
+    // The row reports what is loaded, and the name survives the remount the new
+    // render forces.
+    expect(await screen.findByText('my-logo.svg')).toBeDefined();
+    expect(mockToastSuccess).toHaveBeenCalledWith('Loaded my-logo.svg');
+
+    // Clearing is offered at the end of the field, where a file control is
+    // looked for, and falls back to the file the project ships.
+    fireEvent.click(screen.getByRole('button', { name: 'Clear my-logo.svg and restore yaa.svg' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('yaa.svg')).toBeDefined();
+    });
+    const [resetPath, resetBytes] = mockWriteProjectFile.mock.calls.at(-1)!;
+    expect(resetPath).toBe('yaa.svg');
+    expect(new TextDecoder().decode(resetBytes).startsWith('<?xml')).toBe(true);
+    expect(screen.queryByText('my-logo.svg')).toBeNull();
+    expect(mockToastSuccess).toHaveBeenCalledWith('Restored yaa.svg');
+  });
+
+  it('pins a project’s component switch above the parameters and drives its model parameter', async () => {
+    globalThis.history.replaceState({}, '', '/?model=stamp');
+
+    // Radix Select scrolls the active option into view; jsdom does not ship
+    // `scrollIntoView`.
+    globalThis.HTMLElement.prototype.scrollIntoView = vi.fn();
+    globalThis.HTMLElement.prototype.hasPointerCapture = vi.fn(() => false);
+
+    renderPlaygroundRoot();
+
+    // The switch is the first decision — which model is on screen — so it sits
+    // above the parameter list, while the artwork leads the list itself.
+    const componentSwitch = await screen.findByLabelText('Component');
+    expect(componentSwitch).toBeDefined();
+    fireEvent.click(componentSwitch);
+    fireEvent.click(await screen.findByRole('option', { name: 'Handle' }));
+
+    // `component_selection` lives in the model's `[Hidden]` customizer group, so
+    // this control is the only place it is offered — and setting it is what
+    // reaches the render.
+    await waitFor(() => {
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- the model's own OpenSCAD parameter name
+      expect(mockSetParameters).toHaveBeenCalledWith(expect.objectContaining({ component_selection: 'handle' }));
+    });
   });
 
   it('dispatches direct OpenCascade exports through the same preview actor', async () => {

@@ -97,13 +97,13 @@ than as a wrong-looking model in production.
 Taken from this fork's commits against core paths. Each is a candidate PR, not a permanent local
 patch:
 
-| Area               | Files                                                                                      | Why it is upstreamable                                        |
-| ------------------ | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------- |
-| OpenCascade kernel | `packages/runtime/src/kernels/opencascade/**`                                              | Kernel fixes and export-format coverage, not gallery-specific |
-| Edge detection     | `packages/runtime/src/{utils/edge-detection,middleware/gltf-edge-detection.middleware}.ts` | Native BRep edges in GLTF benefits every consumer             |
-| Geometry cache     | `packages/runtime/src/middleware/geometry-cache.middleware.ts`                             | Transfer-tier buffer fix is a correctness fix                 |
-| OpenSCAD kernel    | `kernels/openscad/**`                                                                      | BOSL2 bundling and the `parameters` subpath export            |
-| Converter fixtures | `packages/converter/src/fixtures/**`                                                       | Format coverage improvements                                  |
+| Area               | Files                                                                                      | Why it is upstreamable                                                                                                                                                                             |
+| ------------------ | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| OpenCascade kernel | `packages/runtime/src/kernels/opencascade/**`                                              | Kernel fixes and export-format coverage, not gallery-specific                                                                                                                                      |
+| Edge detection     | `packages/runtime/src/{utils/edge-detection,middleware/gltf-edge-detection.middleware}.ts` | Native BRep edges in GLTF benefits every consumer                                                                                                                                                  |
+| Geometry cache     | `packages/runtime/src/middleware/geometry-cache.middleware.ts`                             | Transfer-tier buffer fix is a correctness fix                                                                                                                                                      |
+| OpenSCAD kernel    | `kernels/openscad/**`                                                                      | BOSL2 bundling, the `parameters` subpath export, and asset mounting + asset dependency tracking (an `import()`ed SVG is an input to the render, so editing one must invalidate the geometry cache) |
+| Converter fixtures | `packages/converter/src/fixtures/**`                                                       | Format coverage improvements                                                                                                                                                                       |
 
 ## Known upstream-facing defects found in this fork
 
