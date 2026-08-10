@@ -29,10 +29,11 @@ jobs:
   # the shared `apps/ui` surface are upstream's, and editing them costs a rebase
   # conflict plus an upstream PR (docs/policy/fork-overlay-policy.md).
   #
-  # So the targets carrying inherited breakage are excluded here by name, each
-  # with the reason, and run unblocking in `upstream-drift` below. Everything
-  # else — including the gallery build and the playground overlay the fork
-  # exists for — is required to pass.
+  # So the targets carrying inherited breakage are held back here — by name
+  # where the set is small and stable (build, typecheck, test), by scoping to
+  # fork-owned paths where it is neither (lint) — and all of it runs unblocking
+  # in `upstream-drift` below. Everything else, including the gallery build and
+  # the playground overlay the fork exists for, is required to pass.
   verify:
     name: Test, lint, typecheck
     runs-on: ubuntu-latest
@@ -76,21 +77,31 @@ jobs:
       - name: Test affected projects
         # ui: 22 inherited failures (tiptap editor, TSL material snapshots,
         # use-chat). The playground overlay is covered by its own step below.
-        run: pnpm nx affected --targets=test --exclude=ui
+        # oxlint: require-using-on-disposable fails on the fork base too.
+        run: pnpm nx affected --targets=test --exclude=ui,oxlint
 
-      - name: Lint affected projects
-        # ui/api: 234 and 15 inherited errors in files the fork never touched.
-        run: pnpm nx affected --targets=lint --exclude=ui,api
-
-      - name: Verify the playground overlay
-        # The fork's own slice of apps/ui, which the `ui` exclusions above would
-        # otherwise take with them. These paths are fork-owned, so they are held
-        # to the full workspace rules.
-        working-directory: apps/ui
+      - name: Lint fork-owned code
+        # Lint is the one target that cannot be run tree-wide here. The
+        # inherited rot is not confined to a listable set of projects — ui, api,
+        # runtime, types, memory, filesystem and oxlint all fail on upstream
+        # files today, and the next sync can add more — so an exclusion list
+        # would go stale into a red check the fork cannot fix. Lint therefore
+        # blocks on the paths the fork actually owns, and the whole workspace is
+        # linted unblocking in `upstream-drift`.
+        #
+        # Overlay paths per docs/policy/fork-overlay-policy.md, plus the
+        # fork-added tooling that lives inside otherwise-core packages. Keep in
+        # step with `overlayPrefixes` in scripts/src/check-overlay-boundary.mts.
         run: |
-          pnpm exec oxlint -c "${GITHUB_WORKSPACE}/.oxlintrc.json" app/routes/playground
-          pnpm exec eslint app/routes/playground
-          pnpm exec vitest run app/routes/playground
+          FORK_PATHS="apps/ui/app/routes/playground apps/ui-e2e/thumbnails packages/testing/scripts kernels/openscad/scripts"
+          pnpm exec oxlint -c .oxlintrc.json ${FORK_PATHS}
+          pnpm exec eslint ${FORK_PATHS}
+
+      - name: Test the playground overlay
+        # The fork's own slice of apps/ui, which the `ui` test exclusion above
+        # would otherwise take with it.
+        working-directory: apps/ui
+        run: pnpm exec vitest run app/routes/playground
 
   # Advisory: the targets `verify` excludes, run in full so inherited breakage
   # stays visible (and so it is obvious when an upstream sync fixes one and the
@@ -114,9 +125,9 @@ jobs:
 
       - name: Report inherited failures
         run: |
-          pnpm nx affected --targets=lint --projects=ui,api
+          pnpm nx affected --targets=lint
           pnpm nx affected --targets=typecheck --projects=api
-          pnpm nx affected --targets=test --projects=ui
+          pnpm nx affected --targets=test --projects=ui,oxlint
           pnpm nx affected --targets=build --projects=example-electron
 
   overlay-boundary:
