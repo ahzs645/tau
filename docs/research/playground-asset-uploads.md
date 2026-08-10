@@ -39,8 +39,15 @@ A project declares what it accepts in `project.json`, so the UI stays generic:
   its OpenSCAD `svg_file` already defaults to `yaa.svg`, and its OpenCASCADE variant imports
   `./yaa.svg?raw`.
 
-The control sits above the parameter list, in the pane that is present at every breakpoint (beside
-the viewer on desktop, behind the Params tab on mobile), so it needs no separate mobile treatment.
+The control sits at the head of the parameter list, in the pane that is present at every breakpoint
+(beside the viewer on desktop, behind the Params tab on mobile), so it needs no separate mobile
+treatment. It is _in_ the list rather than pinned above it, because the artwork is a parameter in
+every sense that matters — it shapes the stamp the way a dimension does. What is pinned above the
+list instead is the project's component switch, which answers a different question: not how this
+model is shaped, but which model you are looking at. (`PreviewParameters` grew a `beforeParameters`
+slot for this — the smallest extension point that lets the gallery lead the list with something the
+schema does not describe.)
+
 It is shaped as **one more parameter row** rather than as a drop card: label, field, description, at
 the same height and with the same tokens (`--param-field-h`, `--param-field-radius`) as the rows
 under it. A card with its own border and padding is the thing that reads as bolted on; a row reads

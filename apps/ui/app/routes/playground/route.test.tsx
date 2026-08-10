@@ -347,11 +347,18 @@ vi.mock('#components/ui/dropdown-menu.js', () => ({
 }));
 
 vi.mock('#routes/projects_.$id_.preview/preview-parameters.js', () => ({
-  PreviewParameters({ headerActions }: { readonly headerActions?: React.ReactNode }) {
+  PreviewParameters({
+    headerActions,
+    beforeParameters,
+  }: {
+    readonly headerActions?: React.ReactNode;
+    readonly beforeParameters?: React.ReactNode;
+  }) {
     return (
       <div data-testid='preview-parameters'>
         parameters
         {headerActions}
+        {beforeParameters}
       </div>
     );
   },
@@ -826,6 +833,32 @@ describe('PlaygroundRoot', () => {
     expect(new TextDecoder().decode(resetBytes).startsWith('<?xml')).toBe(true);
     expect(screen.queryByText('my-logo.svg')).toBeNull();
     expect(mockToastSuccess).toHaveBeenCalledWith('Restored yaa.svg');
+  });
+
+  it('pins a project’s component switch above the parameters and drives its model parameter', async () => {
+    globalThis.history.replaceState({}, '', '/?model=stamp');
+
+    // Radix Select scrolls the active option into view; jsdom does not ship
+    // `scrollIntoView`.
+    globalThis.HTMLElement.prototype.scrollIntoView = vi.fn();
+    globalThis.HTMLElement.prototype.hasPointerCapture = vi.fn(() => false);
+
+    renderPlaygroundRoot();
+
+    // The switch is the first decision — which model is on screen — so it sits
+    // above the parameter list, while the artwork leads the list itself.
+    const componentSwitch = await screen.findByLabelText('Component');
+    expect(componentSwitch).toBeDefined();
+    fireEvent.click(componentSwitch);
+    fireEvent.click(await screen.findByRole('option', { name: 'Handle' }));
+
+    // `component_selection` lives in the model's `[Hidden]` customizer group, so
+    // this control is the only place it is offered — and setting it is what
+    // reaches the render.
+    await waitFor(() => {
+      // eslint-disable-next-line @typescript-eslint/naming-convention -- the model's own OpenSCAD parameter name
+      expect(mockSetParameters).toHaveBeenCalledWith(expect.objectContaining({ component_selection: 'handle' }));
+    });
   });
 
   it('dispatches direct OpenCascade exports through the same preview actor', async () => {

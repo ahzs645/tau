@@ -103,6 +103,26 @@ export function parseUploadAccept(accept: string): Record<string, string[]> | un
   return Object.fromEntries(mimeTypes.map((mimeType) => [mimeType, extensions]));
 }
 
+/**
+ * Related models one project renders — the stamp and the handle it screws into.
+ * The choice is a model parameter like any other, but it is the first decision a
+ * viewer makes rather than a detail of the current one, so the gallery pins it
+ * above the parameter list. The model keeps the parameter in its `[Hidden]`
+ * group, since showing it twice would be worse than showing it once.
+ */
+const projectComponentsSchema = z.object({
+  parameter: z.string().min(1),
+  label: z.string().min(1),
+  options: z
+    .array(
+      z.object({
+        value: z.string().min(1),
+        label: z.string().min(1),
+      }),
+    )
+    .min(2),
+});
+
 const projectVariantSchema = z.object({
   id: z.enum(['openscad', 'replicad', 'opencascade']),
   label: z.string().min(1).optional(),
@@ -143,6 +163,7 @@ export const projectMetadataSchema = z.looseObject({
   previewNativeEdges: z.boolean().optional(),
   initialParameters: z.record(z.string(), z.unknown()).optional(),
   uploads: z.array(projectUploadSchema).min(1).optional(),
+  components: projectComponentsSchema.optional(),
   previewGlb: z.string().min(1).optional(),
   staticPreview: z
     .object({
@@ -411,13 +432,14 @@ function modeFromMetadata(metadata: ProjectMetadata): NonNullable<PlaygroundExam
 function galleryMetadataFor(
   metadata: ProjectMetadata,
   image: string | undefined,
-): Partial<Pick<PlaygroundExample, 'category' | 'tags' | 'author' | 'image' | 'uploads'>> {
+): Partial<Pick<PlaygroundExample, 'category' | 'tags' | 'author' | 'image' | 'uploads' | 'components'>> {
   return {
     ...(metadata.category ? { category: metadata.category } : {}),
     ...(metadata.tags && metadata.tags.length > 0 ? { tags: metadata.tags } : {}),
     ...(metadata.author ? { author: metadata.author } : {}),
     ...(image ? { image } : {}),
     ...(metadata.uploads ? { uploads: metadata.uploads } : {}),
+    ...(metadata.components ? { components: metadata.components } : {}),
   };
 }
 

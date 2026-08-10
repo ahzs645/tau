@@ -279,7 +279,12 @@ const createParameterView = ({
 
 export function PreviewParameters({
   headerActions,
-}: { readonly headerActions?: React.ReactNode } = {}): React.JSX.Element {
+  beforeParameters,
+}: {
+  readonly headerActions?: React.ReactNode;
+  /** Rendered at the top of the parameter list, above the model's own fields. */
+  readonly beforeParameters?: React.ReactNode;
+} = {}): React.JSX.Element {
   const preview = useCadPreview({ optional: true });
   if (!preview) {
     return (
@@ -292,14 +297,18 @@ export function PreviewParameters({
     );
   }
 
-  return <PreviewParametersContent headerActions={headerActions} preview={preview} />;
+  return (
+    <PreviewParametersContent headerActions={headerActions} beforeParameters={beforeParameters} preview={preview} />
+  );
 }
 
 function PreviewParametersContent({
   headerActions,
+  beforeParameters,
   preview,
 }: {
   readonly headerActions?: React.ReactNode;
+  readonly beforeParameters?: React.ReactNode;
   readonly preview: CadPreviewContextValue;
 }): React.JSX.Element {
   const { graphicsRef, parameters, defaultParameters, jsonSchema, setParameters } = preview;
@@ -390,17 +399,20 @@ function PreviewParametersContent({
           ) : null}
         </div>
       </div>
-      <div className='flex-1 overflow-hidden'>
-        <Parameters
-          parameters={parameterView.parameters}
-          defaultParameters={parameterView.defaultParameters}
-          jsonSchema={parameterView.jsonSchema}
-          units={units}
-          enableSearch={isSearchVisible}
-          isAllExpanded={isAllExpanded}
-          emptyDescription='This model has no parameters'
-          onParametersChange={handleParametersChange}
-        />
+      <div className='flex min-h-0 flex-1 flex-col overflow-hidden'>
+        {beforeParameters ? <div className='shrink-0'>{beforeParameters}</div> : null}
+        <div className='min-h-0 flex-1 overflow-hidden'>
+          <Parameters
+            parameters={parameterView.parameters}
+            defaultParameters={parameterView.defaultParameters}
+            jsonSchema={parameterView.jsonSchema}
+            units={units}
+            enableSearch={isSearchVisible}
+            isAllExpanded={isAllExpanded}
+            emptyDescription='This model has no parameters'
+            onParametersChange={handleParametersChange}
+          />
+        </div>
       </div>
     </div>
   );

@@ -25,6 +25,7 @@ import { graphicsMachine } from '#machines/graphics.machine.js';
 import { defaultGraphicsSettings } from '#constants/editor.constants.js';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '#components/ui/tooltip.js';
 import { Popover, PopoverContent, PopoverTrigger } from '#components/ui/popover.js';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '#components/ui/select.js';
 import { FovControl } from '#components/geometry/cad/fov-control.js';
 import { GridSizeIndicator } from '#components/geometry/cad/grid-control.js';
 import { MeasureControl } from '#components/geometry/cad/measure-control.js';
@@ -47,6 +48,7 @@ import { ArButton } from '#components/cad/ar-button.js';
 import type { CadPreviewStatus } from '#hooks/use-cad-preview.js';
 import { PreviewParameters } from '#routes/projects_.$id_.preview/preview-parameters.js';
 import type {
+  PlaygroundComponents,
   PlaygroundExample,
   PlaygroundPreset,
   PlaygroundUpload,
@@ -461,6 +463,7 @@ export function PlaygroundPreviewPane({
           >
             <PlaygroundParameters
               presets={activeExample.presets ?? []}
+              components={activeExample.components}
               uploads={uploads}
               shippedFiles={shippedFiles}
               uploadedFiles={uploadedFiles}
@@ -532,6 +535,7 @@ function PlaygroundParameterBridge({
 
 function PlaygroundParameters({
   presets,
+  components,
   uploads,
   shippedFiles,
   uploadedFiles,
@@ -539,6 +543,7 @@ function PlaygroundParameters({
   onUploadReset,
 }: {
   readonly presets: readonly PlaygroundPreset[];
+  readonly components?: PlaygroundComponents;
   readonly uploads?: readonly PlaygroundUpload[];
   /** The files the project ships under each slot's `fileName`. */
   readonly shippedFiles?: Record<string, PlaygroundUploadedFile>;
@@ -548,30 +553,88 @@ function PlaygroundParameters({
   readonly onUploadReset?: (upload: PlaygroundUpload) => void;
 }): React.JSX.Element {
   // The parameters pane is the one surface present at every breakpoint — beside
-  // the viewer on desktop, behind the Params tab on mobile — so an upload
-  // control here needs no separate mobile treatment.
+  // the viewer on desktop, behind the Params tab on mobile — so neither control
+  // here needs a separate mobile treatment.
+  //
+  // The two sit either side of the "Parameters" header on purpose. Which model
+  // you are looking at is pinned above it, because it decides what the
+  // parameters below even mean; the artwork is one of those parameters — it
+  // shapes the stamp the way a dimension does — so it leads the list rather
+  // than floating above it.
   const uploadControls =
     onUpload && onUploadReset && uploads && uploads.length > 0 ? { uploads, onUpload, onUploadReset } : undefined;
   const headerActions = presets.length > 0 ? <PlaygroundPresetMenu presets={presets} /> : undefined;
+  const beforeParameters = uploadControls ? (
+    <div className='border-b py-0.5'>
+      {uploadControls.uploads.map((upload) => (
+        <PlaygroundUploadRow
+          key={upload.fileName}
+          upload={upload}
+          shipped={shippedFiles?.[upload.fileName]}
+          uploaded={uploadedFiles?.[upload.fileName]}
+          onUpload={uploadControls.onUpload}
+          onReset={uploadControls.onUploadReset}
+        />
+      ))}
+    </div>
+  ) : undefined;
 
   return (
     <div className='flex h-full min-h-0 flex-col'>
-      {uploadControls ? (
+      {components ? (
         <div className='shrink-0 border-b py-0.5'>
-          {uploadControls.uploads.map((upload) => (
-            <PlaygroundUploadRow
-              key={upload.fileName}
-              upload={upload}
-              shipped={shippedFiles?.[upload.fileName]}
-              uploaded={uploadedFiles?.[upload.fileName]}
-              onUpload={uploadControls.onUpload}
-              onReset={uploadControls.onUploadReset}
-            />
-          ))}
+          <PlaygroundComponentRow components={components} />
         </div>
       ) : null}
       <div className='min-h-0 flex-1'>
-        <PreviewParameters headerActions={headerActions} />
+        <PreviewParameters headerActions={headerActions} beforeParameters={beforeParameters} />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The project's component switch, pinned above the parameter list. It drives a
+ * model parameter the model keeps in its `[Hidden]` customizer group, so the
+ * choice appears here and only here rather than twice.
+ */
+function PlaygroundComponentRow({ components }: { readonly components: PlaygroundComponents }): React.JSX.Element {
+  const { parameters, defaultParameters, setParameters } = useCadPreview();
+  const current =
+    typeof parameters[components.parameter] === 'string'
+      ? (parameters[components.parameter] as string)
+      : typeof defaultParameters[components.parameter] === 'string'
+        ? (defaultParameters[components.parameter] as string)
+        : components.options[0]!.value;
+
+  const handleChange = useCallback(
+    (value: string) => {
+      setParameters({ ...parameters, [components.parameter]: value });
+    },
+    [components.parameter, parameters, setParameters],
+  );
+
+  return (
+    <div className='@container/parameter my-1.5 flex items-center gap-2 px-2.5'>
+      <span className='min-w-0 shrink-0 truncate text-sm font-medium @[240px]/parameter:w-[40%]'>
+        {components.label}
+      </span>
+      <div className='flex min-w-0 flex-1 items-center justify-end'>
+        <Select value={current} onValueChange={handleChange}>
+          <SelectTrigger
+            aria-label={components.label}
+            className='h-[var(--param-field-h,1.5rem)] w-full rounded-[var(--param-field-radius,var(--radius-md))] border-border/50 bg-muted px-1.5 text-sm shadow-none'
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {components.options.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
     </div>
   );

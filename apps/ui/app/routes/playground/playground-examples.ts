@@ -41,6 +41,17 @@ export type PlaygroundUpload = {
 };
 
 /**
+ * Related models one project can render, switched by a model parameter. The
+ * gallery pins this above the parameter list: which model you are looking at is
+ * a different kind of question from how that model is shaped.
+ */
+export type PlaygroundComponents = {
+  readonly parameter: string;
+  readonly label: string;
+  readonly options: ReadonlyArray<{ readonly value: string; readonly label: string }>;
+};
+
+/**
  * A project file as the preview filesystem receives it: text for everything a
  * viewer can read or edit, bytes for the assets a model only imports (meshes,
  * images), which cannot survive being decoded as UTF-8.
@@ -98,6 +109,8 @@ export type PlaygroundExample = {
   readonly initialParameters?: Record<string, unknown>;
   /** Files the viewer can supply at render time; empty for most projects. */
   readonly uploads?: readonly PlaygroundUpload[];
+  /** Related models this project renders, if it renders more than one. */
+  readonly components?: PlaygroundComponents;
   readonly presets?: readonly PlaygroundPreset[];
   readonly staticPreview?: PlaygroundStaticPreview;
   /** Alternate kernel implementations; when present, includes the default variant. */

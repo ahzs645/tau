@@ -13,6 +13,14 @@
       "label": "Artwork (SVG)"
     }
   ],
+  "components": {
+    "parameter": "component_selection",
+    "label": "Component",
+    "options": [
+      { "value": "stamp", "label": "Stamp" },
+      { "value": "handle", "label": "Handle" }
+    ]
+  },
   "variants": [
     {
       "id": "openscad",
