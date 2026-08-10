@@ -71,18 +71,24 @@ jobs:
 
       - name: Build the gallery
         env:
-          # Match the canonical Nx build (apps/ui/project.json): the client
-          # bundle needs more than the default heap. Scoped to this step, as in
-          # the Pages deploy — at job level it also raises the ceiling for every
-          # parallel nx task and vitest worker on a 16GB runner.
+          # Deliberately the same environment the Pages deploy builds in
+          # (github-pages.yml), because that is the artifact this fork actually
+          # ships — a green build here should mean a green deploy. GITHUB_PAGES
+          # is not cosmetic: it switches react-router.config.ts to
+          # `routeDiscovery: 'initial'`, and it is a declared cache input on the
+          # bundle target. Left unset, the client transform wedged in rolldown
+          # for the full timeout on every attempt.
+          GITHUB_PAGES: 'true'
+          # Redundant with apps/ui/project.json, which already scopes this to
+          # the bundle command — kept for parity with the Pages deploy.
           NODE_OPTIONS: '--max-old-space-size=8192'
         # Alone and bounded, both deliberately. The react-router client bundle
         # can wedge in rolldown rather than fail — it did here for 43 minutes,
         # silent, until the job timeout killed it, and the Pages deploy carries
-        # its own retry guard for the same reason (github-pages.yml). Running it
-        # outside the parallel fan-out keeps it off the other builds' cores, and
-        # a bounded retry turns a wedge into a fast, legible failure instead of
-        # eating the job's whole budget.
+        # its own retry guard for the same reason. Running it outside the
+        # parallel fan-out keeps it off the other builds' cores, and a bounded
+        # retry turns a wedge into a fast, legible failure instead of eating the
+        # job's whole budget.
         run: |
           set -euo pipefail
 
