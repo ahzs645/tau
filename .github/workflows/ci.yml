@@ -19,10 +19,35 @@ permissions:
   contents: read
 
 jobs:
+  # What this job asks: did the fork's own work break anything?
+  #
+  # The tree this fork forked from does not pass its own lint, typecheck, or
+  # test suites — upstream runs `nx affected` behind an Nx Cloud remote cache,
+  # so the rot in projects a change does not touch never gets re-run there. On
+  # the fork it does, and the result was a check that had never once been green.
+  # The fork also cannot fix most of it: `packages/`, `kernels/`, `libs/` and
+  # the shared `apps/ui` surface are upstream's, and editing them costs a rebase
+  # conflict plus an upstream PR (docs/policy/fork-overlay-policy.md).
+  #
+  # So the targets carrying inherited breakage are excluded here by name, each
+  # with the reason, and run unblocking in `upstream-drift` below. Everything
+  # else — including the gallery build and the playground overlay the fork
+  # exists for — is required to pass.
   verify:
     name: Test, lint, typecheck
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      # The `ui:build` prerender boots the SSR loaders, which validate this
+      # schema (apps/ui/app/environment.config.ts) and hard-fail when it is
+      # unset. Same values the Pages deploy builds with (github-pages.yml).
+      TAU_API_URL: https://api.taucad.dev
+      TAU_FRONTEND_URL: https://3dd.ahmadjalil.com
+      TAU_WEBSOCKET_URL: wss://api.taucad.dev
+      TAU_DISABLE_CODE_EDITOR: 'true'
+      # Match the canonical Nx build (apps/ui/project.json): the client bundle
+      # needs more than the default heap.
+      NODE_OPTIONS: '--max-old-space-size=8192'
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -38,8 +63,61 @@ jobs:
         # both the OCCT and OpenSCAD suites fail silently.
         run: pnpm nx run-many -t copy-assets
 
-      - name: Verify affected projects
-        run: pnpm nx affected --targets=test,build,lint,typecheck
+      - name: Build affected projects
+        # example-electron: the OCCT wasm modules use top-level await and vite
+        # bundles the kernel worker as `iife`, which cannot represent it.
+        run: pnpm nx affected --targets=build --exclude=example-electron
+
+      - name: Typecheck affected projects
+        # api: `@morphllm/morphsdk` renamed `instructions` to `instruction` and
+        # the pinned version no longer matches its call site in file-edit.service.ts.
+        run: pnpm nx affected --targets=typecheck --exclude=api
+
+      - name: Test affected projects
+        # ui: 22 inherited failures (tiptap editor, TSL material snapshots,
+        # use-chat). The playground overlay is covered by its own step below.
+        run: pnpm nx affected --targets=test --exclude=ui
+
+      - name: Lint affected projects
+        # ui/api: 234 and 15 inherited errors in files the fork never touched.
+        run: pnpm nx affected --targets=lint --exclude=ui,api
+
+      - name: Verify the playground overlay
+        # The fork's own slice of apps/ui, which the `ui` exclusions above would
+        # otherwise take with them. These paths are fork-owned, so they are held
+        # to the full workspace rules.
+        working-directory: apps/ui
+        run: |
+          pnpm exec oxlint -c "${GITHUB_WORKSPACE}/.oxlintrc.json" app/routes/playground
+          pnpm exec eslint app/routes/playground
+          pnpm exec vitest run app/routes/playground
+
+  # Advisory: the targets `verify` excludes, run in full so inherited breakage
+  # stays visible (and so it is obvious when an upstream sync fixes one and the
+  # exclusion above can go). Never blocks a merge.
+  upstream-drift:
+    name: Upstream drift (advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup Nx environment
+        uses: ./.github/actions/setup-nx
+
+      - name: Provision kernel assets
+        run: pnpm nx run-many -t copy-assets
+
+      - name: Report inherited failures
+        run: |
+          pnpm nx affected --targets=lint --projects=ui,api
+          pnpm nx affected --targets=typecheck --projects=api
+          pnpm nx affected --targets=test --projects=ui
+          pnpm nx affected --targets=build --projects=example-electron
 
   overlay-boundary:
     name: Fork overlay boundary

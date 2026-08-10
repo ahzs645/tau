@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/naming-convention -- OpenSCAD customiser parameters keep their authored names as object keys */
 import { describe, expect, it } from 'vitest';
 import { loadProjectExample } from '#routes/playground/projects.js';
 import { deriveStaticParameterView } from '#routes/playground/static-parameters.js';

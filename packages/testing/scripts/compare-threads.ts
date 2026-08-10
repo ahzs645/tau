@@ -28,6 +28,8 @@
  * reported as a median — the two numbers a playground kernel switch and a
  * parameter tweak actually experience.
  */
+/* eslint-disable @typescript-eslint/naming-convention -- the model bag uses filenames as object keys */
+/* oxlint-disable no-await-in-loop -- the cold/warm timings only mean anything if each export runs alone; overlapping them would measure contention instead */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import process from 'node:process';
@@ -41,12 +43,12 @@ const projectsDirectory = resolve(import.meta.dirname, '../../../apps/ui/app/rou
 const read = (path: string): string => readFileSync(resolve(projectsDirectory, path), 'utf8');
 
 // M14 x 2, 20 mm of thread — a normal fastener, not a tuned-for-the-test case.
-const MAJOR_DIAMETER = 14;
-const PITCH = 2;
-const LENGTH = 20;
-const CLEARANCE = 0.4;
-const DEPTH = 0.5413 * PITCH;
-const CORE_RADIUS = MAJOR_DIAMETER / 2 - DEPTH;
+const majorDiameter = 14;
+const pitch = 2;
+const threadLength = 20;
+const clearance = 0.4;
+const depth = 0.5413 * pitch;
+const coreRadius = majorDiameter / 2 - depth;
 
 /**
  * Expected ridge volume by Pappus: the trapezoid profile area swept along the
@@ -56,18 +58,18 @@ const CORE_RADIUS = MAJOR_DIAMETER / 2 - DEPTH;
  */
 function analyticRidgeVolume(): number {
   const flankAngleDeg = 30;
-  const apexWidth = PITCH / 8;
-  const rootWidth = apexWidth + 2 * DEPTH * Math.tan((flankAngleDeg * Math.PI) / 180);
-  const rootInset = Math.min(0.2, DEPTH * 0.25);
-  const height = DEPTH + rootInset;
+  const apexWidth = pitch / 8;
+  const rootWidth = apexWidth + 2 * depth * Math.tan((flankAngleDeg * Math.PI) / 180);
+  const rootInset = Math.min(0.2, depth * 0.25);
+  const height = depth + rootInset;
   const area = ((rootWidth + apexWidth) / 2) * height;
 
   // Centroid of a trapezoid, measured from the wide (root) side.
   const centroidOffset = (height * (2 * apexWidth + rootWidth)) / (3 * (apexWidth + rootWidth));
-  const centroidRadius = CORE_RADIUS - rootInset + centroidOffset;
+  const centroidRadius = coreRadius - rootInset + centroidOffset;
 
-  const turns = LENGTH / PITCH;
-  const pathLength = turns * Math.hypot(2 * Math.PI * centroidRadius, PITCH);
+  const turns = threadLength / pitch;
+  const pathLength = turns * Math.hypot(2 * Math.PI * centroidRadius, pitch);
   return area * pathLength;
 }
 
@@ -77,28 +79,28 @@ const models: Record<string, Record<string, string>> = {
     'occt-utils.ts': read('vane-trap/lib/occt-utils.ts'),
     'ridge.ts': `import { helicalRidge } from './threads.js';
 export default function main() {
-  return helicalRidge({ baseRadius: ${CORE_RADIUS}, pitch: ${PITCH}, length: ${LENGTH}, depth: ${DEPTH} });
+  return helicalRidge({ baseRadius: ${coreRadius}, pitch: ${pitch}, length: ${threadLength}, depth: ${depth} });
 }`,
     'rod.ts': `import { threadedRod } from './threads.js';
 export default function main() {
-  return threadedRod({ majorDiameter: ${MAJOR_DIAMETER}, length: ${LENGTH}, pitch: ${PITCH} });
+  return threadedRod({ majorDiameter: ${majorDiameter}, length: ${threadLength}, pitch: ${pitch} });
 }`,
     'nut.ts': `import { threadedRod } from './threads.js';
 import { boxAt, cut } from './occt-utils.js';
 export default function main() {
   return cut(
-    boxAt([0, 0, ${LENGTH / 2}], ${MAJOR_DIAMETER + 8}, ${MAJOR_DIAMETER + 8}, ${LENGTH}),
-    threadedRod({ majorDiameter: ${MAJOR_DIAMETER}, length: ${LENGTH}, pitch: ${PITCH}, clearance: ${CLEARANCE} }),
+    boxAt([0, 0, ${threadLength / 2}], ${majorDiameter + 8}, ${majorDiameter + 8}, ${threadLength}),
+    threadedRod({ majorDiameter: ${majorDiameter}, length: ${threadLength}, pitch: ${pitch}, clearance: ${clearance} }),
   );
 }`,
     'fit.ts': `import { threadedRod } from './threads.js';
 import { boxAt, cut, intersect } from './occt-utils.js';
 export default function main() {
   const nut = cut(
-    boxAt([0, 0, ${LENGTH / 2}], ${MAJOR_DIAMETER + 8}, ${MAJOR_DIAMETER + 8}, ${LENGTH}),
-    threadedRod({ majorDiameter: ${MAJOR_DIAMETER}, length: ${LENGTH}, pitch: ${PITCH}, clearance: ${CLEARANCE} }),
+    boxAt([0, 0, ${threadLength / 2}], ${majorDiameter + 8}, ${majorDiameter + 8}, ${threadLength}),
+    threadedRod({ majorDiameter: ${majorDiameter}, length: ${threadLength}, pitch: ${pitch}, clearance: ${clearance} }),
   );
-  return intersect(nut, threadedRod({ majorDiameter: ${MAJOR_DIAMETER}, length: ${LENGTH}, pitch: ${PITCH} }));
+  return intersect(nut, threadedRod({ majorDiameter: ${majorDiameter}, length: ${threadLength}, pitch: ${pitch} }));
 }`,
   },
   'occt-analytic': {
@@ -106,54 +108,54 @@ export default function main() {
     'occt-utils.ts': read('pre-chamber-nozzle-insert/lib/occt-utils.ts'),
     'ridge.ts': `import { helicalRidge } from './threads.js';
 export default function main() {
-  return helicalRidge({ baseRadius: ${CORE_RADIUS}, pitch: ${PITCH}, length: ${LENGTH}, depth: ${DEPTH} });
+  return helicalRidge({ baseRadius: ${coreRadius}, pitch: ${pitch}, length: ${threadLength}, depth: ${depth} });
 }`,
     'rod.ts': `import { threadedRod } from './threads.js';
 export default function main() {
-  return threadedRod({ majorDiameter: ${MAJOR_DIAMETER}, length: ${LENGTH}, pitch: ${PITCH} });
+  return threadedRod({ majorDiameter: ${majorDiameter}, length: ${threadLength}, pitch: ${pitch} });
 }`,
     'nut.ts': `import { threadedRod } from './threads.js';
 import { boxAt, cut } from './occt-utils.js';
 export default function main() {
   return cut(
-    boxAt([0, 0, ${LENGTH / 2}], ${MAJOR_DIAMETER + 8}, ${MAJOR_DIAMETER + 8}, ${LENGTH}),
-    threadedRod({ majorDiameter: ${MAJOR_DIAMETER}, length: ${LENGTH}, pitch: ${PITCH}, clearance: ${CLEARANCE} }),
+    boxAt([0, 0, ${threadLength / 2}], ${majorDiameter + 8}, ${majorDiameter + 8}, ${threadLength}),
+    threadedRod({ majorDiameter: ${majorDiameter}, length: ${threadLength}, pitch: ${pitch}, clearance: ${clearance} }),
   );
 }`,
     'fit.ts': `import { threadedRod } from './threads.js';
 import { boxAt, cut, intersect } from './occt-utils.js';
 export default function main() {
   const nut = cut(
-    boxAt([0, 0, ${LENGTH / 2}], ${MAJOR_DIAMETER + 8}, ${MAJOR_DIAMETER + 8}, ${LENGTH}),
-    threadedRod({ majorDiameter: ${MAJOR_DIAMETER}, length: ${LENGTH}, pitch: ${PITCH}, clearance: ${CLEARANCE} }),
+    boxAt([0, 0, ${threadLength / 2}], ${majorDiameter + 8}, ${majorDiameter + 8}, ${threadLength}),
+    threadedRod({ majorDiameter: ${majorDiameter}, length: ${threadLength}, pitch: ${pitch}, clearance: ${clearance} }),
   );
-  return intersect(nut, threadedRod({ majorDiameter: ${MAJOR_DIAMETER}, length: ${LENGTH}, pitch: ${PITCH} }));
+  return intersect(nut, threadedRod({ majorDiameter: ${majorDiameter}, length: ${threadLength}, pitch: ${pitch} }));
 }`,
   },
   replicad: {
     'threads.ts': read('vane-trap/lib/threads.replicad.ts'),
     'ridge.ts': `import { helicalRidge } from './threads.js';
 export default function main() {
-  return helicalRidge({ baseRadius: ${CORE_RADIUS}, pitch: ${PITCH}, length: ${LENGTH}, depth: ${DEPTH} });
+  return helicalRidge({ baseRadius: ${coreRadius}, pitch: ${pitch}, length: ${threadLength}, depth: ${depth} });
 }`,
     'rod.ts': `import { threadedRod } from './threads.js';
 export default function main() {
-  return threadedRod({ majorDiameter: ${MAJOR_DIAMETER}, length: ${LENGTH}, pitch: ${PITCH} });
+  return threadedRod({ majorDiameter: ${majorDiameter}, length: ${threadLength}, pitch: ${pitch} });
 }`,
     'nut.ts': `import { makeBaseBox } from 'replicad';
 import { threadedRod } from './threads.js';
 export default function main() {
-  return makeBaseBox(${MAJOR_DIAMETER + 8}, ${MAJOR_DIAMETER + 8}, ${LENGTH}).cut(
-    threadedRod({ majorDiameter: ${MAJOR_DIAMETER}, length: ${LENGTH}, pitch: ${PITCH}, clearance: ${CLEARANCE} }),
+  return makeBaseBox(${majorDiameter + 8}, ${majorDiameter + 8}, ${threadLength}).cut(
+    threadedRod({ majorDiameter: ${majorDiameter}, length: ${threadLength}, pitch: ${pitch}, clearance: ${clearance} }),
   );
 }`,
     'fit.ts': `import { makeBaseBox } from 'replicad';
 import { threadedRod } from './threads.js';
 export default function main() {
-  const nut = makeBaseBox(${MAJOR_DIAMETER + 8}, ${MAJOR_DIAMETER + 8}, ${LENGTH}).cut(
-    threadedRod({ majorDiameter: ${MAJOR_DIAMETER}, length: ${LENGTH}, pitch: ${PITCH}, clearance: ${CLEARANCE} }),
+  const nut = makeBaseBox(${majorDiameter + 8}, ${majorDiameter + 8}, ${threadLength}).cut(
+    threadedRod({ majorDiameter: ${majorDiameter}, length: ${threadLength}, pitch: ${pitch}, clearance: ${clearance} }),
   );
-  return nut.intersect(threadedRod({ majorDiameter: ${MAJOR_DIAMETER}, length: ${LENGTH}, pitch: ${PITCH} }));
+  return nut.intersect(threadedRod({ majorDiameter: ${majorDiameter}, length: ${threadLength}, pitch: ${pitch} }));
 }`,
   },
 };
@@ -161,7 +163,7 @@ export default function main() {
 type Mesh = { positions: Float32Array; indices: Uint32Array };
 
 /** Positions and indices out of the GLB binary chunk. */
-function readMesh(bytes: Uint8Array): Mesh {
+function readMesh(bytes: Uint8Array<ArrayBuffer>): Mesh {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const jsonLength = view.getUint32(12, true);
   const json = JSON.parse(new TextDecoder().decode(bytes.subarray(20, 20 + jsonLength))) as {
@@ -173,7 +175,7 @@ function readMesh(bytes: Uint8Array): Mesh {
 
   const positions: number[] = [];
   const indices: number[] = [];
-  for (const mesh of json.meshes ?? []) {
+  for (const mesh of json.meshes) {
     for (const primitive of mesh.primitives) {
       const vertexBase = positions.length / 3;
       const positionAccessor = json.accessors[primitive.attributes.POSITION]!;
@@ -299,9 +301,9 @@ for (const [implementation, files] of Object.entries(models)) {
   for (const testCase of ['ridge', 'rod', 'nut', 'fit']) {
     const started = Date.now();
     try {
-      const result = await client.export('glb', { file: `/${testCase}.ts`, coordinateSystem: 'z-up' } as never);
+      const result = await client.export('glb', { file: `/${testCase}.ts`, coordinateSystem: 'z-up' });
       if (!result.success) {
-        results[implementation]![testCase] = `FAILED: ${result.issues.map((issue) => issue.message).join('; ')}`;
+        results[implementation][testCase] = `FAILED: ${result.issues.map((issue) => issue.message).join('; ')}`;
         continue;
       }
 
@@ -309,13 +311,13 @@ for (const [implementation, files] of Object.entries(models)) {
       const warmRuns: number[] = [];
       for (let repeat = 0; repeat < repeats; repeat += 1) {
         const warmStarted = Date.now();
-        await client.export('glb', { file: `/${testCase}.ts`, coordinateSystem: 'z-up' } as never);
+        await client.export('glb', { file: `/${testCase}.ts`, coordinateSystem: 'z-up' });
         warmRuns.push(Date.now() - warmStarted);
       }
 
       const mesh = readMesh(result.data.bytes);
       const bounds = boundsOf(mesh);
-      results[implementation]![testCase] = {
+      results[implementation][testCase] = {
         volume: meshVolume(mesh),
         watertight: isWatertight(mesh),
         triangles: mesh.indices.length / 3,
@@ -324,7 +326,7 @@ for (const [implementation, files] of Object.entries(models)) {
         warmMilliseconds: warmRuns.length > 0 ? median(warmRuns) : undefined,
       };
     } catch (error) {
-      results[implementation]![testCase] = `THREW: ${String(error).split('\n')[0]}`;
+      results[implementation][testCase] = `THREW: ${String(error).split('\n')[0]}`;
     }
   }
 
@@ -333,10 +335,10 @@ for (const [implementation, files] of Object.entries(models)) {
 
 const expectedRidge = analyticRidgeVolume();
 // Rod ≈ core cylinder + ridge; nut ≈ block − (rod grown by the clearance).
-const expectedRod = Math.PI * CORE_RADIUS ** 2 * LENGTH + expectedRidge;
-const blockVolume = (MAJOR_DIAMETER + 8) ** 2 * LENGTH;
+const expectedRod = Math.PI * coreRadius ** 2 * threadLength + expectedRidge;
+const blockVolume = (majorDiameter + 8) ** 2 * threadLength;
 
-console.log(`\nM${MAJOR_DIAMETER} x ${PITCH}, ${LENGTH} mm thread, ${CLEARANCE} mm clearance`);
+console.log(`\nM${majorDiameter} x ${pitch}, ${threadLength} mm thread, ${clearance} mm clearance`);
 console.log(`analytic ridge volume (Pappus): ${expectedRidge.toFixed(1)} mm³`);
 console.log(`analytic rod volume:            ${expectedRod.toFixed(1)} mm³`);
 console.log(`block volume (nut stock):       ${blockVolume.toFixed(1)} mm³\n`);
@@ -370,7 +372,7 @@ for (const [implementation, cases] of Object.entries(results)) {
 }
 
 console.log(`
-'fit' is the mating check: intersect(nut, rod) with ${CLEARANCE} mm of clearance.
+'fit' is the mating check: intersect(nut, rod) with ${clearance} mm of clearance.
 A thread pair that actually screws together leaves only clearance-scale slivers.
 A failed female cut (a plain bore) leaves the male crests overlapping: the male
 thread's ridge volume is ${expectedRidge.toFixed(0)} mm³, so an overlap near that

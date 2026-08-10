@@ -237,6 +237,10 @@ const config = [
             'examples/electron-tau/electron.vite.config.ts',
             'apps/api/vitest.config.ts',
             'apps/ui/scripts/check-ssr-bundle-budget.mts',
+            // FORK: the BOSL2 regeneration script is fork-added maintenance
+            // tooling and belongs to no tsconfig, so the project service needs
+            // it listed here to type-check it at all.
+            'kernels/openscad/scripts/update-bosl2-library.mjs',
           ],
         },
         tsconfigRootDir: import.meta.dirname,

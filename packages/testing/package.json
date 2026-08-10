@@ -69,6 +69,7 @@
     }
   },
   "imports": {
+    "#scripts/*": "./scripts/*",
     "#*": "./src/*"
   }
 }

@@ -63,7 +63,9 @@ const {
     mockSetParameters: vi.fn(),
     mockToastError: vi.fn(),
     mockToastSuccess: vi.fn(),
-    mockWriteProjectFile: vi.fn(async (_path: string, _data: Uint8Array, _options: { source: string }) => undefined),
+    mockWriteProjectFile: vi.fn(
+      async (_path: string, _data: Uint8Array<ArrayBuffer>, _options: { source: string }) => undefined,
+    ),
     mockWriteText: vi.fn(async (_text: string) => 'copied'),
     fileManagerCalls: [] as Array<{
       projectId: string;

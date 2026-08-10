@@ -18,11 +18,11 @@ import { test, expect } from '@playwright/test';
  */
 
 type ProjectMetadata = {
+  [key: string]: unknown;
   title?: string;
   type?: string;
   hidden?: boolean;
   image?: string;
-  [key: string]: unknown;
 };
 
 const projectsDirectory = fileURLToPath(new URL('../../ui/app/routes/playground/projects/', import.meta.url));

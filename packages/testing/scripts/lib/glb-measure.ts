@@ -5,11 +5,13 @@
  * the same ruler, and so neither kernel gets to report on its own shape.
  */
 
+/** Triangle soup pulled out of a GLB: flat XYZ positions and triangle indices into them. */
 export type Mesh = { positions: Float32Array; indices: Uint32Array };
+/** Axis-aligned bounding box, as the `[x, y, z]` corners of the extent. */
 export type Bounds = { min: [number, number, number]; max: [number, number, number] };
 
 /** Positions and indices out of the GLB binary chunk. */
-export function readMesh(bytes: Uint8Array): Mesh {
+export function readMesh(bytes: Uint8Array<ArrayBuffer>): Mesh {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   const jsonLength = view.getUint32(12, true);
   const json = JSON.parse(new TextDecoder().decode(bytes.subarray(20, 20 + jsonLength))) as {
@@ -137,7 +139,7 @@ export function boundsOf({ positions }: Mesh): Bounds {
  * that is genuinely rotated still shows up as a mismatch — only the known
  * kernel-level convention difference is cancelled.
  */
-export function toZUp(bounds: Bounds): Bounds {
+export function toZup(bounds: Bounds): Bounds {
   return {
     min: [bounds.min[0], -bounds.max[2], bounds.min[1]],
     max: [bounds.max[0], -bounds.min[2], bounds.max[1]],

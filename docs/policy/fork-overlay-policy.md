@@ -135,3 +135,26 @@ locally forever:
 `scripts/src/check-overlay-boundary.mts` reports which files in a diff touch core paths. It is
 advisory by design — it prints the list and the three headings above, and does not fail the build.
 The point is that core edits are _noticed_ at review time, not that they are forbidden.
+
+## What CI can and cannot ask of this fork
+
+The same split decides what CI is allowed to block on. The inherited tree does not pass its own
+lint, typecheck, or test suites: upstream runs `nx affected` behind an Nx Cloud remote cache, so
+projects a change does not touch are never re-run there and the rot in them stays invisible. On the
+fork it is all visible at once — 234 lint errors in `apps/ui` and 15 in `apps/api` in files this
+fork has never opened, one `apps/api` typecheck error from a pinned SDK that renamed a field, 22
+`apps/ui` test failures, and an `examples/electron-tau` build that vite cannot bundle. Every one of
+them reproduces on the upstream commit this fork started from.
+
+Blocking on those would mean either fixing core (a rebase conflict plus an upstream PR, per rule 2)
+or ignoring a permanently red check. So `.github/workflows/ci.yml` splits the difference:
+
+- **`verify` blocks.** It runs the affected graph with those specific target/project pairs excluded
+  by name, each with the reason in a comment, plus a dedicated step holding the playground overlay
+  to the full workspace rules. Fork-owned code has no exemptions.
+- **`upstream-drift` never blocks.** It runs exactly what `verify` excludes, so the inherited
+  failures stay on the record — and so it is visible when a sync fixes one and the matching
+  exclusion can be deleted.
+
+When an upstream sync lands, re-run the excluded targets: an exclusion that now passes is one to
+remove in the same commit.
