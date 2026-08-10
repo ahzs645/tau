@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useActorRef } from '@xstate/react';
 import type { ActorRefFrom } from 'xstate';
-import { ChevronDown, Download, Upload } from 'lucide-react';
+import { ChevronDown, Download, Upload, X } from 'lucide-react';
 import type { FileRejection } from 'react-dropzone';
 import { useDropzone } from 'react-dropzone';
 import type { FileExtension, Geometry } from '@taucad/types';
@@ -23,7 +23,7 @@ import { CadPreviewProvider, useCadPreview } from '#hooks/use-cad-preview.js';
 import { GraphicsProvider } from '#hooks/use-graphics.js';
 import { graphicsMachine } from '#machines/graphics.machine.js';
 import { defaultGraphicsSettings } from '#constants/editor.constants.js';
-import { TooltipProvider } from '#components/ui/tooltip.js';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '#components/ui/tooltip.js';
 import { Popover, PopoverContent, PopoverTrigger } from '#components/ui/popover.js';
 import { FovControl } from '#components/geometry/cad/fov-control.js';
 import { GridSizeIndicator } from '#components/geometry/cad/grid-control.js';
@@ -45,7 +45,6 @@ import type { ToolbarItemConfig } from '#hooks/use-toolbar-overflow.js';
 import { useResizeObserver } from '#hooks/use-resize-observer.js';
 import { ArButton } from '#components/cad/ar-button.js';
 import type { CadPreviewStatus } from '#hooks/use-cad-preview.js';
-import { ModifiedIndicator } from '#components/ui/modified-indicator.js';
 import { PreviewParameters } from '#routes/projects_.$id_.preview/preview-parameters.js';
 import type {
   PlaygroundExample,
@@ -690,13 +689,6 @@ function PlaygroundUploadRow({
             >
               {upload.label}
             </span>
-            {isReplaced ? (
-              <ModifiedIndicator
-                onReset={handleReset}
-                tooltip={`Reset to ${shipped.name}`}
-                className='group-hover/field:**:data-[slot=dot]:opacity-0 group-hover/field:**:data-[slot=icon]:opacity-100'
-              />
-            ) : null}
           </div>
           <div className='flex min-w-0 flex-1 items-center justify-end gap-1.5'>
             {/* The artwork itself, one tap or click away. An SVG is a picture and
@@ -736,9 +728,33 @@ function PlaygroundUploadRow({
               <Upload className='size-3.5 shrink-0' />
               <span className='truncate'>{current?.name ?? 'Choose a file…'}</span>
             </button>
+            {/* Clearing the viewer's file is where a file control is expected to
+                offer it — at the end of the field, not as the `ModifiedIndicator`
+                dot beside the label that every other row uses. The dot is the
+                right vocabulary for a parameter and the wrong one here: it is
+                unlabelled, and someone looking for "remove this file" looks at
+                the file, so they never find it. Clearing falls back to the file
+                the project ships, which is what an empty slot would mean anyway. */}
+            {isReplaced ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type='button'
+                    aria-label={`Clear ${uploaded.name} and restore ${shipped.name}`}
+                    className='flex size-[var(--param-field-h,1.5rem)] shrink-0 items-center justify-center rounded-[var(--param-field-radius,var(--radius-md))] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground'
+                    onClick={handleReset}
+                  >
+                    <X className='size-3.5' />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side='left'>Restore {shipped.name}</TooltipContent>
+              </Tooltip>
+            ) : null}
           </div>
         </div>
-        <div className='text-xs text-muted-foreground/70'>Drop a file here, or click to choose one</div>
+        <div className='text-xs text-muted-foreground/70'>
+          {isReplaced ? `Clear to restore ${shipped.name}` : 'Drop a file here, or click to choose one'}
+        </div>
       </div>
     </TooltipProvider>
   );

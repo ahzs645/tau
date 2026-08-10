@@ -52,10 +52,14 @@ Three consequences of taking the row idiom seriously, each of which is also the 
 - **The slot is not empty on arrival.** A project that declares an upload usually _ships_ the file —
   the stamp renders `yaa.svg` from the moment it loads — so the field names the project's own file
   until the viewer replaces it. An empty state would claim there is no artwork.
-- **Replacing it is a modification, and modifications reset.** The row carries the app's
-  `ModifiedIndicator`, so a replaced artwork shows the same yellow dot an overridden parameter does,
-  and clicking it writes the project's file back. "Put it back how it was" is one gesture here and
-  everywhere else in the pane; before, the only offer was to replace it again.
+- **Replacing it is undoable, and the undo is where a file control puts it.** A replaced file gets a
+  clear button at the end of its field, which writes the project's own file back. The first attempt
+  used the app's `ModifiedIndicator` — the yellow dot beside the label that marks an overridden
+  parameter — for consistency, and it failed the only test that matters: asked where the clear
+  option was, someone who had just used the control could not find it. The dot is the right
+  vocabulary for a parameter and the wrong one for a file: it is unlabelled, it sits away from the
+  field, and a person looking to remove a file looks at the file. Consistency lost to
+  discoverability, which is the correct way for that argument to end.
 - **The preview is a popover, not a tooltip.** An SVG is a picture and seeing it matters — the
   OpenSCAD variant's render of a stroke drawing looks nothing like the drawing, so the preview is
   the only place the viewer sees what they actually supplied — but a full-size image inside a 24px

@@ -814,9 +814,9 @@ describe('PlaygroundRoot', () => {
     expect(await screen.findByText('my-logo.svg')).toBeDefined();
     expect(mockToastSuccess).toHaveBeenCalledWith('Loaded my-logo.svg');
 
-    // Replacing the artwork marks the row modified, exactly as overriding a
-    // parameter does, and the same indicator puts the project's file back.
-    fireEvent.click(screen.getByRole('button', { name: 'Reset to yaa.svg' }));
+    // Clearing is offered at the end of the field, where a file control is
+    // looked for, and falls back to the file the project ships.
+    fireEvent.click(screen.getByRole('button', { name: 'Clear my-logo.svg and restore yaa.svg' }));
 
     await waitFor(() => {
       expect(screen.getByText('yaa.svg')).toBeDefined();
