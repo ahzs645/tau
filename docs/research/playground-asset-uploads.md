@@ -56,11 +56,17 @@ Three consequences of taking the row idiom seriously, each of which is also the 
   `ModifiedIndicator`, so a replaced artwork shows the same yellow dot an overridden parameter does,
   and clicking it writes the project's file back. "Put it back how it was" is one gesture here and
   everywhere else in the pane; before, the only offer was to replace it again.
-- **The preview moved to hover.** An SVG is a picture and seeing it matters — the OpenSCAD variant's
-  render of a stroke drawing looks nothing like the drawing, so the thumbnail is the only place the
-  viewer sees what they actually supplied — but a full-size image inside a 24px row is not a row. A
-  chip-sized thumbnail sits in the field and the tooltip shows it large. Both are `data:` URLs off
-  the file's own text, so there is no object-URL lifetime to manage.
+- **The preview is a popover, not a tooltip.** An SVG is a picture and seeing it matters — the
+  OpenSCAD variant's render of a stroke drawing looks nothing like the drawing, so the preview is
+  the only place the viewer sees what they actually supplied — but a full-size image inside a 24px
+  row is not a row. A chip-sized thumbnail sits beside the field and opens the artwork large on
+  click. It was a hover tooltip first, which was wrong: this pane is behind the Params tab on a
+  phone, and touch has no hover, so the preview would have existed only on desktop. Both images are
+  `data:` URLs off the file's own text, so there is no object-URL lifetime to manage.
+
+Checked on a phone viewport rather than assumed: the row keeps its shape at 390 px, picking a file
+and resetting both work on tap, and `ModifiedIndicator` already handles the small screen by showing
+the reset icon outright instead of the hover-to-reveal dot.
 
 The picked file's name is held in the session rather than in the row, so it survives any remount of
 the preview provider — a variant switch, a re-run of the code — and so the session can seed the file

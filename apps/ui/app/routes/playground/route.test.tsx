@@ -770,12 +770,13 @@ describe('PlaygroundRoot', () => {
 
     const { container } = renderPlaygroundRoot();
 
-    // The slot opens on the artwork the project ships, previewed as the image
-    // it is, rather than on an empty state that implies there is none.
+    // The slot opens on the artwork the project ships, previewable as the image
+    // it is, rather than on an empty state that implies there is none. The
+    // preview opens on click rather than hover, because this pane is a phone
+    // surface too.
     expect(await screen.findByText('yaa.svg')).toBeDefined();
-    expect(screen.getByRole('img', { name: 'Artwork (SVG) preview' }).getAttribute('src')).toMatch(
-      /^data:image\/svg\+xml;charset=utf-8,/u,
-    );
+    const previewButton = screen.getByRole('button', { name: 'Preview yaa.svg' });
+    expect(previewButton.querySelector('img')?.getAttribute('src')).toMatch(/^data:image\/svg\+xml;charset=utf-8,/u);
 
     const fileInput = container.querySelector('input[type="file"]');
     if (!(fileInput instanceof HTMLInputElement)) {

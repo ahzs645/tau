@@ -23,7 +23,8 @@ import { CadPreviewProvider, useCadPreview } from '#hooks/use-cad-preview.js';
 import { GraphicsProvider } from '#hooks/use-graphics.js';
 import { graphicsMachine } from '#machines/graphics.machine.js';
 import { defaultGraphicsSettings } from '#constants/editor.constants.js';
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '#components/ui/tooltip.js';
+import { TooltipProvider } from '#components/ui/tooltip.js';
+import { Popover, PopoverContent, PopoverTrigger } from '#components/ui/popover.js';
 import { FovControl } from '#components/geometry/cad/fov-control.js';
 import { GridSizeIndicator } from '#components/geometry/cad/grid-control.js';
 import { MeasureControl } from '#components/geometry/cad/measure-control.js';
@@ -675,26 +676,6 @@ function PlaygroundUploadRow({
   });
 
   const isReplaced = uploaded !== undefined && shipped !== undefined;
-  const field = (
-    <button
-      type='button'
-      aria-label={`Upload for ${upload.label}`}
-      {...getRootProps()}
-      className={cn(
-        'flex h-[var(--param-field-h,1.5rem)] min-w-0 flex-1 items-center gap-1.5 rounded-[var(--param-field-radius,var(--radius-md))] border border-border/50 bg-muted px-1.5 text-sm transition-colors',
-        'text-[var(--param-field-color,var(--color-muted-foreground))] hover:border-border hover:text-[var(--param-field-color-focus,var(--color-foreground))]',
-        isDragActive && 'border-ring text-foreground ring-1 ring-ring',
-      )}
-    >
-      <input {...getInputProps()} />
-      {preview ? (
-        <img src={preview} alt={`${upload.label} preview`} className='size-4 shrink-0 rounded-xs bg-white' />
-      ) : (
-        <Upload className='size-3.5 shrink-0' />
-      )}
-      <span className='truncate'>{current?.name ?? 'Choose a file…'}</span>
-    </button>
-  );
 
   return (
     <TooltipProvider>
@@ -717,22 +698,44 @@ function PlaygroundUploadRow({
               />
             ) : null}
           </div>
-          <div className='flex min-w-0 flex-1 items-center justify-end gap-2'>
-            {/* The artwork itself on hover: an SVG is a picture, and seeing it is
-                the quickest way to know the right file went in — especially here,
-                where the OpenSCAD variant's render of a stroke drawing looks
-                nothing like the drawing. White tile because the artwork carries no
-                background and is usually drawn in black. */}
+          <div className='flex min-w-0 flex-1 items-center justify-end gap-1.5'>
+            {/* The artwork itself, one tap or click away. An SVG is a picture and
+                seeing it is the quickest way to know the right file went in —
+                especially here, where the OpenSCAD variant's render of a stroke
+                drawing looks nothing like the drawing. A popover rather than a
+                hover tooltip because touch has no hover, and this pane is a phone
+                surface as much as a desktop one. White tile because the artwork
+                carries no background and is usually drawn in black. */}
             {preview ? (
-              <Tooltip>
-                <TooltipTrigger asChild>{field}</TooltipTrigger>
-                <TooltipContent side='left' className='bg-white p-1'>
-                  <img src={preview} alt='' className='size-28 object-contain' />
-                </TooltipContent>
-              </Tooltip>
-            ) : (
-              field
-            )}
+              <Popover>
+                <PopoverTrigger asChild>
+                  <button
+                    type='button'
+                    aria-label={`Preview ${current?.name ?? upload.label}`}
+                    className='size-[var(--param-field-h,1.5rem)] shrink-0 overflow-hidden rounded-[var(--param-field-radius,var(--radius-md))] border border-border/50 bg-white p-px transition-colors hover:border-border'
+                  >
+                    <img src={preview} alt='' className='size-full object-contain' />
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent side='left' align='start' className='w-auto bg-white p-1'>
+                  <img src={preview} alt={`${upload.label} preview`} className='size-40 object-contain' />
+                </PopoverContent>
+              </Popover>
+            ) : null}
+            <button
+              type='button'
+              aria-label={`Upload for ${upload.label}`}
+              {...getRootProps()}
+              className={cn(
+                'flex h-[var(--param-field-h,1.5rem)] min-w-0 flex-1 items-center gap-1.5 rounded-[var(--param-field-radius,var(--radius-md))] border border-border/50 bg-muted px-1.5 text-sm transition-colors',
+                'text-[var(--param-field-color,var(--color-muted-foreground))] hover:border-border hover:text-[var(--param-field-color-focus,var(--color-foreground))]',
+                isDragActive && 'border-ring text-foreground ring-1 ring-ring',
+              )}
+            >
+              <input {...getInputProps()} />
+              <Upload className='size-3.5 shrink-0' />
+              <span className='truncate'>{current?.name ?? 'Choose a file…'}</span>
+            </button>
           </div>
         </div>
         <div className='text-xs text-muted-foreground/70'>Drop a file here, or click to choose one</div>
