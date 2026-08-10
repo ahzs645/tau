@@ -162,7 +162,11 @@ jobs:
   upstream-drift:
     name: Upstream drift (advisory)
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Headroom over the four bounded commands below (10 minutes each), so the
+    # job's own timeout is never what stops it — a timeout here is a cancelled
+    # job, which is the red check this design exists to avoid, and it loses the
+    # summary table with it.
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -188,15 +192,21 @@ jobs:
             echo "| --- | --- |"
           } >> "$GITHUB_STEP_SUMMARY"
 
+          # Bounded at 10 minutes each. These commands are the known-broken
+          # ones, so "hangs instead of failing" is a live possibility — the
+          # first run of this job spent 44 minutes in here and was killed by the
+          # job timeout, taking the summary with it. A wedge is now just another
+          # row in the table.
           report() {
             label="$1"
             shift
             echo "::group::${label}"
-            if "$@"; then
-              result='✅ passes now'
-            else
-              result='❌ still failing'
-            fi
+            timeout 600 "$@"
+            case $? in
+              0)   result='✅ passes now' ;;
+              124) result='⏱ hit the 10m bound (neither passing nor failing)' ;;
+              *)   result='❌ still failing' ;;
+            esac
             echo "::endgroup::"
             echo "| \`${label}\` | ${result} |" >> "$GITHUB_STEP_SUMMARY"
           }
