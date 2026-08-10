@@ -614,16 +614,29 @@ function PlaygroundComponentRow({ components }: { readonly components: Playgroun
     [components.parameter, parameters, setParameters],
   );
 
+  const isChanged = current !== defaultParameters[components.parameter];
+
   return (
     <div className='@container/parameter my-1.5 flex items-center gap-2 px-2.5'>
-      <span className='min-w-0 shrink-0 truncate text-sm font-medium @[240px]/parameter:w-[40%]'>
+      <span
+        className={cn(
+          'min-w-0 shrink-0 truncate text-sm @[240px]/parameter:w-[40%]',
+          isChanged ? 'font-medium text-foreground' : 'font-normal text-muted-foreground',
+        )}
+      >
         {components.label}
       </span>
       <div className='flex min-w-0 flex-1 items-center justify-end'>
         <Select value={current} onValueChange={handleChange}>
+          {/* `size='sm'` and this class list mirror the parameter rows' own
+              select (`rjsf-theme`). The size matters beyond taste: the trigger
+              carries its height as `data-[size=default]:h-9`, and a variant
+              selector outranks a plain `h-…` on specificity, so a height class
+              alone leaves it 36px against the 28px rows around it. */}
           <SelectTrigger
+            size='sm'
             aria-label={components.label}
-            className='h-[var(--param-field-h,1.5rem)] w-full rounded-[var(--param-field-radius,var(--radius-md))] border-border/50 bg-muted px-1.5 text-sm shadow-none'
+            className='h-[var(--param-field-h,1.5rem)] min-w-0 flex-1 rounded-[var(--param-field-radius,var(--radius-md))] border-border/50 bg-muted text-[var(--param-field-color,var(--color-muted-foreground))] shadow-none transition-colors hover:border-border hover:text-[var(--param-field-color-focus,var(--color-foreground))] focus-visible:border-border focus-visible:ring-0'
           >
             <SelectValue />
           </SelectTrigger>
