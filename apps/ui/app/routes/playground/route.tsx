@@ -280,24 +280,20 @@ function PlaygroundLoaded({
     }),
     [activeExample.mainFile, activeExample.sourceFiles, activeSession.previewValue, activeSession.uploadedFiles],
   );
-  // What each upload slot is showing right now: the viewer's file once they
-  // bring one, and until then the file the project ships — the stamp renders
-  // `yaa.svg` from the moment it loads, so an empty drop zone would claim
-  // there is no artwork.
-  const uploadFiles = useMemo(() => {
+  // What each upload slot falls back to: the file the project ships. The stamp
+  // renders `yaa.svg` from the moment it loads, so the slot has something to
+  // show before anyone uploads anything — and something to reset to after.
+  const shippedUploadFiles = useMemo(() => {
     const files: Record<string, PlaygroundUploadedFile> = {};
     for (const upload of activeExample.uploads ?? []) {
-      const shipped = activeExample.sourceFiles?.[upload.fileName];
-      const current =
-        activeSession.uploadedFiles[upload.fileName] ??
-        (shipped === undefined ? undefined : { name: upload.fileName, content: shipped });
-      if (current) {
-        files[upload.fileName] = current;
+      const content = activeExample.sourceFiles?.[upload.fileName];
+      if (content !== undefined) {
+        files[upload.fileName] = { name: upload.fileName, content };
       }
     }
 
     return files;
-  }, [activeExample.uploads, activeExample.sourceFiles, activeSession.uploadedFiles]);
+  }, [activeExample.uploads, activeExample.sourceFiles]);
   const previewGeometryCacheKey = useMemo(
     () =>
       buildPlaygroundPreviewCacheKey({
@@ -403,10 +399,31 @@ function PlaygroundLoaded({
         ...(upload.parameter === undefined
           ? {}
           : { parameters: { ...session.parameters, [upload.parameter]: upload.fileName } }),
-        // No preview-version bump: the drop zone has already written the file
+        // No preview-version bump: the upload row has already written the file
         // into the mounted preview filesystem, and the kernel re-renders off
-        // that change. Remounting here would race it — see the drop zone.
+        // that change. Remounting here would race it — see the upload row.
       }));
+    },
+    [updateActiveSession],
+  );
+
+  /** Drop the viewer's file so the slot falls back to the one the project ships. */
+  const handleUploadReset = useCallback(
+    (upload: PlaygroundUpload): void => {
+      updateActiveSession((session) => {
+        if (!(upload.fileName in session.uploadedFiles)) {
+          return session;
+        }
+
+        const { [upload.fileName]: _removed, ...uploadedFiles } = session.uploadedFiles;
+        return {
+          ...session,
+          uploadedFiles,
+          ...(upload.parameter === undefined
+            ? {}
+            : { parameters: { ...session.parameters, [upload.parameter]: upload.fileName } }),
+        };
+      });
     },
     [updateActiveSession],
   );
@@ -682,8 +699,10 @@ function PlaygroundLoaded({
           exportControlsElement={exportControlsElement}
           onGeometriesReady={handlePreviewGeometriesReady}
           uploads={activeExample.uploads}
-          uploadFiles={uploadFiles}
+          shippedFiles={shippedUploadFiles}
+          uploadedFiles={activeSession.uploadedFiles}
           onUpload={handleUpload}
+          onUploadReset={handleUploadReset}
           onParametersChange={handleParametersChange}
         />
       </div>

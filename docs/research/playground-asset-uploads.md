@@ -39,23 +39,32 @@ A project declares what it accepts in `project.json`, so the UI stays generic:
   its OpenSCAD `svg_file` already defaults to `yaa.svg`, and its OpenCASCADE variant imports
   `./yaa.svg?raw`.
 
-The control is a drop zone in the parameters pane, built from the app's own `Dropzone` — the same
-component the converter's "drop new file here" area uses, so a file can be dragged in or clicked
-for. It sits above the parameter list rather than in the header: the parameters pane is the one
-surface present at every breakpoint (beside the viewer on desktop, behind the Params tab on mobile),
-so it needs no separate mobile treatment.
+The control sits above the parameter list, in the pane that is present at every breakpoint (beside
+the viewer on desktop, behind the Params tab on mobile), so it needs no separate mobile treatment.
+It is shaped as **one more parameter row** rather than as a drop card: label, field, description, at
+the same height and with the same tokens (`--param-field-h`, `--param-field-radius`) as the rows
+under it. A card with its own border and padding is the thing that reads as bolted on; a row reads
+as part of the model's inputs, which is what it is. Drag-and-drop comes from `useDropzone` composed
+onto the field, the way the import route's `UploadCard` composes it onto its own surface.
 
-The slot is not empty on arrival. A project that declares an upload usually _ships_ the file — the
-stamp renders `yaa.svg` from the moment it loads — so the drop zone resolves to the project's own
-file until the viewer replaces it, and shows it: name, and for an image type, the artwork itself as
-a thumbnail (a `data:` URL off the file's text, so there is no object-URL lifetime to manage). An
-empty state would claim there is no artwork, and the preview earns its place here more than in most
-upload controls, because the OpenSCAD variant's render of a stroke drawing looks nothing like the
-drawing — the thumbnail is the only place the viewer sees what they actually supplied.
+Three consequences of taking the row idiom seriously, each of which is also the better behaviour:
 
-The picked file's name is held in the session rather than in the drop zone, so it survives any
-remount of the preview provider — a variant switch, a re-run of the code — and so the session can
-seed the file again when one happens.
+- **The slot is not empty on arrival.** A project that declares an upload usually _ships_ the file —
+  the stamp renders `yaa.svg` from the moment it loads — so the field names the project's own file
+  until the viewer replaces it. An empty state would claim there is no artwork.
+- **Replacing it is a modification, and modifications reset.** The row carries the app's
+  `ModifiedIndicator`, so a replaced artwork shows the same yellow dot an overridden parameter does,
+  and clicking it writes the project's file back. "Put it back how it was" is one gesture here and
+  everywhere else in the pane; before, the only offer was to replace it again.
+- **The preview moved to hover.** An SVG is a picture and seeing it matters — the OpenSCAD variant's
+  render of a stroke drawing looks nothing like the drawing, so the thumbnail is the only place the
+  viewer sees what they actually supplied — but a full-size image inside a 24px row is not a row. A
+  chip-sized thumbnail sits in the field and the tooltip shows it large. Both are `data:` URLs off
+  the file's own text, so there is no object-URL lifetime to manage.
+
+The picked file's name is held in the session rather than in the row, so it survives any remount of
+the preview provider — a variant switch, a re-run of the code — and so the session can seed the file
+again when one happens.
 
 Uploads are read as text (`file.text()`), so the mechanism covers textual assets — SVG, DXF, JSON, a
 kernel source — and not binary meshes.

@@ -808,10 +808,23 @@ describe('PlaygroundRoot', () => {
       expect(new TextDecoder().decode(files['yaa.svg']?.content)).toBe(artwork);
     });
 
-    // The drop zone reports what is loaded, and the name survives the remount
-    // the new render forces.
+    // The row reports what is loaded, and the name survives the remount the new
+    // render forces.
     expect(await screen.findByText('my-logo.svg')).toBeDefined();
     expect(mockToastSuccess).toHaveBeenCalledWith('Loaded my-logo.svg');
+
+    // Replacing the artwork marks the row modified, exactly as overriding a
+    // parameter does, and the same indicator puts the project's file back.
+    fireEvent.click(screen.getByRole('button', { name: 'Reset to yaa.svg' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('yaa.svg')).toBeDefined();
+    });
+    const [resetPath, resetBytes] = mockWriteProjectFile.mock.calls.at(-1)!;
+    expect(resetPath).toBe('yaa.svg');
+    expect(new TextDecoder().decode(resetBytes).startsWith('<?xml')).toBe(true);
+    expect(screen.queryByText('my-logo.svg')).toBeNull();
+    expect(mockToastSuccess).toHaveBeenCalledWith('Restored yaa.svg');
   });
 
   it('dispatches direct OpenCascade exports through the same preview actor', async () => {

@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useActorRef } from '@xstate/react';
 import type { ActorRefFrom } from 'xstate';
 import { ChevronDown, Download, Upload } from 'lucide-react';
+import type { FileRejection } from 'react-dropzone';
+import { useDropzone } from 'react-dropzone';
 import type { FileExtension, Geometry } from '@taucad/types';
 import { downloadBlob } from '@taucad/utils/file';
 import { toast } from '#components/ui/sonner.js';
@@ -21,7 +23,7 @@ import { CadPreviewProvider, useCadPreview } from '#hooks/use-cad-preview.js';
 import { GraphicsProvider } from '#hooks/use-graphics.js';
 import { graphicsMachine } from '#machines/graphics.machine.js';
 import { defaultGraphicsSettings } from '#constants/editor.constants.js';
-import { TooltipProvider } from '#components/ui/tooltip.js';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '#components/ui/tooltip.js';
 import { FovControl } from '#components/geometry/cad/fov-control.js';
 import { GridSizeIndicator } from '#components/geometry/cad/grid-control.js';
 import { MeasureControl } from '#components/geometry/cad/measure-control.js';
@@ -42,7 +44,7 @@ import type { ToolbarItemConfig } from '#hooks/use-toolbar-overflow.js';
 import { useResizeObserver } from '#hooks/use-resize-observer.js';
 import { ArButton } from '#components/cad/ar-button.js';
 import type { CadPreviewStatus } from '#hooks/use-cad-preview.js';
-import { Dropzone, DropzoneContent, DropzoneEmptyState } from '#components/ui/dropzone.js';
+import { ModifiedIndicator } from '#components/ui/modified-indicator.js';
 import { PreviewParameters } from '#routes/projects_.$id_.preview/preview-parameters.js';
 import type {
   PlaygroundExample,
@@ -198,12 +200,12 @@ type PlaygroundPreviewPaneProps = {
   readonly exportControlsElement: HTMLDivElement | undefined;
   readonly onGeometriesReady: (geometries: readonly Geometry[], parameters: Record<string, unknown>) => void;
   readonly uploads?: readonly PlaygroundUpload[];
-  /**
-   * What each upload slot currently holds, by the name it is written under —
-   * the file the project ships until the viewer replaces it.
-   */
-  readonly uploadFiles?: Record<string, PlaygroundUploadedFile>;
+  /** The files the project ships under each slot's `fileName`. */
+  readonly shippedFiles?: Record<string, PlaygroundUploadedFile>;
+  /** The files the viewer has supplied, by the name they are written under. */
+  readonly uploadedFiles?: Record<string, PlaygroundUploadedFile>;
   readonly onUpload?: (upload: PlaygroundUpload, file: PlaygroundUploadedFile) => void;
+  readonly onUploadReset?: (upload: PlaygroundUpload) => void;
   readonly onParametersChange: (parameters: Record<string, unknown>) => void;
 };
 
@@ -217,8 +219,10 @@ type PlaygroundPreviewSnapshot = {
 export function PlaygroundPreviewPane({
   activeExample,
   uploads,
-  uploadFiles,
+  shippedFiles,
+  uploadedFiles,
   onUpload,
+  onUploadReset,
   cachedGeometries,
   files,
   isInteractive,
@@ -458,8 +462,10 @@ export function PlaygroundPreviewPane({
             <PlaygroundParameters
               presets={activeExample.presets ?? []}
               uploads={uploads}
-              uploadFiles={uploadFiles}
+              shippedFiles={shippedFiles}
+              uploadedFiles={uploadedFiles}
               onUpload={onUpload}
+              onUploadReset={onUploadReset}
             />
           </section>
         </CadPreviewProvider>
@@ -527,30 +533,39 @@ function PlaygroundParameterBridge({
 function PlaygroundParameters({
   presets,
   uploads,
-  uploadFiles,
+  shippedFiles,
+  uploadedFiles,
   onUpload,
+  onUploadReset,
 }: {
   readonly presets: readonly PlaygroundPreset[];
   readonly uploads?: readonly PlaygroundUpload[];
-  readonly uploadFiles?: Record<string, PlaygroundUploadedFile>;
+  /** The files the project ships under each slot's `fileName`. */
+  readonly shippedFiles?: Record<string, PlaygroundUploadedFile>;
+  /** The files the viewer has supplied, by the name they are written under. */
+  readonly uploadedFiles?: Record<string, PlaygroundUploadedFile>;
   readonly onUpload?: (upload: PlaygroundUpload, file: PlaygroundUploadedFile) => void;
+  readonly onUploadReset?: (upload: PlaygroundUpload) => void;
 }): React.JSX.Element {
   // The parameters pane is the one surface present at every breakpoint — beside
   // the viewer on desktop, behind the Params tab on mobile — so an upload
   // control here needs no separate mobile treatment.
-  const uploadControls = onUpload && uploads && uploads.length > 0 ? { uploads, onUpload } : undefined;
+  const uploadControls =
+    onUpload && onUploadReset && uploads && uploads.length > 0 ? { uploads, onUpload, onUploadReset } : undefined;
   const headerActions = presets.length > 0 ? <PlaygroundPresetMenu presets={presets} /> : undefined;
 
   return (
     <div className='flex h-full min-h-0 flex-col'>
       {uploadControls ? (
-        <div className='flex shrink-0 flex-col gap-2 border-b p-2'>
+        <div className='shrink-0 border-b py-0.5'>
           {uploadControls.uploads.map((upload) => (
-            <PlaygroundUploadDropzone
+            <PlaygroundUploadRow
               key={upload.fileName}
               upload={upload}
-              current={uploadFiles?.[upload.fileName]}
+              shipped={shippedFiles?.[upload.fileName]}
+              uploaded={uploadedFiles?.[upload.fileName]}
               onUpload={uploadControls.onUpload}
+              onReset={uploadControls.onUploadReset}
             />
           ))}
         </div>
@@ -563,8 +578,10 @@ function PlaygroundParameters({
 }
 
 /**
- * Drop target for a file the model reads, in the same shape the converter's
- * drop area uses.
+ * One upload slot, shaped like the parameter rows below it: a label with the
+ * app's modified indicator, and a compact field naming the file in force. The
+ * field is the drop target and the file picker both, so the row stays the same
+ * height as every other row in the pane.
  *
  * The picked file is written into the live preview filesystem here rather than
  * being handed to the route to seed a remount. That is deliberate: the kernel
@@ -575,31 +592,45 @@ function PlaygroundParameters({
  * render it already had. Writing into the mounted filesystem is the same path
  * an editor save takes, and it invalidates and re-renders the same way.
  *
- * The route still records the upload (so a variant switch or a later remount
- * carries it), and what the slot currently holds comes back in through
- * `current` — the project's own file until the viewer replaces it, so the slot
- * shows the artwork being rendered rather than an empty state that implies
- * there is none.
+ * Reset writes the project's own file back the same way, so "put it back how it
+ * was" is the same gesture here as it is for a parameter.
  */
-function PlaygroundUploadDropzone({
+function PlaygroundUploadRow({
   upload,
-  current,
+  shipped,
+  uploaded,
   onUpload,
+  onReset,
 }: {
   readonly upload: PlaygroundUpload;
-  readonly current?: PlaygroundUploadedFile;
+  /** The file the project ships under `fileName`, if it ships one. */
+  readonly shipped?: PlaygroundUploadedFile;
+  /** The file the viewer supplied, once they have. */
+  readonly uploaded?: PlaygroundUploadedFile;
   readonly onUpload: (upload: PlaygroundUpload, file: PlaygroundUploadedFile) => void;
+  readonly onReset: (upload: PlaygroundUpload) => void;
 }): React.JSX.Element {
   const { writeFile } = useFileManager();
-  const source = useMemo(() => (current ? [new File([current.content], current.name)] : undefined), [current]);
+  const current = uploaded ?? shipped;
   const preview = useMemo(
     () => (current ? imagePreviewSource(upload.accept, current.content) : undefined),
     [current, upload.accept],
   );
 
+  const writeArtwork = useCallback(
+    async (content: string) => writeFile(upload.fileName, new TextEncoder().encode(content), { source: 'user' }),
+    [upload.fileName, writeFile],
+  );
+
   const handleDrop = useCallback(
-    (files: File[]) => {
-      const file = files[0];
+    (accepted: File[], rejections: FileRejection[]) => {
+      const rejected = rejections[0]?.errors[0]?.message;
+      if (rejected) {
+        toast.error(rejected);
+        return;
+      }
+
+      const file = accepted[0];
       if (!file) {
         return;
       }
@@ -608,7 +639,7 @@ function PlaygroundUploadDropzone({
       void (async () => {
         try {
           const content = await file.text();
-          await writeFile(upload.fileName, new TextEncoder().encode(content), { source: 'user' });
+          await writeArtwork(content);
           onUpload(upload, { name: file.name, content });
           toast.success(`Loaded ${file.name}`);
         } catch {
@@ -616,51 +647,97 @@ function PlaygroundUploadDropzone({
         }
       })();
     },
-    [onUpload, upload, writeFile],
+    [onUpload, upload, writeArtwork],
   );
 
-  const handleError = useCallback((error: Error) => {
-    toast.error(error.message);
-  }, []);
+  const handleReset = useCallback(() => {
+    if (!shipped) {
+      return;
+    }
+
+    // oxlint-disable-next-line tau-lint/no-async-iife -- the write is the reset
+    void (async () => {
+      try {
+        await writeArtwork(shipped.content);
+        onReset(upload);
+        toast.success(`Restored ${shipped.name}`);
+      } catch {
+        toast.error(`Could not restore ${shipped.name}`);
+      }
+    })();
+  }, [onReset, shipped, upload, writeArtwork]);
+
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    accept: parseUploadAccept(upload.accept),
+    maxFiles: 1,
+    multiple: false,
+    onDrop: handleDrop,
+  });
+
+  const isReplaced = uploaded !== undefined && shipped !== undefined;
+  const field = (
+    <button
+      type='button'
+      aria-label={`Upload for ${upload.label}`}
+      {...getRootProps()}
+      className={cn(
+        'flex h-[var(--param-field-h,1.5rem)] min-w-0 flex-1 items-center gap-1.5 rounded-[var(--param-field-radius,var(--radius-md))] border border-border/50 bg-muted px-1.5 text-sm transition-colors',
+        'text-[var(--param-field-color,var(--color-muted-foreground))] hover:border-border hover:text-[var(--param-field-color-focus,var(--color-foreground))]',
+        isDragActive && 'border-ring text-foreground ring-1 ring-ring',
+      )}
+    >
+      <input {...getInputProps()} />
+      {preview ? (
+        <img src={preview} alt={`${upload.label} preview`} className='size-4 shrink-0 rounded-xs bg-white' />
+      ) : (
+        <Upload className='size-3.5 shrink-0' />
+      )}
+      <span className='truncate'>{current?.name ?? 'Choose a file…'}</span>
+    </button>
+  );
 
   return (
-    <Dropzone
-      accept={parseUploadAccept(upload.accept)}
-      maxFiles={1}
-      src={source}
-      className='p-4'
-      aria-label={upload.label}
-      onDrop={handleDrop}
-      onError={handleError}
-    >
-      <DropzoneEmptyState>
-        <div className='flex flex-col items-center gap-1'>
-          <Upload className='size-5 text-muted-foreground' />
-          <p className='text-sm font-medium'>{upload.label}</p>
-          <p className='text-xs text-muted-foreground'>Drag and drop or click to upload</p>
+    <TooltipProvider>
+      <div className='group/field @container/parameter my-1.5 flex flex-col gap-0.5 px-2.5'>
+        <div className='flex items-center gap-2'>
+          <div className='flex min-w-0 shrink-0 items-center gap-1.5 @[240px]/parameter:w-[40%]'>
+            <span
+              className={cn(
+                'truncate text-sm',
+                isReplaced ? 'font-medium text-foreground' : 'font-normal text-muted-foreground',
+              )}
+            >
+              {upload.label}
+            </span>
+            {isReplaced ? (
+              <ModifiedIndicator
+                onReset={handleReset}
+                tooltip={`Reset to ${shipped.name}`}
+                className='group-hover/field:**:data-[slot=dot]:opacity-0 group-hover/field:**:data-[slot=icon]:opacity-100'
+              />
+            ) : null}
+          </div>
+          <div className='flex min-w-0 flex-1 items-center justify-end gap-2'>
+            {/* The artwork itself on hover: an SVG is a picture, and seeing it is
+                the quickest way to know the right file went in — especially here,
+                where the OpenSCAD variant's render of a stroke drawing looks
+                nothing like the drawing. White tile because the artwork carries no
+                background and is usually drawn in black. */}
+            {preview ? (
+              <Tooltip>
+                <TooltipTrigger asChild>{field}</TooltipTrigger>
+                <TooltipContent side='left' className='bg-white p-1'>
+                  <img src={preview} alt='' className='size-28 object-contain' />
+                </TooltipContent>
+              </Tooltip>
+            ) : (
+              field
+            )}
+          </div>
         </div>
-      </DropzoneEmptyState>
-      <DropzoneContent>
-        <div className='flex w-full flex-col items-center gap-1.5'>
-          {preview ? (
-            // The artwork itself, not a file icon: an SVG is a picture, and
-            // seeing it is the quickest way to know the right file went in —
-            // especially here, where the OpenSCAD variant's render of a stroke
-            // drawing looks nothing like the drawing. White tile because the
-            // artwork carries no background and is usually drawn in black.
-            <img
-              src={preview}
-              alt={`${upload.label} preview`}
-              className='h-16 rounded-sm bg-white object-contain p-1'
-            />
-          ) : (
-            <Upload className='size-5 text-muted-foreground' />
-          )}
-          <p className='w-full truncate text-sm font-medium'>{current?.name}</p>
-          <p className='text-xs text-muted-foreground'>{upload.label} — click to replace</p>
-        </div>
-      </DropzoneContent>
-    </Dropzone>
+        <div className='text-xs text-muted-foreground/70'>Drop a file here, or click to choose one</div>
+      </div>
+    </TooltipProvider>
   );
 }
 
