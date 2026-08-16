@@ -251,9 +251,21 @@ index, and 43% of it is currently a placeholder.
 
 The overlap with F1 is near-total and is the most useful signal in this document: **all five models
 that fail to render are among these six**, and the only poster-less model that does render is
-`Catan Box Insert`. The poster pipeline and the browser are failing on the same set. Treat the
-missing poster as a symptom of F1 rather than a separate content gap — fix the renders and the
-posters should follow, leaving `catan-insert` as the single genuine content omission.
+`Catan Box Insert`.
+
+There is no poster pipeline to be expensive. Posters are hand-committed static files —
+`poster.jpg` (or `.webp`) in the project directory, named by `project.json`'s `image` field and
+resolved through `imageForProject()`. Nothing runs at build time or request time; they are ordinary
+assets in the bundle, so the runtime cost is zero. The cost is one screenshot per model, once.
+
+Which reframes this finding entirely: **the five missing posters are not a cost decision, they are
+blocked by F1.** Nobody could photograph those models, because those models do not render. Fix the
+renders and five of the six resolve as a byproduct. That leaves exactly one genuine omission —
+`catan-insert`, which renders in 4 s and simply has not had its picture taken.
+
+The decision worth making separately is what a poster-less card should look like, since at least one
+will persist. Reserving a 401 × 225 empty rectangle for a glyph is the wrong shape; a card with no
+poster would be better collapsing its media slot than advertising the absence at full size.
 
 ### F10: Everything below 1280 px gets the phone layout
 
@@ -499,7 +511,7 @@ fix is worth more than carrying it locally.
 | R5  | Adopt `preview-mobile.tsx`'s drawer + snap-point pattern in the playground so the model stays visible while parameters change (F11, F12) | P1 | Med | High |
 | R6  | Make the engine filter row scroll or wrap between `md` and the width it actually needs (F7) | P1 | Low | Med |
 | R7  | Constrain card media to `aspect-video` regardless of poster ratio — `min-h-0` on the media, or absolutely position the image (F8) | P1 | Low | Med |
-| R8  | Generate the missing posters (F9); five of six should fall out of R1, leaving only `catan-insert` | P1 | Low | Med |
+| R8  | Collapse the media slot on poster-less cards instead of reserving an empty 16:9 box (F9). Posters themselves are a byproduct of R1, not separate work — only `catan-insert` needs one taken by hand | P2 | Low | Med |
 | R9  | Give the gallery a header: `h1`, theme toggle, docs and repo links (F15) | P1 | Low | Med |
 | R10 | Add an `index.mdx` under `content/docs/` so `/docs` resolves, and link it (F4) | P1 | Low | Med |
 | R11 | Show description, category, tags, and a repo link on the model page, in the pane's empty space (F16) | P2 | Low | Med |
