@@ -1,0 +1,77 @@
+name: Upstream drift
+
+on:
+  # Inherited failures are advisory and do not need to run on every pull
+  # request or main-branch update. Run them explicitly when reviewing an
+  # upstream sync or deciding whether an exclusion can be removed.
+  workflow_dispatch:
+
+# The fork does not use the upstream Nx Cloud workspace (nxCloudId in nx.json),
+# and unauthenticated access to it is rejected, which aborts every nx command.
+env:
+  NX_NO_CLOUD: 'true'
+
+concurrency:
+  group: upstream-drift
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Advisory: run the targets the blocking CI workflow deliberately holds back
+  # so inherited breakage stays visible. A passing result means the matching
+  # exclusion in ci.yml can be removed.
+  upstream-drift:
+    name: Upstream drift (advisory)
+    runs-on: ubuntu-latest
+    # Headroom over the four bounded commands below (10 minutes each), so the
+    # job's own timeout is never what stops it.
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Setup Nx environment
+        uses: ./.github/actions/setup-nx
+
+      - name: Provision kernel assets
+        run: pnpm nx run-many -t copy-assets
+
+      - name: Report inherited failures
+        run: |
+          set -uo pipefail
+
+          {
+            echo "### Upstream drift"
+            echo
+            echo "What \`verify\` holds back. A ✅ is an exclusion to delete."
+            echo
+            echo "| Held back | Result |"
+            echo "| --- | --- |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Bounded at 10 minutes each. These commands are the known-broken
+          # ones, so "hangs instead of failing" is a live possibility. A wedge
+          # is reported in the summary instead of consuming the job timeout.
+          report() {
+            label="$1"
+            shift
+            echo "::group::${label}"
+            status=0
+            timeout 600 "$@" || status=$?
+            case $status in
+              0)   result='✅ passes now' ;;
+              124) result='⏱ hit the 10m bound (neither passing nor failing)' ;;
+              *)   result='❌ still failing' ;;
+            esac
+            echo "::endgroup::"
+            echo "| \`${label}\` | ${result} |" >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          report 'lint (whole workspace)' pnpm nx affected --targets=lint
+          report 'api:typecheck' pnpm nx affected --targets=typecheck --projects=api
+          report 'ui:test, oxlint:test' pnpm nx affected --targets=test --projects=ui,oxlint
+          report 'example-electron:build' pnpm nx affected --targets=build --projects=example-electron
