@@ -34,8 +34,9 @@ jobs:
   # So the targets carrying inherited breakage are held back here — by name
   # where the set is small and stable (build, typecheck, test), by scoping to
   # fork-owned paths where it is neither (lint) — and all of it runs unblocking
-  # in `upstream-drift` below. Everything else, including the gallery build and
-  # the playground overlay the fork exists for, is required to pass.
+  # in the manual `Upstream drift` workflow. Everything else, including the
+  # gallery build and the playground overlay the fork exists for, is required
+  # to pass.
   verify:
     name: Test, lint, typecheck
     runs-on: ubuntu-latest
@@ -134,7 +135,7 @@ jobs:
         # files today, and the next sync can add more — so an exclusion list
         # would go stale into a red check the fork cannot fix. Lint therefore
         # blocks on the paths the fork actually owns, and the whole workspace is
-        # linted unblocking in `upstream-drift`.
+        # linted unblocking in the manual `Upstream drift` workflow.
         #
         # Overlay paths per docs/policy/fork-overlay-policy.md, plus the
         # fork-added tooling that lives inside otherwise-core packages. Keep in
@@ -149,77 +150,6 @@ jobs:
         # would otherwise take with it.
         working-directory: apps/ui
         run: pnpm exec vitest run app/routes/playground
-
-  # Advisory: the targets `verify` holds back, run in full so inherited breakage
-  # stays visible — and so it is obvious when an upstream sync fixes one and the
-  # matching exclusion can go.
-  #
-  # Reports, never gates, in the same sense as the overlay-boundary job below:
-  # the step records each result and always exits 0. `continue-on-error` would
-  # keep the run green but still paint this job red in the PR's checks, which is
-  # the permanently-failing check this whole split exists to get rid of. A ✅ in
-  # its summary table is the thing to act on.
-  upstream-drift:
-    name: Upstream drift (advisory)
-    runs-on: ubuntu-latest
-    # Headroom over the four bounded commands below (10 minutes each), so the
-    # job's own timeout is never what stops it — a timeout here is a cancelled
-    # job, which is the red check this design exists to avoid, and it loses the
-    # summary table with it.
-    timeout-minutes: 60
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-
-      - name: Setup Nx environment
-        uses: ./.github/actions/setup-nx
-
-      - name: Provision kernel assets
-        run: pnpm nx run-many -t copy-assets
-
-      - name: Report inherited failures
-        run: |
-          set -uo pipefail
-
-          {
-            echo "### Upstream drift"
-            echo
-            echo "What \`verify\` holds back. A ✅ is an exclusion to delete."
-            echo
-            echo "| Held back | Result |"
-            echo "| --- | --- |"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          # Bounded at 10 minutes each. These commands are the known-broken
-          # ones, so "hangs instead of failing" is a live possibility — the
-          # first run of this job spent 44 minutes in here and was killed by the
-          # job timeout, taking the summary with it. A wedge is now just another
-          # row in the table.
-          report() {
-            label="$1"
-            shift
-            echo "::group::${label}"
-            # `|| status=$?` rather than a bare call: GitHub runs `run:` blocks
-            # under `bash -e`, so a bare failing command aborts the step before
-            # it can be classified — which is how a job that always exits 0
-            # managed to fail.
-            status=0
-            timeout 600 "$@" || status=$?
-            case $status in
-              0)   result='✅ passes now' ;;
-              124) result='⏱ hit the 10m bound (neither passing nor failing)' ;;
-              *)   result='❌ still failing' ;;
-            esac
-            echo "::endgroup::"
-            echo "| \`${label}\` | ${result} |" >> "$GITHUB_STEP_SUMMARY"
-          }
-
-          report 'lint (whole workspace)' pnpm nx affected --targets=lint
-          report 'api:typecheck' pnpm nx affected --targets=typecheck --projects=api
-          report 'ui:test, oxlint:test' pnpm nx affected --targets=test --projects=ui,oxlint
-          report 'example-electron:build' pnpm nx affected --targets=build --projects=example-electron
 
   overlay-boundary:
     name: Fork overlay boundary
