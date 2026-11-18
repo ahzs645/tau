@@ -1,0 +1,25 @@
+Printing the bottle separator on a small bed
+
+Choose the Honeycomb or Inline layout and enter your measured bottle diameter and desired clearance. In Small bed printing, enter the usable width and depth after allowing for a brim, clips and excluded areas. Keep the bottle-fit and joint settings the same for every piece of a rack.
+
+1. Choose Joint test pair. Print the two short strips upright in the intended filament and layer settings. Turn one strip half a turn around its vertical axis and slide its groove down over the rail. Try the starting clearance of 0.25 mm per flank. If it binds, increase Joint clearance and repeat. If it rattles, reduce it. A short sample tests the fit at the joint. Two full-height cells also test for warping along a long rail.
+2. Choose Print one cell. Export one STL and place its flat bottom rim on the build plate. This part includes every rail and socket. The control checks the footprint in both in-plane orientations. Verify build height and brim in your slicer.
+3. Print one copy per bottle. For the seven-bottle honeycomb, lay out rows of 2, 3 and 2. For two inline rows of four, print eight square cells. Modular layout shows their assembled positions in Tau.
+4. Keep the cells upright and start near the center. Line up both rails and grooves at each shared face and lower the new cell from above until the bases are flush. Add bottles after assembling the rack. The rails resist sideways pull. The cells can slide apart vertically when lifted, so handle the empty assembled rack from underneath.
+
+Example kit dimensions in millimetres
+
+                         One honeycomb cell     One inline cell     Height
+95 mm bottle             103.0 x 115.1          103.0 x 103.0       65
+80 mm bottle              89.6 x  99.5           89.6 x  89.6       50
+
+The 95 mm examples have 1 mm side clearance and a 2.4 mm divider. The 80 mm examples have 1.5 mm side clearance and a 6 mm centered gap, giving a 3 mm divider. Each cell contributes half the divider at a seam. Exposed outside faces keep that half wall and their unused rails. Check the assembled footprint against the bath. The 95 mm seven-cell rack measures about 301.8 x 287.2 mm. The eight-cell inline rack measures about 401.2 x 202.4 mm.
+
+If a cell cannot fit on the bed, the model reports the required footprint. A cell with insufficient space between the bottle and a corner for the socket also reports a fit error. For those cases, PrusaSlicer's Cut tool supports splitting the whole rack at another location and adding a plug, separate dowel or dovetail where the wall has enough material.
+
+The example STLs were mesh-checked and sliced in CuraEngine 4.13 at 0.2 mm layers and a 0.4 mm nozzle without supports. Joint fit, material compatibility with the bath and service durability still need a physical trial.
+
+PrusaSlicer Cut tool
+https://help.prusa3d.com/article/cut-tool_1779
+Prusa guide to fits, clearances and thin walls
+https://help.prusa3d.com/article/modeling-with-3d-printing-in-mind_164135
