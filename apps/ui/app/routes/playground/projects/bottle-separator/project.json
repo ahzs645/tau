@@ -1,0 +1,8 @@
+{
+  "title": "Bottle Separator",
+  "entry": "main.scad",
+  "description": "An open-bottom water-bath insert for round bottles. Stagger hexagonal cells for a compact cluster or align square cells in straight rows.",
+  "image": "poster.webp",
+  "category": "Organization",
+  "tags": ["bottles", "water bath", "honeycomb", "separator"]
+}
