@@ -66,7 +66,7 @@ export const readNodeCatalog = async (): Promise<readonly NodeCatalogEntry[]> =>
     (['curated', 'projects'] as const).map(async (collection) => {
       const children = await readdir(path.join(galleryModelsDirectory, collection), { withFileTypes: true });
       return Promise.all(
-        children.filter((child) => child.isDirectory()).map((child) => readEntry(collection, child.name)),
+        children.filter((child) => child.isDirectory()).map(async (child) => readEntry(collection, child.name)),
       );
     }),
   );

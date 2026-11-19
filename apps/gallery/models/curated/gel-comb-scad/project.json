@@ -21,5 +21,6 @@
     "slot_gap": 4,
     "slot_side_margin": 6,
     "show_side_hooks": true
-  }
+  },
+  "runtimeKernel": "openscad"
 }

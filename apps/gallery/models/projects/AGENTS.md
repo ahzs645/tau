@@ -16,7 +16,7 @@ The browser catalogue in `../../src/catalog/catalog.ts` discovers `models/*/*/pr
 
 ## Kernel variants
 
-`variants` declares alternate implementations. Preserve public IDs `openscad`, `opencascade` and `replicad`; the runtime uses `openrscad` internally for the OpenSCAD variant. The entry matching project `entry` is the default.
+`variants` declares alternate implementations. Preserve public IDs `openscad`, `opencascade` and `replicad`. Preserved SCAD models explicitly select `runtimeKernel: "openscad"`, the pinned classic engine that produced their original geometry. The optional `openrscad` engine requires an explicit declaration and independent compatibility evidence; never switch engines after an error. The entry matching project `entry` is the default.
 
 Raw OpenCASCADE sources import `libcascade`; Replicad sources import `replicad`. Preserve each model's authored `defaultParams` and exported `jsonSchema`, including dropdowns, bounds and conditional fields. Presets and initial parameters apply only to the default variant unless compatibility is explicitly declared.
 

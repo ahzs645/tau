@@ -270,7 +270,7 @@ export const ParameterPanel = ({
         ))}
       </div>
       {presentation?.jsonSchema && result?.parameterManifest ? (
-        <div className='min-h-0 px-2 pb-4'>
+        <div className='shrink-0 px-2 pb-4'>
           <Parameters
             parameters={presentation.parameters}
             defaultParameters={presentation.defaultParameters}

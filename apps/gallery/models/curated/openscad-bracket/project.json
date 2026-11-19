@@ -15,5 +15,6 @@
     ],
     "post_radius": 8,
     "hole_radius": 3.2
-  }
+  },
+  "runtimeKernel": "openscad"
 }

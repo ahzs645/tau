@@ -31,6 +31,8 @@ jobs:
           fetch-depth: 0
       - name: Setup Nx Environment
         uses: ./.github/actions/setup-nx
+      - name: Validate fork workflow boundaries
+        run: pnpm nx run scripts:validate-fork-workflows
       - name: Configure Pages
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
       - name: Validate gallery

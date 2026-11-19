@@ -10,7 +10,7 @@ export const galleryStaticPages = (): Plugin => ({
   enforce: 'post',
   async generateBundle(_options, bundle) {
     const index = bundle['index.html'];
-    if (!index || index.type !== 'asset' || typeof index.source !== 'string') {
+    if (index?.type !== 'asset' || typeof index.source !== 'string') {
       throw new Error('The gallery build did not produce index.html.');
     }
     const catalog = await readNodeCatalog();
@@ -36,7 +36,7 @@ export const galleryStaticPages = (): Plugin => ({
         {
           application: '@taucad/gallery',
           commit: process.env['VITE_COMMIT_SHA'] ?? 'local',
-          upstream: '5e2048c5bb7b4b49b33ed4281cecce2ba928023a',
+          upstream: 'c63defc4de87d95c425b5cbc644e481949e7c3b0',
           publicProjects: publicProjects.length,
           models: publicProjects.map(({ project }) => project.id),
         },
@@ -49,6 +49,11 @@ export const galleryStaticPages = (): Plugin => ({
         [
           ['LICENSE', 'license'],
           ['NOTICE', 'NOTICE'],
+          ['GALLERY-LICENSE.txt', 'apps/gallery/LICENSE'],
+          ['licenses/openscad/LICENSE', 'apps/gallery/src/runtime/classic/LICENSE'],
+          ['licenses/openscad/NOTICE.md', 'apps/gallery/src/runtime/classic/NOTICE.md'],
+          ['licenses/openscad/ENGINE-COPYING.txt', 'apps/gallery/node_modules/openscad-wasm-prebuilt/COPYING'],
+          ['licenses/openscad/fonts/OFL.txt', 'apps/gallery/src/runtime/classic/fonts/OFL.txt'],
         ] as const
       ).map(async ([fileName, sourceName]) => ({
         fileName,

@@ -10,7 +10,7 @@ import { navigate } from '#sharing/location.js';
 import { ThemeToggle } from '#components/theme.jsx';
 
 const kernelLabel = (kernel: string): string =>
-  kernel === 'openrscad'
+  kernel === 'openscad' || kernel === 'openrscad'
     ? 'OpenSCAD'
     : kernel === 'opencascade'
       ? 'OpenCASCADE'
@@ -215,9 +215,14 @@ export const GalleryList = (): React.JSX.Element => {
         ) : null}
         <footer className='flex flex-wrap justify-between gap-3 border-t py-4 text-xs text-muted-foreground'>
           <span>Models run in your browser. Download the result or the project source.</span>
-          <a href='https://github.com/ahzs645/tau' className='underline underline-offset-4'>
-            Source on GitHub
-          </a>
+          <div className='flex flex-wrap gap-4'>
+            <a href='https://github.com/ahzs645/tau' className='underline underline-offset-4'>
+              Source on GitHub
+            </a>
+            <a href={`${import.meta.env.BASE_URL}GALLERY-LICENSE.txt`} className='underline underline-offset-4'>
+              Licenses
+            </a>
+          </div>
         </footer>
       </section>
       <Dialog open={Boolean(preview)} onOpenChange={closePreview}>

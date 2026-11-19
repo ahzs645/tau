@@ -28,7 +28,7 @@ const ModelDimensions = (): React.JSX.Element | undefined => {
   const framing = useGraphicsSelector((snapshot) => snapshot.context.framingRef);
   const units = useGraphicsSelector((snapshot) => snapshot.context.displayUnits.length);
   const bounds = useSelector(framing, (snapshot) => {
-    const measured: unknown = 'measuredBounds' in snapshot.context ? snapshot.context.measuredBounds : undefined;
+    const measured: unknown = 'measuredBounds' in snapshot.context ? snapshot.context['measuredBounds'] : undefined;
     return isMeasuredBounds(measured) ? measured : undefined;
   });
   if (!bounds) {

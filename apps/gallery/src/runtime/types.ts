@@ -2,8 +2,8 @@ import type { JSONSchema7 } from '@taucad/json-schema';
 import type { ParameterManifest } from '@taucad/parameters';
 import type { Artifact, KernelIssue } from '@taucad/runtime/types';
 
-/** Runtime IDs; OpenRSCAD implements the gallery's OpenSCAD variants. */
-export type GalleryKernel = 'openrscad' | 'opencascade' | 'replicad';
+/** Explicit engine selection. Preserved OpenSCAD sources use the original classic engine. */
+export type GalleryKernel = 'openscad' | 'openrscad' | 'opencascade' | 'replicad';
 
 export type GalleryExportFormat = 'glb' | 'stl' | '3mf' | 'obj' | 'step';
 

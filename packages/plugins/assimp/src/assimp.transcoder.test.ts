@@ -120,6 +120,60 @@ describe('assimp transcoder', () => {
     );
   });
 
+  it('should join compatible face primitives only for noncanonical 3MF conversion', async () => {
+    const resolved = await definition();
+    const runtime = createRuntime();
+    const context = await resolved.initialize({ backend: 'auto' }, runtime);
+    const input = file('model.gltf', new TextEncoder().encode(JSON.stringify({ asset: { version: '2.0' } })));
+
+    await resolved.transcode(
+      { from: 'gltf', to: '3mf', files: [input], options: { requireManifold: true } },
+      runtime,
+      context,
+    );
+
+    expect(assimpMock.convert).toHaveBeenCalledWith([{ name: input.name, bytes: input.bytes }], {
+      to: '3mf',
+      exportOptions: { application: 'Tau', requireManifold: true },
+      signal: runtime.signal,
+      postProcess: [...libassimpExporter.defaultPostProcess, 'optimizeMeshes'],
+    });
+  });
+
+  it.each([
+    { label: 'used extension', document: { extensionsUsed: ['EXT_mesh_manifold'] } },
+    { label: 'required extension', document: { extensionsRequired: ['EXT_mesh_manifold'] } },
+    { label: 'mesh topology', document: { meshes: [{ extensions: { EXT_mesh_manifold: {} } }] } },
+  ])('should preserve canonical topology provenance from $label', async ({ document }) => {
+    const resolved = await definition();
+    const runtime = createRuntime();
+    const context = await resolved.initialize({ backend: 'auto' }, runtime);
+    const input = file('model.gltf', new TextEncoder().encode(JSON.stringify(document)));
+
+    await resolved.transcode({ from: 'gltf', to: '3mf', files: [input], options: {} }, runtime, context);
+
+    expect(assimpMock.convert).toHaveBeenCalledWith([{ name: input.name, bytes: input.bytes }], {
+      to: '3mf',
+      exportOptions: { application: 'Tau' },
+      signal: runtime.signal,
+    });
+  });
+
+  it('should leave postprocessing unchanged for input formats outside the glTF routes', async () => {
+    const resolved = await definition();
+    const runtime = createRuntime();
+    const context = await resolved.initialize({ backend: 'auto' }, runtime);
+    const input = file('model.stl');
+
+    await resolved.transcode({ from: 'stl', to: '3mf', files: [input], options: {} }, runtime, context);
+
+    expect(assimpMock.convert).toHaveBeenCalledWith([{ name: input.name, bytes: input.bytes }], {
+      to: '3mf',
+      exportOptions: { application: 'Tau' },
+      signal: runtime.signal,
+    });
+  });
+
   it('preserves sidecar order, copies bytes, and maps MIME types', async () => {
     const primary = new Uint8Array([7, 8, 9]);
     const sidecar = new Uint8Array([10, 11]);

@@ -82,7 +82,7 @@ export const measureGlb = async (bytes: Uint8Array<ArrayBuffer>): Promise<Geomet
         continue;
       }
       const positions = primitive.getAttribute('POSITION');
-      if (!positions || positions.getElementSize() !== 3) {
+      if (positions?.getElementSize() !== 3) {
         throw new Error('GLB triangle primitive is missing VEC3 positions');
       }
       const indexAccessor = primitive.getIndices();
@@ -102,9 +102,9 @@ export const measureGlb = async (bytes: Uint8Array<ArrayBuffer>): Promise<Geomet
         const point = positions.getElement(index, []);
         const [x = Number.NaN, y = Number.NaN, z = Number.NaN] = point;
         const transformed: Point = [
-          matrix[0]! * x + matrix[4]! * y + matrix[8]! * z + matrix[12]!,
-          matrix[1]! * x + matrix[5]! * y + matrix[9]! * z + matrix[13]!,
-          matrix[2]! * x + matrix[6]! * y + matrix[10]! * z + matrix[14]!,
+          matrix[0] * x + matrix[4] * y + matrix[8] * z + matrix[12],
+          matrix[1] * x + matrix[5] * y + matrix[9] * z + matrix[13],
+          matrix[2] * x + matrix[6] * y + matrix[10] * z + matrix[14],
         ];
         if (!transformed.every((value) => Number.isFinite(value))) {
           throw new Error('GLB contains non-finite scene positions');
@@ -159,7 +159,11 @@ export const measureGlb = async (bytes: Uint8Array<ArrayBuffer>): Promise<Geomet
 };
 
 /** Compare world-space envelopes; disagreement is an assertion, never a log-only cross. */
-export const assertBoundsParity = (reference: GeometrySummary, actual: GeometrySummary, toleranceMm = 0.5): void => {
+export const assertBoundsParity = (
+  reference: Pick<GeometrySummary, 'boundsMm'>,
+  actual: Pick<GeometrySummary, 'boundsMm'>,
+  toleranceMm = 0.5,
+): void => {
   const differences = reference.boundsMm.min.map((value, axis) => Math.abs(value - actual.boundsMm.min[axis]!));
   differences.push(...reference.boundsMm.max.map((value, axis) => Math.abs(value - actual.boundsMm.max[axis]!)));
   const delta = Math.max(...differences);

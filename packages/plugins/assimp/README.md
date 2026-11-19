@@ -63,6 +63,8 @@ Hand the definition to a client — `createNodeClient`, `createRuntimeWorker`, o
 
 The transcoder accepts every file in a GLB/glTF input set, preserves ordered sidecars, and exposes target-specific options through the runtime's edge metadata. `assjson` remains a libassimp diagnostic format and is deliberately not advertised as a Tau route.
 
+For GLB/glTF input exported to 3MF without `EXT_mesh_manifold`, Assimp joins compatible face primitives within each original scene node before applying its strict manifold check. This lets a closed CAD part export when its faces were encoded as separate glTF primitives, while preserving separate nodes, placements and materials. This operation does not repair open surfaces or combine incompatible material partitions. Inputs carrying canonical `EXT_mesh_manifold` topology retain their original topology and primitive provenance without this optimization.
+
 ## Versioning and stability
 
 Pre-1.0: a minor version may break. Pin `~0.1.0` rather than `^0.1.0`. This package releases in the

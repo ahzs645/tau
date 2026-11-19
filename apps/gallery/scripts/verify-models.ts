@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { normalizeStaticGlb } from '#runtime/static-glb.js';
 import type { GalleryRenderResult, GallerySession } from '#runtime/types.js';
-import type { GalleryExportFormat, GalleryProject, GalleryVariant } from '#catalog/types.js';
+import type { GalleryProject, GalleryVariant } from '#catalog/types.js';
 import { loadNodeProjectFiles, readNodeCatalog } from '#scripts/catalog-node.js';
 import type { NodeCatalogEntry } from '#scripts/catalog-node.js';
 import { assertBoundsParity, measureGlb } from '#scripts/measure-glb.js';
@@ -16,6 +16,9 @@ import { runVerificationProcess } from '#scripts/verification-process.js';
 import { verificationFingerprint } from '#scripts/verification-fingerprint.js';
 import { printabilityEvidenceSchema, verifyPrintability } from '#scripts/verify-printability.js';
 import type { PrintabilityEvidence } from '#scripts/verify-printability.js';
+import { exportEvidenceSchema, verifyGalleryExports } from '#scripts/verification-exports.js';
+import type { ExportEvidence } from '#scripts/verification-exports.js';
+import { canReuseVariant } from '#scripts/verification-progress.js';
 
 type CaseResult = {
   readonly project: string;
@@ -25,7 +28,9 @@ type CaseResult = {
   readonly geometry?: GeometrySummary;
   readonly artifactHash?: string;
   readonly parameters?: Record<string, unknown>;
-  readonly exports?: ReadonlyArray<{ format: string; files: readonly string[] }>;
+  readonly exports?: readonly ExportEvidence[];
+  readonly previewArtifact?: string;
+  readonly issues?: ReadonlyArray<{ code: string; severity: string; message: string }>;
   readonly printability?: PrintabilityEvidence;
   readonly error?: string;
 };
@@ -45,6 +50,7 @@ type VerificationReport = {
   completedAt?: string;
   fingerprint?: string;
   complete: boolean;
+  finishedVariants: string[];
 };
 type Scenario = {
   name: string;
@@ -56,7 +62,7 @@ type Scenario = {
   bedSizeMm?: readonly [number, number];
 };
 
-const pointSchema = z.tuple([z.number().finite(), z.number().finite(), z.number().finite()]);
+const pointSchema = z.tuple([z.number(), z.number(), z.number()]);
 const workerReportSchema = z.object({
   passed: z.boolean(),
   cases: z.array(
@@ -72,11 +78,13 @@ const workerReportSchema = z.object({
           triangles: z.number().int().positive(),
           meshInstances: z.number().int().positive(),
           boundsMm: z.object({ min: pointSchema, max: pointSchema, size: pointSchema }),
-          signedVolumeMm3: z.number().finite(),
+          signedVolumeMm3: z.number(),
           surfaceAreaMm2: z.number().positive(),
         })
         .optional(),
-      exports: z.array(z.object({ format: z.string(), files: z.array(z.string()) })).optional(),
+      exports: z.array(exportEvidenceSchema).optional(),
+      previewArtifact: z.string().optional(),
+      issues: z.array(z.object({ code: z.string(), severity: z.string(), message: z.string() })).optional(),
       printability: printabilityEvidenceSchema.optional(),
       error: z.string().optional(),
     }),
@@ -86,6 +94,7 @@ const resumeReportSchema = workerReportSchema.extend({
   startedAt: z.string(),
   fingerprint: z.string(),
   complete: z.boolean(),
+  finishedVariants: z.array(z.string()),
 });
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
@@ -123,9 +132,11 @@ const filterProject = argument('project');
 const filterVariant = argument('variant');
 const allExports = flag('all-exports');
 const withRegressions = flag('regressions');
-const writeGeometry = flag('write-glb');
+const writeArtifacts = flag('write-artifacts');
+const writeGeometry = flag('write-glb') || writeArtifacts;
 const workerMode = flag('worker');
 const resume = flag('resume');
+const retryFailures = flag('retry-failures');
 const maxVariantsArgument = argument('max-variants');
 const maxVariants = maxVariantsArgument === undefined ? Infinity : Number(maxVariantsArgument);
 if (maxVariantsArgument !== undefined && (!Number.isSafeInteger(maxVariants) || maxVariants < 1)) {
@@ -174,9 +185,12 @@ const fingerprint = workerMode
       files: ['pnpm-lock.yaml', 'apps/gallery/package.json'],
       options: {
         node: process.version,
+        platform: process.platform,
+        architecture: process.arch,
         allExports,
         withRegressions,
         writeGeometry,
+        writeArtifacts,
         filterProject,
         filterVariant,
         variantTimeout,
@@ -193,6 +207,7 @@ const report: VerificationReport = {
   parity: [],
   passed: true,
   complete: false,
+  finishedVariants: resumed?.finishedVariants ?? [],
   startedAt: resumed?.startedAt ?? new Date().toISOString(),
   ...(fingerprint ? { fingerprint } : {}),
 };
@@ -330,29 +345,12 @@ const reportOperation = (operation: string, scenario = 'startup'): void => {
   process.send?.({ type: 'operation-start', operation, scenario });
 };
 
-const verifyExports = async (input: {
-  readonly session: GallerySession;
-  readonly geometry: GeometrySummary;
-  readonly variant: GalleryVariant;
-  readonly scenario: Scenario;
-}): Promise<Array<{ format: string; files: string[] }>> => {
-  const exports: Array<{ format: string; files: string[] }> = [];
-  const formats: readonly GalleryExportFormat[] = allExports ? input.variant.exportFormats : ['glb'];
-  for (const format of formats) {
-    reportOperation(`export:${format}`, input.scenario.name);
-    const exported = await input.session.export(format);
-    assert.ok(exported.length > 0, `${format} returned no files`);
-    for (const file of exported) {
-      assert.ok(file.bytes.length > 0, `Exported ${file.name} is empty`);
-    }
-    if (format === 'glb') {
-      const glb = exported.find((file) => file.mimeType === 'model/gltf-binary' || file.name.endsWith('.glb'));
-      assert.ok(glb, 'GLB export did not return a GLB file');
-      assertBoundsParity(input.geometry, await measureGlb(new Uint8Array(glb.bytes)));
-    }
-    exports.push({ format, files: exported.map((file) => file.name) });
-  }
-  return exports;
+const saveArtifact = async (name: string, bytes: Uint8Array<ArrayBuffer>): Promise<string> => {
+  const directory = path.join(root, 'out/artifacts/gallery/models');
+  await mkdir(directory, { recursive: true });
+  const filename = path.join(directory, name);
+  await writeFile(filename, bytes);
+  return path.relative(root, filename);
 };
 
 const verifyScenario = async (input: {
@@ -366,6 +364,9 @@ const verifyScenario = async (input: {
   const resultBase = { project: project.id, variant: variant.id, scenario: scenario.name };
   let geometry: GeometrySummary | undefined;
   let printability: PrintabilityEvidence | undefined;
+  let exports: ExportEvidence[] | undefined;
+  let previewArtifact: string | undefined;
+  let renderEvidence: Pick<CaseResult, 'artifactHash' | 'parameters' | 'issues'> = {};
   try {
     let result: GalleryRenderResult;
     try {
@@ -380,6 +381,11 @@ const verifyScenario = async (input: {
     if (scenario.expectedError) {
       throw new Error(`Expected model rejection containing "${scenario.expectedError}", but render succeeded`);
     }
+    renderEvidence = {
+      artifactHash: result.artifactHash,
+      parameters: result.parameters,
+      issues: result.issues.map(({ code, severity, message }) => ({ code, severity, message })),
+    };
     assert.equal(
       result.artifact.mimeType,
       'model/gltf-binary',
@@ -387,7 +393,28 @@ const verifyScenario = async (input: {
     );
     assert.ok(result.artifact.content instanceof Uint8Array, 'GLB artifact must carry bytes');
     const bytes = new Uint8Array(result.artifact.content);
+    const artifactPrefix = `${project.id}--${variant.id}--${scenario.name}`;
+    if (writeGeometry) {
+      previewArtifact = await saveArtifact(`${artifactPrefix}.glb`, bytes);
+    }
     geometry = await measureGlb(bytes);
+    exports = await verifyGalleryExports({
+      session,
+      geometry,
+      formats: allExports ? variant.exportFormats : ['glb'],
+      onStart(format) {
+        reportOperation(`export:${format}`, scenario.name);
+      },
+      async saveFile({ format, file, index }) {
+        if (format === 'glb' ? writeGeometry : writeArtifacts) {
+          return saveArtifact(
+            `${artifactPrefix}--export-${format}-${index + 1}-${path.basename(file.name)}`,
+            file.bytes,
+          );
+        }
+        return undefined;
+      },
+    });
     checkSize(geometry, scenario);
     if (scenario.expectedComponents !== undefined) {
       reportOperation('printability', scenario.name);
@@ -402,12 +429,9 @@ const verifyScenario = async (input: {
     if (['pet-bottle-opener', 'replicad-tray', 'opencascade-box'].includes(project.id)) {
       assert.ok(hasEnumeration(result.jsonSchema), `${project.id} lost its authored dropdown schema`);
     }
-    const exports = await verifyExports({ session, geometry, variant, scenario });
-    if (writeGeometry) {
-      const directory = path.join(root, 'out/artifacts/gallery/models');
-      await mkdir(directory, { recursive: true });
-      await writeFile(path.join(directory, `${project.id}--${variant.id}--${scenario.name}.glb`), bytes);
-    }
+    const failedExports = exports.filter((entry) => entry.error !== undefined);
+    assert.equal(failedExports.length, 0, failedExports.map((entry) => `${entry.format}: ${entry.error}`).join('\n'));
+    assert.ok(!result.issues.some((issue) => issue.severity === 'error'), 'Render returned error diagnostics');
     console.log(
       `PASS ${project.id}/${variant.id}/${scenario.name}: ${geometry.triangles} triangles; ${geometry.boundsMm.size.map((value) => value.toFixed(3)).join(' × ')} mm`,
     );
@@ -416,8 +440,8 @@ const verifyScenario = async (input: {
       milliseconds: performance.now() - started,
       geometry,
       exports,
-      artifactHash: result.artifactHash,
-      parameters: result.parameters,
+      ...renderEvidence,
+      ...(previewArtifact ? { previewArtifact } : {}),
       ...(printability ? { printability } : {}),
     };
   } catch (error) {
@@ -426,6 +450,9 @@ const verifyScenario = async (input: {
       ...resultBase,
       milliseconds: performance.now() - started,
       error: errorMessage(error),
+      ...renderEvidence,
+      ...(exports ? { exports } : {}),
+      ...(previewArtifact ? { previewArtifact } : {}),
       ...(geometry ? { geometry } : {}),
       ...(printability ? { printability } : {}),
     };
@@ -485,6 +512,7 @@ const verifyVariantInChild = async (entry: NodeCatalogEntry, variant: GalleryVar
       `--all-exports=${allExports}`,
       `--regressions=${withRegressions}`,
       `--write-glb=${writeGeometry}`,
+      `--write-artifacts=${writeArtifacts}`,
     ],
     cwd: root,
     operationTimeout: variant.renderTimeout ?? 180_000,
@@ -500,6 +528,18 @@ const verifyVariantInChild = async (entry: NodeCatalogEntry, variant: GalleryVar
     }
   }
   report.cases.push(...saved.cases);
+  const missingScenarios = scenariosFor(entry.project, variant).filter(
+    (scenario) => !saved.cases.some((row) => row.scenario === scenario.name),
+  );
+  if (outcome.exitCode === 0 && missingScenarios.length > 0) {
+    report.cases.push({
+      project: entry.project.id,
+      variant: variant.id,
+      scenario: 'coverage',
+      milliseconds: performance.now() - started,
+      error: `Worker omitted required scenarios: ${missingScenarios.map((scenario) => scenario.name).join(', ')}`,
+    });
+  }
   const failedCase = saved.cases.some((value) => value.error !== undefined);
   if (outcome.timedOut || (outcome.exitCode !== 0 && !failedCase)) {
     report.passed = false;
@@ -533,20 +573,13 @@ if (catalogue.length === 0) {
   throw new Error(`No gallery projects matched ${filterProject ?? 'the public inventory'}`);
 }
 
-const hasCompleteVariant = (entry: NodeCatalogEntry, variant: GalleryVariant): boolean => {
-  const saved = report.cases.filter((row) => row.project === entry.project.id && row.variant === variant.id);
-  return (
-    saved.every((row) => row.error === undefined) &&
-    scenariosFor(entry.project, variant).every((scenario) => saved.some((row) => row.scenario === scenario.name))
-  );
-};
 let executedVariants = 0;
-let stopRequested = false;
+const signalState = { stopRequested: false };
 let selectionComplete = true;
 if (!workerMode) {
   // A caller can yield the native-work slot without interrupting the current bounded child.
   process.on('SIGUSR1', () => {
-    stopRequested = true;
+    signalState.stopRequested = true;
   });
 }
 
@@ -589,11 +622,22 @@ for (const entry of catalogue) {
   for (const variant of entry.project.variants.filter(
     (candidate) => !filterVariant || candidate.id === filterVariant,
   )) {
-    if (resume && hasCompleteVariant(entry, variant)) {
-      console.log(`REUSED ${entry.project.id}/${variant.id}: unchanged inputs and completed checks`);
+    if (
+      resume &&
+      canReuseVariant({
+        project: entry.project.id,
+        variant: variant.id,
+        finishedVariants: report.finishedVariants,
+        cases: report.cases,
+        retryFailures,
+      })
+    ) {
+      console.log(
+        `REUSED ${entry.project.id}/${variant.id}: unchanged inputs and completed attempt (all failure evidence retained)`,
+      );
       continue;
     }
-    if (stopRequested || executedVariants >= maxVariants) {
+    if (signalState.stopRequested || executedVariants >= maxVariants) {
       selectionComplete = false;
       break;
     }
@@ -612,6 +656,11 @@ for (const entry of catalogue) {
       console.error(`FAIL ${entry.project.id}/${variant.id}/startup: ${errorMessage(error)}`);
       await writeCheckpoint();
     }
+    const finishedId = `${entry.project.id}/${variant.id}`;
+    if (!report.finishedVariants.includes(finishedId)) {
+      report.finishedVariants.push(finishedId);
+    }
+    await writeCheckpoint();
   }
   if (!selectionComplete) {
     break;

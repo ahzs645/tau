@@ -5,6 +5,10 @@ import type { GalleryKernel, GallerySession, GallerySessionInput, GallerySession
 
 const loadRuntime = async (kernel: GalleryKernel): Promise<AnyRuntimeDefinition> => {
   switch (kernel) {
+    case 'openscad': {
+      const { runtime } = await import('#runtime/definitions/openscad.js');
+      return runtime;
+    }
     case 'opencascade': {
       const { runtime } = await import('#runtime/definitions/opencascade.js');
       return runtime;

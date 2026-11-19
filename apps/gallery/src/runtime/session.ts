@@ -19,10 +19,20 @@ const aborted = (message = 'The gallery operation was cancelled.'): DOMException
 const runtimeError = (operation: string, issues: readonly KernelIssue[]): Error =>
   new Error(`${operation}: ${issues.map((issue) => issue.message).join('; ') || 'the runtime returned no result'}`);
 
+/** Editors can display partial geometry; gallery results must represent a completed model. */
+const assertNoErrorIssues = (operation: string, issues: readonly KernelIssue[]): void => {
+  const errors = issues.filter(({ severity }) => severity === 'error');
+  if (errors.length > 0) {
+    throw runtimeError(operation, errors);
+  }
+};
+
 /** An aborted caller stops waiting without leaving an unhandled runtime operation behind. */
 const withSignal = async <T>(operation: Promise<T>, signal: AbortSignal): Promise<T> => {
   const cancellation = Promise.withResolvers<never>();
-  const onAbort = (): void => cancellation.reject(signal.reason);
+  const onAbort = (): void => {
+    cancellation.reject(signal.reason);
+  };
   signal.addEventListener('abort', onAbort, { once: true });
   if (signal.aborted) {
     onAbort();
@@ -49,7 +59,7 @@ export const createGallerySessionWithClient = async (
   let abortDisposal: Promise<void> | undefined;
   let unsubscribeProgress: (() => void) | undefined;
 
-  const dispose = (): Promise<void> => {
+  const dispose = async (): Promise<void> => {
     if (shutdown) {
       return shutdown;
     }
@@ -91,6 +101,7 @@ export const createGallerySessionWithClient = async (
     if (!description.success) {
       throw runtimeError('Could not read model parameters', description.issues);
     }
+    assertNoErrorIssues('Could not read model parameters', description.issues);
     const parameterManifest = description.parameters;
     const defaultParameters = copyParameters(parameterManifest.defaults);
     const jsonSchema =
@@ -103,7 +114,7 @@ export const createGallerySessionWithClient = async (
       unsubscribeProgress = model.on('progress', options.onProgress);
     }
 
-    const render = (
+    const render = async (
       parameters?: Readonly<Record<string, unknown>>,
       operation: GalleryOperationOptions = {},
     ): Promise<GalleryRenderResult> => {
@@ -134,6 +145,7 @@ export const createGallerySessionWithClient = async (
         if (!evaluation.success) {
           throw runtimeError('Could not evaluate the model', evaluation.issues);
         }
+        assertNoErrorIssues('Could not evaluate the model', evaluation.issues);
         const offered = evaluation.views.find(({ id }) => id === 'model') ?? evaluation.views[0];
         if (!offered) {
           throw new Error('The model did not produce a view.');
@@ -158,6 +170,7 @@ export const createGallerySessionWithClient = async (
         if (!rendering.success) {
           throw runtimeError('Could not render the model', rendering.issues);
         }
+        assertNoErrorIssues('Could not render the model', rendering.issues);
         return {
           artifact: rendering.artifact,
           artifactHash: rendering.hash,
@@ -177,7 +190,7 @@ export const createGallerySessionWithClient = async (
     };
 
     const waitForCurrentRender = async (signal: AbortSignal): Promise<GalleryRenderResult> => {
-      while (true) {
+      for (;;) {
         const pending = latestRender ?? render();
         try {
           // oxlint-disable-next-line no-await-in-loop -- a newer slider update can supersede the render an export awaits.
@@ -207,6 +220,7 @@ export const createGallerySessionWithClient = async (
         if (!exported.success) {
           throw runtimeError(`Could not export ${format.toUpperCase()}`, exported.issues);
         }
+        assertNoErrorIssues(`Could not export ${format.toUpperCase()}`, exported.issues);
         return exported.files.map(({ name, bytes, mimeType }) => ({ name, bytes, mimeType }));
       },
       async dispose() {

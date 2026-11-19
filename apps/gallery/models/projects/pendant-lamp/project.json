@@ -15,7 +15,8 @@
   "variants": [
     {
       "id": "openscad",
-      "entry": "Main.scad"
+      "entry": "Main.scad",
+      "runtimeKernel": "openscad"
     },
     {
       "id": "opencascade",
@@ -34,5 +35,6 @@
   ],
   "libraries": [
     "BOSL2"
-  ]
+  ],
+  "runtimeKernel": "openscad"
 }

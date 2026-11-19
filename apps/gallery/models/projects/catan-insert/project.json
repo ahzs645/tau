@@ -9,7 +9,8 @@
   "variants": [
     {
       "id": "openscad",
-      "entry": "main.scad"
+      "entry": "main.scad",
+      "runtimeKernel": "openscad"
     },
     {
       "id": "opencascade",
@@ -19,5 +20,6 @@
       "id": "replicad",
       "entry": "main.replicad.ts"
     }
-  ]
+  ],
+  "runtimeKernel": "openscad"
 }

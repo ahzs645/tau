@@ -24,7 +24,7 @@ export const verificationFingerprint = async (input: {
   readonly options: Readonly<Record<string, unknown>>;
 }): Promise<string> => {
   const groups = await Promise.all(
-    input.directories.map((directory) => collectFiles(path.join(input.root, directory))),
+    input.directories.map(async (directory) => collectFiles(path.join(input.root, directory))),
   );
   const files = [...groups.flat(), ...input.files.map((filename) => path.join(input.root, filename))].toSorted();
   const hash = createHash('sha256');

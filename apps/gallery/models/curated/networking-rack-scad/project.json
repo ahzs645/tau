@@ -18,5 +18,6 @@
     "patch_panel_height": 20,
     "vent_hole_size": 3,
     "vent_spacing": 8
-  }
+  },
+  "runtimeKernel": "openscad"
 }

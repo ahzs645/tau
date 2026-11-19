@@ -276,7 +276,7 @@ export const ProjectPage = ({
       {hasParameterPane ? (
         <nav
           aria-label='Model panels'
-          className='gallery-mobile-panels flex shrink-0 border-t bg-background pb-[env(safe-area-inset-bottom)]'
+          className='gallery-mobile-panels shrink-0 border-t bg-background pb-[env(safe-area-inset-bottom)]'
         >
           <Button
             variant='ghost'

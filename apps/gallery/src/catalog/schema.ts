@@ -9,6 +9,7 @@ import type {
 } from '#catalog/types.js';
 
 const variantIdSchema = z.enum(['openscad', 'opencascade', 'replicad']);
+const runtimeKernelSchema = z.enum(['openscad', 'openrscad', 'opencascade', 'replicad']);
 const exportFormatSchema = z.enum(['glb', 'stl', '3mf', 'obj', 'step']);
 const parameterRecordSchema = z.record(z.string(), z.unknown());
 const relativePathSchema = z
@@ -35,6 +36,7 @@ const previewSchema = {
 const variantSchema = z.object({
   id: variantIdSchema,
   entry: relativePathSchema,
+  runtimeKernel: runtimeKernelSchema.optional(),
   label: z.string().min(1).optional(),
   shortLabel: z.string().min(1).optional(),
   language: z.string().optional(),
@@ -51,6 +53,7 @@ const metadataSchema = z.looseObject({
   type: z.enum(['scad', 'static']).optional(),
   kernel: z.enum(['OpenSCAD', 'OpenCascade', 'Replicad', 'Static']).optional(),
   engine: z.enum(['openscad', 'openrscad', 'replicad', 'opencascade', 'occt']).optional(),
+  runtimeKernel: runtimeKernelSchema.optional(),
   variants: z.array(variantSchema).min(1).optional(),
   exportFormats: z.array(exportFormatSchema).optional(),
   initialParameters: parameterRecordSchema.optional(),
@@ -109,11 +112,11 @@ type ProjectDefinitionInput = {
 
 const labels = { openscad: 'OpenSCAD', opencascade: 'OpenCASCADE', replicad: 'Replicad' } as const;
 const shortLabels = { openscad: 'SCAD', opencascade: 'OCCT', replicad: 'Replicad' } as const;
-const kernels = { openscad: 'openrscad', opencascade: 'opencascade', replicad: 'replicad' } as const satisfies Record<
+const kernels = { openscad: 'openscad', opencascade: 'opencascade', replicad: 'replicad' } as const satisfies Record<
   GalleryVariantId,
   GalleryKernel
 >;
-const meshFormats = ['glb', 'stl', '3mf', 'obj'] as const satisfies readonly GalleryExportFormat[];
+const meshFormats = ['glb', 'stl', '3mf', 'obj', 'step'] as const satisfies readonly GalleryExportFormat[];
 const solidFormats = ['glb', 'stl', '3mf', 'step'] as const satisfies readonly GalleryExportFormat[];
 const originalCommit = '996774cc25a147c085fbdcc47a4a89cc0dfe701f';
 
@@ -249,7 +252,7 @@ export const parseProjectDefinition = (input: ProjectDefinitionInput): GalleryPr
             label: variant.label ?? labels[variant.id],
             shortLabel: variant.shortLabel ?? shortLabels[variant.id],
             entry: variant.entry,
-            kernel: kernels[variant.id],
+            kernel: variant.runtimeKernel ?? (isDefault ? metadata.runtimeKernel : undefined) ?? kernels[variant.id],
             language: variant.entry.endsWith('.scad')
               ? 'scad'
               : variant.entry.endsWith('.js')

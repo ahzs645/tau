@@ -6,5 +6,6 @@
   "tags": ["experimental", "design", "prototype"],
   "created": "2024-01-01",
   "author": "OpenSCAD Playground",
-  "hidden": true
+  "hidden": true,
+  "runtimeKernel": "openscad"
 }

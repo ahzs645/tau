@@ -1,5 +1,5 @@
 /** Kernels selected by this gallery; public variant IDs retain the old URLs. */
-export type GalleryKernel = 'openrscad' | 'opencascade' | 'replicad';
+export type GalleryKernel = 'openscad' | 'openrscad' | 'opencascade' | 'replicad';
 
 export type GalleryVariantId = 'openscad' | 'opencascade' | 'replicad';
 

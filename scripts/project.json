@@ -294,6 +294,13 @@
         "command": "node scripts/src/validate-grafana.ts"
       }
     },
+    "validate-fork-workflows": {
+      "executor": "nx:run-commands",
+      "cache": false,
+      "options": {
+        "command": "node scripts/src/validate-fork-workflows.ts"
+      }
+    },
     "validate-workflows": {
       "executor": "nx:run-commands",
       "options": {

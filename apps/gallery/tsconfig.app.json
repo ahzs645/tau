@@ -10,5 +10,12 @@
     "target": "ES2022"
   },
   "include": ["src/**/*.ts", "src/**/*.tsx", "scripts/**/*.ts", "*.ts", "package.json"],
-  "exclude": ["src/**/*.test.*", "src/**/*.spec.*", "scripts/**/*.test.*", "vitest.config.ts", "playwright.config.ts"]
+  "exclude": [
+    "src/**/*.test.*",
+    "src/**/*.spec.*",
+    "scripts/**/*.test.*",
+    "vitest.config.ts",
+    "vitest.integration.config.ts",
+    "playwright.config.ts"
+  ]
 }

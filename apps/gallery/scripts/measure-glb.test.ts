@@ -53,9 +53,9 @@ describe('gallery geometry evidence', () => {
       expect(result.boundsMm.max[axis]).toBeCloseTo(expected, 5);
     }
     expect(Math.abs(result.signedVolumeMm3)).toBeCloseTo(24, 4);
-    expect(() => assertBoundsParity(result, { ...result, boundsMm: { ...result.boundsMm, min: [3, 20, 30] } })).toThrow(
-      'Geometry bounds differ',
-    );
+    expect(() => {
+      assertBoundsParity(result, { ...result, boundsMm: { ...result.boundsMm, min: [3, 20, 30] } });
+    }).toThrow('Geometry bounds differ');
   });
 
   it('should reject a lines-only artifact rather than accepting a nonempty file', async () => {

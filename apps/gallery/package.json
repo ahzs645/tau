@@ -4,7 +4,7 @@
   "description": "The standalone parametric model gallery at 3dd.ahmadjalil.com",
   "private": true,
   "type": "module",
-  "license": "Apache-2.0",
+  "license": "SEE LICENSE IN LICENSE",
   "imports": {
     "#scripts/*.js": "./scripts/*.ts",
     "#static-pages.vite-plugin.js": "./static-pages.vite-plugin.ts",
@@ -34,7 +34,9 @@
     "three": "catalog:",
     "uint8array-extras": "catalog:",
     "xstate": "catalog:",
-    "zod": "catalog:"
+    "zod": "catalog:",
+    "@taucad/geometry-core": "workspace:*",
+    "openscad-wasm-prebuilt": "catalog:"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.1",
@@ -55,6 +57,7 @@
     "vite": "catalog:",
     "vitest": "4.1.11",
     "@gltf-transform/core": "catalog:",
-    "playwright": "catalog:"
+    "playwright": "catalog:",
+    "saxes": "catalog:"
   }
 }

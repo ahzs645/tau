@@ -37,7 +37,8 @@
   "variants": [
     {
       "id": "openscad",
-      "entry": "Main.scad"
+      "entry": "Main.scad",
+      "runtimeKernel": "openscad"
     },
     {
       "id": "opencascade",
@@ -48,5 +49,6 @@
   ],
   "parityExclusions": {
     "opencascade": "The original OCCT variant intentionally models the stamp plate and SVG strokes only; it excludes the SCAD knub/handle STL templates and uses a corrected artwork scale. See main.occt.ts source documentation."
-  }
+  },
+  "runtimeKernel": "openscad"
 }

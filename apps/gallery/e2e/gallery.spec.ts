@@ -1,7 +1,9 @@
+import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { expect, test } from 'playwright/test';
 import type { Page } from 'playwright/test';
 import { measureGlb } from '#scripts/measure-glb.js';
+import { validateStepStructure, validateThreeMfStructure } from '#scripts/export-structure.js';
 
 const waitForModel = async (page: Page): Promise<void> => {
   await expect(page.getByRole('img', { name: '3D model preview', exact: true })).toBeVisible({ timeout: 120_000 });
@@ -29,7 +31,48 @@ test('static routes, searchable catalogue and legacy model links', async ({ page
   const hostname = await cname.text();
   expect(hostname.trim()).toBe('3dd.ahmadjalil.com');
 
-  await page.goto('/tau/playground/?model=openscad-bracket');
+  await Promise.all(
+    [
+      { url: '/GALLERY-LICENSE.txt', text: 'Gallery component licenses' },
+      { url: '/licenses/openscad/LICENSE', text: 'GNU GENERAL PUBLIC LICENSE' },
+      { url: '/licenses/openscad/NOTICE.md', text: 'openscad-wasm-prebuilt@1.2.0' },
+      { url: '/licenses/openscad/ENGINE-COPYING.txt', text: 'GNU GENERAL PUBLIC LICENSE' },
+      { url: '/licenses/openscad/fonts/OFL.txt', text: 'SIL OPEN FONT LICENSE Version 1.1' },
+    ].map(async ({ url, text }) => {
+      const notice = await request.get(url);
+      expect(notice.ok(), url).toBe(true);
+      const contents = await notice.text();
+      expect(contents, url).toContain(text);
+      expect(contents, url).not.toMatch(/<!doctype\s+html|<html(?:\s|>)/iu);
+    }),
+  );
+
+  // Inspect the bytes fetched by the real worker, including the production asset URL rewrite.
+  const fonts = [
+    {
+      path: /\/Geist-Regular-[^/]+\.ttf$/u,
+      sha256: '8177983fd81e22d440b343d931c508aa87eeb7a43907223b648e4c66214a3999',
+    },
+    {
+      path: /\/Geist-Bold-[^/]+\.ttf$/u,
+      sha256: '45e6b30280949f1aa0208a4b05f47e1984719aba0b7fcc2bc993a15b9199f644',
+    },
+  ];
+  await Promise.all([
+    ...fonts.map(async (font) => {
+      const asset = await page.waitForResponse((item) => font.path.test(new URL(item.url()).pathname), {
+        timeout: 120_000,
+      });
+      expect(asset.ok(), asset.url()).toBe(true);
+      expect(
+        createHash('sha256')
+          .update(await asset.body())
+          .digest('hex'),
+        asset.url(),
+      ).toBe(font.sha256);
+    }),
+    page.goto('/tau/playground/?model=openscad-bracket'),
+  ]);
   await expect(page.getByRole('heading', { level: 1, name: 'OpenSCAD bracket' })).toBeVisible();
   await waitForModel(page);
   await page.getByRole('button', { name: 'Share', exact: true }).click();
@@ -46,6 +89,7 @@ test('SCAD renders changed parameters and downloads the committed geometry', asy
   ).toString('base64url');
   await page.goto(`/openscad-bracket/?p=1.raw.${payload}`);
   await waitForModel(page);
+  await expect(page.getByRole('navigation', { name: 'Model panels' })).toBeHidden();
   await expect(page.getByLabel('Model dimensions', { exact: true })).toContainText('100');
   await page.getByRole('combobox', { name: 'Export format' }).selectOption('glb');
   const pending = page.waitForEvent('download');
@@ -99,6 +143,7 @@ test('mobile layout keeps the viewer and parameter controls usable', async ({ pa
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/openscad-bracket/');
   await waitForModel(page);
+  await expect(page.getByRole('navigation', { name: 'Model panels' })).toBeVisible();
   await expect(page.getByRole('region', { name: 'Interactive model viewer' })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath('model-mobile.png'), fullPage: true });
@@ -145,11 +190,46 @@ test('stamp artwork and the handle selector change the real exported geometry', 
   await waitForModel(page);
   await expect(component).toHaveValue('handle');
   const handle = await exportGeometry();
-  // The preserved handle STL is Z-up 20 × 23.094 × 50 mm; the viewer exports Y-up metres.
+  // The preserved handle STL is Z-up 20 × 23.094 × 50 mm; GLB downloads use canonical Y-up metres.
   expect(handle.boundsMm.size[0]).toBeCloseTo(20, 2);
   expect(handle.boundsMm.size[1]).toBeCloseTo(50, 2);
   expect(handle.boundsMm.size[2]).toBeCloseTo(23.094, 2);
-  await expect(page.getByLabel('Model dimensions', { exact: true })).toHaveText('X 20 · Y 50 · Z 23.09 mm');
+  // The viewer maps canonical GLB into Tau's Z-up world before reporting physical bounds for the label.
+  await expect(page.getByLabel('Model dimensions', { exact: true })).toHaveText('X 20 · Y 23.09 · Z 50 mm');
+
+  // These formats use the browser Assimp worker; STEP is a faceted conversion of the authored SCAD mesh.
+  expect(await page.evaluate(() => globalThis.crossOriginIsolated)).toBe(false);
+  const formatControl = page.getByRole('combobox', { name: 'Export format' });
+  const exportConverted = async (format: '3mf' | 'step', label: string): Promise<Uint8Array<ArrayBuffer>> => {
+    await expect(formatControl.getByRole('option', { name: label, exact: true })).toHaveAttribute('value', format);
+    await formatControl.selectOption({ label });
+    const [download] = await Promise.all([
+      page.waitForEvent('download', { timeout: 120_000 }),
+      page.getByRole('button', { name: 'Export', exact: true }).click(),
+    ]);
+    expect(download.suggestedFilename()).toMatch(format === '3mf' ? /\.3mf$/u : /\.(?:step|stp)$/u);
+    const filename = await download.path();
+    if (!filename) {
+      throw new Error(`No stamp ${format.toUpperCase()} download was written.`);
+    }
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    return new Uint8Array(await readFile(filename));
+  };
+  const threeMf = await exportConverted('3mf', '3MF');
+  expect(validateThreeMfStructure(threeMf)['triangles']).toBeGreaterThan(0);
+  const step = await exportConverted('step', 'STEP (faceted)');
+  expect(validateStepStructure(step)['surfaces']).toBeGreaterThan(0);
+
+  const parametersPanel = page.getByRole('complementary', { name: 'Model parameters' });
+  const attribution = parametersPanel.getByRole('link', { name: 'Project source and attribution' });
+  await attribution.scrollIntoViewIfNeeded();
+  await expect(attribution).toBeInViewport();
+  const formBounds = await parametersPanel.locator('[data-slot="parameters"]').boundingBox();
+  const attributionBounds = await attribution.boundingBox();
+  if (!formBounds || !attributionBounds) {
+    throw new Error('The stamp parameter form and attribution must remain visible in the parameter pane.');
+  }
+  expect(formBounds.y + formBounds.height).toBeLessThanOrEqual(attributionBounds.y);
 
   await page.getByRole('button', { name: 'Share', exact: true }).click();
   await expect(page.getByRole('dialog')).toContainText('Uploaded files stay in this browser');

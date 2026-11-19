@@ -43,7 +43,9 @@
         "commands": [
           "corepack pnpm --dir packages/plugins/opencascade exec vitest run src/opencascade.gallery-schema.test.ts --maxWorkers=1",
           "corepack pnpm --dir packages/plugins/replicad exec vitest run src/replicad.gallery-schema.test.ts --maxWorkers=1",
-          "corepack pnpm --dir packages/plugins/openrscad exec vitest run src/openrscad.gallery-assets.test.ts --maxWorkers=1"
+          "corepack pnpm --dir packages/plugins/openrscad exec vitest run src/openrscad.gallery-assets.test.ts --maxWorkers=1",
+          "corepack pnpm --dir apps/gallery exec vitest run --config vitest.integration.config.ts --maxWorkers=1",
+          "corepack pnpm --dir packages/plugins/assimp exec vitest run src/assimp.split-primitives.test.ts --maxWorkers=1"
         ]
       }
     }

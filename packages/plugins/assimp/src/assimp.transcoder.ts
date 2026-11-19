@@ -1,6 +1,6 @@
 import { defineTranscoder } from '@taucad/runtime/transcoder';
 import { lookupMimeType } from '@taucad/runtime/types';
-import { AssimpError, conversionEdges, createAssimp } from 'libassimp';
+import { AssimpError, conversionEdges, createAssimp, defaultPostProcess } from 'libassimp';
 import type { Assimp, ConversionEdge, ExportFormat, ExportOptionsFor } from 'libassimp';
 import { z } from 'zod';
 import { assimpEdgeSchemas, pointCloudExportOptions, tauSetExportOptions } from '#assimp-export-options.js';
@@ -46,8 +46,13 @@ type InputFile = Readonly<{ name: string; bytes: Uint8Array<ArrayBuffer> }>;
 const gltfPointsMode = 0;
 const glbMagic = 0x46_54_6c_67;
 const glbJsonChunk = 0x4e_4f_53_4a;
+const threeMfPostProcess = [...defaultPostProcess, 'optimizeMeshes'] as const;
 
-/** The glTF JSON of a `.gltf` file or a GLB's first chunk, or `undefined` when the bytes are neither. */
+/**
+ * Read the glTF JSON of a `.gltf` file or a GLB's first chunk.
+ * @param file - Name and bytes of one input artifact.
+ * @returns The parsed document, or `undefined` when the bytes are neither format.
+ */
 const gltfJson = ({ name, bytes }: InputFile): unknown => {
   try {
     if (name.toLowerCase().endsWith('.gltf')) {
@@ -63,7 +68,11 @@ const gltfJson = ({ name, bytes }: InputFile): unknown => {
   }
 };
 
-/** Whether the model has primitives and every one of them draws points, so no mesh has faces or lines. */
+/**
+ * Identify models that contain only point primitives.
+ * @param files - The complete input artifact set.
+ * @returns Whether primitives exist and every primitive draws points.
+ */
 const isPointCloud = (files: readonly InputFile[]): boolean => {
   const document = files.map((file) => gltfJson(file)).find((json) => json !== undefined) as
     | { meshes?: Array<{ primitives?: Array<{ mode?: number }> }> }
@@ -72,7 +81,45 @@ const isPointCloud = (files: readonly InputFile[]): boolean => {
   return primitives.length > 0 && primitives.every((primitive) => primitive.mode === gltfPointsMode);
 };
 
-/** The form options plus the hidden ones tau chooses for this model. */
+/**
+ * Keep canonical topology and its primitive-run provenance out of mesh optimization.
+ * @param files - The complete input artifact set.
+ * @returns Whether a document declares or carries canonical manifold topology.
+ */
+const hasManifoldTopology = (files: readonly InputFile[]): boolean =>
+  files.some((file) => {
+    const document = gltfJson(file);
+    if (document === null || typeof document !== 'object') {
+      return false;
+    }
+    const declarations = [
+      'extensionsUsed' in document ? document.extensionsUsed : undefined,
+      'extensionsRequired' in document ? document.extensionsRequired : undefined,
+    ];
+    if (declarations.some((value) => Array.isArray(value) && value.includes('EXT_mesh_manifold'))) {
+      return true;
+    }
+    if (!('meshes' in document) || !Array.isArray(document.meshes)) {
+      return false;
+    }
+    return document.meshes.some(
+      (mesh: unknown) =>
+        mesh !== null &&
+        typeof mesh === 'object' &&
+        'extensions' in mesh &&
+        mesh.extensions !== null &&
+        typeof mesh.extensions === 'object' &&
+        'EXT_mesh_manifold' in mesh.extensions,
+    );
+  });
+
+/**
+ * Combine form options with the hidden options Tau chooses for this model.
+ * @param to - The requested export format.
+ * @param formOptions - User-selected export options.
+ * @param files - The complete input artifact set.
+ * @returns The native export options for the selected format and model.
+ */
 const exportOptionsFor = (
   to: ExportFormat,
   formOptions: unknown,
@@ -86,7 +133,11 @@ const exportOptionsFor = (
   return options as ExportOptionsFor<typeof to>;
 };
 
-/** The libassimp message, plus what to change when the failure comes from a setting or a size limit. */
+/**
+ * Explain native errors that arise from a setting or size limit.
+ * @param error - The conversion failure.
+ * @returns The native message with any applicable action for the user.
+ */
 const failureMessage = (error: unknown): string => {
   const message = error instanceof Error ? error.message : 'Transcoding failed';
   if (error instanceof AssimpError && error.code === 'LIMIT_EXCEEDED') {
@@ -102,7 +153,7 @@ const failureMessage = (error: unknown): string => {
 export const assimpTranscoder = defineTranscoder({
   id: 'assimp',
   name: 'AssimpTranscoder',
-  version: '0.1.2',
+  version: '0.1.3',
   edges,
   optionsSchema: assimpTranscoderOptionsSchema,
 
@@ -129,10 +180,17 @@ export const assimpTranscoder = defineTranscoder({
 
     try {
       services.logger.log(`Transcoding ${input.from} -> ${input.to}`);
+      const optimizeFacePrimitives =
+        input.to === '3mf' && (input.from === 'glb' || input.from === 'gltf') && !hasManifoldTopology(input.files);
       const options = {
         to: input.to,
         exportOptions: exportOptionsFor(input.to, input.options, input.files),
         signal: services.signal,
+        // OCCT faces are separate glTF primitives, imported as separate aiMeshes. Join only
+        // compatible meshes within their original node before 3MF's strict whole-part check.
+        // The native step preserves materials, placements and instancing; it does not repair
+        // topology. Canonical EXT_mesh_manifold inputs already carry their whole-part indices.
+        ...(optimizeFacePrimitives ? { postProcess: threeMfPostProcess } : {}),
       };
       const { files } = await context.assimp.convert(
         input.files.map(({ name, bytes }) => ({ name, bytes })),

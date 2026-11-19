@@ -118,7 +118,7 @@ describe('gallery migration inventory', () => {
     const lamp = catalogue.find(({ project }) => project.id === 'pendant-lamp')?.project;
     expect(lamp?.defaultVariantId).toBe('openscad');
     expect(lamp?.variants.map(({ id, kernel }) => ({ id, kernel }))).toEqual([
-      { id: 'openscad', kernel: 'openrscad' },
+      { id: 'openscad', kernel: 'openscad' },
       { id: 'opencascade', kernel: 'opencascade' },
       { id: 'replicad', kernel: 'replicad' },
     ]);
@@ -130,6 +130,10 @@ describe('gallery migration inventory', () => {
       tessellation: { linearTolerance: 0.02, angularTolerance: 8 },
       includeEdges: false,
     });
+    expect(lamp?.variants.find(({ id }) => id === 'openscad')?.exportFormats).toContain('step');
+    expect(
+      catalogue.find(({ project }) => project.id === 'openscad-bracket')?.project.variants[0]?.exportFormats,
+    ).toEqual(['glb']);
   });
 
   it('should reject missing source and unsafe metadata paths before publishing a route', () => {
@@ -144,5 +148,22 @@ describe('gallery migration inventory', () => {
     expect(() =>
       parseProjectDefinition({ ...input, metadata: { ...input.metadata, entry: '../private.scad' } }),
     ).toThrow('parent traversal');
+  });
+
+  it('should select the preserved classic engine explicitly and permit OpenRSCAD only by declaration', async () => {
+    const catalogue = await readNodeCatalog();
+    const scadVariants = catalogue.flatMap(({ project }) => project.variants).filter(({ id }) => id === 'openscad');
+    expect(scadVariants.length).toBeGreaterThan(0);
+    expect(scadVariants.every(({ kernel }) => kernel === 'openscad')).toBe(true);
+    const project = parseProjectDefinition({
+      id: 'deliberate-openrscad',
+      collection: 'curated',
+      metadata: { title: 'Explicit engine', description: '', entry: 'main.scad', runtimeKernel: 'openrscad' },
+      filePaths: ['main.scad'],
+      resourceUrl: (name) => name,
+    });
+    expect(project.variants.map(({ id, kernel }) => ({ id, kernel }))).toEqual([
+      { id: 'openscad', kernel: 'openrscad' },
+    ]);
   });
 });

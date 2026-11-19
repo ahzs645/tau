@@ -5,6 +5,9 @@ import type { GalleryKernel, GallerySession, GallerySessionInput, GallerySession
 
 const createWorker = (kernel: GalleryKernel): Worker => {
   switch (kernel) {
+    case 'openscad': {
+      return new Worker(new URL('workers/openscad.worker.ts', import.meta.url), { type: 'module' });
+    }
     case 'opencascade': {
       return new Worker(new URL('workers/opencascade.worker.ts', import.meta.url), { type: 'module' });
     }
@@ -18,7 +21,7 @@ const createWorker = (kernel: GalleryKernel): Worker => {
 };
 
 /** Start one selected kernel in a dedicated worker; parameter changes reuse its document. */
-export const createGallerySession = (
+export const createGallerySession = async (
   input: GallerySessionInput,
   options?: GallerySessionOptions,
 ): Promise<GallerySession> => {

@@ -46,6 +46,7 @@ export const ProjectHeader = memo(
     readonly onExport: () => Promise<void>;
     readonly onSwitchVariant: (variant: GalleryVariantId) => void;
   }): React.JSX.Element => {
+    const isScad = variant?.kernel === 'openscad' || variant?.kernel === 'openrscad';
     const backToGallery = useCallback((event: React.MouseEvent<HTMLAnchorElement>) => {
       if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
         return;
@@ -119,7 +120,7 @@ export const ProjectHeader = memo(
               {formats.length > 0 ? (
                 formats.map((format) => (
                   <option key={format} value={format}>
-                    {format.toUpperCase()}
+                    {format === 'step' && isScad ? 'STEP (faceted)' : format.toUpperCase()}
                   </option>
                 ))
               ) : (

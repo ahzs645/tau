@@ -30,7 +30,8 @@
     {
       "id": "openscad",
       "entry": "prechamber_nozzle_insert_BOSL2_threads.scad",
-      "renderTimeout": 300000
+      "renderTimeout": 300000,
+      "runtimeKernel": "openscad"
     },
     {
       "id": "opencascade",
